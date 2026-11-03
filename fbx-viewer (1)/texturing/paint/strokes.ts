@@ -105,6 +105,9 @@ export interface StrokeView {
     /** Model space to clip space. */
     viewProjection: THREE.Matrix4;
     cameraPosition: THREE.Vector3;
+    /** The screen's right and up, in model space: what a surface brush's angle turns from. */
+    cameraRight?: THREE.Vector3;
+    cameraUp?: THREE.Vector3;
     /** Viewport size in pixels. */
     width: number;
     height: number;
@@ -195,7 +198,10 @@ float coverageAt(vec3 p, vec3 n) {
         if (dot(n, dn) < 0.1) continue;
         vec3 d = p - centre;
         if (abs(dot(d, dn)) > radius) continue;
-        vec3 t = normalize(uDabs3[i].xyz - dn * dot(uDabs3[i].xyz, dn));
+        vec3 across = uDabs3[i].xyz - dn * dot(uDabs3[i].xyz, dn);
+        // Seen edge on, the screen's direction lies along the normal: any direction on the surface will do.
+        if (dot(across, across) < 1e-8) across = abs(dn.x) < 0.9 ? cross(dn, vec3(1.0, 0.0, 0.0)) : cross(dn, vec3(0.0, 1.0, 0.0));
+        vec3 t = normalize(across);
         vec3 b = cross(dn, t);
         vec2 local = vec2(dot(d, t), dot(d, b)) / radius;
         float s = shapeAt(local, radius * uDabs3[i].w) * uDabs2[i].x;
@@ -222,6 +228,11 @@ void main() {
             float c = coverageAt(uCentre + (vPos - uCentre) * mm, n * mm);
             a = 1.0 - (1.0 - a) * (1.0 - c);
         }
+    }
+    // Mirrored across all three at once: the eighth copy.
+    if (uIsland < 0 && uSymmetry.x > 0.5 && uSymmetry.y > 0.5 && uSymmetry.z > 0.5) {
+        float e = coverageAt(uCentre - (vPos - uCentre), -n);
+        a = 1.0 - (1.0 - a) * (1.0 - e);
     }
     outColor = vec4(a);
 }`;
@@ -421,7 +432,8 @@ export class Stroke {
                     d1[i].set(dab.point.x, dab.point.y, dab.point.z, dab.worldRadius ?? 0.01);
                     d2[i].set(dab.flow, dab.normal!.x, dab.normal!.y, dab.normal!.z);
                     // The disc's "across" direction: the screen's right, turned by the dab's angle, laid on the surface.
-                    const right = new THREE.Vector3(Math.cos(dab.angle), Math.sin(dab.angle), 0);
+                    const right = new THREE.Vector3().copy(view.cameraRight ?? new THREE.Vector3(1, 0, 0)).multiplyScalar(Math.cos(dab.angle))
+                        .addScaledVector(view.cameraUp ?? new THREE.Vector3(0, 1, 0), Math.sin(dab.angle));
                     d3[i].set(right.x, right.y, right.z, dab.radius / Math.max(1e-6, dab.worldRadius ?? 1));
                 }
             });
@@ -542,7 +554,13 @@ export class Stroke {
     /** Leaves the pictures as they were before the stroke (a stroke given up on). */
     cancel(): void {
         const gpu = this.stack.host.gpu;
-        for (const tile of this.stack.tiles) for (const key of this.keys()) gpu.copy(this.before.get(`${key}|${tile}`)!, this.stack.picture(key, tile));
+        for (const tile of this.stack.tiles) {
+            for (const key of this.keys()) {
+                gpu.copy(this.before.get(`${key}|${tile}`)!, this.stack.picture(key, tile));
+                // Masks worked out from this picture are worked out again.
+                this.stack.touch(key, tile);
+            }
+        }
         for (const image of this.masks.values()) gpu.release(image);
         for (const image of this.before.values()) gpu.release(image);
         this.masks.clear();

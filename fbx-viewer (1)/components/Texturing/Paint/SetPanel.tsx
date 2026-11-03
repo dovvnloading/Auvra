@@ -19,10 +19,14 @@ const Row: React.FC<{ label: string; value: number; min: number; max: number; st
     </label>
 );
 
+const SIZES = [9, 10, 11, 12].map((log2) => ({ value: log2, label: `${2 ** log2} × ${2 ** log2}` }));
+
 export const SetPanel: React.FC<{
     session: PaintSession;
     models: ReadonlyArray<{ id: string; name: string; object: THREE.Object3D }>;
-}> = ({ session, models }) => {
+    /** Opens the set again (after its picture size changed). */
+    onReopen: () => void;
+}> = ({ session, models, onReopen }) => {
     const document = session.document;
     const [settings, setSettings] = useState<BakeSettings>(() => ({ ...DEFAULT_BAKE_SETTINGS, ...(document.bake?.settings ?? {}) }));
     const [highPoly, setHighPoly] = useState('');
@@ -37,9 +41,10 @@ export const SetPanel: React.FC<{
             <section className="space-y-2">
                 <div className="text-2xs font-semibold text-zinc-300">Texture set</div>
                 <div className="flex items-center gap-2 text-2xs text-zinc-400">
-                    <span className="w-28">Picture size</span>
-                    <span className="text-zinc-200">{2 ** document.size} × {2 ** document.size}</span>
-                    <span className="text-zinc-600">· {session.stack.tiles.length === 1 ? 'one tile' : `${session.stack.tiles.length} UDIM tiles (${session.stack.tiles.join(', ')})`}</span>
+                    <span className="w-28 shrink-0">Picture size</span>
+                    <Select value={document.size} options={SIZES} disabled={busy} className="w-32"
+                        onChange={(value) => { void session.resize(Number(value)).then((changed) => { if (changed) onReopen(); }); }} />
+                    <span className="truncate text-zinc-600">{session.stack.tiles.length === 1 ? 'one tile' : `${session.stack.tiles.length} UDIM tiles (${session.stack.tiles.join(', ')})`}</span>
                 </div>
                 <div className="flex flex-wrap gap-x-3 gap-y-1">
                     {PAINT_CHANNELS.map((channel: PaintChannel) => (
@@ -56,7 +61,9 @@ export const SetPanel: React.FC<{
             <section className="space-y-2">
                 <div className="flex items-center justify-between">
                     <span className="text-2xs font-semibold text-zinc-300">Mesh maps</span>
-                    {document.bake && <span className="flex items-center gap-1 text-2xs text-emerald-400"><CheckCircle2 size={11} /> Baked</span>}
+                    {document.bake && (session.stack.bakeSize === null
+                        ? <span className="flex items-center gap-1 text-2xs text-emerald-400"><CheckCircle2 size={11} /> Baked</span>
+                        : <span className="text-2xs text-amber-400">Baked at {2 ** session.stack.bakeSize} × {2 ** session.stack.bakeSize}: bake again for full detail</span>)}
                 </div>
                 <p className="text-2xs leading-snug text-zinc-500">Occlusion, curvature, thickness, normals, position and IDs read from the model. Smart masks and materials are built on them.</p>
                 <div className="flex items-center gap-2">

@@ -38,11 +38,21 @@ export interface ChannelBlend {
     opacity: number;
 }
 
+/**
+ * How a tiling picture is laid on: along the surface's UVs, or from three sides (cast along each axis
+ * and blended by how the surface faces, so it runs on across UV seams). Scale is repeats across the
+ * model's longest side when cast from three sides, repeats per UV square along the UVs.
+ */
+export interface FillProjection { projection: 'uv' | 'triplanar'; scale: number; rotation: number; sharpness: number }
+
 export type FillSource =
     | { kind: 'value'; value: [number, number, number] }
-    | { kind: 'texture'; textureId: string; projection: 'uv' | 'triplanar'; scale: number; rotation: number; sharpness: number }
-    /** One output of a texture graph material, drawn with this surface's mesh maps. */
-    | { kind: 'graph'; graphId: string; output: string; values: Record<string, unknown> }
+    | ({ kind: 'texture'; textureId: string } & FillProjection)
+    /**
+     * One output of a texture graph material, drawn with this surface's mesh maps. Laid on along the
+     * UVs unless a projection says otherwise.
+     */
+    | ({ kind: 'graph'; graphId: string; output: string; values: Record<string, unknown> } & Partial<FillProjection>)
     /** What the surface wore before painting began (its own picture for the channel). */
     | { kind: 'current' };
 

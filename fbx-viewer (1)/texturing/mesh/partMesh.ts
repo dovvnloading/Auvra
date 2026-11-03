@@ -138,10 +138,12 @@ export const buildPartMesh = (root: THREE.Object3D, materials: ReadonlySet<THREE
             normals.push(n.x, n.y, n.z);
             uvs.push(uv.getX(source), uv.getY(source));
             if (anyTangents) {
+                // A mesh without tangents among meshes with them: a w of 0 asks for the frame from texture
+                // slopes, as the renderer uses for it.
                 if (tangent) {
                     t.set(tangent.getX(source), tangent.getY(source), tangent.getZ(source)).transformDirection(matrix);
                     tangents.push(t.x, t.y, t.z, tangent.itemSize > 3 ? tangent.getW(source) : 1);
-                } else tangents.push(1, 0, 0, 1);
+                } else tangents.push(0, 0, 0, 0);
             }
             if (anyColors) {
                 if (color) colors.push(color.getX(source), color.getY(source), color.getZ(source));

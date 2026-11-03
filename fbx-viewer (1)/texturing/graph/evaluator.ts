@@ -1,6 +1,6 @@
 import type * as THREE from 'three';
 import type { GpuImage, ImagePrecision, TextureGpu } from '../gpu/textureGpu';
-import { formulaScope, hashText, parameterValues, resolveNodeParams, MAX_SIZE_LOG2 } from './document';
+import { formulaScope, graphContentKey, hashText, parameterValues, resolveNodeParams, MAX_SIZE_LOG2 } from './document';
 import { nodeBindings } from './nodeKit';
 import { INPUT_NODE_TYPE, MESH_MAP_NODE_TYPE, OUTPUT_NODE_TYPE, SUBGRAPH_NODE_TYPE } from './nodes/io';
 import { textureNodeDefinition, type GraphResolver } from './registry';
@@ -76,6 +76,7 @@ export class TextureGraphEvaluator {
     private readonly cache = new Map<string, NodeState>();
     private generation = 0;
     private clock = 0;
+    private readonly stopListening: () => void;
 
     constructor(
         private readonly gpu: TextureGpu,
@@ -84,7 +85,7 @@ export class TextureGraphEvaluator {
         private readonly depth = 0,
         private readonly visiting: ReadonlySet<string> = new Set(),
     ) {
-        gpu.onRestored(() => {
+        this.stopListening = gpu.onRestored(() => {
             this.cache.clear();
             identities = new WeakMap();
         });
@@ -99,6 +100,8 @@ export class TextureGraphEvaluator {
     dispose(): void {
         for (const state of this.cache.values()) this.releaseState(state);
         this.cache.clear();
+        // Evaluators come and go (one per run of a graph used inside another): each stops listening as it goes.
+        this.stopListening();
     }
 
     /** Lets go of results of nodes the graph no longer has. */
@@ -221,7 +224,8 @@ export class TextureGraphEvaluator {
             }
             if (node.type === SUBGRAPH_NODE_TYPE) {
                 const entry = typeof params.graph === 'string' ? this.resolve(params.graph) : undefined;
-                extras.push(entry ? hashText(JSON.stringify(entry.graph)) : 'missing');
+                // The used graph and those it uses in turn, and their pictures loading: any of them changing draws it again.
+                extras.push(entry ? graphContentKey(entry.graph, this.resolve, (id) => Boolean(this.texture(id))) : 'missing');
                 for (const key of Object.keys(external)) if (key.startsWith('mesh:')) extras.push(`${key}=${externalToken(key)}`);
             }
             for (const param of definition.params) {
@@ -263,14 +267,30 @@ export class TextureGraphEvaluator {
             const started = performance.now();
             const state: NodeState = { signature: details.signature, outputs: {}, width: details.width, height: details.height, milliseconds: 0, used: ++this.clock };
             if (details.warnings.length) state.warnings = details.warnings;
+            // Every picture the node takes, so whatever it still holds when it fails (or is not kept) goes back.
+            const made: GpuImage[] = [];
+            const leftovers = () => {
+                const kept = new Set(Object.values(state.outputs));
+                for (const image of made) if (!kept.has(image)) this.gpu.release(image);
+            };
             try {
-                state.outputs = await definition.run(this.context(node, definition, details, plan, request, external));
+                state.outputs = await definition.run(this.context(node, definition, details, plan, request, external, made));
             } catch (error) {
+                state.outputs = {};
+                leftovers();
                 if (error instanceof AbortedError || (error as Error)?.name === 'AbortError') throw error;
                 state.error = error instanceof Error ? error.message : 'This node could not be drawn.';
             }
+            leftovers();
+            // A newer evaluation began while this node drew: its picture is out of date, and must not
+            // replace what the newer one keeps.
+            if (generation !== this.generation || request.signal?.aborted) {
+                this.releaseState(state);
+                throw new AbortedError();
+            }
             state.milliseconds = performance.now() - started;
-            if (cached) this.releaseState(cached);
+            const current = this.cache.get(node.id);
+            if (current && current !== state) this.releaseState(current);
             this.cache.set(node.id, state);
             results.set(node.id, state);
             request.onNode?.(node.id, state);
@@ -286,6 +306,7 @@ export class TextureGraphEvaluator {
         plan: Plan,
         request: EvaluateRequest,
         external: Readonly<Record<string, ExternalImage | null | undefined>>,
+        made: GpuImage[],
     ): NodeRunContext {
         const gpu = this.gpu;
         const links = plan.incoming.get(node.id);
@@ -307,7 +328,11 @@ export class TextureGraphEvaluator {
             signal: request.signal ?? new AbortController().signal,
             input,
             outputKind: (key) => details.kinds[key] ?? 'color',
-            image: (kind, width = details.width, height = details.height, precision = kind === details.kinds[definition.outputs[0]?.key ?? 'out'] ? details.precision : kind === 'color' ? 8 : 16) => gpu.image(width, height, kind, precision),
+            image: (kind, width = details.width, height = details.height, precision = kind === details.kinds[definition.outputs[0]?.key ?? 'out'] ? details.precision : kind === 'color' ? 8 : 16) => {
+                const image = gpu.image(width, height, kind, precision);
+                made.push(image);
+                return image;
+            },
             pass: async (target, fragment, extra = {}) => {
                 const bound = nodeBindings(definition, { input, params: details.params, seed, texture: this.texture }, (name) => gpu.constant(name));
                 await gpu.pass(target, {
@@ -343,7 +368,10 @@ export class TextureGraphEvaluator {
                         const state = states.get(output.id);
                         if (state?.error) throw new Error(`Inside "${entry.name}": ${state.error}`);
                         const image = state?.outputs.out;
-                        if (image) result[output.id] = gpu.retain(image);
+                        if (image) {
+                            result[output.id] = gpu.retain(image);
+                            made.push(image);
+                        }
                     }
                     return result;
                 } finally {

@@ -343,3 +343,26 @@ export const graphTextureIds = (graph: TextureGraph): string[] => {
 /** The graphs a graph uses as nodes. */
 export const graphDependencies = (graph: TextureGraph): string[] =>
     [...new Set(graph.nodes.filter((node) => node.type === SUBGRAPH_NODE_TYPE && typeof node.params.graph === 'string' && node.params.graph).map((node) => node.params.graph as string))];
+
+/**
+ * A key for everything a graph draws from: its nodes and wires (not where they sit), every graph it
+ * uses at any depth, and which of their pictures have loaded. It changes whenever any of them would
+ * draw differently.
+ */
+export const graphContentKey = (graph: TextureGraph, resolve: (id: string) => { graph: TextureGraph } | undefined, loaded: (textureId: string) => boolean): string => {
+    const shape = (g: TextureGraph) => [g.size, g.seed, g.parameters, g.nodes.map(({ x: _x, y: _y, ...rest }) => rest), g.links, graphTextureIds(g).filter(loaded)];
+    const used: unknown[] = [];
+    const seen = new Set<string>();
+    const visit = (g: TextureGraph) => {
+        for (const id of graphDependencies(g)) {
+            if (seen.has(id)) continue;
+            seen.add(id);
+            const entry = resolve(id);
+            if (!entry) { used.push([id, 'missing']); continue; }
+            used.push([id, shape(entry.graph)]);
+            visit(entry.graph);
+        }
+    };
+    visit(graph);
+    return hashText(JSON.stringify([shape(graph), used]));
+};

@@ -53,10 +53,12 @@ void main() {
     int scale = p_scale;
     for (int o = 0; o < 12; o++) {
         if (o >= p_octaves) break;
-        float n = octave(vUv * float(scale), ivec2(scale), uSeed + float(o) * 13.17);
+        // Turbulent: each octave is pushed about by those before it, which swirls the pattern; the push
+        // repeats with the picture, so it still tiles.
+        vec2 at = p_style == 3 ? vUv + vec2(sum, -sum) * 0.04 : vUv;
+        float n = octave(at * float(scale), ivec2(scale), uSeed + float(o) * 13.17);
         if (p_style == 1) n = 1.0 - 2.0 * abs(n);
-        else if (p_style == 2) n = 2.0 * abs(n) - 1.0;
-        else if (p_style == 3) n = abs(n) * 2.0 - 1.0;
+        else if (p_style >= 2) n = 2.0 * abs(n) - 1.0;
         sum += n * amplitude;
         total += amplitude;
         amplitude *= p_roughness;
@@ -184,7 +186,9 @@ void main() {
     float scale = p_scale;
     for (int o = 0; o < 10; o++) {
         if (o >= p_octaves) break;
-        float n = perlin3(p * scale + float(o) * 17.3, uSeed + float(o));
+        // Turbulent: pushed about by the octaves before, as in Fractal noise.
+        vec3 at = p_style == 3 ? p + vec3(sum, -sum, sum * 0.5) * 0.04 : p;
+        float n = perlin3(at * scale + float(o) * 17.3, uSeed + float(o));
         if (p_style == 1) n = 1.0 - 2.0 * abs(n);
         else if (p_style >= 2) n = 2.0 * abs(n) - 1.0;
         sum += n * amplitude;
@@ -366,7 +370,7 @@ void main() {
         type: 'weave',
         label: 'Weave',
         category: 'Patterns',
-        description: 'Threads passing over and under each other: cloth, carbon fibre, wicker.',
+        description: 'Threads passing over and under each other: cloth, carbon fibre, wicker. The thread count is rounded up to even (four for twill) so it tiles.',
         keywords: ['fabric', 'cloth', 'carbon', 'wicker', 'basket', 'twill'],
         inputs: [],
         outputs: [out('gray')],
@@ -381,7 +385,9 @@ void main() {
     return profile * lift;
 }
 void main() {
-    vec2 p = vUv * float(p_tiling);
+    // Plain weave repeats every two threads and twill every four: rounded up to that, it tiles.
+    int tiling = p_pattern == 0 ? (p_tiling + 1) / 2 * 2 : (p_tiling + 3) / 4 * 4;
+    vec2 p = vUv * float(tiling);
     ivec2 c = ivec2(floor(p));
     vec2 f = fract(p);
     int phase = p_pattern == 0 ? (c.x + c.y) & 1 : ((c.x + c.y) / 2) & 1;
@@ -497,7 +503,8 @@ void main() {
             ivec2 id = wrapCell(cell, ivec2(p_columns, p_rows));
             if (hash1(id, uSeed + 11.0) < p_dropRandom) continue;
             vec2 centre = vec2(cell) + 0.5 + (hash2(id, uSeed + 1.0) - 0.5) * p_positionRandom;
-            centre.x += mod(float(cell.y), 2.0) * p_offset;
+            // By the wrapped row, so shapes over the top and bottom edges stay whole with an odd number of rows.
+            centre.x += mod(float(id.y), 2.0) * p_offset;
             vec2 cellUv = centre / grid;
             float scale = p_size * (1.0 - hash1(id, uSeed + 2.0) * p_sizeRandom) * g_scaleMap(fract(cellUv));
             if (scale <= 0.0) continue;

@@ -286,7 +286,9 @@ export const TextureGraphCanvas: React.FC<TextureGraphCanvasProps> = ({
     };
 
     const onDoubleClick = (event: React.MouseEvent) => {
-        const target = event.target as HTMLElement;
+        // The canvas holds the pointer while a button is down, so the event arrives on the canvas itself:
+        // look up what is really under the pointer.
+        const target = (document.elementFromPoint(event.clientX, event.clientY) as HTMLElement | null) ?? (event.target as HTMLElement);
         const nodeElement = target.closest('[data-node]') as HTMLElement | null;
         if (nodeElement) {
             onView(nodeElement.dataset.node!);

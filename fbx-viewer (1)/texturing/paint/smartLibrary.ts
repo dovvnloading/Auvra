@@ -132,6 +132,19 @@ const BUILTINS: Array<{ id: string; name: string; graph: TextureGraph }> = [
         ], [['cells', 'tri', 'pattern'], ['tri', 'normal'], ['tri', 'rough'], ['tri', 'outH'], ['normal', 'outN'], ['rough', 'outR']],
         [scale(6)]),
     },
+    {
+        id: `${BUILTIN_PREFIX}surfaceBreakup`,
+        name: 'Surface break-up',
+        graph: graphOf([
+            { id: 'pos', type: 'meshMap', params: { map: 'position' } },
+            { id: 'broad', type: 'noise3d', params: { scale: { $bind: 'scale' }, octaves: 6, roughness: 0.55 } },
+            { id: 'fine', type: 'noise3d', params: { scale: 90, octaves: 3, seed: 7 } },
+            { id: 'mix', type: 'blend', params: { mode: 'overlay', opacity: 0.5 } },
+            { id: 'range', type: 'levels', params: { outLow: { $bind: 'low' }, outHigh: { $bind: 'high' } } },
+            { id: 'outR', type: 'output', params: { channel: 'roughness', name: '' } },
+        ], [['pos', 'broad', 'position'], ['pos', 'fine', 'position'], ['fine', 'mix', 'foreground'], ['broad', 'mix', 'background'], ['mix', 'range'], ['range', 'outR']],
+        [scale(5), { name: 'low', label: 'Smoothest', kind: 'float', default: 0.35, min: 0, max: 1 }, { name: 'high', label: 'Roughest', kind: 'float', default: 0.6, min: 0, max: 1 }]),
+    },
 ];
 
 export const BUILTIN_GRAPHS: ReadonlyMap<string, GraphEntry> = new Map(BUILTINS.map((entry) => [entry.id, entry]));
@@ -159,7 +172,20 @@ const fill = (document: PaintDocument, name: string, values: Partial<Record<Pain
 
 const gray = (v: number): [number, number, number] => [v, v, v];
 
-/** Built-in smart materials: folders of fill layers masked by smart masks. */
+/** A fill whose roughness wanders between two values over the surface, as real metal and paint do. */
+const varied = (document: PaintDocument, name: string, baseColor: [number, number, number], low: number, high: number, metallic: number, mask?: MaskEffect[]): PaintLayer => {
+    const layer = newFillLayer(document, name, {
+        baseColor: { kind: 'value', value: baseColor },
+        roughness: { kind: 'graph', graphId: `${BUILTIN_PREFIX}surfaceBreakup`, output: 'roughness', values: { low, high } },
+        metallic: { kind: 'value', value: gray(metallic) },
+    });
+    return mask ? { ...layer, mask } : layer;
+};
+
+/**
+ * Built-in smart materials: folders of fill layers masked by smart masks. Base colours are sRGB and
+ * keep to measured ranges: metals 0.7-1 (steel and iron about 0.77), everything else 0.12-0.94.
+ */
 export const SMART_MATERIALS: ReadonlyArray<{ id: string; name: string; description: string; swatch: string; build: (document: PaintDocument) => PaintLayer }> = [
     {
         id: 'paintedMetal',
@@ -167,20 +193,21 @@ export const SMART_MATERIALS: ReadonlyArray<{ id: string; name: string; descript
         description: 'Painted steel with the paint worn off its edges and dirt in its creases.',
         swatch: '#5b6b4c',
         build: (document) => newFolder('Worn painted metal', [
-            fill(document, 'Bare steel', { baseColor: [0.56, 0.57, 0.58], roughness: gray(0.32), metallic: gray(1) }),
-            fill(document, 'Paint', { baseColor: [0.29, 0.36, 0.22], roughness: gray(0.55), metallic: gray(0) }, generatorEffect(`${BUILTIN_PREFIX}edgeWear`, {}, true)),
-            fill(document, 'Grime', { baseColor: [0.12, 0.1, 0.08], roughness: gray(0.85) }, generatorEffect(`${BUILTIN_PREFIX}cavityDirt`, { amount: 0.45 })),
+            varied(document, 'Bare steel', [0.77, 0.78, 0.78], 0.24, 0.42, 1),
+            varied(document, 'Paint', [0.29, 0.36, 0.22], 0.48, 0.66, 0, generatorEffect(`${BUILTIN_PREFIX}edgeWear`, {}, true)),
+            fill(document, 'Grime', { baseColor: [0.2, 0.17, 0.13], roughness: gray(0.85) }, generatorEffect(`${BUILTIN_PREFIX}cavityDirt`, { amount: 0.45 })),
         ]),
     },
     {
         id: 'rustyIron',
         name: 'Rusty iron',
-        description: 'Dark iron with rust spreading through sheltered places and bright worn edges.',
+        description: 'Iron with rust spreading through sheltered places, dark stains in its creases and bright worn edges.',
         swatch: '#7a3f1d',
         build: (document) => newFolder('Rusty iron', [
-            fill(document, 'Iron', { baseColor: [0.32, 0.31, 0.3], roughness: gray(0.5), metallic: gray(1) }),
-            fill(document, 'Rust', { baseColor: [0.42, 0.19, 0.08], roughness: gray(0.9), metallic: gray(0), height: gray(0.56) }, generatorEffect(`${BUILTIN_PREFIX}rustSpots`)),
-            fill(document, 'Polished edges', { baseColor: [0.62, 0.62, 0.62], roughness: gray(0.25), metallic: gray(1) }, generatorEffect(`${BUILTIN_PREFIX}edgeWear`, { amount: 0.25, sharpness: 0.85 })),
+            varied(document, 'Iron', [0.71, 0.7, 0.68], 0.4, 0.72, 1),
+            fill(document, 'Rust stains', { baseColor: [0.33, 0.17, 0.1], roughness: gray(0.8), metallic: gray(0) }, generatorEffect(`${BUILTIN_PREFIX}cavityDirt`, { amount: 0.6 })),
+            fill(document, 'Rust', { baseColor: [0.45, 0.23, 0.12], roughness: gray(0.9), metallic: gray(0), height: gray(0.56) }, generatorEffect(`${BUILTIN_PREFIX}rustSpots`, { amount: 0.62 })),
+            fill(document, 'Polished edges', { baseColor: [0.86, 0.86, 0.85], roughness: gray(0.22), metallic: gray(1) }, generatorEffect(`${BUILTIN_PREFIX}edgeWear`, { amount: 0.25, sharpness: 0.85 })),
         ]),
     },
     {
@@ -189,9 +216,9 @@ export const SMART_MATERIALS: ReadonlyArray<{ id: string; name: string; descript
         description: 'Matte plastic, scuffed lighter on its edges, dusty on top.',
         swatch: '#26282b',
         build: (document) => newFolder('Scuffed plastic', [
-            fill(document, 'Plastic', { baseColor: [0.11, 0.115, 0.12], roughness: gray(0.62), metallic: gray(0) }),
-            fill(document, 'Scuffs', { baseColor: [0.24, 0.24, 0.25], roughness: gray(0.78) }, generatorEffect(`${BUILTIN_PREFIX}edgeWear`, { amount: 0.35, breakup: 0.8 })),
-            fill(document, 'Scratches', { baseColor: [0.32, 0.32, 0.33], roughness: gray(0.45) }, generatorEffect(`${BUILTIN_PREFIX}scratches`, { amount: 0.6 })),
+            varied(document, 'Plastic', [0.16, 0.165, 0.17], 0.55, 0.7, 0),
+            fill(document, 'Scuffs', { baseColor: [0.3, 0.3, 0.31], roughness: gray(0.78) }, generatorEffect(`${BUILTIN_PREFIX}edgeWear`, { amount: 0.35, breakup: 0.8 })),
+            fill(document, 'Scratches', { baseColor: [0.38, 0.38, 0.39], roughness: gray(0.45) }, generatorEffect(`${BUILTIN_PREFIX}scratches`, { amount: 0.6 })),
             fill(document, 'Dust', { baseColor: [0.45, 0.42, 0.38], roughness: gray(0.95) }, generatorEffect(`${BUILTIN_PREFIX}dust`, { amount: 0.55 })),
         ]),
     },
@@ -202,14 +229,14 @@ export const SMART_MATERIALS: ReadonlyArray<{ id: string; name: string; descript
         swatch: '#5a3420',
         build: (document) => {
             const grain = newFillLayer(document, 'Leather', {
-                baseColor: { kind: 'value', value: [0.3, 0.17, 0.1] },
+                baseColor: { kind: 'value', value: [0.32, 0.19, 0.12] },
                 roughness: { kind: 'graph', graphId: `${BUILTIN_PREFIX}leatherGrain`, output: 'roughness', values: {} },
                 height: { kind: 'graph', graphId: `${BUILTIN_PREFIX}leatherGrain`, output: 'height', values: {} },
                 metallic: { kind: 'value', value: [0, 0, 0] },
             });
             return newFolder('Aged leather', [
                 grain,
-                fill(document, 'Creases', { baseColor: [0.14, 0.08, 0.05] }, generatorEffect(`${BUILTIN_PREFIX}cavityDirt`, { amount: 0.55 })),
+                fill(document, 'Creases', { baseColor: [0.19, 0.13, 0.09] }, generatorEffect(`${BUILTIN_PREFIX}cavityDirt`, { amount: 0.55 })),
                 fill(document, 'Rubbed edges', { baseColor: [0.45, 0.3, 0.2], roughness: gray(0.45) }, generatorEffect(`${BUILTIN_PREFIX}edgeWear`, { amount: 0.3 })),
             ]);
         },
@@ -220,21 +247,33 @@ export const SMART_MATERIALS: ReadonlyArray<{ id: string; name: string; descript
         description: 'Dirt in the crevices, grime rising from below and dust on top, over whatever is beneath.',
         swatch: '#4a4237',
         build: (document) => newFolder('Grime and dust', [
-            fill(document, 'Crevice dirt', { baseColor: [0.1, 0.085, 0.07], roughness: gray(0.9) }, generatorEffect(`${BUILTIN_PREFIX}cavityDirt`)),
-            fill(document, 'Grime', { baseColor: [0.16, 0.13, 0.1], roughness: gray(0.85) }, generatorEffect(`${BUILTIN_PREFIX}grimeBelow`)),
+            fill(document, 'Crevice dirt', { baseColor: [0.17, 0.145, 0.12], roughness: gray(0.9) }, generatorEffect(`${BUILTIN_PREFIX}cavityDirt`)),
+            fill(document, 'Grime', { baseColor: [0.22, 0.18, 0.14], roughness: gray(0.85) }, generatorEffect(`${BUILTIN_PREFIX}grimeBelow`)),
             fill(document, 'Dust', { baseColor: [0.5, 0.47, 0.42], roughness: gray(0.95) }, generatorEffect(`${BUILTIN_PREFIX}dust`)),
         ]),
     },
 ];
 
-/** A layer drawing every channel output of a texture graph material, with this surface's mesh maps. */
+/** Nodes that read the painted surface itself (its mesh maps or its shape in space). */
+const SURFACE_NODES = new Set(['meshMap', 'triplanar', 'directionMask', 'axisGradient', 'noise3d', 'blendMeshNormals']);
+
+/**
+ * A layer drawing every channel output of a texture graph material, with this surface's mesh maps.
+ * A flat tiling material is cast from three sides so it runs on across UV seams; a graph that reads the
+ * surface itself already follows it and is laid along the UVs.
+ */
 export const graphMaterialLayer = (document: PaintDocument, graphId: string, name: string, graph: TextureGraph): PaintLayer => {
     const fills: PaintLayer['fill'] = {};
+    const cast = !graph.nodes.some((node) => SURFACE_NODES.has(node.type));
     for (const node of graph.nodes) {
         if (node.type !== 'output') continue;
         const channel = node.params.channel as string;
         const target = channel === 'baseColor' || channel === 'roughness' || channel === 'metallic' || channel === 'height' || channel === 'normal' || channel === 'emissive' || channel === 'opacity' ? channel as PaintChannel : null;
-        if (target && document.channels.includes(target) && !fills[target]) fills[target] = { kind: 'graph', graphId, output: channel, values: {} };
+        if (target && document.channels.includes(target) && !fills[target]) {
+            fills[target] = cast
+                ? { kind: 'graph', graphId, output: channel, values: {}, projection: 'triplanar', scale: 4, rotation: 0, sharpness: 4 }
+                : { kind: 'graph', graphId, output: channel, values: {} };
+        }
     }
     return { id: paintId('l'), name, kind: 'fill', visible: true, channels: channelsOf(document, Object.keys(fills) as PaintChannel[]), fill: fills, from: name };
 };

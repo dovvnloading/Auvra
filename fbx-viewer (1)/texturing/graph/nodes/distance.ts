@@ -541,11 +541,11 @@ void main() {
         type: 'normalToHeight',
         label: 'Height from normal',
         category: 'Height and normals',
-        description: 'Rebuilds a height map that would give a normal map, solving coarse to fine.',
+        description: 'Rebuilds a height map that would give a normal map, solving coarse to fine, stretched to fill black to white.',
         keywords: ['normal to height', 'integrate', 'reconstruct height'],
         inputs: [colorIn('in', 'Normal', 'normal')],
         outputs: [out('gray')],
-        params: [float('intensity', 'Strength', 1, 0, 8), int('iterations', 'Quality', 24, 4, 96)],
+        params: [float('intensity', 'Contrast', 1, 0, 8), int('iterations', 'Quality', 24, 4, 96)],
         sizeFrom: 'input',
         async run(context) {
             const input = context.input('in');
@@ -556,9 +556,8 @@ void main() {
             const slopes: GpuImage[] = [];
             let level = gpu.image(context.width, context.height, 'color', 32);
             await gpu.pass(level, {
-                fragment: `uniform float uIntensity;\nvoid main() { vec3 n = texture(source, vUv).xyz * 2.0 - 1.0; n.z = max(n.z, 0.05); outColor = vec4(-n.xy / n.z * uIntensity / max(uSize.x, uSize.y) * 64.0, 0.0, 1.0); }`,
+                fragment: 'void main() { vec3 n = texture(source, vUv).xyz * 2.0 - 1.0; n.z = max(n.z, 0.05); outColor = vec4(-n.xy / n.z / max(uSize.x, uSize.y) * 64.0, 0.0, 1.0); }',
                 inputs: { source: input },
-                uniforms: { uIntensity: Number(context.params.intensity) },
             });
             slopes.push(level);
             while (level.width > 16 && level.height > 16) {
@@ -573,7 +572,8 @@ void main() {
             for (let index = slopes.length - 1; index >= 0; index--) {
                 const slope = slopes[index];
                 let current = gpu.image(slope.width, slope.height, 'gray', 32);
-                if (height) await gpu.pass(current, { fragment: 'void main() { outColor = vec4(texture(source, vUv).r * 2.0); }', inputs: { source: height } });
+                // Heights keep their value from level to level (only slopes grow with the pixel size).
+                if (height) await gpu.pass(current, { fragment: 'void main() { outColor = vec4(texture(source, vUv).r); }', inputs: { source: height } });
                 else gpu.clear(current, [0, 0, 0, 1]);
                 gpu.release(height);
                 for (let step = 0; step < iterations * (index === slopes.length - 1 ? 4 : 1); step++) {
@@ -594,17 +594,36 @@ void main() {
                 height = current;
             }
             for (const slope of slopes) gpu.release(slope);
-            // The solution floats up and down as a whole: centre it on mid grey.
-            let mean = gpu.image(Math.max(1, height!.width >> 1), Math.max(1, height!.height >> 1), 'gray', 32);
-            await gpu.pass(mean, { fragment: 'void main() { outColor = texture(source, vUv); }', inputs: { source: height! } });
-            while (mean.width > 1 || mean.height > 1) {
-                const next = gpu.image(Math.max(1, mean.width >> 1), Math.max(1, mean.height >> 1), 'gray', 32);
-                await gpu.pass(next, { fragment: 'void main() { outColor = texture(source, vUv); }', inputs: { source: mean } });
-                gpu.release(mean);
-                mean = next;
+            // The solution floats up and down as a whole and its height depends on how strong the normal
+            // map was: stretch it to fill black to white, so nothing is cut off. Lowest and highest first.
+            let range = gpu.image((height!.width + 1) >> 1, (height!.height + 1) >> 1, 'color', 32);
+            const gather = (first: boolean) => `void main() {
+    ivec2 p = ivec2(gl_FragCoord.xy) * 2;
+    ivec2 last = textureSize(source, 0) - 1;
+    vec2 a = texelFetch(source, min(p, last), 0).${first ? 'rr' : 'rg'};
+    vec2 b = texelFetch(source, min(p + ivec2(1, 0), last), 0).${first ? 'rr' : 'rg'};
+    vec2 c = texelFetch(source, min(p + ivec2(0, 1), last), 0).${first ? 'rr' : 'rg'};
+    vec2 d = texelFetch(source, min(p + ivec2(1, 1), last), 0).${first ? 'rr' : 'rg'};
+    outColor = vec4(min(min(a.x, b.x), min(c.x, d.x)), max(max(a.y, b.y), max(c.y, d.y)), 0.0, 1.0);
+}`;
+            await gpu.pass(range, { fragment: gather(true), inputs: { source: height! } });
+            while (range.width > 1 || range.height > 1) {
+                const next = gpu.image((range.width + 1) >> 1, (range.height + 1) >> 1, 'color', 32);
+                await gpu.pass(next, { fragment: gather(false), inputs: { source: range } });
+                gpu.release(range);
+                range = next;
             }
-            await gpu.pass(result, { fragment: 'void main() { float m = texelFetch(average, ivec2(0), 0).r; outColor = vec4(saturate(0.5 + (texture(source, vUv).r - m))); }', inputs: { source: height!, average: mean } });
-            gpu.release(mean);
+            await gpu.pass(result, {
+                fragment: `uniform float uContrast;
+void main() {
+    vec2 span = texelFetch(range, ivec2(0), 0).rg;
+    float h = span.y - span.x > 1e-6 ? (texture(source, vUv).r - span.x) / (span.y - span.x) : 0.5;
+    outColor = vec4(saturate(0.5 + (h - 0.5) * uContrast));
+}`,
+                inputs: { source: height!, range },
+                uniforms: { uContrast: Number(context.params.intensity) },
+            });
+            gpu.release(range);
             gpu.release(height);
             return { out: result };
         },

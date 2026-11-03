@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { blendModeIndex } from '../gpu/glslLibrary';
 import type { GpuImage, TextureGpu } from '../gpu/textureGpu';
-import { hashText } from '../graph/document';
+import { graphContentKey, hashText } from '../graph/document';
 import { TextureGraphEvaluator, type ExternalImage } from '../graph/evaluator';
 import { MESH_MAPS, OUTPUT_NODE_TYPE, meshMapKey, type MeshMapName } from '../graph/nodes/io';
 import { jumpFlood } from '../graph/nodes/distance';
@@ -9,13 +9,14 @@ import type { GraphResolver } from '../graph/registry';
 import { padImage, releaseTileBake, type TileBake } from '../bake/meshBaker';
 import { UvRaster } from '../bake/uvRaster';
 import type { PartMesh } from '../mesh/partMesh';
-import { encodePng, readPicture } from '../png';
+import { encodePng, encodePng16, pngBitDepth, readPicture, readPng16 } from '../png';
 import type { ChannelImages } from '../materialOutput';
 import {
     CHANNEL_DEFAULT,
     CHANNEL_IS_COLOR,
     PAINT_CHANNELS,
     allLayers,
+    type FillProjection,
     type FillSource,
     type MaskEffect,
     type PaintChannel,
@@ -114,8 +115,106 @@ void main() {
     outColor = vec4(saturate(mix(m, r, uOpacity)));
 }`;
 
+/**
+ * A kept picture at another size scaled to this set's: averaged over each block when shrinking, blended
+ * between neighbours when growing, weighting colour by coverage so see-through pixels add no black.
+ */
+const RESAMPLE = /* glsl */ `
+vec4 weighted(ivec2 p, ivec2 last) {
+    vec4 c = texelFetch(source, clamp(p, ivec2(0), last), 0);
+    return vec4(c.rgb * c.a, c.a);
+}
+void main() {
+    ivec2 size = textureSize(source, 0);
+    ivec2 last = size - 1;
+    float ratio = float(size.x) / uSize.x;
+    vec4 sum = vec4(0.0);
+    if (ratio > 1.0) {
+        int n = int(ratio + 0.5);
+        ivec2 base = ivec2(gl_FragCoord.xy) * n;
+        for (int y = 0; y < 16; y++) {
+            if (y >= n) break;
+            for (int x = 0; x < 16; x++) {
+                if (x >= n) break;
+                sum += weighted(base + ivec2(x, y), last);
+            }
+        }
+        sum /= float(n * n);
+    } else {
+        vec2 at = vUv * vec2(size) - 0.5;
+        ivec2 i = ivec2(floor(at));
+        vec2 f = fract(at);
+        sum = mix(mix(weighted(i, last), weighted(i + ivec2(1, 0), last), f.x), mix(weighted(i + ivec2(0, 1), last), weighted(i + ivec2(1, 1), last), f.x), f.y);
+    }
+    outColor = sum.a > 1e-5 ? vec4(sum.rgb / sum.a, sum.a) : vec4(0.0);
+}`;
+
+/**
+ * A fill's picture laid onto the texels: along the UVs, or cast along each axis and blended by how the
+ * surface faces. A cast normal map is not blended as colours: each side's lean is turned into the
+ * model's space, laid along the surface, and read back in the frame the renderer uses there.
+ */
+const CAST = /* glsl */ `
+uniform sampler2D uTexture;
+uniform int uProjection;
+uniform float uScale;
+uniform float uRotation;
+uniform float uSharpness;
+uniform int uSrgb;
+uniform int uGray;
+uniform int uRebuildNormal;
+uniform int uNormalMap;
+uniform int uChannel;
+uniform vec3 uCentre;
+uniform float uExtent;
+vec4 read(vec2 uv) {
+    vec4 c = texture(uTexture, uv);
+    if (uGray == 1) c.rgb = c.rrr;
+    if (uSrgb == 1) c.rgb = linearToSrgb(c.rgb);
+    if (uRebuildNormal == 1) { vec2 xy = c.xy * 2.0 - 1.0; c.rgb = vec3(xy, sqrt(saturate(1.0 - dot(xy, xy)))) * 0.5 + 0.5; }
+    if (uChannel > 0) c.rgb = vec3(c[uChannel]);
+    return c;
+}
+// How far a normal map pixel leans along the picture's two axes, as directions in the model: t and b
+// are where the picture's u and v grow; r is the picture's turn.
+vec3 lean(vec2 uv, mat2 r, vec3 t, vec3 b) {
+    vec3 n = read(uv).xyz * 2.0 - 1.0;
+    vec2 d = (n.xy / max(n.z, 0.05)) * r;
+    return t * d.x + b * d.y;
+}
+void main() {
+    if (uProjection == 0) {
+        vec2 uv = vSourceUv;
+        if (uScale != 1.0 || uRotation != 0.0) uv = rotate2(radians(uRotation)) * (uv * uScale);
+        outColor = vec4(read(uv).rgb, 1.0);
+        return;
+    }
+    vec3 n = normalize(vNormal);
+    vec3 w = pow(abs(n), vec3(uSharpness));
+    w /= max(w.x + w.y + w.z, 1e-5);
+    vec3 q = (vPos - uCentre) / uExtent * uScale;
+    mat2 r = rotate2(radians(uRotation));
+    vec2 ux = r * q.zy;
+    vec2 uy = r * q.xz;
+    vec2 uz = r * q.xy;
+    if (uNormalMap == 0) {
+        outColor = vec4((read(ux) * w.x + read(uy) * w.y + read(uz) * w.z).rgb, 1.0);
+        return;
+    }
+    vec3 slope = lean(ux, r, vec3(0.0, 0.0, 1.0), vec3(0.0, 1.0, 0.0)) * w.x
+        + lean(uy, r, vec3(1.0, 0.0, 0.0), vec3(0.0, 0.0, 1.0)) * w.y
+        + lean(uz, r, vec3(1.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0)) * w.z;
+    vec3 bent = normalize(n + slope - n * dot(n, slope));
+    mat3 frame = surfaceFrame(n);
+    vec3 local = abs(determinant(frame)) > 1e-8 ? inverse(frame) * bent : transpose(frame) * bent;
+    outColor = vec4(normalize(local) * 0.5 + 0.5, 1.0);
+}`;
+
 const MASK_KINDS = { paint: 0, fill: 1, generator: 2, levels: 3, blur: 4, invert: 5 } as const;
 const MASK_BLENDS = { multiply: 0, add: 1, subtract: 2, replace: 3, max: 4, min: 5 } as const;
+
+/** Baked maps kept at 16 bits: where each texel is, and smooth values that steps would show in. */
+const FINE_MAPS: ReadonlySet<MeshMapName> = new Set(['position', 'height', 'curvature']);
 
 /** Picture keys: a layer's channel, or a mask effect. */
 export const pictureKey = (owner: string, channel?: PaintChannel): string => (channel ? `${owner}:${channel}` : owner);
@@ -128,6 +227,10 @@ export class PaintStack {
     readonly tiles: number[];
     document: PaintDocument;
     bake: Map<number, TileBake> | null = null;
+    /** The size (power of two) the baked maps were made at, when it differs from the set's. */
+    bakeSize: number | null = null;
+    /** Why the layers could not be put together last time, or null. */
+    problem: string | null = null;
     /** Coverage and nearest-covered maps per tile, for padding (from the bake, or worked out on opening). */
     private padding = new Map<number, { coverage: GpuImage; nearest: GpuImage }>();
     /** Painted pictures by key, then tile. */
@@ -136,6 +239,8 @@ export class PaintStack {
     readonly unsaved = new Set<string>();
     readonly outputs = new Map<number, TileOutputs>();
     private readonly fills = new Map<string, Cached>();
+    /** Graph pictures copied with smaller versions of themselves, for casting. */
+    private readonly castCopies = new Map<string, { signature: string; target: THREE.WebGLRenderTarget }>();
     private readonly masks = new Map<string, Cached>();
     private readonly evaluators = new Map<string, TextureGraphEvaluator>();
     private readonly listeners = new Set<() => void>();
@@ -159,7 +264,8 @@ export class PaintStack {
         const stack = new PaintStack(host, part, document);
         await stack.layOut();
         await stack.loadPictures();
-        await stack.compose();
+        // A layer that cannot be drawn (a broken graph, say) leaves the set open, with the problem shown.
+        await stack.compose().catch(() => undefined);
         return stack;
     }
 
@@ -208,7 +314,10 @@ export class PaintStack {
                     texture.generateMipmaps = false;
                     texture.needsUpdate = true;
                     const image = this.picture(key, tile);
-                    this.gpu.passNow(image, { fragment: 'void main() { outColor = texture(source, vUv); }', inputs: { source: texture } });
+                    // Kept at another size (the set was resized): scaled with the colour of see-through
+                    // pixels left out, so stroke edges do not darken.
+                    const fragment = bitmap.width === this.size && bitmap.height === this.size ? 'void main() { outColor = texture(source, vUv); }' : RESAMPLE;
+                    this.gpu.passNow(image, { fragment, inputs: { source: texture } });
                     texture.dispose();
                     bitmap.close();
                 } catch {
@@ -231,16 +340,30 @@ export class PaintStack {
                     const entry = bake.get(Number(tileName));
                     if (!entry || !picture?.assetId) continue;
                     try {
-                        const bitmap = await readPicture(await this.host.fetchPicture(picture.assetId));
-                        const texture = new THREE.Texture(bitmap);
-                        texture.flipY = false;
-                        texture.colorSpace = THREE.NoColorSpace;
-                        texture.needsUpdate = true;
+                        const blob = await this.host.fetchPicture(picture.assetId);
                         const gray = ['ambientOcclusion', 'curvature', 'thickness', 'height'].includes(name);
-                        const image = this.gpu.image(this.size, this.size, gray ? 'gray' : 'color', gray ? 16 : 8);
-                        this.gpu.passNow(image, { fragment: 'void main() { outColor = texture(source, vUv); }', inputs: { source: texture } });
-                        texture.dispose();
-                        bitmap.close();
+                        const image = this.gpu.image(this.size, this.size, gray ? 'gray' : 'color', gray || FINE_MAPS.has(name as MeshMapName) ? 16 : 8);
+                        if (await pngBitDepth(blob) === 16) {
+                            // Kept at 16 bits: read whole (a browser would read it at 8).
+                            const fine = await readPng16(blob);
+                            if (fine.width !== this.size) this.bakeSize = Math.round(Math.log2(fine.width));
+                            const texture = new THREE.DataTexture(fine.data, fine.width, fine.height, THREE.RGBAFormat, THREE.FloatType);
+                            texture.colorSpace = THREE.NoColorSpace;
+                            texture.minFilter = texture.magFilter = fine.width === this.size ? THREE.NearestFilter : THREE.LinearFilter;
+                            texture.needsUpdate = true;
+                            this.gpu.passNow(image, { fragment: 'void main() { outColor = texture(source, vUv); }', inputs: { source: texture } });
+                            texture.dispose();
+                        } else {
+                            const bitmap = await readPicture(blob);
+                            if (bitmap.width !== this.size) this.bakeSize = Math.round(Math.log2(bitmap.width));
+                            const texture = new THREE.Texture(bitmap);
+                            texture.flipY = false;
+                            texture.colorSpace = THREE.NoColorSpace;
+                            texture.needsUpdate = true;
+                            this.gpu.passNow(image, { fragment: 'void main() { outColor = texture(source, vUv); }', inputs: { source: texture } });
+                            texture.dispose();
+                            bitmap.close();
+                        }
                         entry.maps[name as MeshMapName] = image;
                     } catch {
                         // Re-baking brings a lost map back.
@@ -291,10 +414,16 @@ export class PaintStack {
         for (const entry of [...this.unsaved]) {
             const [key, tileName] = entry.split('|');
             const image = this.pictures.get(key)?.get(Number(tileName));
-            if (!image) { this.unsaved.delete(entry); continue; }
-            const pixels = this.gpu.readRgba8(image, this.size, this.size, 'raw', false);
-            stored.set(entry, await this.host.storePicture(await encodePng(pixels, this.size, this.size)));
+            // Marked kept as its pixels are read: a stroke landing while they are stored marks it again.
             this.unsaved.delete(entry);
+            if (!image) continue;
+            const pixels = this.gpu.readRgba8(image, this.size, this.size, 'raw', false);
+            try {
+                stored.set(entry, await this.host.storePicture(await encodePng(pixels, this.size, this.size)));
+            } catch (error) {
+                this.unsaved.add(entry);
+                throw error;
+            }
         }
         if (!stored.size) return this.document;
         const name = (key: string, tile: number) => stored.get(`${key}|${tile}`);
@@ -335,6 +464,7 @@ export class PaintStack {
     setBake(bake: Map<number, TileBake>): void {
         if (this.bake) for (const result of this.bake.values()) releaseTileBake(this.gpu, result);
         this.bake = bake;
+        this.bakeSize = null;
         this.sourcesVersion++;
         this.invalidate();
     }
@@ -346,8 +476,20 @@ export class PaintStack {
         for (const [tile, result] of this.bake) {
             for (const [name, image] of Object.entries(result.maps)) {
                 if (!image) continue;
-                const pixels = this.gpu.readRgba8(image, this.size, this.size, image.kind === 'gray' ? 'gray' : 'raw', false);
-                const assetId = await this.host.storePicture(await encodePng(pixels, this.size, this.size));
+                let blob: Blob;
+                if (FINE_MAPS.has(name as MeshMapName)) {
+                    // 8 bits would step these in 1/255ths of the model: noise and triplanar masks read from them would turn blocky.
+                    const values = this.gpu.readFloat(image);
+                    const gray = image.kind === 'gray';
+                    const samples = new Uint16Array(image.width * image.height * (gray ? 1 : 4));
+                    const quantize = (value: number) => Math.round(Math.min(1, Math.max(0, value)) * 65535);
+                    if (gray) for (let p = 0; p < samples.length; p++) samples[p] = quantize(values[p * 4]);
+                    else for (let i = 0; i < samples.length; i++) samples[i] = (i & 3) === 3 ? 65535 : quantize(values[i]);
+                    blob = await encodePng16(samples, image.width, image.height, gray ? 1 : 4);
+                } else {
+                    blob = await encodePng(this.gpu.readRgba8(image, this.size, this.size, image.kind === 'gray' ? 'gray' : 'raw', false), this.size, this.size);
+                }
+                const assetId = await this.host.storePicture(blob);
                 maps[name as MeshMapName] = { ...(maps[name as MeshMapName] ?? {}), [String(tile)]: { assetId } };
             }
         }
@@ -374,7 +516,8 @@ export class PaintStack {
     invalidate(channels?: readonly PaintChannel[]): void {
         if (!channels) this.stale = null;
         else if (this.stale) for (const channel of channels) this.stale.add(channel);
-        void this.compose();
+        // A failure is shown through `problem`.
+        this.compose().catch(() => undefined);
     }
 
     /** Puts the stale channels together; calls made meanwhile run once more afterwards. */
@@ -384,16 +527,47 @@ export class PaintStack {
             return this.composing;
         }
         this.composing = (async () => {
-            do {
-                this.again = false;
-                const channels = this.stale ? [...this.stale] : [...PAINT_CHANNELS];
-                this.stale = new Set();
-                for (const tile of this.tiles) await this.composeTile(tile, channels);
+            try {
+                do {
+                    this.again = false;
+                    this.prune();
+                    const channels = this.stale ? [...this.stale] : [...PAINT_CHANNELS];
+                    this.stale = new Set();
+                    for (const tile of this.tiles) await this.composeTile(tile, channels);
+                    this.problem = null;
+                    this.emit();
+                } while (this.again);
+            } catch (error) {
+                // Put together in full next time, once whatever failed (a graph a fill draws from, say) is put right.
+                this.stale = null;
+                this.problem = error instanceof Error ? error.message : 'The layers could not be put together.';
                 this.emit();
-            } while (this.again);
-            this.composing = null;
+                throw error;
+            } finally {
+                this.composing = null;
+            }
         })();
         return this.composing;
+    }
+
+    /**
+     * Lets go of evaluators and kept pictures of layers, channels and mask effects the document no longer
+     * has (between compose rounds, when none is drawing). Undo brings a layer back drawn afresh.
+     */
+    private prune(): void {
+        const live = new Set<string>();
+        for (const layer of allLayers(this.document.layers)) {
+            live.add(layer.id);
+            for (const channel of PAINT_CHANNELS) live.add(`${layer.id}:${channel}`);
+            for (const source of Object.values(layer.fill ?? {})) if (source?.kind === 'graph') live.add(`${layer.id}:graph:${source.graphId}`);
+            for (const effect of layer.mask ?? []) live.add(`${layer.id}:${effect.id}`);
+        }
+        // Keys end with the tile.
+        const owner = (key: string) => key.slice(0, key.lastIndexOf(':'));
+        for (const [key, evaluator] of this.evaluators) if (!live.has(owner(key))) { evaluator.dispose(); this.evaluators.delete(key); }
+        for (const [key, cached] of this.fills) if (!live.has(owner(key))) { this.gpu.release(cached.image); this.fills.delete(key); }
+        for (const [key, cached] of this.masks) if (!live.has(owner(key))) { this.gpu.release(cached.image); this.masks.delete(key); }
+        for (const [key, copy] of this.castCopies) if (!live.has(owner(key))) { copy.target.dispose(); this.castCopies.delete(key); }
     }
 
     private async composeTile(tile: number, channels: readonly PaintChannel[]): Promise<void> {
@@ -538,6 +712,11 @@ void main() {
 
     /** A graph's output drawn for this tile with its mesh maps; outputs are named by channel or by Output node id. */
     async graphOutput(graphId: string, output: string, values: Readonly<Record<string, unknown>>, tile: number, evaluatorKey: string): Promise<GpuImage | null> {
+        return (await this.graphState(graphId, output, values, tile, evaluatorKey))?.image ?? null;
+    }
+
+    /** As graphOutput, with the signature of everything the picture came from. */
+    private async graphState(graphId: string, output: string, values: Readonly<Record<string, unknown>>, tile: number, evaluatorKey: string): Promise<{ image: GpuImage; signature: string } | null> {
         const entry = this.host.resolveGraph(graphId);
         if (!entry) return null;
         const outputs = entry.graph.nodes.filter((node) => node.type === OUTPUT_NODE_TYPE);
@@ -555,73 +734,97 @@ void main() {
         });
         const state = states.get(node.id);
         if (state?.error) throw new Error(`${entry.name}: ${state.error}`);
-        return state?.outputs.out ?? null;
+        return state?.outputs.out ? { image: state.outputs.out, signature: state.signature } : null;
     }
 
     private async fillOf(layerId: string, channel: PaintChannel, fill: FillSource, tile: number): Promise<{ image: GpuImage | THREE.Texture | null; kind: number; value: [number, number, number] } | null> {
         if (fill.kind === 'value') return { image: null, kind: 3, value: fill.value };
-        if (fill.kind === 'graph') {
-            const image = await this.graphOutput(fill.graphId, fill.output, fill.values, tile, `${layerId}:${channel}`);
-            return image ? { image, kind: image.kind === 'gray' ? 2 : 1, value: [0, 0, 0] } : null;
-        }
         const key = `${layerId}:${channel}:${tile}`;
+        if (fill.kind === 'graph') {
+            // Channels drawn from the same graph share its evaluator, so the nodes they have in common are drawn once.
+            const drawn = await this.graphState(fill.graphId, fill.output, fill.values, tile, `${layerId}:graph:${fill.graphId}`);
+            if (!drawn) return null;
+            const projection: FillProjection = { projection: fill.projection ?? 'uv', scale: fill.scale ?? 1, rotation: fill.rotation ?? 0, sharpness: fill.sharpness ?? 4 };
+            if (projection.projection === 'uv' && projection.scale === 1 && projection.rotation === 0) {
+                // Drawn straight along the UVs: a cast kept from earlier settings is let go.
+                const stale = this.fills.get(key);
+                if (stale) { this.gpu.release(stale.image); this.fills.delete(key); }
+                this.castCopies.get(key)?.target.dispose();
+                this.castCopies.delete(key);
+                return { image: drawn.image, kind: drawn.image.kind === 'gray' ? 2 : 1, value: [0, 0, 0] };
+            }
+            // Cast pictures are read at many sizes on the surface: a copy with smaller versions of itself keeps them from shimmering.
+            let copy = this.castCopies.get(key);
+            if (copy?.signature !== drawn.signature) {
+                if (!copy || copy.target.width !== drawn.image.width || copy.target.height !== drawn.image.height) {
+                    copy?.target.dispose();
+                    copy = {
+                        signature: '',
+                        target: new THREE.WebGLRenderTarget(drawn.image.width, drawn.image.height, {
+                            type: drawn.image.kind === 'gray' ? THREE.HalfFloatType : THREE.UnsignedByteType,
+                            format: THREE.RGBAFormat,
+                            wrapS: THREE.RepeatWrapping,
+                            wrapT: THREE.RepeatWrapping,
+                            minFilter: THREE.LinearMipmapLinearFilter,
+                            magFilter: THREE.LinearFilter,
+                            generateMipmaps: true,
+                            depthBuffer: false,
+                            colorSpace: THREE.NoColorSpace,
+                        }),
+                    };
+                }
+                this.gpu.copy(drawn.image, copy.target);
+                copy.signature = drawn.signature;
+                this.castCopies.set(key, copy);
+            }
+            const image = this.cast(key, [drawn.signature], copy.target.texture, channel, tile, projection, { gray: drawn.image.kind === 'gray', srgb: false, rebuildNormal: false, channelRead: 0 });
+            return { image, kind: 1, value: [0, 0, 0] };
+        }
         const current = fill.kind === 'current' ? this.host.current[channel] : null;
         if (fill.kind === 'current' && Array.isArray(current)) return { image: null, kind: 3, value: current };
         const texture = fill.kind === 'texture' ? this.host.texture(fill.textureId) : current as THREE.Texture | null;
         if (!texture) return fill.kind === 'current' ? { image: null, kind: 3, value: CHANNEL_DEFAULT[channel] } : null;
-        const signature = hashText(JSON.stringify([fill, texture.uuid, texture.version, tile, this.size]));
-        const cached = this.fills.get(key);
-        if (cached?.signature === signature) return { image: cached.image, kind: 1, value: [0, 0, 0] };
-        if (cached) this.gpu.release(cached.image);
-        const image = this.gpu.image(this.size, this.size, 'color', 8);
-        const channelRead = channel === 'roughness' ? 1 : channel === 'metallic' ? 2 : 0;
-        this.raster.draw(image, tile, `uniform sampler2D uTexture;
-uniform int uProjection;
-uniform float uScale;
-uniform float uRotation;
-uniform float uSharpness;
-uniform int uSrgb;
-uniform int uNormal;
-uniform int uChannel;
-uniform vec3 uCentre;
-vec4 read(vec2 uv) {
-    vec4 c = texture(uTexture, uv);
-    if (uSrgb == 1) c.rgb = linearToSrgb(c.rgb);
-    if (uNormal == 1) { vec2 xy = c.xy * 2.0 - 1.0; c.rgb = vec3(xy, sqrt(saturate(1.0 - dot(xy, xy)))) * 0.5 + 0.5; }
-    if (uChannel > 0) c.rgb = vec3(c[uChannel]);
-    return c;
-}
-void main() {
-    vec4 c;
-    if (uProjection == 0) {
-        vec2 uv = vSourceUv;
-        if (uScale != 1.0 || uRotation != 0.0) uv = rotate2(radians(uRotation)) * (uv * uScale);
-        c = read(uv);
-    } else {
-        vec3 n = normalize(vNormal);
-        vec3 w = pow(abs(n), vec3(uSharpness));
-        w /= max(w.x + w.y + w.z, 1e-5);
-        vec3 q = (vPos - uCentre) * uScale;
-        mat2 r = rotate2(radians(uRotation));
-        c = read(r * q.zy) * w.x + read(r * q.xz) * w.y + read(r * q.xy) * w.z;
+        const projection: FillProjection = fill.kind === 'texture'
+            ? { projection: fill.projection, scale: fill.scale, rotation: fill.rotation, sharpness: fill.sharpness }
+            : { projection: 'uv', scale: 1, rotation: 0, sharpness: 4 };
+        const image = this.cast(key, [texture.uuid, texture.version], texture, channel, tile, projection, {
+            gray: false,
+            srgb: texture.colorSpace === THREE.SRGBColorSpace,
+            rebuildNormal: channel === 'normal' && fill.kind === 'current',
+            channelRead: fill.kind === 'current' ? (channel === 'roughness' ? 1 : channel === 'metallic' ? 2 : 0) : 0,
+        });
+        return { image, kind: 1, value: [0, 0, 0] };
     }
-    outColor = vec4(c.rgb, 1.0);
-}`, {
+
+    /** A picture laid onto this tile's texels along the UVs or from three sides, kept until its source or settings change. */
+    private cast(key: string, source: unknown[], texture: THREE.Texture, channel: PaintChannel, tile: number, projection: FillProjection,
+        read: { gray: boolean; srgb: boolean; rebuildNormal: boolean; channelRead: number }): GpuImage {
+        const signature = hashText(JSON.stringify([source, projection, read, channel, tile, this.size]));
+        const cached = this.fills.get(key);
+        if (cached?.signature === signature) return cached.image;
+        if (cached) this.gpu.release(cached.image);
+        // Height keeps its smooth steps; other channels are fine at 8 bits.
+        const image = this.gpu.image(this.size, this.size, 'color', channel === 'height' ? 16 : 8);
+        const extent = this.part.bounds.getSize(new THREE.Vector3());
+        this.raster.draw(image, tile, CAST, {
             uniforms: {
                 uTexture: texture,
-                uProjection: fill.kind === 'texture' && fill.projection === 'triplanar' ? 1 : 0,
-                uScale: fill.kind === 'texture' ? fill.scale : 1,
-                uRotation: fill.kind === 'texture' ? fill.rotation : 0,
-                uSharpness: fill.kind === 'texture' ? fill.sharpness : 4,
-                uSrgb: texture.colorSpace === THREE.SRGBColorSpace ? 1 : 0,
-                uNormal: channel === 'normal' && fill.kind === 'current' ? 1 : 0,
-                uChannel: fill.kind === 'current' ? channelRead : 0,
+                uProjection: projection.projection === 'triplanar' ? 1 : 0,
+                uScale: projection.scale,
+                uRotation: projection.rotation,
+                uSharpness: projection.sharpness,
+                uSrgb: read.srgb ? 1 : 0,
+                uGray: read.gray ? 1 : 0,
+                uRebuildNormal: read.rebuildNormal ? 1 : 0,
+                uNormalMap: channel === 'normal' ? 1 : 0,
+                uChannel: read.channelRead,
                 uCentre: this.part.bounds.getCenter(new THREE.Vector3()),
+                uExtent: Math.max(extent.x, extent.y, extent.z, 1e-6),
             },
             clear: [0, 0, 0, 1],
         });
         this.fills.set(key, { signature, image });
-        return { image, kind: 1, value: [0, 0, 0] };
+        return image;
     }
 
     // -----------------------------------------------------------------------
@@ -634,7 +837,13 @@ void main() {
         if (!effects.length) return null;
         const key = `${layer.id}:${tile}`;
         const pictureVersions = effects.map((effect) => (effect.kind === 'paint' ? this.pictureVersion(pictureKey(effect.id), tile) : 0));
-        const signature = hashText(JSON.stringify([effects.map(({ pictures: _pictures, ...rest }) => rest), pictureVersions, this.sourcesVersion]));
+        // A smart mask's graph (one of the project's, say) changing redraws the mask too.
+        const graphs = effects.map((effect) => {
+            if (effect.kind !== 'generator' || !effect.graphId) return '';
+            const entry = this.host.resolveGraph(effect.graphId);
+            return entry ? graphContentKey(entry.graph, this.host.resolveGraph, (id) => Boolean(this.host.texture(id))) : 'missing';
+        });
+        const signature = hashText(JSON.stringify([effects.map(({ pictures: _pictures, ...rest }) => rest), pictureVersions, graphs, this.sourcesVersion]));
         const cached = this.masks.get(key);
         if (cached?.signature === signature) return cached.image;
         let m = this.gpu.image(this.size, this.size, 'gray', 16);
@@ -728,6 +937,8 @@ void main() {
         for (const byTile of this.pictures.values()) for (const image of byTile.values()) this.gpu.release(image);
         for (const cached of [...this.fills.values(), ...this.masks.values()]) this.gpu.release(cached.image);
         for (const evaluator of this.evaluators.values()) evaluator.dispose();
+        for (const copy of this.castCopies.values()) copy.target.dispose();
+        this.castCopies.clear();
         for (const padding of this.padding.values()) { this.gpu.release(padding.coverage); this.gpu.release(padding.nearest); }
         if (this.bake) for (const result of this.bake.values()) releaseTileBake(this.gpu, result);
         this.raster.dispose();
