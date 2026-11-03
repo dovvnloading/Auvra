@@ -8,6 +8,9 @@
  *     (or a density of its own when one is set);
  *   - boxes are placed largest first into free rectangles (maximal rectangles, best short-side fit),
  *     turned a quarter when that fits better, with padding all round so filtering never mixes islands;
+ *   - then the islands' real outlines are nested on a grid: largest first, each set into the lowest
+ *     place it fits in any of its four quarter turns, so small islands fill the gaps between large ones
+ *     (about a quarter more of the picture used than boxes on hard-surface models);
  *   - the common scale is searched for: the largest at which everything fits.
  */
 
@@ -177,52 +180,13 @@ const tryPack = (items: Prepared[], scale: number, settings: PackSettings): Arra
 };
 
 // ---------------------------------------------------------------------------
-// Shape packing: islands dropped onto a skyline by their real outlines
+// Nesting grid
 // ---------------------------------------------------------------------------
 
 const GRID = 512;
 
-interface Profile { width: number; height: number; bottom: Int32Array; top: Int32Array; turn: number }
-
 const turnPoint = (x: number, y: number, turn: number): [number, number] =>
     (turn === 0 ? [x, y] : turn === 1 ? [-y, x] : turn === 2 ? [-x, -y] : [y, -x]);
-
-/** An island's lowest and highest filled cell in each column at `scale` (cells per model unit), padded. */
-const profileOf = (item: Prepared, scale: number, turn: number, pad: number): Profile => {
-    const turned = item.points.map(([x, y]) => turnPoint(x * scale, y * scale, turn));
-    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    for (const [x, y] of turned) { minX = Math.min(minX, x); maxX = Math.max(maxX, x); minY = Math.min(minY, y); maxY = Math.max(maxY, y); }
-    const width = Math.max(1, Math.ceil(maxX - minX) + pad * 2 + 1);
-    const height = Math.max(1, Math.ceil(maxY - minY) + pad * 2 + 1);
-    const bottom = new Int32Array(width).fill(1 << 30);
-    const top = new Int32Array(width).fill(-1);
-    const mark = (cx: number, cy: number) => {
-        for (let dx = -pad; dx <= pad; dx++) {
-            const x = cx + dx;
-            if (x < 0 || x >= width) continue;
-            bottom[x] = Math.min(bottom[x], Math.max(0, cy - pad));
-            top[x] = Math.max(top[x], Math.min(height - 1, cy + pad));
-        }
-    };
-    const t = item.island.triangles;
-    const at = (k: number): [number, number] => [turned[k][0] - minX + pad, turned[k][1] - minY + pad];
-    const edge = (p: number[], q: number[], x: number, y: number) => (q[0] - p[0]) * (y - p[1]) - (q[1] - p[1]) * (x - p[0]);
-    for (let k = 0; k < t.length; k += 3) {
-        const a = at(t[k]), b = at(t[k + 1]), c = at(t[k + 2]);
-        const x0 = Math.floor(Math.min(a[0], b[0], c[0])), x1 = Math.ceil(Math.max(a[0], b[0], c[0]));
-        const y0 = Math.floor(Math.min(a[1], b[1], c[1])), y1 = Math.ceil(Math.max(a[1], b[1], c[1]));
-        for (const p of [a, b, c]) mark(Math.floor(p[0]), Math.floor(p[1]));
-        const area = edge(a, b, c[0], c[1]);
-        for (let y = y0; y <= y1; y++) {
-            for (let x = x0; x <= x1; x++) {
-                const cx = x + 0.5, cy = y + 0.5;
-                const w0 = edge(b, c, cx, cy), w1 = edge(c, a, cx, cy), w2 = edge(a, b, cx, cy);
-                if (area >= 0 ? w0 >= -1 && w1 >= -1 && w2 >= -1 : w0 <= 1 && w1 <= 1 && w2 <= 1) mark(x, y);
-            }
-        }
-    }
-    return { width, height, bottom, top, turn };
-};
 
 /**
  * Each island's share of the padding in grid cells: rounded up, and never under one cell, as islands in
@@ -230,54 +194,188 @@ const profileOf = (item: Prepared, scale: number, turn: number, pad: number): Pr
  */
 const gridPadding = (settings: PackSettings): number => Math.max(1, Math.ceil(((settings.padding / settings.resolution) * GRID) / 2));
 
-/** Drops every island onto per-tile skylines at `scale`; null when they do not all fit. */
-const tryShapes = (items: Prepared[], scale: number, settings: PackSettings): Array<{ x: number; y: number; profile: Profile; tile: number }> | null => {
-    const tiles = settings.tilesX * settings.tilesY;
+// ---------------------------------------------------------------------------
+// Nesting: islands set into the free space by their real outlines, gaps and holes included
+// ---------------------------------------------------------------------------
+
+/**
+ * An island's cells as runs per row (inclusive first and last cell, in pairs), grown by the padding, with
+ * each row's longest run (to pass over rows that cannot hold it at a glance).
+ */
+interface Mask { width: number; height: number; runs: Int32Array[]; widest: Int32Array; turn: number; cells: number }
+
+/** An island's cells at `scale` (cells per model unit), turned `turn` quarters and grown by `pad` cells all round. */
+const maskOf = (item: Prepared, scale: number, turn: number, pad: number): Mask => {
+    const turned = item.points.map(([x, y]) => turnPoint(x * scale, y * scale, turn));
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const [x, y] of turned) { minX = Math.min(minX, x); maxX = Math.max(maxX, x); minY = Math.min(minY, y); maxY = Math.max(maxY, y); }
+    const width = Math.max(1, Math.ceil(maxX - minX) + pad * 2 + 1);
+    const height = Math.max(1, Math.ceil(maxY - minY) + pad * 2 + 1);
+    const filled = new Uint8Array(width * height);
+    const mark = (x: number, y: number) => { if (x >= 0 && y >= 0 && x < width && y < height) filled[y * width + x] = 1; };
+    const t = item.island.triangles;
+    const at = (k: number): [number, number] => [turned[k][0] - minX + pad, turned[k][1] - minY + pad];
+    const edge = (p: number[], q: number[], x: number, y: number) => (q[0] - p[0]) * (y - p[1]) - (q[1] - p[1]) * (x - p[0]);
+    for (let k = 0; k < t.length; k += 3) {
+        const a = at(t[k]), b = at(t[k + 1]), c = at(t[k + 2]);
+        for (const p of [a, b, c]) mark(Math.floor(p[0]), Math.floor(p[1]));
+        const x0 = Math.floor(Math.min(a[0], b[0], c[0])), x1 = Math.ceil(Math.max(a[0], b[0], c[0]));
+        const y0 = Math.floor(Math.min(a[1], b[1], c[1])), y1 = Math.ceil(Math.max(a[1], b[1], c[1]));
+        const area = edge(a, b, c[0], c[1]);
+        // Every cell the triangle touches: a cell's centre within three quarters of a cell of each edge's line
+        // (half a cell's diagonal is 0.71), kept to the triangle's box so thin triangles' corners do not spread.
+        const sign = area >= 0 ? 1 : -1;
+        const s0 = Math.hypot(c[0] - b[0], c[1] - b[1]) * 0.75, s1 = Math.hypot(a[0] - c[0], a[1] - c[1]) * 0.75, s2 = Math.hypot(b[0] - a[0], b[1] - a[1]) * 0.75;
+        for (let y = y0; y <= y1; y++) {
+            for (let x = x0; x <= x1; x++) {
+                const cx = x + 0.5, cy = y + 0.5;
+                if (edge(b, c, cx, cy) * sign >= -s0 && edge(c, a, cx, cy) * sign >= -s1 && edge(a, b, cx, cy) * sign >= -s2) mark(x, y);
+            }
+        }
+    }
+    // Grown by the padding: along rows, then along columns (a square all round each cell).
+    let grown = filled;
+    if (pad > 0) {
+        const rows = new Uint8Array(width * height);
+        for (let y = 0; y < height; y++) {
+            let last = -Infinity;
+            for (let x = 0; x < width; x++) { if (filled[y * width + x]) last = x; if (x - last <= pad) rows[y * width + x] = 1; }
+            last = Infinity;
+            for (let x = width - 1; x >= 0; x--) { if (filled[y * width + x]) last = x; if (last - x <= pad) rows[y * width + x] = 1; }
+        }
+        grown = new Uint8Array(width * height);
+        for (let x = 0; x < width; x++) {
+            let last = -Infinity;
+            for (let y = 0; y < height; y++) { if (rows[y * width + x]) last = y; if (y - last <= pad) grown[y * width + x] = 1; }
+            last = Infinity;
+            for (let y = height - 1; y >= 0; y--) { if (rows[y * width + x]) last = y; if (last - y <= pad) grown[y * width + x] = 1; }
+        }
+    }
+    const runs: Int32Array[] = [];
+    const widest = new Int32Array(height);
+    let cells = 0;
+    for (let y = 0; y < height; y++) {
+        const row: number[] = [];
+        for (let x = 0; x < width; x++) {
+            if (!grown[y * width + x]) continue;
+            const start = x;
+            while (x + 1 < width && grown[y * width + x + 1]) x++;
+            row.push(start, x);
+            cells += x - start + 1;
+            widest[y] = Math.max(widest[y], x - start + 1);
+        }
+        runs.push(Int32Array.from(row));
+    }
+    return { width, height, runs, widest, turn, cells };
+};
+
+/**
+ * The cells of one tile taken so far, with, for every cell, the first taken cell at or after it in its row,
+ * and every row's longest free run.
+ */
+class Occupancy {
+    readonly taken = new Uint8Array(GRID * GRID);
+    readonly next = new Int32Array(GRID * GRID).fill(GRID);
+    readonly room = new Int32Array(GRID).fill(GRID);
+    free = GRID * GRID;
+
+    /** Where `mask` first fits at row `y` from column `x` on: -1 when it fits there, else a column worth trying next. */
+    blocked(mask: Mask, x: number, y: number): number {
+        for (let r = 0; r < mask.height; r++) {
+            const row = (y + r) * GRID;
+            const runs = mask.runs[r];
+            for (let k = 0; k < runs.length; k += 2) {
+                const first = this.next[row + x + runs[k]];
+                if (first <= x + runs[k + 1]) return first - runs[k] + 1;
+            }
+        }
+        return -1;
+    }
+
+    /** The lowest, then leftmost place `mask` fits within the margin with its top below `ceiling`; null when none. */
+    lowest(mask: Mask, margin: number, ceiling = GRID): { x: number; y: number } | null {
+        rows: for (let y = margin; y + mask.height <= Math.min(GRID - margin, ceiling); y++) {
+            for (let r = 0; r < mask.height; r++) if (this.room[y + r] < mask.widest[r]) continue rows;
+            let x = margin;
+            while (x + mask.width <= GRID - margin) {
+                const skip = this.blocked(mask, x, y);
+                if (skip < 0) return { x, y };
+                x = Math.max(x + 1, skip);
+            }
+        }
+        return null;
+    }
+
+    take(mask: Mask, x: number, y: number): void {
+        for (let r = 0; r < mask.height; r++) {
+            const row = (y + r) * GRID;
+            const runs = mask.runs[r];
+            if (!runs.length) continue;
+            for (let k = 0; k < runs.length; k += 2) {
+                this.taken.fill(1, row + x + runs[k], row + x + runs[k + 1] + 1);
+                this.free -= runs[k + 1] - runs[k] + 1;
+            }
+            let first = GRID;
+            let longest = 0;
+            for (let c = GRID - 1; c >= 0; c--) {
+                if (this.taken[row + c]) first = c;
+                this.next[row + c] = first;
+                if (!this.taken[row + c]) longest = Math.max(longest, first - c);
+            }
+            this.room[y + r] = longest;
+        }
+    }
+}
+
+/** Sets every island, largest first, into the lowest place it fits on per-tile grids at `scale`; null when they do not all fit. */
+const tryNest = (items: Prepared[], scale: number, settings: PackSettings): Array<{ x: number; y: number; mask: Mask; tile: number }> | null => {
+    const tiles = Array.from({ length: settings.tilesX * settings.tilesY }, () => new Occupancy());
     const pad = gridPadding(settings);
-    const skies = Array.from({ length: tiles }, () => new Int32Array(GRID).fill(pad));
-    const order = items.map((_, i) => i).sort((a, b) => items[b].width * items[b].height - items[a].width * items[a].height);
-    const result: Array<{ x: number; y: number; profile: Profile; tile: number }> = new Array(items.length);
+    const masks = items.map((item) => (settings.rotate && !item.island.locked ? [0, 1, 2, 3] : [0]).map((turn) => maskOf(item, scale * GRID, turn, pad)));
+    const order = items.map((_, i) => i).sort((a, b) => masks[b][0].cells - masks[a][0].cells);
+    const result: Array<{ x: number; y: number; mask: Mask; tile: number }> = new Array(items.length);
+    let needed = 0;
+    for (const i of order) needed += masks[i][0].cells;
     for (const i of order) {
-        let best: { x: number; y: number; profile: Profile; tile: number; score: number } | null = null;
-        const turns = settings.rotate && !items[i].island.locked ? [0, 1, 2, 3] : [0];
-        for (let tile = 0; tile < tiles && !best; tile++) {
-            const sky = skies[tile];
-            for (const turn of turns) {
-                const profile = profileOf(items[i], scale * GRID, turn, pad);
-                if (profile.width > GRID - 2 * pad || profile.height > GRID - 2 * pad) continue;
-                for (let x = pad; x + profile.width <= GRID - pad; x++) {
-                    let y = 0;
-                    for (let c = 0; c < profile.width; c++) if (profile.top[c] >= 0) y = Math.max(y, sky[x + c] - profile.bottom[c]);
-                    if (y + profile.height > GRID - pad) continue;
-                    // The space left empty under the island is lost for good: least of it first, then lowest.
-                    let waste = 0;
-                    for (let c = 0; c < profile.width; c++) if (profile.top[c] >= 0) waste += y + profile.bottom[c] - sky[x + c];
-                    const score = waste * 4 + (y + profile.height) * profile.width;
-                    if (!best || score < best.score) best = { x, y, profile, tile, score };
-                }
+        // More cells wanted than there are free: it cannot fit, wherever things go.
+        if (needed > tiles.reduce((sum, tile) => sum + tile.free, 0)) return null;
+        needed -= masks[i][0].cells;
+        let best: { x: number; y: number; mask: Mask; tile: number } | null = null;
+        for (let tile = 0; tile < tiles.length && !best; tile++) {
+            for (const mask of masks[i]) {
+                if (mask.width > GRID - 2 * pad || mask.height > GRID - 2 * pad) continue;
+                // A turn can only win by ending lower than the best so far: the search stops there.
+                const spot = tiles[tile].lowest(mask, pad, best ? best.y + best.mask.height : GRID);
+                // Lowest top edge first, so the free space above stays as level as it can.
+                if (spot && (!best || spot.y + mask.height < best.y + best.mask.height || (spot.y + mask.height === best.y + best.mask.height && spot.x < best.x))) best = { ...spot, mask, tile };
             }
         }
         if (!best) return null;
-        const sky = skies[best.tile];
-        for (let c = 0; c < best.profile.width; c++) if (best.profile.top[c] >= 0) sky[best.x + c] = Math.max(sky[best.x + c], best.y + best.profile.top[c] + 1);
+        tiles[best.tile].take(best.mask, best.x, best.y);
         result[i] = best;
     }
     return result;
 };
 
-const packShapes = (islands: readonly Island[], settings: PackSettings): { placements: Placement[]; scale: number } | null => {
-    const items = prepare(islands, false);
-    let total = 0;
-    for (const item of items) total += item.width * item.height;
-    if (total <= 0) return null;
+/** Nesting at the largest scale from `floor` up at which everything fits; null when it does no better than `floor`. */
+const packNested = (islands: readonly Island[], settings: PackSettings, floor: number): { placements: Placement[]; scale: number } | null => {
+    const items = prepare(islands, settings.rotate);
+    let area = 0;
+    for (const item of items) {
+        const t = item.island.triangles;
+        const p = item.points;
+        for (let k = 0; k < t.length; k += 3) area += Math.abs(cross(p[t[k]], p[t[k + 1]], p[t[k + 2]])) / 2;
+    }
+    if (area <= 0) return null;
     const tiles = settings.tilesX * settings.tilesY;
-    let low = 0;
-    let high = Math.sqrt(tiles / total) * 1.6;
-    let best: ReturnType<typeof tryShapes> = null;
+    // Everything fits by `floor` already; nothing can be larger than the islands filling the tiles whole.
+    let low = floor;
+    let high = Math.max(floor, Math.min(Math.sqrt(tiles / area), floor * 1.6));
+    let best: ReturnType<typeof tryNest> = null;
     let bestScale = 0;
-    for (let step = 0; step < 14; step++) {
+    for (let step = 0; step < 10 && high - low > low * 0.005; step++) {
         const middle = (low + high) / 2;
-        const attempt = tryShapes(items, middle, settings);
+        const attempt = tryNest(items, middle, settings);
         if (attempt) { best = attempt; bestScale = middle; low = middle; } else high = middle;
     }
     if (!best) return null;
@@ -285,7 +383,7 @@ const packShapes = (islands: readonly Island[], settings: PackSettings): { place
     const placements = items.map((item, i) => {
         const spot = best![i];
         const s = bestScale * GRID;
-        const turned = item.points.map(([x, y]) => turnPoint(x * s, y * s, spot.profile.turn));
+        const turned = item.points.map(([x, y]) => turnPoint(x * s, y * s, spot.mask.turn));
         let minX = Infinity, minY = Infinity;
         for (const [x, y] of turned) { minX = Math.min(minX, x); minY = Math.min(minY, y); }
         const tx = spot.tile % settings.tilesX;
@@ -303,9 +401,9 @@ const packShapes = (islands: readonly Island[], settings: PackSettings): { place
 /** Packs islands; returns each island's final coordinates (in its UDIM tile's place) and tile. */
 export const packIslands = (islands: readonly Island[], settings: PackSettings = DEFAULT_PACK): Placement[] => {
     const boxes = packBoxes(islands, settings);
-    const shapes = packShapes(islands, settings);
-    // The packing that lets the islands be larger uses the picture better.
-    return shapes && shapes.scale > boxes.scale ? shapes.placements : boxes.placements;
+    // Nesting starts from what boxes reach, and is kept when it lets the islands be larger.
+    const nested = packNested(islands, settings, boxes.scale);
+    return nested && nested.scale > boxes.scale ? nested.placements : boxes.placements;
 };
 
 /** Box packing (maximal rectangles): islands as their tightest boxes. */

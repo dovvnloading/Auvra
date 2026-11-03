@@ -21,6 +21,8 @@ export type ViewMode = 'material' | PaintChannel | 'ambientOcclusion' | `mesh:${
 
 interface Preview { base: GpuImage | null; orm: GpuImage | null; emissive: GpuImage | null; single: GpuImage | null }
 
+const FIELD_OF_VIEW = 32;
+
 const environments = new WeakMap<TextureGpu, THREE.Texture>();
 const environmentOf = (gpu: TextureGpu): THREE.Texture => {
     let texture = environments.get(gpu);
@@ -32,6 +34,9 @@ const environmentOf = (gpu: TextureGpu): THREE.Texture => {
     }
     return texture;
 };
+
+/** How far back the camera stands to see a model of this box diagonal whole, in a view of this aspect. */
+const fitDistance = (diagonal: number, aspect: number): number => (diagonal / 2) / Math.sin(THREE.MathUtils.degToRad(FIELD_OF_VIEW / 2)) * 1.05 / Math.min(1, aspect);
 
 const NO_SUBSCRIBE = () => () => undefined;
 const ZERO = () => 0;
@@ -99,7 +104,7 @@ export const PaintViewport: React.FC<{
         const sun = new THREE.DirectionalLight(0xffffff, 1.6);
         sun.position.set(2, 4, 3);
         scene.add(sun);
-        const camera = new THREE.PerspectiveCamera(32, 1, 0.01, 1000);
+        const camera = new THREE.PerspectiveCamera(FIELD_OF_VIEW, 1, 0.01, 1000);
         const object = session.target.object;
         object.updateWorldMatrix(true, true);
         const inverse = object.matrixWorld.clone().invert();
@@ -140,7 +145,8 @@ export const PaintViewport: React.FC<{
         seamLines.renderOrder = 2;
         scene.add(seamLines);
         const box = new THREE.Box3().setFromObject(root);
-        const orbit = { target: box.getCenter(new THREE.Vector3()), yaw: 0.5, pitch: 0.2, distance: box.getSize(new THREE.Vector3()).length() * 1.4 || 2, radius: box.getSize(new THREE.Vector3()).length() || 1 };
+        const diagonal = box.getSize(new THREE.Vector3()).length() || 1;
+        const orbit = { target: box.getCenter(new THREE.Vector3()), yaw: 0.5, pitch: 0.2, distance: fitDistance(diagonal, 1), radius: diagonal };
         return { scene, root, camera, tiles, orbit, box, hidden, layoutMesh, seamLines };
     }, [session, stack]);
 
@@ -159,10 +165,13 @@ export const PaintViewport: React.FC<{
 
     const frame = useCallback(() => {
         world.orbit.target.copy(world.box.getCenter(new THREE.Vector3()));
-        world.orbit.distance = world.orbit.radius * 1.4;
+        world.orbit.distance = fitDistance(world.orbit.radius, size.width / Math.max(1, size.height));
         redraw((value) => value + 1);
-    }, [world]);
-    useEffect(() => { if (frameSignal) frame(); }, [frame, frameSignal]);
+    }, [size, world]);
+    // Framed when asked, not again whenever the view changes size.
+    const latestFrame = useRef(frame);
+    latestFrame.current = frame;
+    useEffect(() => { if (frameSignal) latestFrame.current(); }, [frameSignal]);
 
     useEffect(() => {
         const element = host.current;

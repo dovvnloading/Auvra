@@ -101,6 +101,22 @@ describe('packing', () => {
         expect(coverage(placements, islands)).toBeGreaterThan(0.35);
     });
 
+    it('sets small islands into the holes of others', () => {
+        // Square frames with holes that four small squares fit into: boxes and rows of islands can never use the holes.
+        const ring = (): Island => {
+            const uv = new Float64Array([0, 0, 1, 0, 1, 1, 0, 1, 0.2, 0.2, 0.8, 0.2, 0.8, 0.8, 0.2, 0.8]);
+            const triangles: number[] = [];
+            for (let k = 0; k < 4; k++) { const n = (k + 1) % 4; triangles.push(k, n, 4 + n, k, 4 + n, 4 + k); }
+            return { uv, triangles, area3d: 0.64 };
+        };
+        const square = (): Island => ({ uv: new Float64Array([0, 0, 0.24, 0, 0.24, 0.24, 0, 0.24]), triangles: [0, 1, 2, 0, 2, 3], area3d: 0.0576 });
+        const islands = [...Array.from({ length: 16 }, ring), ...Array.from({ length: 64 }, square)];
+        const placements = packIslands(islands, { padding: 8, resolution: 2048, rotate: true, tilesX: 1, tilesY: 1 });
+        expect(overlaps(placements, islands)).toBe(false);
+        // Packed as boxes or along a skyline this reaches about 0.64.
+        expect(coverage(placements, islands)).toBeGreaterThan(0.75);
+    });
+
     it('spreads islands over several UDIM tiles when asked', () => {
         const { part } = meshOf(new THREE.TorusGeometry(1, 0.35, 24, 48));
         const islands = islandsOf(unwrap(buildTopology(part.positions, part.indices)));
