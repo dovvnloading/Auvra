@@ -160,27 +160,29 @@ export const locateLayer = (layers: readonly PaintLayer[], id: string, parent: P
     return null;
 };
 
-/** Inserts `layer` above `above` (in its list), or at the top when none is given. */
+/** Inserts `layer` above `above` (in whichever list holds it), or at the top when none is given or found. */
 export const insertLayer = (layers: readonly PaintLayer[], layer: PaintLayer, above: string | null): PaintLayer[] => {
-    if (!above) return [...layers, layer];
-    const out: PaintLayer[] = [];
-    let placed = false;
-    for (const candidate of layers) {
-        if (candidate.layers && !placed) {
-            const inner = insertLayer(candidate.layers, layer, above);
-            if (inner.length !== candidate.layers.length) {
-                out.push({ ...candidate, layers: inner });
+    const into = (list: readonly PaintLayer[]): PaintLayer[] | null => {
+        const out: PaintLayer[] = [];
+        let placed = false;
+        for (const candidate of list) {
+            if (!placed && candidate.layers) {
+                const inner = into(candidate.layers);
+                if (inner) {
+                    out.push({ ...candidate, layers: inner });
+                    placed = true;
+                    continue;
+                }
+            }
+            out.push(candidate);
+            if (!placed && candidate.id === above) {
+                out.push(layer);
                 placed = true;
-                continue;
             }
         }
-        out.push(candidate);
-        if (candidate.id === above && !placed) {
-            out.push(layer);
-            placed = true;
-        }
-    }
-    return placed ? out : [...layers, layer];
+        return placed ? out : null;
+    };
+    return (above ? into(layers) : null) ?? [...layers, layer];
 };
 
 /** Moves `id` to sit just above `target` (or into folder `target` when `into`). */

@@ -34,8 +34,10 @@ export class SurfacePicker {
     }
 
     /** The nearest point of the surface along a ray in the model's space. */
-    cast(origin: THREE.Vector3, direction: THREE.Vector3): SurfaceHit | null {
+    cast(origin: THREE.Vector3, rayDirection: THREE.Vector3): SurfaceHit | null {
         const { positions, indices } = this.part;
+        // A ray exactly along an axis would meet a box face as zero times infinity: lean it a hair.
+        const direction = new THREE.Vector3(rayDirection.x || 1e-12, rayDirection.y || 1e-12, rayDirection.z || 1e-12);
         let bestU = 0;
         let bestV = 0;
         const result = closestPrimitive(this.bvh, [origin.x, origin.y, origin.z], [direction.x, direction.y, direction.z], (triangle, limit) => {

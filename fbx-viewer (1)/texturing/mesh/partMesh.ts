@@ -93,7 +93,7 @@ export const buildPartMesh = (root: THREE.Object3D, materials: ReadonlySet<THREE
     let anyTangents = false;
     let anyColors = false;
     const meshes = collect(root, materials);
-    for (const { mesh, ranges } of meshes) {
+    for (const { mesh } of meshes) {
         const geometry = mesh.geometry;
         if (!geometry.attributes.uv) continue;
         anyTangents ||= Boolean(geometry.attributes.tangent);
