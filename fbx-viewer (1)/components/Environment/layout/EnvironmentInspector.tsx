@@ -28,6 +28,7 @@ import { collectSubtree, getWorldMatrix, reparentPreservingWorld, sortByHierarch
 import { COMPONENT_DEFINITIONS, createComponent, getComponentDefinition } from '../../../runtime/components/registry';
 import type { ComponentPropSchema } from '../../../runtime/components/types';
 import { findSplineComponent } from '../../../runtime/splineRegistry';
+import { ColourField } from '../../UI/ColourPicker';
 
 interface EnvironmentInspectorProps {
     /** selectedObjectIds is the multi-selection (primary stays selectedObjectId). */
@@ -343,13 +344,7 @@ const ComponentPropField: React.FC<{
         case 'color':
             return (
                 <PropRow label={schema.label}>
-                    <input
-                        type="color"
-                        value={readColor(value, schema.default)}
-                        onChange={(e) => onChange(e.target.value, true)}
-                        className="w-8 h-5 bg-transparent border-none p-0 cursor-pointer"
-                        aria-label={schema.label}
-                    />
+                    <ColourField value={readColor(value, schema.default)} onChange={(next) => onChange(next, true)} label={schema.label} className="h-5 w-8" />
                 </PropRow>
             );
         case 'vector3': {
@@ -906,12 +901,7 @@ export const EnvironmentInspector: React.FC<EnvironmentInspectorProps> = ({ stat
                                         </div>
                                         <div className="flex items-center justify-between">
                                             <span className="text-2xs text-gray-400">Fog Color</span>
-                                            <input
-                                                type="color"
-                                                value={selectedObject.skyConfig.fogColor}
-                                                onChange={(e) => scrubUpdate({ skyConfig: { ...selectedObject.skyConfig!, fogColor: e.target.value } })}
-                                                className="w-6 h-4 bg-transparent border-none p-0 cursor-pointer"
-                                            />
+                                            <ColourField value={selectedObject.skyConfig.fogColor} onChange={(fogColor) => scrubUpdate({ skyConfig: { ...selectedObject.skyConfig!, fogColor } })} label="Fog colour" className="h-5 w-8" />
                                         </div>
                                     </div>
                                 </div>

@@ -23,6 +23,7 @@ import {
     type Range,
     type Vec3,
 } from '../../runtime/particleEffect';
+import { ColourField } from '../UI/ColourPicker';
 
 const FIELD = 'w-full bg-gray-950 border border-gray-700 rounded px-1.5 py-0.5 text-2xs text-gray-200 focus:outline-none focus:border-amber-500';
 const BUTTON = 'flex items-center justify-center gap-1 px-2 py-0.5 rounded border border-gray-700 bg-gray-800 hover:bg-gray-700 text-2xs text-gray-200';
@@ -103,7 +104,7 @@ const VectorInputs: React.FC<{ label: string; value: Vec3; step?: number; onComm
 );
 
 const ColorInput: React.FC<{ label: string; value: string; onCommit: (value: string) => void }> = ({ label, value, onCommit }) => (
-    <input aria-label={label} type="color" value={value} onChange={(event) => onCommit(event.target.value)} className="h-5 w-10 rounded border border-gray-700 bg-gray-950" />
+    <ColourField label={label} value={value} onChange={onCommit} className="h-5 w-10" />
 );
 
 const hexAlpha = (hex: string, alpha: number) => {
