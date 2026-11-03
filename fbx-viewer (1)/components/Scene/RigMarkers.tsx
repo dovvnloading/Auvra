@@ -192,8 +192,8 @@ export const RigMarkers: React.FC<{ modelId: string; root: THREE.Object3D }> = (
             <meshBasicMaterial color={active ? ACTIVE_COLOR : MARKER_COLOR} depthTest={false} transparent toneMapped={false} fog={false} />
             <Html zIndexRange={[20, 0]} style={{ pointerEvents: 'none' }}>
               <span
-                className={`absolute -top-2 whitespace-nowrap rounded bg-black/60 px-1 py-px text-2xs ${active ? 'text-white' : 'text-ink-2'}`}
-                style={isRight ? { right: 10 } : { left: 10 }}
+                className={`absolute whitespace-nowrap rounded bg-black/60 px-1 py-px text-2xs ${active ? 'text-white' : 'text-ink-2'}`}
+                style={{ ...(isRight ? { right: 8 } : { left: 8 }), top: MARKER_LABEL[name] === 'Elbow' ? 6 : MARKER_LABEL[name] === 'Shoulder' || MARKER_LABEL[name] === 'Wrist' ? -24 : -8 }}
               >
                 {MARKER_LABEL[name]}
               </span>

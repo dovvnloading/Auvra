@@ -37,6 +37,8 @@ export const voxelOf = (grid: VoxelGrid, px: number, py: number, pz: number): [n
 const MAX_VOXELS = 64_000_000;
 /** Empty voxels kept around the body, so the flood can reach all of its outside. */
 const MARGIN = 3;
+/** How many layers in from a grid's sides count as its edge, for a part cut out of a larger body. */
+const EDGE_LAYERS = MARGIN + 2;
 
 /** Marks every voxel the triangles pass through, by walking each in steps shorter than a voxel. */
 const markSurface = (grid: VoxelGrid, triangles: TriangleSoup): void => {
@@ -72,7 +74,7 @@ const markSurface = (grid: VoxelGrid, triangles: TriangleSoup): void => {
 };
 
 /** Fills the body: everything a flood from outside cannot reach past the thickened surface. */
-const fillInside = (grid: VoxelGrid): void => {
+const fillInside = (grid: VoxelGrid, insideAtEdge?: (x: number, y: number, z: number) => boolean): void => {
   const { nx, ny, nz, surface, solid } = grid;
   const stride = nx * ny;
   const total = nx * ny * nz;
@@ -86,6 +88,17 @@ const fillInside = (grid: VoxelGrid): void => {
           for (let dy = Math.max(0, y - 1); dy <= Math.min(ny - 1, y + 1); dy += 1) {
             for (let dx = Math.max(0, x - 1); dx <= Math.min(nx - 1, x + 1); dx += 1) wall[dx + dy * nx + dz * stride] = 1;
           }
+        }
+      }
+    }
+  }
+  // A part cut out of a mesh is open where it was cut: a flood must not get in that way.
+  if (insideAtEdge) {
+    for (let z = 0; z < nz; z += 1) {
+      for (let y = 0; y < ny; y += 1) {
+        for (let x = 0; x < nx; x += 1) {
+          if (Math.min(x, y, z, nx - 1 - x, ny - 1 - y, nz - 1 - z) >= EDGE_LAYERS) continue;
+          if (insideAtEdge(grid.ox + (x + 0.5) * grid.size, grid.oy + (y + 0.5) * grid.size, grid.oz + (z + 0.5) * grid.size)) wall[x + y * nx + z * stride] = 1;
         }
       }
     }
@@ -155,8 +168,11 @@ export const soupBounds = (triangles: TriangleSoup): { min: [number, number, num
   return min[0] <= max[0] ? { min, max } : null;
 };
 
-/** The body of `triangles` in voxels, `resolution` of them along its longest side. */
-export const voxelize = (triangles: TriangleSoup, resolution: number): VoxelGrid | null => {
+/**
+ * The body of `triangles` in voxels, `resolution` of them along its longest side. For triangles cut
+ * out of a larger body, `insideAtEdge` says which places at the grid's edge are inside that body.
+ */
+export const voxelize = (triangles: TriangleSoup, resolution: number, insideAtEdge?: (x: number, y: number, z: number) => boolean): VoxelGrid | null => {
   const bounds = soupBounds(triangles);
   if (!bounds) return null;
   const extent = [bounds.max[0] - bounds.min[0], bounds.max[1] - bounds.min[1], bounds.max[2] - bounds.min[2]];
@@ -185,6 +201,6 @@ export const voxelize = (triangles: TriangleSoup, resolution: number): VoxelGrid
     surface: new Uint8Array(nx * ny * nz),
   };
   markSurface(grid, triangles);
-  fillInside(grid);
+  fillInside(grid, insideAtEdge);
   return grid;
 };

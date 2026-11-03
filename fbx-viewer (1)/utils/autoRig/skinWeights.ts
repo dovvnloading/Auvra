@@ -44,6 +44,10 @@ const SMOOTHING_ROUNDS = 2;
 const SMOOTHING = 0.5;
 /** A distance no bone reaches, in a short. */
 const FAR = 65535;
+/** Voxels along the longest side of a hand's own grid: fine enough to keep fingers apart. */
+const HAND_RESOLUTION = 128;
+/** How far around a wrist a hand's own grid reaches, in lengths of the hand. */
+const HAND_REACH = 1.4;
 
 /**
  * Joins loose pieces (a belt that does not touch the body) to the largest piece with thin bridges,
@@ -192,6 +196,96 @@ const hopsBetween = (joints: readonly RigJoint[], moving: readonly number[]): Ui
   return hops;
 };
 
+/** A hand's bones on a grid of its own: the share of each at any place in the hand. */
+interface HandBinding {
+  /** The slots, among the moving joints, of the hand and its fingers. */
+  slots: number[];
+  wrist: readonly number[];
+  reach: number;
+  sharesAt: (x: number, y: number, z: number, out: Float32Array) => boolean;
+}
+
+const bindHand = (triangles: TriangleSoup, joints: readonly RigJoint[], moving: readonly number[], hand: number, bodyGrid: VoxelGrid, body: Uint8Array): HandBinding | null => {
+  const childrenOf = (index: number): number[] => joints.flatMap((joint, at) => (joint.parent === index ? [at] : []));
+  const fingers = moving.filter((joint) => joints[joint].handOf === hand);
+  if (!fingers.length) return null;
+  const wrist = joints[hand].position;
+  // As far as the fingers reach, with a margin for the rest of the hand's outline.
+  let length = 0;
+  for (const joint of joints) {
+    if (joint.handOf === hand) length = Math.max(length, Math.hypot(joint.position[0] - wrist[0], joint.position[1] - wrist[1], joint.position[2] - wrist[2]));
+  }
+  const reach = length * HAND_REACH;
+  const near: number[] = [];
+  for (let t = 0; t + 8 < triangles.length; t += 9) {
+    let inside = false;
+    for (let c = 0; c < 3 && !inside; c += 1) {
+      inside = Math.hypot(triangles[t + c * 3] - wrist[0], triangles[t + c * 3 + 1] - wrist[1], triangles[t + c * 3 + 2] - wrist[2]) < reach;
+    }
+    if (inside) for (let i = 0; i < 9; i += 1) near.push(triangles[t + i]);
+  }
+  const grid = voxelize(Float32Array.from(near), HAND_RESOLUTION, (x, y, z) => {
+    const [vx, vy, vz] = voxelOf(bodyGrid, x, y, z);
+    return body[voxelIndex(bodyGrid, vx, vy, vz)] === 1;
+  });
+  if (!grid) return null;
+  const mask = grid.solid;
+  const neighbours = neighboursOf(grid);
+  const skin = distanceToSkin(grid, mask);
+  const ownBones = [hand, ...fingers];
+  const field = new Uint32Array(mask.length);
+  const thickness = new Float32Array(ownBones.length);
+  const distances = ownBones.map((joint, at) => {
+    // The hand itself runs from the wrist to the roots of the fingers only: past them is theirs.
+    const ends = childrenOf(joint).filter((child) => joints[child].handOf !== undefined).map((child) => joints[child].position);
+    const seeds = seedsOf(grid, mask, joints[joint].position, ends.length ? ends : [joints[joint].position]);
+    const depths = seeds.map((seed) => skin[seed]).sort((a, b) => a - b);
+    thickness[at] = Math.max(LEAST_THICKNESS, depths[Math.floor(depths.length / 2)] ?? 0);
+    distanceThrough(mask, neighbours, seeds, field);
+    const list = new Uint16Array(field.length);
+    for (let index = 0; index < field.length; index += 1) list[index] = field[index] === UNREACHED ? FAR : Math.min(FAR - 1, field[index]);
+    return list;
+  });
+  const slots = ownBones.map((joint) => moving.indexOf(joint));
+  // Which way the fingers lie from the wrist: nothing behind it follows them.
+  const forward = [0, 0, 0];
+  for (const joint of fingers) {
+    if (joints[joint].parent !== hand) continue;
+    for (let axis = 0; axis < 3; axis += 1) forward[axis] += joints[joint].position[axis] - wrist[axis];
+  }
+  const adjoining = ownBones.map((joint) => ownBones.map((other) => joint === other || joints[joint].parent === other || joints[other].parent === joint));
+  return {
+    slots,
+    wrist,
+    reach,
+    sharesAt: (x, y, z, out) => {
+      if ((x - wrist[0]) * forward[0] + (y - wrist[1]) * forward[1] + (z - wrist[2]) * forward[2] < 0) return false;
+      const voxel = nearestBodyVoxel(grid, mask, x, y, z);
+      if (voxel < 0) return false;
+      let nearest = 0;
+      let nearestShare = -1;
+      for (let bone = 0; bone < ownBones.length; bone += 1) {
+        const distance = distances[bone][voxel];
+        const share = distance === FAR ? 0 : (1 / (distance / 10 / thickness[bone] + NEAREST_DISTANCE)) ** FALLOFF;
+        out[bone] = share;
+        if (share > nearestShare) {
+          nearestShare = share;
+          nearest = bone;
+        }
+      }
+      // A vertex follows the bone nearest it and those next to that: a finger curling cannot swing skin far from it.
+      let total = 0;
+      for (let bone = 0; bone < ownBones.length; bone += 1) {
+        if (!adjoining[nearest][bone]) out[bone] = 0;
+        total += out[bone];
+      }
+      if (!(total > 0)) return false;
+      for (let bone = 0; bone < ownBones.length; bone += 1) out[bone] /= total;
+      return true;
+    },
+  };
+};
+
 /** Vertices at the same place across parts and seams move as one: gives each a shared number. */
 const weldVertices = (parts: readonly SkinnedPart[], size: number): { ids: Int32Array[]; first: { part: number; vertex: number }[] } => {
   const tolerance = size / 64;
@@ -307,6 +401,8 @@ export const bindSkin = (
   const thickness = new Float32Array(moving.length);
   const distances = moving.map((jointIndex, at) => {
     const joint = joints[jointIndex];
+    // Fingers come in on the hand's own grid; on this one they are part of the hand.
+    if (joint.handOf !== undefined) return null;
     const ends = childrenOf[jointIndex].map((child) => joints[child].position);
     const seeds = seedsOf(grid, mask, joint.position, ends.length ? ends : [joint.position]);
     // How far the bone is from the skin along most of its length.
@@ -322,6 +418,10 @@ export const bindSkin = (
     return list;
   });
 
+  const hands = moving.flatMap((joint) => {
+    const binding = moving.some((other) => joints[other].handOf === joint) ? bindHand(triangles, joints, moving, joint, grid, mask) : null;
+    return binding ? [{ slot: moving.indexOf(joint), binding, shares: new Float32Array(binding.slots.length) }] : [];
+  });
   const hops = hopsBetween(joints, moving);
   const boneCount = moving.length;
   const { ids, first } = weldVertices(parts, grid.size);
@@ -339,7 +439,7 @@ export const bindSkin = (
     let nearest = 0;
     let nearestDistance = Infinity;
     for (let bone = 0; bone < boneCount; bone += 1) {
-      const distance = number >= 0 ? distances[bone][number] : FAR;
+      const distance = number >= 0 ? distances[bone]?.[number] ?? FAR : FAR;
       if (distance === FAR) continue;
       const relative = distance / 10 / thickness[bone];
       if (relative < nearestDistance) {
@@ -349,9 +449,21 @@ export const bindSkin = (
     }
     for (let bone = 0; bone < boneCount; bone += 1) {
       if (hops[nearest * boneCount + bone] > HOPS_ALLOWED) continue;
-      const distance = number >= 0 ? distances[bone][number] : FAR;
+      const distance = number >= 0 ? distances[bone]?.[number] ?? FAR : FAR;
       if (distance === FAR) continue;
       pull[bone] = (1 / (distance / 10 / thickness[bone] + NEAREST_DISTANCE)) ** FALLOFF;
+    }
+    // What goes to a hand with fingers is shared out among them.
+    for (const { slot, binding, shares: handShares } of hands) {
+      if (!(pull[slot] > 0)) continue;
+      const handPull = pull[slot];
+      // Further up the arm than the hand's own grid goes, the hand's share is too small to share out.
+      const x = positions[at * 3];
+      const y = positions[at * 3 + 1];
+      const z = positions[at * 3 + 2];
+      if (Math.hypot(x - binding.wrist[0], y - binding.wrist[1], z - binding.wrist[2]) > binding.reach) continue;
+      if (!binding.sharesAt(x, y, z, handShares)) continue;
+      binding.slots.forEach((bone, index) => { pull[bone] = handPull * handShares[index]; });
     }
     pull[nearest] = Math.max(pull[nearest], 1e-30);
     keepStrongest(pull, vertex, bones, shares);
