@@ -1,3 +1,4 @@
+import * as THREE from 'three';
 import { largestPiece } from './bodyField';
 import { turnAboutY, turnSoupAboutY, type BodyExtents, type BodyMarkers, type BodyReading, type MarkerName, type Point } from './bodyMarkers';
 import { bodySkeleton, turnJointsAboutY, type RigJoint } from './bodySkeleton';
@@ -89,11 +90,19 @@ export const standardReading = (triangles: TriangleSoup): BodyReading | null => 
   };
 };
 
-/** Hand tips follow their wrists when a person moves those: keeps a hand's length and direction from the forearm. */
-const followWrist = (oldWrist: Point, wrist: Point, tip: Point): Point => [
-  tip[0] + wrist[0] - oldWrist[0],
-  tip[1] + wrist[1] - oldWrist[1],
-  tip[2] + wrist[2] - oldWrist[2],
+/** A hand tip when a person moves the forearm: keeps the hand's length and its direction from the forearm. */
+const followForearm = (oldElbow: Point, oldWrist: Point, elbow: Point, wrist: Point, tip: Point): Point => {
+  const before = new THREE.Vector3(...oldWrist).sub(new THREE.Vector3(...oldElbow)).normalize();
+  const after = new THREE.Vector3(...wrist).sub(new THREE.Vector3(...elbow)).normalize();
+  const hand = new THREE.Vector3(...tip).sub(new THREE.Vector3(...oldWrist)).applyQuaternion(new THREE.Quaternion().setFromUnitVectors(before, after));
+  return [wrist[0] + hand.x, wrist[1] + hand.y, wrist[2] + hand.z];
+};
+
+/** A toe when a person moves the ankle. */
+const followAnkle = (oldAnkle: Point, ankle: Point, toe: Point): Point => [
+  toe[0] + ankle[0] - oldAnkle[0],
+  toe[1],
+  toe[2] + ankle[2] - oldAnkle[2],
 ];
 
 export interface RiggedBody {
@@ -137,8 +146,10 @@ export const rigBody = (
       for (const name of moved) markers[name] = centreInDepth(grid, mask, markers[name]);
     }
     if (original) {
-      if (moved.includes('leftWrist')) extents.leftHandTip = followWrist(up(original.leftWrist), markers.leftWrist, extents.leftHandTip);
-      if (moved.includes('rightWrist')) extents.rightHandTip = followWrist(up(original.rightWrist), markers.rightWrist, extents.rightHandTip);
+      if (moved.includes('leftWrist') || moved.includes('leftElbow')) extents.leftHandTip = followForearm(up(original.leftElbow), up(original.leftWrist), markers.leftElbow, markers.leftWrist, extents.leftHandTip);
+      if (moved.includes('rightWrist') || moved.includes('rightElbow')) extents.rightHandTip = followForearm(up(original.rightElbow), up(original.rightWrist), markers.rightElbow, markers.rightWrist, extents.rightHandTip);
+      if (moved.includes('leftAnkle')) extents.leftToe = followAnkle(up(original.leftAnkle), markers.leftAnkle, extents.leftToe);
+      if (moved.includes('rightAnkle')) extents.rightToe = followAnkle(up(original.rightAnkle), markers.rightAnkle, extents.rightToe);
     }
   }
   onProgress?.(0.05);

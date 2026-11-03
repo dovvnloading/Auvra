@@ -1,5 +1,6 @@
 
 import { markMountedPart } from '../../utils/mountedParts';
+import { savedBone } from '../../utils/animationBinding';
 import React, { useEffect, useRef, useMemo } from 'react';
 import * as THREE from 'three';
 import { useFrame } from '@react-three/fiber';
@@ -124,7 +125,7 @@ export const SocketController: React.FC<SocketControllerProps> = ({
         let targetBone: THREE.Object3D | undefined;
         
         if (data.boneName) {
-            targetBone = parentObject.getObjectByName(data.boneName);
+            targetBone = savedBone(parentObject, data.boneName);
         }
         
         if (!targetBone) {

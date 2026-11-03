@@ -185,8 +185,16 @@ export interface HUDDocumentData {
 }
 
 /** Result of loading a project snapshot or game pack into runtime-ready content. */
+/** A model the project holds that could not be read when it was opened, and why. */
+export interface RefusedModel {
+    name: string;
+    reason: string;
+}
+
 export interface LoadedGameContent {
     content: GameContent;
+    /** Models left out because their files could not be read. They stay in the project. */
+    refusedModels: RefusedModel[];
     levels: LevelData[];
     objects: LevelObject[];
     hud: HUDDocumentData | null;

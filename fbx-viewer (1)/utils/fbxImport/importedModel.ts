@@ -237,7 +237,8 @@ const writeMetalRough = async (context: MaterialContext, source: SourceMaterial,
   }
   const metalnessIndex = source.metalnessTexture;
 
-  const roughness = source.roughness ?? (isLegacy ? DEFAULT_ROUGHNESS : 0.5);
+  // A shader in specular-glossiness mode gives how glossy it is instead.
+  const roughness = source.roughness ?? (source.glossiness != null ? 1 - source.glossiness : isLegacy ? DEFAULT_ROUGHNESS : 0.5);
   pbr.roughnessFactor = Math.min(1, Math.max(0, roughness));
   pbr.metallicFactor = Math.min(1, Math.max(0, source.metalness ?? 0));
   if (roughnessIndex === undefined && metalnessIndex === undefined) return;
@@ -300,8 +301,8 @@ const writeBaseColour = async (context: MaterialContext, source: SourceMaterial,
   }
   if (baseTexture === null && colourIndex !== undefined) baseTexture = table.texture(colourIndex);
 
-  // A map replaces the constant colour, which is usually an exporter's default (Blender's 0.8 grey).
-  const colour = baseTexture !== null ? [1, 1, 1] : materialColour((source.baseColor ?? [0.8, 0.8, 0.8]).map((value) => value * (source.baseFactor ?? 1)), source.shader);
+  // A colour map replaces the constant colour, which is usually an exporter's default (Blender's 0.8 grey). A mask alone does not.
+  const colour = baseTexture !== null && colourIndex !== undefined ? [1, 1, 1] : materialColour((source.baseColor ?? [0.8, 0.8, 0.8]).map((value) => value * (source.baseFactor ?? 1)), source.shader);
   pbr.baseColorFactor = [...colour, opacity];
   if (baseTexture !== null) pbr.baseColorTexture = textureInfo(context, materialIndex, colourIndex ?? opacityIndex!, baseTexture);
   if (seeThrough) material.alphaMode = 'BLEND';
@@ -321,7 +322,7 @@ const writeEmission = (context: MaterialContext, source: SourceMaterial, materia
     if (LEGACY_SHADERS.has(source.shader) && colour[0] > 0.9 && colour[1] > 0.9 && colour[2] > 0.9) return;
     material.emissiveFactor = materialColour(colour, source.shader);
   }
-  if (factor > 1) {
+  if (factor !== 1) {
     material.extensions = { ...material.extensions, KHR_materials_emissive_strength: { emissiveStrength: factor } };
     context.usedExtensions.add('KHR_materials_emissive_strength');
   }
@@ -356,14 +357,17 @@ const writeMaterial = async (context: MaterialContext, source: SourceMaterial, m
   return material;
 };
 
+/** Up to a multiple of four, without the bit operators that stop at two gigabytes. */
+const align4 = (length: number): number => length + ((4 - (length % 4)) % 4);
+
 const CHUNK_JSON = 0x4e4f534a;
 const CHUNK_BIN = 0x004e4942;
 
 /** The document and data as one GLB. */
 const writeGlb = (document: unknown, binary: Uint8Array, images: readonly StoredImage[], imageOffsets: readonly number[], binaryLength: number): ArrayBuffer => {
   const json = new TextEncoder().encode(JSON.stringify(document));
-  const jsonPadded = (json.length + 3) & ~3;
-  const binPadded = (binaryLength + 3) & ~3;
+  const jsonPadded = align4(json.length);
+  const binPadded = align4(binaryLength);
   const total = 12 + 8 + jsonPadded + 8 + binPadded;
   const output = new Uint8Array(total);
   const view = new DataView(output.buffer);
@@ -386,7 +390,7 @@ const describeMissing = (missing: ReadonlySet<string>): string[] => [...missing]
 
 /** The image files a file's materials read, once each, and which of them it holds itself. */
 export const describeImages = (native: Pick<NativeImport, 'materials' | 'textures'>): { file: string; embedded: boolean }[] => {
-  const slots: (keyof SourceMaterial)[] = ['baseTexture', 'roughnessTexture', 'glossinessTexture', 'metalnessTexture', 'normalTexture', 'occlusionTexture', 'emissionTexture', 'opacityTexture'];
+  const slots: (keyof SourceMaterial)[] = ['baseTexture', 'roughnessTexture', 'glossinessTexture', 'metalnessTexture', 'normalTexture', 'bumpTexture', 'occlusionTexture', 'emissionTexture', 'opacityTexture'];
   const images = new Map<string, { file: string; embedded: boolean }>();
   for (const material of native.materials) {
     for (const slot of slots) {
@@ -446,7 +450,7 @@ export const buildImportedGlb = async (native: NativeImport, options: BuildOptio
   const imageOffsets: number[] = [];
   let binaryLength = nativeBinary.length;
   const images = table.images.map((image) => {
-    binaryLength = (binaryLength + 3) & ~3;
+    binaryLength = align4(binaryLength);
     imageOffsets.push(binaryLength);
     const bufferView = bufferViews.push({ buffer: 0, byteOffset: binaryLength, byteLength: image.bytes.length }) - 1;
     binaryLength += image.bytes.length;
@@ -478,7 +482,7 @@ export const buildImportedGlb = async (native: NativeImport, options: BuildOptio
     ...(document.animations ? { animations: document.animations } : {}),
     accessors: document.accessors,
     bufferViews,
-    buffers: [{ byteLength: (binaryLength + 3) & ~3 }],
+    buffers: [{ byteLength: align4(binaryLength) }],
     ...(materials.length ? { materials } : {}),
     ...(table.textures.length ? { textures: table.textures, samplers: table.samplers, images } : {}),
     ...(usedExtensions.size ? { extensionsUsed: [...usedExtensions] } : {}),
