@@ -65,6 +65,7 @@ vi.mock('../../utils/projectHydration', () => ({
     releaseAll: () => undefined,
     content: () => ({}),
     objects: () => [],
+    refusedModels: () => [],
   }),
 }));
 

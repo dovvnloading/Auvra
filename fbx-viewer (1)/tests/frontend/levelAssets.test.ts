@@ -189,6 +189,7 @@ const fakeLoader = (bytesOf: (id: string) => number) => {
         releaseAll: () => undefined,
         content: () => ({ models: [...models], attachments: [], textures: [], audioAssets: [], blueprints: [], sockets: [] }),
         objects: () => [],
+        refusedModels: () => [],
     } as unknown as GameContentLoader;
     return { loader, models, released, loads };
 };
