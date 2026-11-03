@@ -57,12 +57,12 @@ const along = (a: Point, b: Point, share: number): Point => [a[0] + (b[0] - a[0]
 const gapOf = (a: Point, b: Point): number => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
 
 /** A line through some points: the place a distance along it, carrying on the way it goes past either end. */
-export interface Line {
+interface Line {
   length: number;
   at: (distance: number) => Point;
 }
 
-export const lineThrough = (points: readonly Point[]): Line => {
+const lineThrough = (points: readonly Point[]): Line => {
   const lengths = [0];
   for (let i = 1; i < points.length; i += 1) lengths.push(lengths[i - 1] + gapOf(points[i], points[i - 1]));
   const length = lengths[lengths.length - 1];

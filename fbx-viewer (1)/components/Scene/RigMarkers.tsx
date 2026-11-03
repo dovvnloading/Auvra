@@ -194,7 +194,7 @@ export const RigMarkers: React.FC<{ modelId: string; root: THREE.Object3D }> = (
   const size = reading ? sizeOf(reading) : 1;
 
   // An animal seen side on has its other side right behind this one: it moves with it, so it is left out.
-  const hidden = (name: string): boolean => sideOn && bothSides && name.startsWith('right');
+  const farHidden = sideOn && bothSides;
   const links = useMemo(() => (sideOn ? FOUR_LEG_LINKS : PERSON_LINKS) as readonly [RigMarkerName, RigMarkerName][], [sideOn]);
   const lines = useMemo(() => {
     const geometry = new THREE.BufferGeometry();
@@ -209,15 +209,14 @@ export const RigMarkers: React.FC<{ modelId: string; root: THREE.Object3D }> = (
     for (const [from, to] of links) {
       const a = markerAt(reading, from);
       const b = markerAt(reading, to);
-      if (!a || !b || hidden(from) || hidden(to)) continue;
+      if (!a || !b || (farHidden && (from.startsWith('right') || to.startsWith('right')))) continue;
       places.setXYZ(drawn * 2, ...a);
       places.setXYZ(drawn * 2 + 1, ...b);
       drawn += 1;
     }
     lines.setDrawRange(0, drawn * 2);
     places.needsUpdate = true;
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [lines, links, reading, sideOn, bothSides]);
+  }, [lines, links, reading, farHidden]);
 
   // Dragging a marker: the pointer's ray meets the plane through the marker, square to the view of the body.
   const dragging = useRef<RigMarkerName | null>(null);
@@ -259,7 +258,7 @@ export const RigMarkers: React.FC<{ modelId: string; root: THREE.Object3D }> = (
   if (!shown || !reading) return null;
   const radius = size * MARKER_SIZE;
   const labels = (sideOn ? FOUR_LEG_LABEL : PERSON_LABEL) as Record<string, string>;
-  const names = (Object.keys(labels) as RigMarkerName[]).filter((name) => markerAt(reading, name) && !hidden(name));
+  const names = (Object.keys(labels) as RigMarkerName[]).filter((name) => markerAt(reading, name) && !(farHidden && name.startsWith('right')));
   return (
     <group ref={group}>
       <lineSegments geometry={lines} renderOrder={1000} frustumCulled={false} raycast={NOTHING}>

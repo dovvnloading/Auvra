@@ -207,12 +207,14 @@ const pawAhead = (grid: VoxelGrid, mask: Uint8Array, paw: Paw, bottom: number, t
 
 /** How far a leg's line strays along the body from the straight line up it, as a share of that line: hocks bend back. */
 const strayAlong = (bands: readonly WaveBand[]): number => {
-  const a = bands[Math.floor(bands.length * 0.1)].centre;
+  // From above the paw, whose length says nothing of how the leg bends.
+  const from = Math.floor(bands.length * 0.3);
+  const a = bands[from].centre;
   const b = bands[bands.length - 1].centre;
   const chord: Point = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
   const length = Math.hypot(chord[0], chord[1], chord[2]) || 1;
   let stray = 0;
-  for (const band of bands) {
+  for (const band of bands.slice(from)) {
     const gap: Point = [band.centre[0] - a[0], band.centre[1] - a[1], band.centre[2] - a[2]];
     const along = (gap[0] * chord[0] + gap[1] * chord[1] + gap[2] * chord[2]) / length;
     const off = gap[2] - (chord[2] / length) * along;
