@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo } from 'react';
+import { savedBone } from '../../utils/animationBinding';
 import * as THREE from 'three';
 import { SkeletonUtils } from 'three-stdlib';
 import { markMountedPart } from '../../utils/mountedParts';
@@ -61,7 +62,7 @@ export const AttachmentController: React.FC<AttachmentControllerProps> = ({ data
         let targetBone: THREE.Object3D | undefined;
 
         if (boneName) {
-            targetBone = parentObject.getObjectByName(boneName);
+            targetBone = savedBone(parentObject, boneName);
         }
 
         // FIX: Removed fallback recursive search for arbitrary bones.

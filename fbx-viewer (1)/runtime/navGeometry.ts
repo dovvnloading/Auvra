@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { authoredHullsUnder } from '../utils/modelConventions';
 import { ConvexGeometry } from 'three-stdlib';
 import type { LevelComponent, LevelObject } from '../types';
 import { planHull, type HostGeometry } from './components/physicsComponents';
@@ -544,7 +545,8 @@ export const modelTriangles = (model: THREE.Object3D): HostGeometry | null => {
         soup.add(values, mesh.geometry.index ? (mesh.geometry.index.array as ArrayLike<number>) : null, relative);
     });
     if (soup.positions.length === 0) return null;
-    return { positions: new Float32Array(soup.positions), indices: new Uint32Array(soup.indices) };
+    const hulls = authoredHullsUnder(model, () => false, toModel);
+    return { positions: new Float32Array(soup.positions), indices: new Uint32Array(soup.indices), ...(hulls.length ? { hulls } : {}) };
 };
 
 const heightsTokens = new WeakMap<object, number>();

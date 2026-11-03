@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { AttachmentData, AudioData, Blueprint, LevelData, LevelObject, LoadedModelData, ModelSourceImage, PrefabData, SocketData, TerrainData, TextureData } from '../types';
-import { importPhaseLabel, loadFBXFile } from './modelLoader';
+import { importFailureMessage, importPhaseLabel, loadFBXFile } from './modelLoader';
 import { resolveTerrainHeightfield } from './terrainHeightfield';
 import { isTerrainHeightfieldPending } from './terrainHeightfieldCodec';
 import { resolveTerrainHolemap, resolveTerrainSplatmap } from '../components/Environment/Terrain/terrainSplat';
@@ -23,6 +23,7 @@ import {
   normalizeGameSettings,
   type HUDDocumentData,
   type LoadedGameContent,
+  type RefusedModel,
 } from '../runtime/types';
 import { MATERIALS_DOMAIN, materialLibrary, readMaterialAsset, type MaterialAsset } from '../runtime/materials/materialLibrary';
 import { loadSkinPaint } from './skinPaint/modelSkin';
@@ -163,6 +164,7 @@ export async function loadGameContent(
     report(detail, 0, 'library_publication', diagnostic);
   };
   let assetFailureCount = 0;
+  const refusedModels: RefusedModel[] = [];
   const traceAsset = (assetAlias: string) => diagnostics?.operationId && diagnostics.traceId
     ? { operationId: diagnostics.operationId, traceId: diagnostics.traceId, assetAlias }
     : undefined;
@@ -236,12 +238,14 @@ export async function loadGameContent(
       let diagnostic: DiagnosticAttributes = { assetAlias, assetKind: item.category === 'Animation' ? 'animation' : 'model' };
       let activePhase: string = 'source_read';
       let loadedModel: LoadedModelData | null = null;
+      let reading = false;
       try {
         report(`Downloading model — ${item.name}`, 0.05, activePhase, diagnostic);
         const sourceFile = await loadProjectAssetFile(item.assetId, item.name, traceAsset(assetAlias));
         assertCurrent();
         diagnostic = assetDiagnosticAttributes(sourceFile, item.category === 'Animation' ? 'animation' : 'model', assetAlias);
         const sourceImages: ModelSourceImage[] = Array.isArray(item.sourceImages) ? item.sourceImages : [];
+        reading = true;
         const loaded = await loadFBXFile(sourceFile, {
           normalize: item.category !== 'Animation',
           convert: convertOptionsFor(item.category === 'Animation' ? undefined : item.importSettings),
@@ -255,6 +259,7 @@ export async function loadGameContent(
             report(`${importPhaseLabel(phase)} — ${item.name}`, progress * 0.8 + 0.1, phase, diagnostic);
           },
         });
+        reading = false;
         loadedModel = loaded;
         assertCurrent();
         // Clips keep the names stored at import, not the model's current name (see applyStoredClipNames).
@@ -282,7 +287,8 @@ export async function loadGameContent(
         if (typeof item.folder === 'string') loaded.folder = item.folder;
         // A missing importSettings document field means the default (old) normalization.
         applyModelImportSettings(loaded, item.importSettings);
-        for (const [materialName, textureId] of Object.entries(item.textureOverrides || {}) as Array<[string, string]>) {
+        for (const [savedName, textureId] of Object.entries(item.textureOverrides || {}) as Array<[string, string]>) {
+          const materialName = currentMaterialName(savedName);
           const textureUrl = textureAssetUrls.get(textureId);
           if (!textureUrl) continue;
           const texture = await new THREE.TextureLoader().loadAsync(textureUrl);
@@ -314,7 +320,7 @@ export async function loadGameContent(
         }
         // Material overrides layer on top of the texture overrides above, so a
         // material without its own map override keeps the overridden texture.
-        loaded.materialOverrides = await hydrateMaterialOverrides(loaded.object, item.materialOverrides, {
+        loaded.materialOverrides = await hydrateMaterialOverrides(loaded.object, withCurrentMaterialNames(item.materialOverrides), {
           resolveTextureUrl: (textureId) => textureAssetUrls.get(textureId),
           assertCurrent,
         });
@@ -364,7 +370,7 @@ export async function loadGameContent(
         if (Array.isArray(item.mirroredClips) && item.mirroredClips.length) {
           loaded.mirroredClips = item.mirroredClips.filter((name: unknown): name is string => typeof name === 'string');
           try {
-            loaded.animations.push(...mirrorModelClips(loaded.object, loaded.animations, loaded.mirroredClips));
+            loaded.animations.push(...mirrorModelClips(loaded.object, loaded.animations, loaded.mirroredClips, loaded.boneRoles));
           } catch (error) { recordAssetFailure('clip_mirror_failed', error, 'animation_binding', diagnostic); }
         }
         models.push(loaded);
@@ -372,7 +378,15 @@ export async function loadGameContent(
         if (loadedModel) {
           try { disposeModel(loadedModel); } catch { /* best effort */ }
         }
-        recordAssetFailure('model_hydration_failed', error, activePhase, diagnostic);
+        // A file that cannot be read now could be when it was imported. It stays in the project, and
+        // the rest of the project opens: nothing else can be done about it from outside.
+        const cancelled = (error as { name?: string } | null)?.name === 'AbortError';
+        if (reading && !cancelled) {
+          refusedModels.push({ name: item.name, reason: importFailureMessage(item.name, error) });
+          recordAssetDiagnostic('model_hydration_failed', error, activePhase, diagnostic);
+        } else {
+          recordAssetFailure('model_hydration_failed', error, activePhase, diagnostic);
+        }
         complete(`Skipped model — ${item.name}`, diagnostic);
       }
     }
@@ -542,6 +556,7 @@ export async function loadGameContent(
       audioAssets,
       prefabs: documents('prefabs') as PrefabData[],
     },
+    refusedModels,
     levels: documents('levels') as LevelData[],
     objects,
     hud: (hudDocument as HUDDocumentData | undefined) ?? null,
@@ -551,6 +566,14 @@ export async function loadGameContent(
     settings: normalizeGameSettings(settingsDocument?.settings),
   };
 }
+
+/** The name projects saved a mesh with no material under, before models came to call it Default. */
+const currentMaterialName = (name: string): string => (name === '__DEFAULT' ? 'Default' : name);
+
+const withCurrentMaterialNames = <T,>(overrides: T): T => {
+  if (!overrides || typeof overrides !== 'object' || !('__DEFAULT' in overrides)) return overrides;
+  return Object.fromEntries(Object.entries(overrides).map(([name, value]) => [currentMaterialName(name), value])) as T;
+};
 
 /** Dispose content that was loaded but will not be published. Best effort. */
 function releaseLoadedAssets(models: LoadedModelData[], attachments: AttachmentData[], ownedUrls: string[]): void {

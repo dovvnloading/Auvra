@@ -135,7 +135,7 @@ export const boneAtScreen = (bones: readonly SkeletonBone[], camera: THREE.Camer
   return best;
 };
 
-/** How many vertices each bone is the strongest influence on, by bone name. */
+/** How many vertices each bone moves at all, by bone name. */
 export const boneInfluences = (root: THREE.Object3D): Map<string, number> => {
   const counts = new Map<string, number>();
   root.traverse((node) => {
@@ -145,10 +145,11 @@ export const boneInfluences = (root: THREE.Object3D): Map<string, number> => {
     const weights = mesh.geometry.getAttribute('skinWeight');
     if (!joints || !weights) return;
     for (let vertex = 0; vertex < joints.count; vertex += 1) {
-      let strongest = 0;
-      for (let k = 1; k < 4; k += 1) if (weights.getComponent(vertex, k) > weights.getComponent(vertex, strongest)) strongest = k;
-      const bone = mesh.skeleton.bones[joints.getComponent(vertex, strongest)];
-      if (bone) counts.set(bone.name, (counts.get(bone.name) ?? 0) + 1);
+      for (let k = 0; k < 4; k += 1) {
+        if (weights.getComponent(vertex, k) <= 0) continue;
+        const bone = mesh.skeleton.bones[joints.getComponent(vertex, k)];
+        if (bone) counts.set(bone.name, (counts.get(bone.name) ?? 0) + 1);
+      }
     }
   });
   return counts;

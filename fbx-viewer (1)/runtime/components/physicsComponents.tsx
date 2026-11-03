@@ -725,24 +725,50 @@ const ObjectCollider: React.FC<ObjectColliderProps> = ({ settings, content, obje
 
 /** The shapes a model's file holds, or one hull around the model when it holds none. */
 const ModelFileColliders: React.FC<{ content: HostGeometry; colliderRef: (collider: RapierCollider | null) => void; common: ColliderCommonProps }> = ({ content, colliderRef, common }) => {
-    const hulls = useMemo(() => (content.hulls?.length ? content.hulls : [content.positions]).map(planHull), [content]);
-    const mass = common.mass === undefined ? undefined : common.mass / hulls.length;
-    const offset = (common.position ?? [0, 0, 0]) as Vec3;
+    const points = content.hulls?.length ? content.hulls : [content.positions];
+    const hulls = useMemo(() => points.map(planHull), [points]);
+    const masses = useMemo(() => hullMasses(points, common.mass), [points, common.mass]);
+    const scale = (common.scale ?? [1, 1, 1]) as Vec3;
+    // A box's size is scaled as given, so a mirror must not reach it; its centre still takes the mirror.
+    const boxScale: Vec3 = [Math.abs(scale[0]), Math.abs(scale[1]), Math.abs(scale[2])];
     return (
         <>
             {hulls.map((hull, index) => (hull.kind === 'box'
-                ? <CuboidCollider key={index} ref={colliderRef} args={hull.halfExtents} {...common} position={[offset[0] + hull.center[0], offset[1] + hull.center[1], offset[2] + hull.center[2]]} mass={mass} />
-                : <ConvexHullCollider key={index} ref={colliderRef} args={[hull.points]} {...common} mass={mass} />))}
+                ? <CuboidCollider key={index} ref={colliderRef} args={hull.halfExtents} {...common} position={placedCenter(hull.center, common)} scale={boxScale} mass={masses[index]} />
+                : <ConvexHullCollider key={index} ref={colliderRef} args={[hull.points]} {...common} mass={masses[index]} />))}
         </>
     );
+};
+
+/** Where a shape's centre lands under a collider's own offset, turn and scale. */
+const placedCenter = (center: Vec3, common: ColliderCommonProps): Vec3 => {
+    const offset = (common.position ?? [0, 0, 0]) as Vec3;
+    const scale = (common.scale ?? [1, 1, 1]) as Vec3;
+    const turned = new THREE.Vector3(center[0] * scale[0], center[1] * scale[1], center[2] * scale[2]);
+    if (common.rotation) turned.applyEuler(new THREE.Euler(...(common.rotation as Vec3)));
+    return [offset[0] + turned.x, offset[1] + turned.y, offset[2] + turned.z];
+};
+
+/** A body's mass shared among its shapes by the room each takes, so a small part does not weigh as much as the rest and tip the body over. */
+export const hullMasses = (hulls: readonly Float32Array[], mass: number | undefined): (number | undefined)[] => {
+    if (mass === undefined) return hulls.map(() => undefined);
+    const point = new THREE.Vector3();
+    const volumes = hulls.map((points) => {
+        const bounds = new THREE.Box3();
+        for (let i = 0; i + 2 < points.length; i += 3) bounds.expandByPoint(point.set(points[i], points[i + 1], points[i + 2]));
+        const size = bounds.isEmpty() ? new THREE.Vector3() : bounds.getSize(new THREE.Vector3());
+        return Math.max(size.x, MIN_EXTENT) * Math.max(size.y, MIN_EXTENT) * Math.max(size.z, MIN_EXTENT);
+    });
+    const total = volumes.reduce((sum, volume) => sum + volume, 0);
+    return volumes.map((volume) => (mass * volume) / total);
 };
 
 /** The automatic shape of a rigid body without colliders: the shapes its model's file holds, or a hull around its meshes, or a unit box when it draws none. */
 const AutomaticColliders: React.FC<{ content: HostGeometry | null; mass?: number }> = ({ content, mass }) => {
     const hulls = content?.hulls;
+    const masses = useMemo(() => hullMasses(hulls ?? [], mass), [hulls, mass]);
     if (!hulls?.length) return <HullCollider points={content?.positions ?? null} mass={mass} />;
-    const each = mass === undefined ? undefined : mass / hulls.length;
-    return <>{hulls.map((points, index) => <HullCollider key={index} points={points} mass={each} />)}</>;
+    return <>{hulls.map((points, index) => <HullCollider key={index} points={points} mass={masses[index]} />)}</>;
 };
 
 const HullCollider: React.FC<{ points: Float32Array | null; mass?: number }> = ({ points, mass }) => {
@@ -1039,7 +1065,11 @@ const buildPreviewGeometry = (kind: 'mesh' | 'hull', content: HostGeometry): THR
     if (content.hulls?.length) {
         const shapes = content.hulls.flatMap((points) => {
             const shape = previewHull(points);
-            return shape ? [shape] : [];
+            if (!shape) return [];
+            // Flat shapes draw as boxes, solid ones as hulls: to merge, both must hold the same attributes.
+            const plain = shape.index ? shape.toNonIndexed() : shape;
+            plain.deleteAttribute('uv');
+            return [plain];
         });
         return shapes.length ? mergeGeometries(shapes) : null;
     }

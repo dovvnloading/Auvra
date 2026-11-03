@@ -30,7 +30,8 @@ interface AssetContextType {
   importModelWithOptions: (file: File, settings: ModelImportSettings, category?: AssetCategory, images?: readonly File[]) => Promise<void>;
   readModelSource: (modelId: string) => Promise<File>;
   readModelSourceImages: (modelId: string) => Promise<File[]>;
-  reimportModel: (modelId: string, file?: File | null, settings?: ModelImportSettings, images?: readonly File[], category?: AssetCategory) => Promise<void>;
+  /** Whether the model was saved with what it was given. */
+  reimportModel: (modelId: string, file?: File | null, settings?: ModelImportSettings, images?: readonly File[], category?: AssetCategory) => Promise<boolean | undefined>;
   updateModel: (id: string, updates: AssetInfoUpdate) => Promise<void>;
   removeModel: (id: string) => void;
   placeInScene: (id: string) => void; 

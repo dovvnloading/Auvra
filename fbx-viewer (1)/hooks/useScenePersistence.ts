@@ -20,7 +20,8 @@ import {
 } from '../diagnostics/runtime';
 import { createDefaultCameraState, readEditorState } from '../utils/editorState';
 import { loadGameContent } from '../utils/projectHydration';
-import { drawAsPaintedTexture } from '../utils/materialOverrides';
+import { appAlert } from '../utils/appDialogs';
+import { drawAsPaintedTexture, overrideTextureFlipY } from '../utils/materialOverrides';
 
 export interface ScenePersistenceProps {
   setModels: (models: LoadedModelData[]) => void;
@@ -231,6 +232,9 @@ async function hydrateSnapshot(
   });
   // The detached result owns the blob URLs from here on, so a later stale
   // check releases them with the rest of the unpublished project.
+  if (loaded.refusedModels.length) {
+    void appAlert(`These models could not be read, so they are not in the library for now. They are still in the project.\n\n${loaded.refusedModels.map((model) => model.reason).join('\n')}`);
+  }
   for (const texture of loaded.content.textures) targets.trackUrl?.(texture.url);
   for (const audio of loaded.content.audioAssets) targets.trackUrl?.(audio.url);
   const { content, levels, objects } = loaded;
@@ -479,7 +483,7 @@ export const useScenePersistence = ({
                     detached.standaloneTextures.add(tex);
                     assertCurrent();
                     tex.colorSpace = THREE.SRGBColorSpace;
-                    tex.flipY = true;
+                    tex.flipY = overrideTextureFlipY(loaded.object);
                     let attached = false;
                     loaded.object.traverse((child) => {
                         if ((child as THREE.Mesh).isMesh) {

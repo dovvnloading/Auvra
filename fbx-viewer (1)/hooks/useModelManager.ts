@@ -6,6 +6,7 @@ import { importFailureMessage, importPhaseLabel, loadFBXFile } from '../utils/mo
 import { disposeModel, disposeObject } from '../utils/processing/ModelLifecycle';
 import { applyModelImportSettings, convertOptionsFor, resolveImportSettings, stripGeometry } from '../utils/processing/ModelTransforms';
 import { applyStoredClipNames, mirrorModelClips, prepareAnimationClips, uniqueClipNames } from '../utils/animationBinding';
+import { skeletonBones } from '../utils/skeletonView';
 import type { StoredBoneRole } from '../utils/retargeting';
 import { loadSkinPaint } from '../utils/skinPaint/modelSkin';
 import { flushSkinPaint } from '../utils/skinPaint/paintSession';
@@ -288,15 +289,16 @@ export const useModelManager = (
    */
   const reimportModel = useCallback(async (modelId: string, file?: File | null, settings?: ModelImportSettings, images: readonly File[] = [], newCategory?: AssetCategory) => {
     projectService.assertWritable();
-    const existing = models.find((model) => model.id === modelId);
+    // As it is now: this can be called long after it was set off, as a skeleton is made.
+    const existing = modelsRef.current.find((model) => model.id === modelId);
     if (!existing) {
       addNotification({ message: 'The model to reimport is no longer loaded.', type: 'error' });
-      return;
+      return false;
     }
     const name = file ? reimportedModelName(existing.name, file.name) : existing.name;
-    if (models.some((model) => model.id !== modelId && model.name === name)) {
+    if (modelsRef.current.some((model) => model.id !== modelId && model.name === name)) {
       void appAlert(`A model named "${name}" is already loaded in the library.`);
-      return;
+      return false;
     }
     const category = newCategory ?? existing.category;
     const kind = category === 'Animation' ? 'animation' : 'model';
@@ -357,7 +359,14 @@ export const useModelManager = (
       replacement.isPlacedInScene = existing.isPlacedInScene;
       replacement.textureOverrides = existing.textureOverrides;
       replacement.folder = existing.folder;
-      replacement.boneRoles = modelsRef.current.find((model) => model.id === modelId)?.boneRoles ?? existing.boneRoles;
+      const latestRoles = modelsRef.current.find((model) => model.id === modelId)?.boneRoles ?? existing.boneRoles;
+      // A new file's bones: what was said of bones it no longer has means nothing.
+      if (file && latestRoles?.length) {
+        const names = new Set(skeletonBones(replacement.object).map((entry) => entry.name));
+        replacement.boneRoles = latestRoles.filter((stored) => names.has(stored.bone));
+      } else {
+        replacement.boneRoles = latestRoles;
+      }
       // Painted weights go on whatever file it now has, wherever its vertices still stand.
       const skinPaint = category === 'Animation' ? undefined : storedModel?.skinPaint as SkinPaintReference | undefined;
       let paintLost = 0;
@@ -441,6 +450,16 @@ export const useModelManager = (
       }
       replacement.sourceClipNames = ownClips.map((clip) => clip.name);
       await projectService.applyChanges([{ domain: 'models', operation: 'upsert', id: modelId, value: document }], trace);
+      // Mirrored copies are made again from the clips they copy, as when the project opens.
+      const { mirroredClips } = modelsRef.current.find((model) => model.id === modelId) ?? existing;
+      if (mirroredClips?.length) {
+        replacement.mirroredClips = mirroredClips;
+        try {
+          replacement.animations.push(...mirrorModelClips(replacement.object, replacement.animations, mirroredClips, replacement.boneRoles));
+        } catch (error) {
+          frontendDiagnostics.failure('clip_mirror_failed', error);
+        }
+      }
 
       operation.update({ phase: 'library_publication', progress: 0.98, detail: 'Publishing to library', diagnostic });
       // Material overrides saved while the reimport ran are the ones to keep.
@@ -456,10 +475,12 @@ export const useModelManager = (
       replacement = null;
       setModels((previous) => previous.map((model) => (model.id === modelId ? published : model)));
       disposeModel(existing);
-      onModelFileRead?.(published);
+      // A file's sockets come in with a new file. Reading the same one again would bring back what was deleted or renamed.
+      if (file) onModelFileRead?.(published);
       addNotification(paintLost > 0
         ? { message: `Reimported "${existing.name}". ${paintLost.toLocaleString()} painted vertices no longer match it and went back to its own weights.`, type: 'info' }
         : { message: `Reimported "${existing.name}".`, type: 'success' });
+      return true;
     } catch (error) {
       outcome = isAbortError(error) ? 'cancelled' : 'failure';
       failure = error;
@@ -581,7 +602,7 @@ export const useModelManager = (
     const model = modelsRef.current.find((candidate) => candidate.id === modelId);
     if (!model) return;
     try {
-      const [mirrored] = mirrorModelClips(model.object, model.animations, [clipName]);
+      const [mirrored] = mirrorModelClips(model.object, model.animations, [clipName], model.boneRoles);
       if (!mirrored) return;
       const mirroredClips = [...(model.mirroredClips ?? []).filter((name) => name !== clipName), clipName];
       await dbOperations.updateModelMirroredClips(modelId, mirroredClips);
@@ -881,6 +902,8 @@ export const useModelManager = (
           await loadSkinPaint(newModelData.object, skinPaint, (assetId) => readSkinPaintBytes(assetId), { keepFileWeights: true });
         }
         newModelData.animations = model.animations;
+        newModelData.sourceClipNames = model.sourceClipNames;
+        newModelData.mirroredClips = model.mirroredClips;
         newModelData.isPlacedInScene = model.isPlacedInScene;
         newModelData.textureOverrides = {}; // Clear overrides
 
@@ -889,6 +912,7 @@ export const useModelManager = (
         // Kept: edited in the Materials panel, possibly saved while the reset ran.
         const latest = modelsRef.current.find((candidate) => candidate.id === modelId) ?? model;
         newModelData.materialOverrides = latest.materialOverrides;
+        newModelData.boneRoles = latest.boneRoles;
         attachMaterialOverrides(newModelData.object, normalizeMaterialOverrides(latest.materialOverrides), detachMaterialOverrides(latest.object));
 
         setModels(prev => prev.map(m => {

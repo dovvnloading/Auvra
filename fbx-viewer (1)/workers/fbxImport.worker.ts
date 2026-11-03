@@ -11,7 +11,7 @@ type ImportFormat = 'fbx' | 'obj';
 export type ModelConvertOptions = Pick<NativeImportOptions, 'animation' | 'morphTargets' | 'tangents' | 'recomputeNormals' | 'skin' | 'meshes' | 'looseMeshes' | 'excludedClips' | 'sampleRate' | 'keyThreshold' | 'smoothingAngle'>;
 type ImportRequest =
   | { type: 'parse'; buffer: ArrayBuffer; format?: ImportFormat; name?: string; options?: ModelConvertOptions; images?: { name: string; buffer: ArrayBuffer }[] }
-  | { type: 'inspect'; buffer: ArrayBuffer; format?: ImportFormat; name?: string };
+  | { type: 'inspect'; buffer: ArrayBuffer; format?: ImportFormat; name?: string; images?: { name: string; buffer: ArrayBuffer }[] };
 type ImportPhase = 'fbx_structure_parse' | 'model_structure_parse' | 'embedded_texture_decode' | 'runtime_asset_construction' | 'runtime_asset_transfer';
 type ImportProgress = { type: 'progress'; progress: number; phase: ImportPhase; workerState: 'parsing' | 'decoding' | 'constructing' | 'transferring' };
 type ImportComplete = { type: 'complete'; glb: ArrayBuffer; itemCount: number; clipCount: number; missingTextures: string[]; metresPerUnit: number | null; report: ModelFileReport };
@@ -67,14 +67,20 @@ scope.onmessage = async (event: MessageEvent<ImportRequest>) => {
     else report(0.12, 'fbx_structure_parse', 'parsing');
     const importer = await loadImporter();
     const fileName = request.name || `model.${format}`;
+    // An OBJ's material file comes among the files found beside it.
+    const materialFile = request.images?.find(({ name }) => /\.mtl$/i.test(name));
+    const materials = materialFile ? new Uint8Array(materialFile.buffer) : undefined;
     if (request.type === 'inspect') {
-      const native = runNativeImport(importer, request.buffer, fileName, { inspect: true, obj: format === 'obj' });
-      const inspected: ModelFileReport = { ...native.report, images: describeImages(native) };
+      const native = runNativeImport(importer, request.buffer, fileName, { inspect: true, obj: format === 'obj', materials });
+      const inspected: ModelFileReport = {
+        ...native.report,
+        images: [...(native.report.materialFile && !materials ? [{ file: native.report.materialFile, embedded: false }] : []), ...describeImages(native)],
+      };
       native.close();
       scope.postMessage({ type: 'inspected', report: inspected } satisfies InspectComplete);
       return;
     }
-    const native = runNativeImport(importer, request.buffer, fileName, { ...request.options, obj: format === 'obj' });
+    const native = runNativeImport(importer, request.buffer, fileName, { ...request.options, obj: format === 'obj', materials });
     if (format === 'obj' && native.report.triangles === 0) throw new Error('The OBJ file contains no mesh geometry.');
     report(0.48, 'embedded_texture_decode', 'decoding');
     report(0.64, 'runtime_asset_construction', 'constructing');

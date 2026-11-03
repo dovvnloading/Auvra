@@ -88,6 +88,13 @@ const bones = (root: THREE.Object3D): THREE.Bone[] => {
   return result;
 };
 
+/**
+ * The bone a saved name means. Older projects could pick a copy of a bone that a character split
+ * into parts had ("mixamorigRightHand_1"), which is now the bone itself.
+ */
+export const savedBone = (root: THREE.Object3D, name: string): THREE.Object3D | undefined =>
+  root.getObjectByName(name) ?? root.getObjectByName(name.replace(/_\d+$/, ''));
+
 export const isSkeletalModel = (model: AnimationTargetCandidate): boolean => bones(model.object).length > 0;
 
 /** `names` made unique among themselves and against `taken` ("Idle", then "Idle 2"); `taken` gains them. */
@@ -116,12 +123,13 @@ export const mirrorModelClips = (
   object: THREE.Object3D,
   clips: readonly THREE.AnimationClip[],
   names: readonly string[],
+  storedRoles?: readonly StoredBoneRole[],
 ): THREE.AnimationClip[] => {
   const wanted = names.filter((name) => clips.some((clip) => clip.name === name) && !clips.some((clip) => clip.name === mirroredClipName(name)));
   if (!wanted.length) return [];
   const rig = bindPoseRig(object);
   if (!rig) throw new AnimationImportError('The model has no skeleton to mirror its clips on.');
-  return wanted.map((name) => mirrorHumanoidClip(rig, clips.find((clip) => clip.name === name)!, mirroredClipName(name)));
+  return wanted.map((name) => mirrorHumanoidClip(rig, clips.find((clip) => clip.name === name)!, mirroredClipName(name), storedRoles));
 };
 
 export const applyStoredClipNames = (clips: readonly THREE.AnimationClip[], stored: unknown): void => {
@@ -182,9 +190,21 @@ const REST_PLACE_TOLERANCE = 0.05;
 const REST_TURN_TOLERANCE = THREE.MathUtils.degToRad(15);
 
 /**
+ * Whether a bone's children leave it the same way on two rigs. They do not change with the pose a
+ * file was saved in, and a rest pose can lie in them alone: T and A poses with no turn on any bone.
+ */
+const childrenLeaveAlike = (target: THREE.Object3D, source: THREE.Object3D): boolean => target.children.every((child) => {
+  if (!child.name || child.position.lengthSq() < 1e-12) return true;
+  const partner = source.children.find((candidate) => candidate.name === child.name);
+  if (!partner || partner.position.lengthSq() < 1e-12) return true;
+  return child.position.angleTo(partner.position) <= REST_TURN_TOLERANCE;
+});
+
+/**
  * Whether a clip's values hold on `root` as they are: the bones it places rest where they rest on
- * the rig it was made on, and those it turns rest turned alike. Same names do not make that so: a
- * hip height from another character's proportions, or in another unit, puts the feet off the floor.
+ * the rig it was made on, and those it turns rest turned alike, with their children leaving them
+ * alike. Same names do not make that so: a hip height from another character's proportions, or in
+ * another unit, puts the feet off the floor.
  */
 const clipFitsRest = (root: THREE.Object3D, sourceRoot: THREE.Object3D, clip: THREE.AnimationClip): boolean => clip.tracks.every((track) => {
   const nodeName = trackNodeName(track);
@@ -195,7 +215,7 @@ const clipFitsRest = (root: THREE.Object3D, sourceRoot: THREE.Object3D, clip: TH
   if (track.name.endsWith('.position')) {
     return target.position.distanceTo(source.position) <= REST_PLACE_TOLERANCE * Math.max(target.position.length(), source.position.length());
   }
-  if (track.name.endsWith('.quaternion')) return target.quaternion.angleTo(source.quaternion) <= REST_TURN_TOLERANCE;
+  if (track.name.endsWith('.quaternion')) return target.quaternion.angleTo(source.quaternion) <= REST_TURN_TOLERANCE && childrenLeaveAlike(target, source);
   return true;
 });
 
@@ -271,7 +291,11 @@ export const prepareAnimationClips = (
   const usable = clips.filter((clip) => clip.duration > 0 && clip.tracks.length > 0);
   if (!usable.length) throw new AnimationImportError('The FBX contains no usable animation clips.');
 
-  if (usable.every((clip) => clipBindsDirectly(targetRoot, clip) && clipFitsRest(restOf(targetRoot), sourceRoot, clip))) {
+  // A file with a skin says what its rest pose is, whatever pose it was saved in.
+  const sourceRest = restOf(sourceRoot);
+  const bindsDirectly = usable.every((clip) => clipBindsDirectly(targetRoot, clip));
+  // A model with no skeleton has only its nodes to move: there is nothing to retarget onto.
+  if (bindsDirectly && (!bindPoseRig(targetRoot) || usable.every((clip) => clipFitsRest(restOf(targetRoot), sourceRest, clip)))) {
     return {
       clips: usable.map((clip) => clip.clone()),
       mode: 'direct',
@@ -279,5 +303,5 @@ export const prepareAnimationClips = (
       animatedBones: 0,
     };
   }
-  return retargetAnimations(targetRoot, sourceRoot, usable, storedRoles);
+  return retargetAnimations(targetRoot, sourceRest, usable, storedRoles);
 };

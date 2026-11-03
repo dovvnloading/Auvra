@@ -5,6 +5,7 @@ import { readBody, turnAboutY, turnSoupAboutY, type Point } from '../../utils/au
 import { bodySkeleton } from '../../utils/autoRig/bodySkeleton';
 import { readFingers } from '../../utils/autoRig/handReading';
 import { buildRiggedGlb, trianglesOf, type GltfJson, type RigPrimitive } from '../../utils/autoRig/riggedGlb';
+import { readModelConventions } from '../../utils/modelConventions';
 import { rigBody, standardReading } from '../../utils/autoRig/rigBody';
 import { bindSkin } from '../../utils/autoRig/skinWeights';
 import { voxelize } from '../../utils/autoRig/voxels';
@@ -360,6 +361,21 @@ describe('placing the markers by hand', () => {
     expect(Math.abs(elbow.position[2])).toBeLessThan(0.02);
   }, RIGGING_TIME);
 
+  it('has toes follow a moved ankle and the hand tip turn with a moved forearm', () => {
+    const soup = figure();
+    const reading = readBody(soup)!;
+    const { markers } = reading;
+    const ankle: Point = [markers.leftAnkle[0] + 0.05, markers.leftAnkle[1], markers.leftAnkle[2]];
+    // The wrist drops straight below the elbow, so the hand should now hang down.
+    const wrist: Point = [markers.leftElbow[0], markers.leftElbow[1] - 0.25, markers.leftWrist[2]];
+    const { joints } = rigBody(soup, [partOf(soup)], { ...reading, markers: { ...markers, leftAnkle: ankle, leftWrist: wrist } }, ['leftAnkle', 'leftWrist'], undefined, markers, false);
+    const place = (name: string) => joints.find((joint) => joint.name === name)!.position;
+    expect(place('LeftToe_End')[0] - place('LeftFoot')[0]).toBeCloseTo(reading.extents.leftToe[0] - markers.leftAnkle[0], 2);
+    const hand = new THREE.Vector3(...place('LeftHandTip_End')).sub(new THREE.Vector3(...place('LeftHand')));
+    expect(hand.y).toBeLessThan(-0.05);
+    expect(Math.abs(hand.x)).toBeLessThan(Math.abs(hand.y));
+  }, RIGGING_TIME);
+
   it('turns the skeleton back to the mesh\'s own space', () => {
     const sin = -1;
     const cos = 0;
@@ -415,22 +431,26 @@ describe('writing the rigged file', () => {
     const { source, primitive, imageBytes } = sourceOf(body.map((value, index) => (index % 3 === 1 ? value - 0.5 : value)));
     const reading = readBody(primitive.positions)!;
     const { joints, weights } = rigBody(trianglesOf([primitive]), [primitive], reading, []);
-    return { glb: buildRiggedGlb(source, [primitive], joints, weights), joints, imageBytes, primitive };
+    const shape = { name: 'UCX_Body', positions: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1]), indices: new Uint32Array([0, 1, 2, 0, 2, 3, 0, 3, 1, 1, 3, 2]) };
+    return { glb: buildRiggedGlb(source, [primitive], joints, weights, [shape]), joints, imageBytes, primitive, shape };
   })();
 
   it('keeps the rest of the document, and drops what no longer holds', () => {
     const { json, binary } = glbParts(rigged.glb);
-    expect(json.scenes![0].extras).toEqual({ uvOriginTopLeft: true });
+    // The model's unit goes along, for its root to keep its scale.
+    expect(json.scenes![0].extras).toEqual({ uvOriginTopLeft: true, sourceMetresPerUnit: 0.5 });
     expect(json.materials).toEqual([{ name: 'Skin' }]);
     expect(json.animations).toBeUndefined();
     expect(json.extensionsUsed).toEqual(['KHR_materials_unlit']);
     expect(json.nodes![0].mesh).toBeUndefined();
+    // An empty keeps no name its mesh has taken with it: a loader would number the mesh's.
+    expect(json.nodes![0].name).toBeUndefined();
     // The image comes through byte for byte.
     const view = json.bufferViews![json.images![0].bufferView!];
     expect([...binary.subarray(view.byteOffset ?? 0, (view.byteOffset ?? 0) + view.byteLength)]).toEqual([...rigged.imageBytes]);
   });
 
-  it('loads as a skinned mesh that rests exactly where the mesh was, in metres', async () => {
+  it('loads as a skinned mesh that rests exactly where the mesh was, in the model\'s own units', async () => {
     const loaded = await new GLTFLoader().parseAsync(rigged.glb, '');
     let mesh: THREE.SkinnedMesh | null = null;
     loaded.scene.traverse((object) => {
@@ -447,9 +467,21 @@ describe('writing the rigged file', () => {
       point.fromBufferAttribute(skinned.geometry.getAttribute('position'), vertex);
       skinned.applyBoneTransform(vertex, point);
       point.applyMatrix4(skinned.matrixWorld);
-      expect(point.x).toBeCloseTo(rigged.primitive.positions[vertex * 3] * 0.5, 3);
-      expect(point.y).toBeCloseTo(rigged.primitive.positions[vertex * 3 + 1] * 0.5, 3);
-      expect(point.z).toBeCloseTo(rigged.primitive.positions[vertex * 3 + 2] * 0.5, 3);
+      expect(point.x).toBeCloseTo(rigged.primitive.positions[vertex * 3], 3);
+      expect(point.y).toBeCloseTo(rigged.primitive.positions[vertex * 3 + 1], 3);
+      expect(point.z).toBeCloseTo(rigged.primitive.positions[vertex * 3 + 2], 3);
     }
+    expect(loaded.scene.userData.sourceMetresPerUnit).toBe(0.5);
+  });
+
+  it('carries the model\'s collision shapes along, under their own names and unskinned', async () => {
+    const loaded = await new GLTFLoader().parseAsync(rigged.glb, '');
+    const shape = loaded.scene.getObjectByName('UCX_Body') as THREE.Mesh;
+    expect(shape.isMesh).toBe(true);
+    expect((shape as THREE.Mesh & { isSkinnedMesh?: boolean }).isSkinnedMesh).toBeFalsy();
+    expect(Array.from(shape.geometry.getAttribute('position').array)).toEqual(Array.from(rigged.shape.positions));
+    const hulls = readModelConventions(loaded.scene);
+    expect(hulls.hulls).toHaveLength(1);
+    expect(hulls.shapes).toEqual([shape]);
   });
 });
