@@ -427,6 +427,83 @@ export class TextureGpu {
         return flipped;
     }
 
+    /**
+     * Reads an 8-bit image's pixels (bottom row first) without holding up the GPU: the read is queued behind
+     * its drawing and collected once a fence says it is done, so live edits keep flowing. The image may be
+     * released (and reused) as soon as this returns. Resolves null if the context is lost meanwhile.
+     */
+    readRgba8Later(image: GpuImage): Promise<Uint8Array | null> {
+        const gl = this.renderer.getContext() as WebGL2RenderingContext;
+        const { width, height } = image;
+        const previous = this.renderer.getRenderTarget();
+        this.renderer.setRenderTarget(image.target);
+        const buffer = gl.createBuffer();
+        gl.bindBuffer(gl.PIXEL_PACK_BUFFER, buffer);
+        gl.bufferData(gl.PIXEL_PACK_BUFFER, width * height * 4, gl.STREAM_READ);
+        gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, 0);
+        // three never binds a pack buffer itself: leave none bound for its own reads.
+        gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+        this.renderer.setRenderTarget(previous);
+        const fence = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
+        gl.flush();
+        return new Promise((resolve) => {
+            const finish = (pixels: Uint8Array | null) => {
+                if (fence) gl.deleteSync(fence);
+                gl.deleteBuffer(buffer);
+                resolve(pixels);
+            };
+            let waited = 0;
+            const poll = () => {
+                if (gl.isContextLost() || !fence) { finish(null); return; }
+                const status = gl.clientWaitSync(fence, 0, 0);
+                if (status === gl.WAIT_FAILED || waited > 10000) { finish(null); return; }
+                if (status === gl.TIMEOUT_EXPIRED) { waited += 4; setTimeout(poll, 4); return; }
+                const pixels = new Uint8Array(width * height * 4);
+                gl.bindBuffer(gl.PIXEL_PACK_BUFFER, buffer);
+                gl.getBufferSubData(gl.PIXEL_PACK_BUFFER, 0, pixels);
+                gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+                finish(pixels);
+            };
+            setTimeout(poll, 0);
+        });
+    }
+
+    /**
+     * Reads `source` scaled to `width` × `height` as 16-bit values (one per pixel for 'gray', four for
+     * 'color'), top row first when `flipRows`. Read a strip at a time, so even an 8K picture needs little memory.
+     */
+    readUint16(source: PassInput, width: number, height: number, encode: 'color' | 'gray', flipRows = true): Uint16Array {
+        const channels = encode === 'gray' ? 1 : 4;
+        const out = new Uint16Array(width * height * channels);
+        const stripRows = Math.max(1, Math.min(height, Math.floor((16 * 1024 * 1024) / (width * 16))));
+        const strip = this.image(width, stripRows, 'color', 32);
+        const pixels = new Float32Array(width * stripRows * 4);
+        const gray = encode === 'gray' || (isImage(source) && source.kind === 'gray');
+        try {
+            for (let y0 = 0; y0 < height; y0 += stripRows) {
+                const rows = Math.min(stripRows, height - y0);
+                // Rows y0 on of the whole picture, drawn into the strip.
+                this.passNow(strip, {
+                    fragment: `uniform float uY0;\nuniform float uHeight;\nuniform float uStrip;\nvoid main() { vec4 c = texture(source, vec2(vUv.x, (uY0 + vUv.y * uStrip) / uHeight)); outColor = ${gray ? 'vec4(c.rrr, 1.0)' : 'c'}; }`,
+                    inputs: { source },
+                    uniforms: { uY0: y0, uHeight: height, uStrip: stripRows },
+                });
+                this.renderer.readRenderTargetPixels(strip.target, 0, 0, width, rows, pixels);
+                for (let r = 0; r < rows; r++) {
+                    const row = flipRows ? height - 1 - (y0 + r) : y0 + r;
+                    for (let x = 0; x < width; x++) {
+                        const from = (r * width + x) * 4;
+                        const to = (row * width + x) * channels;
+                        for (let c = 0; c < channels; c++) out[to + c] = Math.round(Math.min(1, Math.max(0, pixels[from + c])) * 65535);
+                    }
+                }
+            }
+        } finally {
+            this.release(strip);
+        }
+        return out;
+    }
+
     /** Reads a float image's first `channels` values per pixel, bottom row first. */
     readFloat(source: GpuImage): Float32Array {
         const temp = this.image(source.width, source.height, 'color', 32);

@@ -74,6 +74,11 @@ const identityOf = (value: object): number => {
 
 export class TextureGraphEvaluator {
     private readonly cache = new Map<string, NodeState>();
+    /**
+     * The evaluator each sub-graph node runs its graph with, kept between runs (by node and graph), so an
+     * edit redraws only the inner nodes it reaches.
+     */
+    private readonly nested = new Map<string, TextureGraphEvaluator>();
     private generation = 0;
     private clock = 0;
     private readonly stopListening: () => void;
@@ -100,6 +105,8 @@ export class TextureGraphEvaluator {
     dispose(): void {
         for (const state of this.cache.values()) this.releaseState(state);
         this.cache.clear();
+        for (const inner of this.nested.values()) inner.dispose();
+        this.nested.clear();
         // Evaluators come and go (one per run of a graph used inside another): each stops listening as it goes.
         this.stopListening();
     }
@@ -111,6 +118,13 @@ export class TextureGraphEvaluator {
             if (ids.has(id)) continue;
             this.releaseState(state);
             this.cache.delete(id);
+        }
+        // A sub-graph node gone, or now running another graph: its inner evaluator goes too.
+        const using = new Set(graph.nodes.filter((node) => node.type === 'subgraph').map((node) => `${node.id}:${String(node.params.graph ?? '')}`));
+        for (const [key, inner] of this.nested) {
+            if (using.has(key)) continue;
+            inner.dispose();
+            this.nested.delete(key);
         }
     }
 
@@ -348,7 +362,10 @@ export class TextureGraphEvaluator {
                 if (this.depth >= MAX_DEPTH || this.visiting.has(graphId)) throw new Error('This graph uses itself, directly or through others.');
                 const entry = this.resolve(graphId);
                 if (!entry) throw new Error('The graph this node used is no longer in the project.');
-                const nested = new TextureGraphEvaluator(gpu, this.resolve, this.texture, this.depth + 1, new Set([...this.visiting, graphId]));
+                const key = `${node.id}:${graphId}`;
+                let nested = this.nested.get(key);
+                if (!nested) this.nested.set(key, nested = new TextureGraphEvaluator(gpu, this.resolve, this.texture, this.depth + 1, new Set([...this.visiting, graphId])));
+                nested.prune(entry.graph);
                 const given: Record<string, ExternalImage | null> = {};
                 for (const [key, value] of Object.entries(external)) if (key.startsWith('mesh:')) given[key] = value ?? null;
                 for (const [key, value] of Object.entries(inputs)) given[key] = value;
@@ -374,8 +391,11 @@ export class TextureGraphEvaluator {
                         }
                     }
                     return result;
-                } finally {
+                } catch (error) {
+                    // A run that failed (or was stopped) may leave inner results half made: start afresh next time.
                     nested.dispose();
+                    this.nested.delete(key);
+                    throw error;
                 }
             },
         };

@@ -34,7 +34,7 @@ export const readStoredGraph = (value: unknown): StoredTextureGraph => {
     const stored: StoredTextureGraph = {
         graph,
         values,
-        bakeSize: Math.min(MAX_SIZE_LOG2 - 1, Math.max(MIN_SIZE_LOG2 + 4, Math.round(Number(raw.bakeSize) || 11))),
+        bakeSize: Math.min(MAX_SIZE_LOG2, Math.max(MIN_SIZE_LOG2 + 4, Math.round(Number(raw.bakeSize) || 11))),
         layout: raw.layout === 'separate' ? 'separate' : 'engine',
     };
     const baked = raw.baked;

@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { createMaterialGraph, defaultParams, type MaterialGraph } from '../runtime/materials/materialGraph';
 import { OUTPUT_NODE_TYPE as MATERIAL_OUTPUT } from '../runtime/materials/materialNodes';
 import type { GpuImage, TextureGpu } from './gpu/textureGpu';
+import { encodePng16 } from './png';
 
 /**
  * FROM IMAGES TO AN ENGINE MATERIAL
@@ -34,14 +35,21 @@ export const ROLE_LABELS: Record<ChannelPicture['role'], string> = {
 /** A layout of pictures to write: packed for the engine, or one picture per channel. */
 export type PictureLayout = 'engine' | 'separate';
 
+/** What exported pictures keep at 16 bits a channel: height steps and normal banding show at 8. */
+export const DEEP_EXPORT: ReadonlyArray<ChannelPicture['role']> = ['height', 'normal'];
+
 /**
  * Encodes the channels as PNG pictures, `width` × `height`. `flipRows` puts the top of the image (v = 1)
  * first, as pictures for bottom-left texture coordinates (FBX, OBJ) are stored; glTF-style models want false.
+ * Roles in `deep` are written at 16 bits a channel (for files that leave the editor; the engine reads 8).
  */
-export const encodeChannels = async (gpu: TextureGpu, images: ChannelImages, width: number, height: number, layout: PictureLayout, flipRows = true): Promise<ChannelPicture[]> => {
+export const encodeChannels = async (gpu: TextureGpu, images: ChannelImages, width: number, height: number, layout: PictureLayout, flipRows = true, deep: ReadonlyArray<ChannelPicture['role']> = []): Promise<ChannelPicture[]> => {
     const pictures: ChannelPicture[] = [];
     const add = async (role: ChannelPicture['role'], image: GpuImage, encode: 'color' | 'gray') => {
-        pictures.push({ role, blob: await gpu.toPng(image, width, height, encode, flipRows), width, height });
+        const blob = deep.includes(role)
+            ? await encodePng16(gpu.readUint16(image, width, height, encode, flipRows), width, height, encode === 'gray' ? 1 : 4)
+            : await gpu.toPng(image, width, height, encode, flipRows);
+        pictures.push({ role, blob, width, height });
     };
     if (images.baseColor) await add('baseColor', images.baseColor, 'color');
     if (images.normal) await add('normal', images.normal, 'color');

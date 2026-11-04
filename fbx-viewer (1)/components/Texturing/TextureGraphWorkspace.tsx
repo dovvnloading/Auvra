@@ -11,7 +11,7 @@ import { OUTPUT_NODE_TYPE, SUBGRAPH_NODE_TYPE } from '../../texturing/graph/node
 import { textureNodeDefinition, type GraphEntry, type GraphResolver } from '../../texturing/graph/registry';
 import { bakeSignature, readStoredGraph, type StoredTextureGraph } from '../../texturing/graph/stored';
 import { OUTPUT_CHANNELS, OUTPUT_CHANNEL_LABELS, type GraphParameter, type GraphParameterKind, type OutputChannel, type TexGraphNode, type TexParamDef, type TextureGraph } from '../../texturing/graph/types';
-import { ROLE_LABELS, encodeChannels, materialGraphForTextures, type ChannelImages, type ChannelTextureIds, type MaterialChannel } from '../../texturing/materialOutput';
+import { DEEP_EXPORT, ROLE_LABELS, encodeChannels, materialGraphForTextures, type ChannelImages, type ChannelTextureIds, type MaterialChannel } from '../../texturing/materialOutput';
 import { download, makeZip } from '../../texturing/zip';
 import { Button, Segmented, Spinner } from '../UI/kit';
 import { Select } from '../UI/Select';
@@ -255,7 +255,7 @@ const Workspace: React.FC<{
         const size = 2 ** stored.bakeSize;
         try {
             const images = await renderChannels(evaluator, stored.bakeSize);
-            const pictures = await encodeChannels(session.gpu, images, size, size, 'separate', true);
+            const pictures = await encodeChannels(session.gpu, images, size, size, 'separate', true, DEEP_EXPORT);
             const base = asset.name.replace(/[^\w-]+/g, '_') || 'material';
             const zip = await makeZip(pictures.map((picture) => ({ name: `${base}_${picture.role}.png`, data: picture.blob })));
             download(zip, `${base}_${size}.zip`);
