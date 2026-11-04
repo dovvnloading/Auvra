@@ -10,7 +10,9 @@ import { buildCharts, chartBoundaries, edgeKey, type Chart, type UvTopology } fr
  *      while their normals stay within a cone of the chart's average, smoothest first, so seams fall
  *      along creases and turns rather than across smooth areas;
  *   3. each chart is flattened conformally; one that folds over, stretches past the limit, or is not
- *      a disc (a closed shell, a handle) is cut in two across its longest direction and tried again.
+ *      a disc (a closed shell, a handle) is cut in two across its longest direction and tried again,
+ *      and one that wraps round onto itself (a slit opening onto its own sides, a band curling back)
+ *      is cut between the layers that landed on each other.
  * The user's own seams (painted in the UV view) are kept and added to.
  */
 
@@ -220,6 +222,101 @@ const split = (topology: UvTopology, chart: Chart, seams: Set<number>): void => 
     }
 };
 
+/**
+ * Cuts a chart where it lies on itself. Each fold is two of its faces (by place in its list) that landed
+ * on each other. For each still joined after the cuts before it, every face of their piece goes with the
+ * one it is nearer to across the surface (through uncut edges), so the two layers come apart into two
+ * joined pieces with the cut between them: a slit that opened onto its own sides is carried through, a
+ * band that curled round is cut across. Every fold the flattening showed is cut in the one round.
+ */
+const splitFolds = (topology: UvTopology, chart: Chart, folds: ReadonlyArray<[number, number]>, seams: Set<number>): void => {
+    const { faces, edgeFaces, positions: p, vertexCount: n } = topology;
+    const count = chart.faces.length;
+    const index = new Map(chart.faces.map((f, i) => [f, i]));
+    const centres = new Float64Array(count * 3);
+    chart.faces.forEach((f, i) => {
+        for (let axis = 0; axis < 3; axis++) centres[i * 3 + axis] = (p[faces[f * 3] * 3 + axis] + p[faces[f * 3 + 1] * 3 + axis] + p[faces[f * 3 + 2] * 3 + axis]) / 3;
+    });
+    /** The chart's faces joined to face `i` across an uncut edge. */
+    const neighbours = (i: number, visit: (j: number, key: number) => void) => {
+        const f = chart.faces[i];
+        for (let k = 0; k < 3; k++) {
+            const key = edgeKey(faces[f * 3 + k], faces[f * 3 + ((k + 1) % 3)], n);
+            if (seams.has(key)) continue;
+            for (const g of edgeFaces.get(key) ?? []) {
+                const j = index.get(g);
+                if (j !== undefined && j !== i) visit(j, key);
+            }
+        }
+    };
+    const distance = new Float64Array(count);
+    const owner = new Int8Array(count);
+    const heap: Array<[number, number]> = [];
+    const push = (entry: [number, number]) => {
+        heap.push(entry);
+        for (let i = heap.length - 1; i > 0;) {
+            const parent = (i - 1) >> 1;
+            if (heap[parent][0] <= heap[i][0]) break;
+            [heap[parent], heap[i]] = [heap[i], heap[parent]];
+            i = parent;
+        }
+    };
+    const pop = (): [number, number] => {
+        const top = heap[0];
+        const last = heap.pop()!;
+        if (heap.length) {
+            heap[0] = last;
+            for (let i = 0; ;) {
+                const l = i * 2 + 1, r = l + 1;
+                let m = i;
+                if (l < heap.length && heap[l][0] < heap[m][0]) m = l;
+                if (r < heap.length && heap[r][0] < heap[m][0]) m = r;
+                if (m === i) break;
+                [heap[m], heap[i]] = [heap[i], heap[m]];
+                i = m;
+            }
+        }
+        return top;
+    };
+    // Which joined piece each face is in, worked out again after every cut.
+    const piece = new Int32Array(count);
+    const stack: number[] = [];
+    const label = () => {
+        piece.fill(-1);
+        let next = 0;
+        for (let start = 0; start < count; start++) {
+            if (piece[start] >= 0) continue;
+            piece[start] = next;
+            stack.push(start);
+            while (stack.length) neighbours(stack.pop()!, (j) => { if (piece[j] < 0) { piece[j] = next; stack.push(j); } });
+            next++;
+        }
+    };
+    label();
+    for (const [a, b] of folds) {
+        // Already apart (a cut for an earlier fold parted them): nothing to do.
+        if (piece[a] !== piece[b]) continue;
+        // Shortest paths from both faces at once, nearest first, through their piece.
+        distance.fill(Infinity);
+        owner.fill(-1);
+        distance[a] = 0; owner[a] = 0; push([0, a]);
+        distance[b] = 0; owner[b] = 1; push([0, b]);
+        while (heap.length) {
+            const [d, i] = pop();
+            if (d > distance[i]) continue;
+            neighbours(i, (j) => {
+                const step = Math.hypot(centres[i * 3] - centres[j * 3], centres[i * 3 + 1] - centres[j * 3 + 1], centres[i * 3 + 2] - centres[j * 3 + 2]);
+                if (d + step < distance[j]) { distance[j] = d + step; owner[j] = owner[i]; push([d + step, j]); }
+            });
+        }
+        for (let i = 0; i < count; i++) {
+            if (owner[i] < 0) continue;
+            neighbours(i, (j, key) => { if (owner[j] >= 0 && owner[j] !== owner[i]) seams.add(key); });
+        }
+        label();
+    }
+};
+
 /** Seams and flattened charts for the whole surface (step 3 included). */
 export const unwrap = (topology: UvTopology, settings: UnwrapSettings = DEFAULT_UNWRAP, keep: ReadonlySet<number> = new Set(), seamsGiven?: ReadonlySet<number>): UnwrapResult => {
     const seams = seamsGiven ? new Set(seamsGiven) : chooseSeams(topology, settings, keep);
@@ -241,14 +338,20 @@ export const unwrap = (topology: UvTopology, settings: UnwrapSettings = DEFAULT_
             if (!flattenable(chart) && chart.faces.length > 1) {
                 split(topology, chart, seams);
                 cut = true;
-                flat.push({ uv: new Float64Array(chart.vertexWeld.length * 2), flipped: 0, worstStretch: 1, meanStretch: 1 });
+                flat.push({ uv: new Float64Array(chart.vertexWeld.length * 2), flipped: 0, overlapping: 0, worstStretch: 1, meanStretch: 1 });
                 continue;
             }
             const result = flatten(chart);
             flat.push(result);
-            if (round < ROUNDS - 1 && chart.faces.length > 2 && (result.flipped > 0 || result.meanStretch > settings.stretchLimit)) {
-                split(topology, chart, seams);
-                cut = true;
+            if (round < ROUNDS - 1 && chart.faces.length > 2) {
+                if (result.flipped > 0 || result.meanStretch > settings.stretchLimit) {
+                    split(topology, chart, seams);
+                    cut = true;
+                } else if (result.folds) {
+                    // Wrapped round onto itself: cut between the layers that landed on each other.
+                    splitFolds(topology, chart, result.folds, seams);
+                    cut = true;
+                }
             }
         }
         if (!cut) return { seams, charts, flat };

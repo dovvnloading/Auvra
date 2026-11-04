@@ -200,9 +200,10 @@ const gridPadding = (settings: PackSettings): number => Math.max(1, Math.ceil(((
 
 /**
  * An island's cells as runs per row (inclusive first and last cell, in pairs), grown by the padding, with
- * each row's longest run (to pass over rows that cannot hold it at a glance).
+ * each row's longest run (to pass over rows that cannot hold it at a glance), and the shortest and longest
+ * of those (`least` is 0 when a row is empty).
  */
-interface Mask { width: number; height: number; runs: Int32Array[]; widest: Int32Array; turn: number; cells: number }
+interface Mask { width: number; height: number; runs: Int32Array[]; widest: Int32Array; least: number; most: number; turn: number; cells: number }
 
 /** An island's cells at `scale` (cells per model unit), turned `turn` quarters and grown by `pad` cells all round. */
 const maskOf = (item: Prepared, scale: number, turn: number, pad: number): Mask => {
@@ -266,18 +267,26 @@ const maskOf = (item: Prepared, scale: number, turn: number, pad: number): Mask 
         }
         runs.push(Int32Array.from(row));
     }
-    return { width, height, runs, widest, turn, cells };
+    let least = Infinity, most = 0;
+    for (let y = 0; y < height; y++) { least = Math.min(least, widest[y]); most = Math.max(most, widest[y]); }
+    return { width, height, runs, widest, least, most, turn, cells };
 };
 
 /**
- * The cells of one tile taken so far, with, for every cell, the first taken cell at or after it in its row,
- * and every row's longest free run.
+ * The cells of one tile taken so far, with, for every cell, the first taken and the first free cell at or
+ * after it in its row, and every row's longest free run.
  */
+/** For an empty tile, each cell's first free cell at or after it: itself. */
+const EVERY_CELL_FREE = Int32Array.from({ length: GRID * GRID }, (_, i) => i % GRID);
+
 class Occupancy {
     readonly taken = new Uint8Array(GRID * GRID);
     readonly next = new Int32Array(GRID * GRID).fill(GRID);
+    readonly nextFree = new Int32Array(EVERY_CELL_FREE);
     readonly room = new Int32Array(GRID).fill(GRID);
     free = GRID * GRID;
+    /** The longest free run of any row. */
+    most = GRID;
 
     /** Where `mask` first fits at row `y` from column `x` on: -1 when it fits there, else a column worth trying next. */
     blocked(mask: Mask, x: number, y: number): number {
@@ -286,7 +295,16 @@ class Occupancy {
             const runs = mask.runs[r];
             for (let k = 0; k < runs.length; k += 2) {
                 const first = this.next[row + x + runs[k]];
-                if (first <= x + runs[k + 1]) return first - runs[k] + 1;
+                if (first > x + runs[k + 1]) continue;
+                // This run of the mask needs a free stretch of its length: the next one in the row, past the
+                // taken cells and any gaps too short, is where it can start.
+                const length = runs[k + 1] - runs[k] + 1;
+                let gap = this.nextFree[row + first];
+                while (gap < GRID && this.next[row + gap] - gap < length) {
+                    const end = this.next[row + gap];
+                    gap = end < GRID ? this.nextFree[row + end] : GRID;
+                }
+                return gap - runs[k];
             }
         }
         return -1;
@@ -294,14 +312,24 @@ class Occupancy {
 
     /** The lowest, then leftmost place `mask` fits within the margin with its top below `ceiling`; null when none. */
     lowest(mask: Mask, margin: number, ceiling = GRID): { x: number; y: number } | null {
-        rows: for (let y = margin; y + mask.height <= Math.min(GRID - margin, ceiling); y++) {
-            for (let r = 0; r < mask.height; r++) if (this.room[y + r] < mask.widest[r]) continue rows;
+        // Too few free cells, or no row with a run as long as the mask's longest: it fits nowhere here.
+        if (mask.cells > this.free || mask.most > this.most) return null;
+        const limit = Math.min(GRID - margin, ceiling);
+        for (let y = margin; y + mask.height <= limit;) {
+            let short = -1;
+            for (let r = 0; r < mask.height; r++) if (this.room[y + r] < mask.widest[r]) { short = r; break; }
+            if (short >= 0) {
+                // A row shorter than every row of the mask rules out each place covering it.
+                y = this.room[y + short] < mask.least ? y + short + 1 : y + 1;
+                continue;
+            }
             let x = margin;
             while (x + mask.width <= GRID - margin) {
                 const skip = this.blocked(mask, x, y);
                 if (skip < 0) return { x, y };
                 x = Math.max(x + 1, skip);
             }
+            y++;
         }
         return null;
     }
@@ -316,14 +344,20 @@ class Occupancy {
                 this.free -= runs[k + 1] - runs[k] + 1;
             }
             let first = GRID;
+            let firstFree = GRID;
             let longest = 0;
             for (let c = GRID - 1; c >= 0; c--) {
                 if (this.taken[row + c]) first = c;
+                else firstFree = c;
                 this.next[row + c] = first;
+                this.nextFree[row + c] = firstFree;
                 if (!this.taken[row + c]) longest = Math.max(longest, first - c);
             }
             this.room[y + r] = longest;
         }
+        let most = 0;
+        for (let y = 0; y < GRID; y++) if (this.room[y] > most) most = this.room[y];
+        this.most = most;
     }
 }
 

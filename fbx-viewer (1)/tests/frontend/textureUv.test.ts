@@ -3,9 +3,37 @@ import * as THREE from 'three';
 import { buildPartMesh } from '../../texturing/mesh/partMesh';
 import { coverage, packIslands, smallestBoxAngle, type Island } from '../../texturing/uv/pack';
 import { newTriangleTiles } from '../../texturing/uv/transfer';
+import { flattenChart } from '../../texturing/uv/lscm';
+import { overlappingTriangles } from '../../texturing/uv/overlap';
 import { DEFAULT_UNWRAP, unwrap } from '../../texturing/uv/unwrap';
 import { applyLayout, buildLayout, decodeLayout, encodeLayout } from '../../texturing/uv/uvLayout';
-import { buildTopology, existingSeams } from '../../texturing/uv/uvTopology';
+import { buildCharts, buildTopology, existingSeams } from '../../texturing/uv/uvTopology';
+
+/** A gently rising ramp of two turns round a post: every turn nearly flat, so flattened whole it lies on itself. */
+const ramp = (): THREE.BufferGeometry => {
+    const turns = 2, around = 96 * turns, across = 6;
+    const positions: number[] = [];
+    const index: number[] = [];
+    for (let i = 0; i <= around; i++) {
+        const angle = (i / around) * turns * Math.PI * 2;
+        for (let j = 0; j <= across; j++) {
+            const radius = 1 + j / across;
+            positions.push(Math.cos(angle) * radius, (i / around) * turns * 0.25, Math.sin(angle) * radius);
+        }
+    }
+    for (let i = 0; i < around; i++) {
+        for (let j = 0; j < across; j++) {
+            const a = i * (across + 1) + j, b = a + 1, c = a + across + 1, d = c + 1;
+            index.push(a, c, b, b, c, d);
+        }
+    }
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    geometry.setAttribute('uv', new THREE.Float32BufferAttribute(new Array((positions.length / 3) * 2).fill(0), 2));
+    geometry.setIndex(index);
+    geometry.computeVertexNormals();
+    return geometry;
+};
 
 const meshOf = (geometry: THREE.BufferGeometry) => {
     const material = new THREE.MeshStandardMaterial();
@@ -56,6 +84,7 @@ describe('unwrapping', () => {
         expect(result.charts.length).toBeGreaterThan(1);
         for (const flat of result.flat) {
             expect(flat.flipped).toBe(0);
+            expect(flat.overlapping).toBe(0);
             expect(flat.meanStretch).toBeLessThan(DEFAULT_UNWRAP.stretchLimit);
         }
     });
@@ -63,7 +92,7 @@ describe('unwrapping', () => {
     it('cuts a torus (which has a hole through it) until every piece lies flat', () => {
         const { part } = meshOf(new THREE.TorusGeometry(1, 0.35, 24, 48));
         const result = unwrap(buildTopology(part.positions, part.indices));
-        for (const flat of result.flat) expect(flat.flipped).toBe(0);
+        for (const flat of result.flat) expect(flat.flipped + flat.overlapping).toBe(0);
         const faces = result.charts.reduce((sum, chart) => sum + chart.faces.length, 0);
         expect(faces).toBe(part.indices.length / 3);
     });
@@ -74,6 +103,31 @@ describe('unwrapping', () => {
         const topology = buildTopology(part.positions, part.indices);
         const result = unwrap(topology);
         for (const flat of result.flat) expect(flat.worstStretch).toBeLessThan(1.05);
+    });
+
+    it('finds triangles lying over each other, but not ones that only touch', () => {
+        // Two triangles sharing an edge, one touching them at a corner, and one laid over the first.
+        const uv = [0, 0, 1, 0, 0, 1, 1, 1, 2, 1, 1, 2, 0.1, 0.1, 0.6, 0.1, 0.1, 0.6];
+        const corners = [0, 1, 2, 1, 3, 2, 3, 4, 5, 6, 7, 8];
+        expect(overlappingTriangles(uv, corners, 3)).toEqual([]);
+        expect(overlappingTriangles(uv, corners, 4).sort()).toEqual([0, 3]);
+        expect(overlappingTriangles(uv, corners, 4, true)).toHaveLength(2);
+    });
+
+    it('cuts a piece that wraps round onto itself until none lies on itself', () => {
+        const { part } = meshOf(ramp());
+        const topology = buildTopology(part.positions, part.indices);
+        // Flattened whole, the ramp's two turns lie on each other, though no triangle turns over.
+        const [whole] = buildCharts(topology, new Set());
+        const flat = flattenChart(topology, whole);
+        expect(flat.flipped).toBe(0);
+        expect(flat.overlapping).toBeGreaterThan(0);
+        const result = unwrap(topology);
+        expect(result.charts.length).toBeGreaterThan(1);
+        result.charts.forEach((chart, i) => {
+            expect(result.flat[i].overlapping).toBe(0);
+            expect(overlappingTriangles(result.flat[i].uv, chart.corners, chart.faces.length)).toEqual([]);
+        });
     });
 
     it('reads the seams a mesh already has from its texture coordinates', () => {

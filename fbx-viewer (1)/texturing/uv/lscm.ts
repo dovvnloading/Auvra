@@ -1,3 +1,4 @@
+import { overlappingPairs } from './overlap';
 import { chartBoundaries, type Chart, type UvTopology } from './uvTopology';
 
 /**
@@ -15,6 +16,10 @@ export interface Flattened {
     uv: Float64Array;
     /** Triangles turned over (a sign the chart should be cut further). */
     flipped: number;
+    /** Triangles lying over others of the chart: it wrapped round onto itself and should be cut further. */
+    overlapping: number;
+    /** Pairs of the chart's faces (by place in its list) lying on each other, where it should be cut apart. */
+    folds?: Array<[number, number]>;
     /** Worst stretch of any triangle (1 is none): largest over smallest of its two stretch directions. */
     worstStretch: number;
     /** Mean stretch, weighted by area. */
@@ -182,7 +187,7 @@ export const flattenChart = (topology: UvTopology, chart: Chart): Flattened => {
     return measure(topology, chart, x);
 };
 
-/** Flips and stretch of a flattened chart, with uv scaled so its area matches the surface's. */
+/** Flips, overlaps and stretch of a flattened chart, with uv scaled so its area matches the surface's. */
 export const measure = (topology: UvTopology, chart: Chart, uv: Float64Array): Flattened => {
     let surface = 0;
     let flat = 0;
@@ -215,7 +220,23 @@ export const measure = (topology: UvTopology, chart: Chart, uv: Float64Array): F
         worst = Math.max(worst, stretch.ratio);
         weighted += stretch.ratio * topology.areas[f];
     });
-    return { uv, flipped, worstStretch: worst, meanStretch: surface > 0 ? weighted / surface : 1 };
+    // Overlaps shallower than a quarter of a fine texel (the whole surface on one 4096 picture) are rounding.
+    const depth = (Math.sqrt(surfaceOf(topology)) / 4096) * 0.25;
+    const folds = overlappingPairs(uv, chart.corners, chart.faces.length, depth);
+    const overlapping = new Set(folds.flat()).size;
+    return { uv, flipped, overlapping, ...(folds.length ? { folds } : {}), worstStretch: worst, meanStretch: surface > 0 ? weighted / surface : 1 };
+};
+
+/** The model's whole surface area, worked out once per topology. */
+const surfaces = new WeakMap<UvTopology, number>();
+const surfaceOf = (topology: UvTopology): number => {
+    let total = surfaces.get(topology);
+    if (total === undefined) {
+        total = 0;
+        for (let f = 0; f < topology.faceCount; f++) total += topology.areas[f];
+        surfaces.set(topology, total);
+    }
+    return total;
 };
 
 /**
