@@ -338,6 +338,8 @@ export interface FootIKOptions {
     excludeObjectId?: string;
     /** Hold a planted foot where it landed until it lifts (see FootLock). */
     lock?: boolean;
+    /** Lowers the pelvis by this much more (m, at most 0): a landing's dip, the legs bending to keep the feet down. */
+    pelvisDrop?: number;
 }
 
 /**
@@ -523,7 +525,7 @@ export const updateFootIK = (
     }
 
     // Lower ground under one foot drops the pelvis so that leg reaches; higher ground only bends a knee.
-    const drop = pelvis * weight;
+    const drop = pelvis * weight + Math.min(0, options.pelvisDrop ?? 0);
     const dropped = rig.hips !== null && drop < -SETTLED;
     if (rig.hips && dropped) offsetBoneWorld(rig.hips, _pelvisOffset.set(0, drop, 0));
 

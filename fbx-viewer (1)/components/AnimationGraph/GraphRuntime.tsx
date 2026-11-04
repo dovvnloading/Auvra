@@ -15,6 +15,8 @@ export interface GraphRuntimeAPI {
     consumeRootYaw?: () => number;
     /** World-space root-motion travel since the last call; the caller moves the character by it. */
     consumeRootMotion?: (out?: THREE.Vector3) => THREE.Vector3;
+    /** Radians (left positive) a Motion Match turn-in-place clip turned since the last call, or null when none is turning. */
+    consumeMatchedTurn?: () => number | null;
     getActiveState?: () => GraphState | null;
 }
 
@@ -59,14 +61,14 @@ export const GraphRuntime: React.FC<GraphRuntimeProps> = ({
         eventSource,
         lod
     );
-    const { setVariable, getVariable, getVariables, playMontage, stopMontage, consumeRootMotion, consumeRootYaw, getActiveState } = runtime;
+    const { setVariable, getVariable, getVariables, playMontage, stopMontage, consumeRootMotion, consumeRootYaw, consumeMatchedTurn, getActiveState } = runtime;
 
     // Expose API
     useEffect(() => {
         if (apiRef) {
-            apiRef.current = { setVariable, getVariable, getVariables, playMontage, stopMontage, consumeRootMotion, consumeRootYaw, getActiveState };
+            apiRef.current = { setVariable, getVariable, getVariables, playMontage, stopMontage, consumeRootMotion, consumeRootYaw, consumeMatchedTurn, getActiveState };
         }
-    }, [apiRef, setVariable, getVariable, getVariables, playMontage, stopMontage, consumeRootMotion, consumeRootYaw, getActiveState]);
+    }, [apiRef, setVariable, getVariable, getVariables, playMontage, stopMontage, consumeRootMotion, consumeRootYaw, consumeMatchedTurn, getActiveState]);
 
     return null;
 };

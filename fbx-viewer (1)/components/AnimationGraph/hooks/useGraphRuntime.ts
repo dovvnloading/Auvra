@@ -135,6 +135,13 @@ export const useGraphRuntime = (
     }, []);
     const stopMontage = useCallback((blendOut?: number, slot?: string) => { montageRef.current?.stop(blendOut, slot); }, []);
     const consumeRootYaw = useCallback(() => montageRef.current?.consumeRootYaw() ?? 0, []);
+    // The turn a Motion Match state's turn-in-place clip has made, until the character takes it.
+    const matchedTurnRef = useRef<number | null>(null);
+    const consumeMatchedTurn = useCallback((): number | null => {
+        const turn = matchedTurnRef.current;
+        matchedTurnRef.current = null;
+        return turn;
+    }, []);
 
     // -- Root motion: travel accumulates until the owner of the transform consumes it.
     const rootMotionRef = useRef(new THREE.Vector3());
@@ -164,6 +171,7 @@ export const useGraphRuntime = (
         lod,
         sourceClips: clipsByName,
         blendModeRef,
+        matchedTurnOut: matchedTurnRef,
     });
 
     // Without a character controller (the editor preview) the graph applies its own root motion.
@@ -185,5 +193,5 @@ export const useGraphRuntime = (
         return graph.states.find(state => state.id === id) ?? null;
     }, [activeStateRef, graph.states]);
 
-    return { setVariable, getVariable, getVariables, playMontage, stopMontage, consumeRootMotion, consumeRootYaw, getActiveState };
+    return { setVariable, getVariable, getVariables, playMontage, stopMontage, consumeRootMotion, consumeRootYaw, consumeMatchedTurn, getActiveState };
 };

@@ -270,6 +270,14 @@ export class MotionDatabase {
         return localDirection((after.root.x - before.root.x) * SAMPLE_RATE / 2, (after.root.z - before.root.z) * SAMPLE_RATE / 2, now.facing);
     }
 
+    /** The way a clip's root faces at a time (radians, unwrapped along the clip). */
+    facingAt(clip: number, time: number): number {
+        const entry = this.clips[clip];
+        if (!entry) return 0;
+        const index = Math.max(0, Math.min(entry.samples.length - 1, Math.round(time * SAMPLE_RATE)));
+        return rootAt(entry, index, 0).facing;
+    }
+
     /** The database frame of a clip nearest a time, or -1. */
     frameOf(clip: number, time: number): number {
         if (clip < 0 || clip >= this.clips.length) return -1;

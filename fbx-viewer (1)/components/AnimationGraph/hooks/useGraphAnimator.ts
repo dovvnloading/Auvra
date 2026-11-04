@@ -136,6 +136,11 @@ export interface AnimatorExtras {
     sourceClips?: Record<string, THREE.AnimationClip>;
     /** How the transition just taken meets its state (beside blendDurationRef); crossfade when left out. */
     blendModeRef?: React.MutableRefObject<'crossfade' | 'inertial'>;
+    /**
+     * The turn a Motion Match state's turn-in-place clip has made since last taken (radians, left
+     * positive), for the character to turn by on the spot; null while none is turning it.
+     */
+    matchedTurnOut?: React.MutableRefObject<number | null>;
 }
 
 /** Roughly a character's size, for telling whether it is on screen. */
@@ -393,7 +398,21 @@ export const useGraphAnimator = (
                     });
                     trajectory = _trajectory;
                 }
+                const wasClip = match.matcher.clip, wasTime = match.matcher.time;
                 const choice = match.matcher.step(delta, velocity, velocity, 0, trajectory);
+                // A clip turning on the spot turns the character by its own turn, so its feet step round with it
+                // (just after a jump, by the turn the new clip made over this step).
+                if (extras.matchedTurnOut && choice.clip >= 0) {
+                    const db = match.matcher.database;
+                    const travel = db.travelAt(choice.clip, choice.time);
+                    const from = !choice.jumped && choice.clip === wasClip ? wasTime : Math.max(0, choice.time - delta);
+                    if (Math.hypot(travel.x, travel.z) < WARP_SPEED * db.body) {
+                        let turn = db.facingAt(choice.clip, choice.time) - db.facingAt(choice.clip, from);
+                        // Across a loop's end the facing goes back to the start: that step is not turned.
+                        if (Math.abs(turn) > Math.PI / 2) turn = 0;
+                        extras.matchedTurnOut.current = (extras.matchedTurnOut.current ?? 0) + turn;
+                    }
+                }
                 const clipName = choice.clip >= 0 ? match.matcher.database.clips[choice.clip].name : null;
                 if (clipName && actionsMap[clipName]) {
                     matched = clipName;
