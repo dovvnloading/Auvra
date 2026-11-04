@@ -31,6 +31,8 @@ export interface MotionSample {
     leftFoot: Vec3;
     rightFoot: Vec3;
     hips: Vec3;
+    /** Whether each foot (left, right) is planted on the ground at this moment (see footContacts). */
+    contacts?: [boolean, boolean];
 }
 
 /** A clip as samples at SAMPLE_RATE, from its start to its end. */

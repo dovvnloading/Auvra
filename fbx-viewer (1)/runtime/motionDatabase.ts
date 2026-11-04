@@ -70,6 +70,46 @@ export const travelFromFeet = (samples: MotionSample[]): void => {
     });
 };
 
+/** A foot within this share of the hips' height of its lowest point may be planted... */
+const PLANTED_HEIGHT = 0.06;
+/** ...if it moves slower than this many hips heights a second over the ground. */
+const PLANTED_SPEED = 0.3;
+/** Contacts are the majority over this many samples, so one stray sample does not flicker a foot up or down. */
+const CONTACT_FILTER = 5;
+
+/**
+ * Marks when each foot is planted (`contacts`): near its lowest and nearly still over the ground, with
+ * lone samples either way voted away by their neighbours. A looping clip's ends see each other.
+ */
+export const footContacts = (samples: MotionSample[], loop: boolean): void => {
+    const n = samples.length;
+    if (!n) return;
+    const body = Math.max(1e-3, samples.reduce((sum, sample) => sum + sample.hips.y, 0) / n
+        - Math.min(...samples.map(sample => Math.min(sample.leftFoot.y, sample.rightFoot.y))));
+    const at = (i: number) => samples[loop ? ((i % n) + n) % n : Math.max(0, Math.min(n - 1, i))];
+    const planted = (['leftFoot', 'rightFoot'] as const).map((foot) => {
+        const lowest = Math.min(...samples.map(sample => sample[foot].y));
+        return samples.map((sample, i) => {
+            const before = at(i - 1)[foot], after = at(i + 1)[foot];
+            // Across a loop's seam the neighbours are a lap apart: the step there is not known, so it counts as still.
+            const span = (loop || (i > 0 && i < n - 1)) ? 2 : 1;
+            let speed = Math.hypot(after.x - before.x, after.z - before.z) * SAMPLE_RATE / span;
+            if (loop && (i === 0 || i === n - 1)) speed = 0;
+            return sample[foot].y <= lowest + PLANTED_HEIGHT * body && speed <= PLANTED_SPEED * body;
+        });
+    });
+    const half = Math.floor(CONTACT_FILTER / 2);
+    const vote = (flags: boolean[], i: number): boolean => {
+        let down = 0;
+        for (let k = -half; k <= half; k++) {
+            const j = loop ? (((i + k) % n) + n) % n : Math.max(0, Math.min(n - 1, i + k));
+            if (flags[j]) down++;
+        }
+        return down * 2 > CONTACT_FILTER;
+    };
+    samples.forEach((sample, i) => { sample.contacts = [vote(planted[0], i), vote(planted[1], i)]; });
+};
+
 /** `values` averaged over `half` samples either side; a looping series carries on past its ends by its change per lap. */
 export const smoothSeries = (values: readonly number[], loop: boolean, half: number): number[] => {
     const n = values.length;
@@ -87,14 +127,23 @@ export const smoothSeries = (values: readonly number[], loop: boolean, half: num
     });
 };
 
-/** The hips' heading in the model's bind pose (facing 0), or null without a skinned mesh to pose. */
-const restYaw = (copy: THREE.Object3D, hips: THREE.Object3D): number | null => {
+/**
+ * The heading of the bone named `name` in the model's bind pose (facing 0), or null without a skinned
+ * mesh to pose. Posed on a copy of its own: putting a skeleton in its bind pose rewrites bones from the
+ * skin's bind matrices, which on a model placed at a different size can leave the bones no clip moves
+ * (the legs' lengths, say) out of place for sampling.
+ */
+const restYaw = (model: THREE.Object3D, name: string): number | null => {
+    const copy = cloneSkinned(model);
+    copy.position.set(0, 0, 0);
+    copy.quaternion.identity();
     const skinned: THREE.SkinnedMesh[] = [];
     copy.traverse(node => { if ((node as THREE.SkinnedMesh).isSkinnedMesh) skinned.push(node as THREE.SkinnedMesh); });
-    if (!skinned.length) return null;
+    const bone = findBone(copy, name);
+    if (!skinned.length || !bone) return null;
     skinned[0].skeleton.pose();
     copy.updateMatrixWorld(true);
-    return yawOf(hips);
+    return yawOf(bone);
 };
 
 const wrapAngle = (angle: number) => Math.atan2(Math.sin(angle), Math.cos(angle));
@@ -108,7 +157,10 @@ export const sampleClip = (model: THREE.Object3D, clip: THREE.AnimationClip, loo
     const leftFoot = findBone(copy, 'LeftFoot');
     const rightFoot = findBone(copy, 'RightFoot');
     if (!hips || !leftFoot || !rightFoot) return null;
-    const rest = restYaw(copy, hips);
+    // The way the character faces is the chest's: in a strafe the hips swing toward the travel while
+    // the chest keeps facing ahead.
+    const chest = findBone(copy, 'Spine2') ?? findBone(copy, 'Spine1') ?? findBone(copy, 'Spine') ?? hips;
+    const rest = restYaw(model, chest.name);
     const mixer = new THREE.AnimationMixer(copy);
     mixer.clipAction(clip).play();
     const count = Math.max(2, Math.round(clip.duration * SAMPLE_RATE));
@@ -117,8 +169,8 @@ export const sampleClip = (model: THREE.Object3D, clip: THREE.AnimationClip, loo
     for (let i = 0; i < count; i++) {
         mixer.setTime(Math.min(clip.duration, i / SAMPLE_RATE));
         copy.updateMatrixWorld(true);
-        // Facing is the hips' heading from the bind pose's, followed round without wrapping.
-        const yaw = yawOf(hips);
+        // Facing is the chest's heading from the bind pose's, followed round without wrapping.
+        const yaw = yawOf(chest);
         heading = i === 0 ? wrapAngle(yaw - (rest ?? yaw)) : heading + wrapAngle(yaw - lastYaw);
         lastYaw = yaw;
         const at = point(hips);
@@ -128,6 +180,7 @@ export const sampleClip = (model: THREE.Object3D, clip: THREE.AnimationClip, loo
     mixer.uncacheRoot(copy);
     const first = samples[0].root, last = samples[samples.length - 1].root;
     if (Math.hypot(last.x - first.x, last.z - first.z) < IN_PLACE_TRAVEL) travelFromFeet(samples);
+    footContacts(samples, loop);
     // The root and facing follow the body's course, not the sway of each step.
     const half = Math.round(SMOOTHING * SAMPLE_RATE);
     const xs = smoothSeries(samples.map(sample => sample.root.x), loop, half);
