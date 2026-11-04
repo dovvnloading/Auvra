@@ -5,7 +5,7 @@ import {
 } from '../../runtime/motionMatching';
 import * as THREE from 'three';
 import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
-import { motionDatabaseFor, smoothSeries, travelFromFeet } from '../../runtime/motionDatabase';
+import { footContacts, motionDatabaseFor, smoothSeries, travelFromFeet } from '../../runtime/motionDatabase';
 
 /*
  * Motion matching on synthetic locomotion: clips whose root moves at a known velocity (and turns),
@@ -257,5 +257,20 @@ describe('sampled clips', () => {
     expect(samples[29].root.z).toBeCloseTo(2.9, 5);
     // The body keeps its place over the root.
     expect(samples[29].hips.z).toBeCloseTo(2.9, 5);
+  });
+  it('mark a foot planted while it is down and still, voting away a lone stray sample', () => {
+    // The left foot is down for frames 0-11 (still, apart from one stray lift at 5), then swings
+    // forward through the air; the right foot does the opposite.
+    const samples: MotionSample[] = Array.from({ length: 24 }, (_, i) => {
+      const down = i < 12;
+      const left = down ? { x: 0, y: i === 5 ? 0.2 : 0.1, z: 0 } : { x: 0, y: 0.3, z: 0.05 * (i - 12) };
+      const right = down ? { x: 0.2, y: 0.3, z: 0.05 * i } : { x: 0.2, y: 0.1, z: 0.6 };
+      return { root: { x: 0, y: 0, z: 0 }, facing: 0, hips: { x: 0.1, y: 1, z: 0 }, leftFoot: left, rightFoot: right };
+    });
+    footContacts(samples, false);
+    expect(samples.slice(1, 11).every(sample => sample.contacts![0])).toBe(true);
+    expect(samples.slice(14, 23).some(sample => sample.contacts![0])).toBe(false);
+    expect(samples.slice(14, 23).every(sample => sample.contacts![1])).toBe(true);
+    expect(samples.slice(1, 11).some(sample => sample.contacts![1])).toBe(false);
   });
 });

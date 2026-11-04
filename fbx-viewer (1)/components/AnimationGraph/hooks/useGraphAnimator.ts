@@ -302,8 +302,9 @@ export const useGraphAnimator = (
             if (match.key !== key) {
                 match.key = key;
                 match.stateId = currentState.id;
-                const clips = names.map(name => actionsMap[name].getClip());
-                const sources = names.map((name, i) => extras.sourceClips?.[name]?.uuid ?? clips[i].uuid);
+                // Read from the model's own clips: the mixer plays copies with their travel taken out.
+                const clips = names.map(name => extras.sourceClips?.[name] ?? actionsMap[name].getClip());
+                const sources = clips.map(clip => clip.uuid);
                 const database = names.length ? motionDatabaseFor(modelObject, clips, sources) : null;
                 match.matcher = database ? new MotionMatcher(database) : null;
             }
