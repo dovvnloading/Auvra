@@ -19,7 +19,9 @@ export interface Vec2 { x: number; z: number }
 export interface Vec3 { x: number; y: number; z: number }
 
 /** Seconds into the future the trajectory is described at. */
-export const TRAJECTORY_TIMES = [0.2, 0.4, 0.6] as const;
+export const TRAJECTORY_TIMES = [0.2, 0.5, 1.0] as const;
+/** Seconds into the past the trajectory is described at: where the character has come from tells a start from a loop. */
+export const HISTORY_TIMES = [0.2, 0.4] as const;
 /** Frames per second clips are sampled at. */
 export const SAMPLE_RATE = 30;
 
@@ -42,31 +44,41 @@ export interface MotionClipSamples {
     samples: MotionSample[];
 }
 
-/** Feature layout: trajectory positions (x, z per time), trajectory facings (x, z per time), then pose. */
+/**
+ * Feature layout: trajectory positions (x, z per time), trajectory facings (x, z per time), past
+ * positions (x, z per history time), then pose.
+ */
 const TRAJECTORY_SIZE = TRAJECTORY_TIMES.length * 2;
-export const FEATURE_SIZE = TRAJECTORY_SIZE * 2 + 6 + 6 + 3;
+const HISTORY_SIZE = HISTORY_TIMES.length * 2;
+export const FEATURE_SIZE = TRAJECTORY_SIZE * 2 + HISTORY_SIZE + 6 + 6 + 3;
 const POSITIONS = 0;
 const FACINGS = TRAJECTORY_SIZE;
-const FEET = TRAJECTORY_SIZE * 2;
+const PAST = TRAJECTORY_SIZE * 2;
+const FEET = PAST + HISTORY_SIZE;
 const FOOT_VELOCITIES = FEET + 6;
 const HIPS_VELOCITY = FOOT_VELOCITIES + 6;
 
 export interface MotionWeights {
     trajectoryPosition: number;
     trajectoryFacing: number;
+    trajectoryPast: number;
     feet: number;
     footVelocity: number;
     hipsVelocity: number;
 }
 
-export const DEFAULT_MOTION_WEIGHTS: MotionWeights = { trajectoryPosition: 2, trajectoryFacing: 1.5, feet: 0.6, footVelocity: 0.6, hipsVelocity: 0.8 };
+export const DEFAULT_MOTION_WEIGHTS: MotionWeights = { trajectoryPosition: 2, trajectoryFacing: 1.5, trajectoryPast: 0.6, feet: 0.6, footVelocity: 0.6, hipsVelocity: 0.8 };
 
 /**
  * The least spread each group is scaled by, so a feature that hardly varies across the database (the
  * facing, when every clip goes straight) is not blown up past the rest: lengths and speeds in hips
  * heights (a second), directions as they are.
  */
-const SPREAD_FLOOR = { trajectoryPosition: 0.1, trajectoryFacing: 0.2, feet: 0.05, footVelocity: 0.25, hipsVelocity: 0.25 };
+const SPREAD_FLOOR = { trajectoryPosition: 0.1, trajectoryFacing: 0.2, trajectoryPast: 0.1, feet: 0.05, footVelocity: 0.25, hipsVelocity: 0.25 };
+/** Seconds at the end of a clip that does not loop that matching never starts it at. */
+export const END_MARGIN = 0.2;
+/** Frames a search block holds (see MotionDatabase.search). */
+const SEARCH_BLOCK = 16;
 /** A clip carrying the character slower than this many hips heights a second is standing still. */
 const STANDING_SPEED = 0.1;
 
@@ -98,9 +110,20 @@ const sampleAt = (clip: MotionClipSamples, index: number, offset: number): Motio
 const rootAt = (clip: MotionClipSamples, index: number, offset: number): { root: Vec3; facing: number } => {
     const n = clip.samples.length;
     const at = index + offset;
-    if (!clip.loop || (at >= 0 && at < n)) {
-        const sample = sampleAt(clip, index, offset);
+    if (at >= 0 && at < n) {
+        const sample = clip.samples[at];
         return { root: sample.root, facing: sample.facing };
+    }
+    if (!clip.loop) {
+        // Past either end of a clip that does not loop, the character carries on as it was moving there:
+        // a stop that ends at rest stays put, a start that ends walking walks on.
+        const end = at < 0 ? 0 : n - 1;
+        const next = at < 0 ? Math.min(1, n - 1) : Math.max(0, n - 2);
+        const edge = clip.samples[end], inner = clip.samples[next];
+        // Per sample, outward from that end.
+        const dx = edge.root.x - inner.root.x, dz = edge.root.z - inner.root.z, turn = edge.facing - inner.facing;
+        const reach = at < 0 ? -at : at - end;
+        return { root: { x: edge.root.x + dx * reach, y: edge.root.y, z: edge.root.z + dz * reach }, facing: edge.facing + turn * reach };
     }
     const laps = Math.floor(at / n);
     const sample = clip.samples[((at % n) + n) % n];
@@ -123,6 +146,12 @@ export const frameFeatures = (clip: MotionClipSamples, index: number, out = new 
         const turn = localDirection(Math.sin(future.facing), Math.cos(future.facing), facing);
         out[FACINGS + i * 2] = turn.x;
         out[FACINGS + i * 2 + 1] = turn.z;
+    });
+    HISTORY_TIMES.forEach((time, i) => {
+        const past = rootAt(clip, index, -Math.round(time * SAMPLE_RATE));
+        const at = toLocal(past.root, root, facing);
+        out[PAST + i * 2] = at.x;
+        out[PAST + i * 2 + 1] = at.z;
     });
     const previous = sampleAt(clip, index, -1);
     const previousRoot = rootAt(clip, index, -1);
@@ -160,6 +189,8 @@ export class MotionDatabase {
     private readonly mean = new Float32Array(FEATURE_SIZE);
     private readonly scale = new Float32Array(FEATURE_SIZE);
     private readonly clipStart: number[] = [];
+    private readonly blockLow: Float32Array;
+    private readonly blockHigh: Float32Array;
     /** The hips' average height over the clips: the character's size, in the database's units. */
     readonly body: number;
 
@@ -168,8 +199,8 @@ export class MotionDatabase {
         const raw: Float32Array[] = [];
         this.clips.forEach((clip, c) => {
             this.clipStart.push(this.frames.length);
-            // A clip that does not loop needs its trajectory: its last frames cannot see ahead.
-            const usable = clip.loop ? clip.samples.length : Math.max(1, clip.samples.length - Math.round(TRAJECTORY_TIMES[TRAJECTORY_TIMES.length - 1] * SAMPLE_RATE));
+            // A clip that does not loop is not started in its last moments: it would end at once.
+            const usable = clip.loop ? clip.samples.length : Math.max(1, clip.samples.length - Math.round(END_MARGIN * SAMPLE_RATE));
             for (let i = 0; i < usable; i++) {
                 this.frames.push({ clip: c, time: i / SAMPLE_RATE });
                 raw.push(frameFeatures(clip, i));
@@ -182,6 +213,7 @@ export class MotionDatabase {
         const groups: Array<[number, number, number, number]> = [
             [POSITIONS, TRAJECTORY_SIZE, weights.trajectoryPosition, SPREAD_FLOOR.trajectoryPosition * body],
             [FACINGS, TRAJECTORY_SIZE, weights.trajectoryFacing, SPREAD_FLOOR.trajectoryFacing],
+            [PAST, HISTORY_SIZE, weights.trajectoryPast, SPREAD_FLOOR.trajectoryPast * body],
             [FEET, 6, weights.feet, SPREAD_FLOOR.feet * body],
             [FOOT_VELOCITIES, 6, weights.footVelocity, SPREAD_FLOOR.footVelocity * body],
             [HIPS_VELOCITY, 3, weights.hipsVelocity, SPREAD_FLOOR.hipsVelocity * body],
@@ -196,6 +228,19 @@ export class MotionDatabase {
         }
         this.features = new Float32Array(raw.length * FEATURE_SIZE);
         raw.forEach((features, f) => this.normalize(features, this.features, f * FEATURE_SIZE));
+        // Each block's least and greatest value of every feature, so a search passes over whole blocks
+        // that cannot hold anything nearer than what it has found.
+        const blocks = Math.ceil(this.frames.length / SEARCH_BLOCK);
+        this.blockLow = new Float32Array(blocks * FEATURE_SIZE).fill(Infinity);
+        this.blockHigh = new Float32Array(blocks * FEATURE_SIZE).fill(-Infinity);
+        for (let f = 0; f < this.frames.length; f++) {
+            const b = Math.floor(f / SEARCH_BLOCK) * FEATURE_SIZE;
+            for (let k = 0; k < FEATURE_SIZE; k++) {
+                const value = this.features[f * FEATURE_SIZE + k];
+                if (value < this.blockLow[b + k]) this.blockLow[b + k] = value;
+                if (value > this.blockHigh[b + k]) this.blockHigh[b + k] = value;
+            }
+        }
     }
 
     /** Scales and weights raw features in place (or into `out` at `offset`). */
@@ -228,22 +273,38 @@ export class MotionDatabase {
         return frameFeatures(this.clips[clip], Math.round(time * SAMPLE_RATE));
     }
 
-    /** The frame nearest `query` (normalized features), and its cost; `skip` frames are passed over. */
+    /**
+     * The frame nearest `query` (normalized features), and its cost; `skip` frames are passed over. A
+     * block of frames whose bounds are already further than the best found is passed over whole.
+     */
     search(query: Float32Array, skip?: (frame: number) => boolean): { frame: number; cost: number } {
         let best = -1;
         let bestCost = Infinity;
         const features = this.features;
-        for (let f = 0; f < this.frames.length; f++) {
-            if (skip?.(f)) continue;
-            let cost = 0;
-            const base = f * FEATURE_SIZE;
-            for (let k = 0; k < FEATURE_SIZE && cost < bestCost; k++) {
-                const d = features[base + k] - query[k];
-                cost += d * d;
+        const count = this.frames.length;
+        for (let start = 0, block = 0; start < count; start += SEARCH_BLOCK, block++) {
+            const b = block * FEATURE_SIZE;
+            let bound = 0;
+            for (let k = 0; k < FEATURE_SIZE && bound < bestCost; k++) {
+                const q = query[k];
+                const low = this.blockLow[b + k], high = this.blockHigh[b + k];
+                const nearest = q < low ? low : q > high ? high : q;
+                bound += (q - nearest) * (q - nearest);
             }
-            if (cost < bestCost) {
-                bestCost = cost;
-                best = f;
+            if (bound >= bestCost) continue;
+            const end = Math.min(count, start + SEARCH_BLOCK);
+            for (let f = start; f < end; f++) {
+                if (skip?.(f)) continue;
+                let cost = 0;
+                const base = f * FEATURE_SIZE;
+                for (let k = 0; k < FEATURE_SIZE && cost < bestCost; k++) {
+                    const d = features[base + k] - query[k];
+                    cost += d * d;
+                }
+                if (cost < bestCost) {
+                    bestCost = cost;
+                    best = f;
+                }
             }
         }
         return { frame: best, cost: bestCost };
@@ -271,12 +332,26 @@ export const predictTrajectory = (velocity: Vec2, desired: Vec2, desiredFacing: 
     return { positions, facings };
 };
 
+/** Where the character is asked to go (and, when known, where it has been), in its own space and the database's units. */
+export interface MotionTrajectory {
+    /** At TRAJECTORY_TIMES. */
+    positions: Vec2[];
+    /** Radians turned from now, at TRAJECTORY_TIMES. */
+    facings: number[];
+    /** At HISTORY_TIMES ago; without them, the playing frame's own past is used. */
+    past?: Vec2[];
+}
+
 /** The query: the playing frame's pose with the predicted trajectory, normalized. */
-export const buildQuery = (database: MotionDatabase, playingFrame: number, trajectory: { positions: Vec2[]; facings: number[] }): Float32Array => {
+export const buildQuery = (database: MotionDatabase, playingFrame: number, trajectory: MotionTrajectory): Float32Array => {
     const raw = playingFrame >= 0 ? database.rawFeatures(playingFrame) : new Float32Array(FEATURE_SIZE);
     trajectory.positions.forEach((position, i) => {
         raw[POSITIONS + i * 2] = position.x;
         raw[POSITIONS + i * 2 + 1] = position.z;
+    });
+    trajectory.past?.forEach((position, i) => {
+        raw[PAST + i * 2] = position.x;
+        raw[PAST + i * 2 + 1] = position.z;
     });
     trajectory.facings.forEach((facing, i) => {
         raw[FACINGS + i * 2] = Math.sin(facing);
@@ -298,6 +373,11 @@ export interface MotionMatcherOptions {
 
 export const DEFAULT_MATCHER_OPTIONS: MotionMatcherOptions = { searchInterval: 0.1, sameWindow: 0.25, switchMargin: 0.1, switchCost: 1 };
 
+/** The far end of the asked-for path moving this many hips heights since the last search searches at once... */
+const SHARP_MOVE = 0.25;
+/** ...as does the facing asked for there turning this far (radians). */
+const SHARP_TURN = 0.5;
+
 /** What to play: a clip at a time, and whether to crossfade to it (a jump) or keep going. */
 export interface MotionChoice {
     clip: number;
@@ -313,6 +393,8 @@ export class MotionMatcher {
     clip = -1;
     time = 0;
     private sinceSearch = Infinity;
+    /** Where the asked-for path ended at the last search, to notice a sharp change of mind. */
+    private searchedFor: { x: number; z: number; facing: number } | null = null;
 
     constructor(readonly database: MotionDatabase, readonly options: MotionMatcherOptions = DEFAULT_MATCHER_OPTIONS) {}
 
@@ -321,7 +403,7 @@ export class MotionMatcher {
      * where the character's own movement says it will be at TRAJECTORY_TIMES (its space, the database's
      * units); otherwise one is predicted from the velocities.
      */
-    step(dt: number, velocity: Vec2, desired: Vec2, desiredFacing: number, trajectory?: { positions: Vec2[]; facings: number[] }): MotionChoice {
+    step(dt: number, velocity: Vec2, desired: Vec2, desiredFacing: number, trajectory?: MotionTrajectory): MotionChoice {
         const db = this.database;
         if (this.clip >= 0) {
             const clip = db.clips[this.clip];
@@ -332,8 +414,15 @@ export class MotionMatcher {
         }
         this.sinceSearch += dt;
         let jumped = false;
-        if (this.sinceSearch >= this.options.searchInterval || this.clip < 0) {
+        // A sharp change in what is asked for (a stick flicked round, a stop) is answered at once, not at the next search.
+        const last = trajectory ? trajectory.positions.length - 1 : -1;
+        const asked = last >= 0 ? { x: trajectory!.positions[last].x, z: trajectory!.positions[last].z, facing: trajectory!.facings[last] } : null;
+        const sharp = !!asked && !!this.searchedFor && (
+            Math.hypot(asked.x - this.searchedFor.x, asked.z - this.searchedFor.z) > SHARP_MOVE * db.body
+            || Math.abs(asked.facing - this.searchedFor.facing) > SHARP_TURN);
+        if (this.sinceSearch >= this.options.searchInterval || this.clip < 0 || sharp) {
             this.sinceSearch = 0;
+            this.searchedFor = asked;
             const playing = this.clip >= 0 ? db.frameOf(this.clip, this.time) : -1;
             const query = buildQuery(db, playing, trajectory ?? predictTrajectory(velocity, desired, desiredFacing));
             const best = db.search(query);

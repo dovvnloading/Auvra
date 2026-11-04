@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  DEFAULT_MATCHER_OPTIONS, FEATURE_SIZE, MotionDatabase, MotionMatcher, SAMPLE_RATE, TRAJECTORY_TIMES, buildQuery, frameFeatures, predictTrajectory,
+  DEFAULT_MATCHER_OPTIONS, END_MARGIN, FEATURE_SIZE, HISTORY_TIMES, MotionDatabase, MotionMatcher, SAMPLE_RATE, TRAJECTORY_TIMES, buildQuery, frameFeatures, predictTrajectory,
   type MotionClipSamples, type MotionSample,
 } from '../../runtime/motionMatching';
 import * as THREE from 'three';
@@ -131,10 +131,16 @@ describe('search', () => {
     expect(database.clipSpeed('swim')).toBe(0);
   });
 
-  it("leaves out a non-looping clip's last frames, which cannot see ahead", () => {
+  it("leaves out a non-looping clip's last moments, and sees past its end as carrying on", () => {
     const once = locomotion('stop', 0, 1, 0, 1, 2, false);
     const database = new MotionDatabase([once]);
-    expect(database.frames.length).toBe(once.samples.length - Math.round(TRAJECTORY_TIMES[TRAJECTORY_TIMES.length - 1] * SAMPLE_RATE));
+    expect(database.frames.length).toBe(once.samples.length - Math.round(END_MARGIN * SAMPLE_RATE));
+    // Near its end, a clip still moving at 1 m/s is seen going on at that speed, not stopping dead.
+    const late = frameFeatures(once, once.samples.length - 7);
+    expect(late[(TRAJECTORY_TIMES.length - 1) * 2 + 1]).toBeCloseTo(TRAJECTORY_TIMES[TRAJECTORY_TIMES.length - 1], 1);
+    // And just after its start, it is seen to have come from behind at that speed.
+    const early = frameFeatures(once, 2);
+    expect(early[TRAJECTORY_TIMES.length * 4 + (HISTORY_TIMES.length - 1) * 2 + 1]).toBeCloseTo(-HISTORY_TIMES[HISTORY_TIMES.length - 1], 1);
     expect(database.frameOf(0, 100)).toBe(database.frames.length - 1);
     expect(database.frameOf(5, 0)).toBe(-1);
   });
@@ -188,6 +194,56 @@ describe('matcher', () => {
     };
     expect(jumps({ ...DEFAULT_MATCHER_OPTIONS, switchCost: 0 })).toBeGreaterThan(0);
     expect(jumps(DEFAULT_MATCHER_OPTIONS)).toBe(0);
+  });
+  it('answers a sharp change in what is asked for at once, not at the next search', () => {
+    const matcher = new MotionMatcher(new MotionDatabase(library()), { ...DEFAULT_MATCHER_OPTIONS, searchInterval: 10 });
+    const ahead = (speed: number) => ({ positions: TRAJECTORY_TIMES.map(time => ({ x: 0, z: speed * time })), facings: TRAJECTORY_TIMES.map(() => 0) });
+    const still = { x: 0, z: 0 };
+    matcher.step(1 / 60, still, still, 0, ahead(0));
+    const standing = matcher.database.clips[matcher.clip].name;
+    expect(standing).toBe('idle');
+    // Long between searches: a small change waits...
+    matcher.step(1 / 60, still, still, 0, ahead(0.05));
+    expect(matcher.database.clips[matcher.clip].name).toBe('idle');
+    // ...but setting off at a run does not.
+    const choice = matcher.step(1 / 60, still, still, 0, ahead(4.5));
+    expect(choice.jumped).toBe(true);
+    expect(matcher.database.clips[matcher.clip].name).not.toBe('idle');
+  });
+});
+
+describe('search', () => {
+  it('finds the same frame as looking at every frame, while passing over blocks that cannot win', () => {
+    const database = new MotionDatabase(library());
+    let seed = 7;
+    const random = () => ((seed = (seed * 16807) % 2147483647) / 2147483647) * 2 - 1;
+    for (let trial = 0; trial < 40; trial++) {
+      const query = new Float32Array(FEATURE_SIZE).map(() => random() * 2);
+      let best = -1, bestCost = Infinity;
+      for (let f = 0; f < database.frames.length; f++) {
+        let cost = 0;
+        for (let k = 0; k < FEATURE_SIZE; k++) cost += (database.features[f * FEATURE_SIZE + k] - query[k]) ** 2;
+        if (cost < bestCost) { bestCost = cost; best = f; }
+      }
+      const found = database.search(query);
+      expect(found.frame).toBe(best);
+      expect(found.cost).toBeCloseTo(bestCost, 4);
+    }
+  });
+
+  it("describes where a frame came from, so a start reads differently from a loop", () => {
+    // A clip that stands for a second and then walks off: early in the walk it has come from standing.
+    const start = locomotion('start', 0, 1.5, 0, 2, 2, false);
+    start.samples.forEach((sample, i) => {
+      const z = Math.max(0, i - SAMPLE_RATE) * 1.5 / SAMPLE_RATE;
+      sample.root = { x: 0, y: 0, z };
+      sample.hips = { x: 0, y: 1, z };
+    });
+    const loop = locomotion('walk', 0, 1.5);
+    const startFeatures = frameFeatures(start, SAMPLE_RATE + 3);
+    const loopFeatures = frameFeatures(loop, 30);
+    // Both head the same way, but the loop has walked to here and the start has barely moved.
+    expect(startFeatures[TRAJECTORY_TIMES.length * 4 + 1]).toBeGreaterThan(loopFeatures[TRAJECTORY_TIMES.length * 4 + 1] + 0.15);
   });
 });
 
