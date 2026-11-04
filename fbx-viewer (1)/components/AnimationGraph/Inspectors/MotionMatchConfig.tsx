@@ -23,6 +23,8 @@ export interface ClipMotionSummary {
     /** Degrees turned over the clip, left positive. */
     turn: number;
     text: string;
+    /** Plays once (a start, a stop, a turn round) rather than looping. */
+    once?: boolean;
 }
 
 /** A clip's way of travel, from its local direction (x to the left, z ahead). */
@@ -44,6 +46,24 @@ export const summarizeClips = (database: MotionDatabase, names: readonly string[
         const duration = (clip.samples.length - 1) / SAMPLE_RATE;
         const speed = database.clipSpeed(name);
         const turn = ((database.facingAt(index, duration) - database.facingAt(index, 0)) * 180) / Math.PI;
+        if (!clip.loop) {
+            // Played once: how it starts and how it ends.
+            const edge = Math.min(2 / SAMPLE_RATE, duration / 4);
+            const first = clip.samples[0], last = clip.samples[clip.samples.length - 1];
+            const drop = (first.hips.y - first.root.y) - (last.hips.y - last.root.y);
+            const startWay = database.travelAt(index, edge), endWay = database.travelAt(index, duration - edge);
+            const startSpeed = Math.hypot(startWay.x, startWay.z), endSpeed = Math.hypot(endWay.x, endWay.z);
+            const still = 0.25 * database.body;
+            const side = turn > 0 ? 'left' : 'right';
+            let once: string;
+            if (drop > 0.3 * database.body) once = 'lands (once)';
+            else if (Math.abs(turn) > 120) once = startSpeed > still ? `turns round to the ${side} while moving (once)` : `turns round to the ${side} on the spot (once)`;
+            else if (startSpeed <= still && endSpeed > still) once = `sets off from standing, up to ${endSpeed.toFixed(1)} m/s (once)`;
+            else if (startSpeed > still && endSpeed <= still) once = `stops from ${startSpeed.toFixed(1)} m/s (once)`;
+            else if (Math.abs(turn) > 20 && startSpeed <= still) once = `turns ${Math.round(Math.abs(turn))}° ${side} on the spot (once)`;
+            else once = 'plays once';
+            return [{ name, speed, turn, text: once, once: true }];
+        }
         // Its way over the whole clip, seen from the model's own forward (as the clip was made), not its chest.
         const first = clip.samples[0].root, last = clip.samples[clip.samples.length - 1].root;
         let text: string;
@@ -57,9 +77,12 @@ export const summarizeClips = (database: MotionDatabase, names: readonly string[
 export const coverageWarnings = (summaries: readonly ClipMotionSummary[]): string[] => {
     const warnings: string[] = [];
     if (!summaries.length) return warnings;
-    if (!summaries.some(clip => clip.speed === 0 && Math.abs(clip.turn) <= 20)) warnings.push('No clip stands still: the character keeps stepping when it stops. Add an idle.');
-    if (!summaries.some(clip => clip.speed > 0)) warnings.push('No clip travels: add walks or runs.');
-    if (!summaries.some(clip => clip.speed === 0 && Math.abs(clip.turn) > 20)) warnings.push('No clip turns on the spot, so turning in place slides the feet. One side is enough: the other is mirrored.');
+    const loops = summaries.filter(clip => !clip.once);
+    if (!loops.some(clip => clip.speed === 0 && Math.abs(clip.turn) <= 20)) warnings.push('No clip stands still: the character keeps stepping when it stops. Add an idle.');
+    if (!loops.some(clip => clip.speed > 0)) warnings.push('No clip travels: add walks or runs.');
+    if (!summaries.some(clip => clip.speed === 0 && Math.abs(clip.turn) > 20) && !summaries.some(clip => clip.once && /on the spot/.test(clip.text))) {
+        warnings.push('No clip turns on the spot, so turning in place slides the feet. One side is enough: the other is mirrored.');
+    }
     return warnings;
 };
 

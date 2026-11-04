@@ -243,7 +243,15 @@ export const useGraphAnimator = (
     // How fast the character is moving over the ground (world units a second), for states that match it.
     const ground = useRef({ speed: 0, last: null as THREE.Vector3 | null, velocity: new THREE.Vector3() });
     // A Motion Match state's matcher, made for its clips on this model when it is first played.
-    const matching = useRef({ stateId: null as string | null, key: '', matcher: null as MotionMatcher | null, own: [] as THREE.AnimationClip[] });
+    // `mirrored` are the database's mirrored clips; `actions` the action list their actions were added to.
+    const matching = useRef({
+        stateId: null as string | null,
+        key: '',
+        matcher: null as MotionMatcher | null,
+        own: [] as THREE.AnimationClip[],
+        mirrored: [] as THREE.AnimationClip[],
+        actions: null as Record<string, THREE.AnimationAction> | null,
+    });
     // Switches without a crossfade (motion matching's jumps, inertial transitions) fade out offsets on the model's bones.
     const inertia = useRef<{ model: THREE.Object3D | null; inertializer: Inertializer | null }>({ model: null, inertializer: null });
     // Seconds since the current state was entered, and whether it was entered by crossfading.
@@ -349,6 +357,8 @@ export const useGraphAnimator = (
         let matched: string | null = null;
         if (locomotion) locomotion.matched = null;
         let matchedScale = 1;
+        // Set when the action list was made anew under a playing match: its clip starts again where the matcher is.
+        let resumeMatched = false;
         if (currentState?.stateType === 'MotionMatch' && modelObject) {
             const names = currentState.blendSamples.map(sample => sample.clipName).filter((name): name is string => !!name && !!actionsMap[name]);
             const key = `${currentState.id}|${names.join('|')}`;
@@ -357,6 +367,8 @@ export const useGraphAnimator = (
                 match.key = key;
                 match.stateId = currentState.id;
                 match.matcher = null;
+                match.mirrored = [];
+                match.actions = null;
                 // Read from the model's own clips: the mixer plays copies with their travel taken out.
                 match.own = names.map(name => extras.sourceClips?.[name] ?? actionsMap[name].getClip());
             }
@@ -364,16 +376,23 @@ export const useGraphAnimator = (
                 // Built in the background with each clip's mirrored copy; until then the state plays its first clip.
                 const built = motionDatabaseWhenReady(modelObject, match.own);
                 if (built?.database) {
-                    // A mirrored clip plays in place like the state's own clips.
-                    for (const clip of built.mirrored) {
-                        if (actionsMap[clip.name]) continue;
-                        const action = mixer.clipAction(extractRootMotion(clip, { root: modelObject })?.clip ?? clip);
-                        action.enabled = false;
-                        action.setEffectiveWeight(0);
-                        actionsMap[clip.name] = action;
-                    }
+                    match.mirrored = built.mirrored;
                     match.matcher = new MotionMatcher(built.database);
                 }
+            }
+            if (match.matcher && match.actions !== actionsMap) {
+                // A mirrored clip plays in place like the state's own clips. The action list is made anew when
+                // the character's clips change (another model loading during play), so its mirrored actions are
+                // added again, and the playing clip picks up where the matcher has got to.
+                for (const clip of match.mirrored) {
+                    if (actionsMap[clip.name]) continue;
+                    const action = mixer.clipAction(extractRootMotion(clip, { root: modelObject })?.clip ?? clip);
+                    action.enabled = false;
+                    action.setEffectiveWeight(0);
+                    actionsMap[clip.name] = action;
+                }
+                resumeMatched = match.actions !== null;
+                match.actions = actionsMap;
             }
             if (match.matcher) {
                 // The character's velocity in its own space and in its model's units (the database's).
@@ -418,12 +437,15 @@ export const useGraphAnimator = (
                 if (clipName && actionsMap[clipName]) {
                     matched = clipName;
                     if (locomotion) locomotion.matched = clipName;
-                    if (choice.jumped) {
+                    if (choice.jumped || resumeMatched) {
                         // The jump cuts to the match at once; the inertializer eases the pose across (or,
-                        // without one, it shows as a cut).
+                        // without one, it shows as a cut). A new action list starts the same way.
                         const action = actionsMap[clipName];
+                        // A clip that plays once (a start, a stop, a turn round) holds its last pose until the next search.
+                        const loops = match.matcher.database.loops(clipName);
                         action.reset();
-                        action.setLoop(THREE.LoopRepeat, Infinity);
+                        action.setLoop(loops ? THREE.LoopRepeat : THREE.LoopOnce, loops ? Infinity : 1);
+                        action.clampWhenFinished = !loops;
                         action.time = choice.time;
                         action.play();
                         switchHalfLife = DEFAULT_INERTIAL_HALF_LIFE;
@@ -439,8 +461,9 @@ export const useGraphAnimator = (
                 const scale = modelObject.getWorldScale(_modelScale).x;
                 // A Motion Match state has its clips' speeds in its database, where a clip standing still has none.
                 const database = matched ? matching.current.matcher?.database : undefined;
+                // A clip that plays once (a start, a stop) keeps its own pace: its speed changes along it.
                 rate *= groundSpeedRate(ground.current.speed, targetWeights, name => (database
-                    ? database.clipSpeed(name) * matchedScale
+                    ? (database.loops(name) ? database.clipSpeed(name) * matchedScale : 0)
                     : clipGroundSpeed(modelObject, actionsMap[name].getClip()) * scale));
             }
             if (currentState.stateType === 'Single' || currentState.stateType === 'MotionMatch') {
