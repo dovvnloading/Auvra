@@ -6,9 +6,10 @@ import { PlayerInputState } from './usePlayerControls';
 import { BlueprintStat, DEFAULT_MODEL_IMPORT_SETTINGS, LevelObject } from '../../../types';
 import { PLAYER_PHYSICS_ID, physicsUserData } from '../../../runtime/physicsQueries';
 import { flatGroundHeight, terrainSurfaceHeight } from '../../../runtime/terrainPhysics';
+import { characterMotionOf } from '../../../runtime/locomotion/characterMotion';
+import { stepSpring, wrapAngle, type Spring1 } from '../../../runtime/locomotion/springs';
 
 interface PhysicsConfig {
-    ROTATION_SPEED: number;
     MOVE_SPEED_WALK: number;
     MOVE_SPEED_RUN: number;
     STAMINA_DRAIN: number;
@@ -19,7 +20,6 @@ interface PhysicsConfig {
 }
 
 const DEFAULT_CONFIG: PhysicsConfig = {
-    ROTATION_SPEED: 15.0,
     MOVE_SPEED_WALK: 4.0,
     MOVE_SPEED_RUN: 7.5,
     STAMINA_DRAIN: 20,
@@ -35,9 +35,6 @@ export const TURN_IN_PLACE_START = THREE.MathUtils.degToRad(70);
 export const TURN_IN_PLACE_END = THREE.MathUtils.degToRad(4);
 /** The fastest a turn in place turns the body, in radians per second. */
 export const TURN_IN_PLACE_SPEED = THREE.MathUtils.degToRad(300);
-
-/** `angle` wrapped into -PI..PI. */
-const wrapAngle = (angle: number): number => Math.atan2(Math.sin(angle), Math.cos(angle));
 
 /**
  * Where an aiming character faces. Moving, it faces the aim. Standing, its feet stay put while the
@@ -67,7 +64,16 @@ export const CHARACTER = {
     MAX_STEP: 1 / 20,        // Longest frame simulated in one go (tab switches, hitches)
     TELEPORT_DISTANCE: 0.01, // Model moved by someone else (spawn, restart, load) further than this
     FALL_DELAY: 0.15,        // Seconds off the ground, without a jump, before it counts as a fall (not a bump or a step down)
+    HUMAN_HEIGHT: 1.8,       // A character this tall (or less) falls at the world's gravity; a taller one as if the world were scaled to it
+    STEP_SMOOTHING: 0.05,    // Seconds (a spring half-life) the body takes to catch up with a stair step the capsule climbed or dropped at once
 };
+
+/**
+ * How much stronger than the world's gravity a character falls: 1 up to a person's height, and in
+ * proportion to its height beyond, for characters imported larger than life (models used to come in
+ * 5 units tall), so a jump to the same share of the body takes the time it would for a person.
+ */
+export const characterGravityScale = (height: number): number => Math.max(1, height / CHARACTER.HUMAN_HEIGHT);
 
 /** Blueprint speed stats are Unreal-style centimetres per second (the default player walks at 450). */
 const STAT_UNITS_PER_WORLD_UNIT = 100;
@@ -145,6 +151,15 @@ export interface CharacterRig {
     jumped: boolean;
     /** The collider's own solver groups while the character rides in a vehicle (it pushes nothing then); null on foot. */
     ridingGroups: number | null;
+    /** The world's gravity is multiplied by this for the character (characterGravityScale). */
+    gravityScale: number;
+    /**
+     * How far the drawn body sits above (or below) the capsule: a stair step climbed or dropped in one
+     * frame moves the capsule at once, and the body follows over a moment (CHARACTER.STEP_SMOOTHING).
+     */
+    stepOffset: Spring1;
+    /** The wall the last step ran into (its outward normal on the ground), when it was blocked by one. */
+    wall: { x: number; z: number; hit: boolean };
 }
 
 /** Off the ground after a jump, or for longer than FALL_DELAY: running over a bump or down a step is not a fall. */
@@ -217,6 +232,9 @@ export const createCharacterRig = ({ world, rapier }: CharacterPhysicsContext, m
         airborneTime: 0,
         jumped: false,
         ridingGroups: null,
+        gravityScale: characterGravityScale(height),
+        stepOffset: { x: 0, v: 0 },
+        wall: { x: 0, z: 0, hit: false },
     };
 };
 
@@ -231,7 +249,8 @@ const disposeCharacterRig = (rig: CharacterRig) => {
 
 // Reusable math objects
 const _desired = new THREE.Vector3();
-const _rootMove = new THREE.Vector3();
+const _velocity = new THREE.Vector3();
+const _move = { x: 0, z: 0 };
 
 const hasPhysicsComponent = (obj: LevelObject) =>
     !!obj.components?.some(component => component.enabled !== false && (component.type === 'collider' || component.type === 'rigidBody'));
@@ -267,6 +286,34 @@ const pushOutOfFootprints = (
     }
 };
 
+/** A face this close to vertical (the y of its normal) is a wall rather than ground, a slope or a step's edge. */
+const WALL_NORMAL_Y = 0.1;
+
+/**
+ * The wall the step just taken ran into most squarely, into `character.wall`: a near-vertical face the
+ * move pressed against without rising (rising, it was climbing a step or a slope, not blocked).
+ */
+const findWall = (character: CharacterRig, rose: number) => {
+    const wall = character.wall;
+    wall.hit = false;
+    if (rose > 1e-4) return;
+    let most = 0;
+    for (let i = 0, count = character.controller.numComputedCollisions(); i < count; i++) {
+        const normal = character.controller.computedCollision(i)?.normal1;
+        if (!normal || Math.abs(normal.y) > WALL_NORMAL_Y) continue;
+        const length = Math.hypot(normal.x, normal.z);
+        if (length < 1e-6) continue;
+        const x = normal.x / length, z = normal.z / length;
+        // How squarely the move went into it.
+        const into = -(_desired.x * x + _desired.z * z);
+        if (into <= most) continue;
+        most = into;
+        wall.x = x;
+        wall.z = z;
+        wall.hit = true;
+    }
+};
+
 /**
  * One frame of Rapier KinematicCharacterController movement for `character`: gravity, jumping, slopes
  * and steps against the level's colliders. Where no collider lies below (levels authored before
@@ -299,19 +346,24 @@ export const stepCharacterPhysics = (
         character.grounded = false;
         character.airborneTime = 0;
         character.jumped = false;
+        character.stepOffset.x = 0;
+        character.stepOffset.v = 0;
     }
 
-    const gravity = physicsWorld.gravity.y < 0 ? physicsWorld.gravity.y : CHARACTER.DEFAULT_GRAVITY;
+    const gravity = (physicsWorld.gravity.y < 0 ? physicsWorld.gravity.y : CHARACTER.DEFAULT_GRAVITY) * character.gravityScale;
     if (character.grounded && input.jumpPressed) {
         character.verticalSpeed = Math.sqrt(2 * -gravity * character.height * CHARACTER.JUMP_RATIO);
         character.jumped = true;
     }
-    character.verticalSpeed = Math.max(-CHARACTER.TERMINAL_SPEED, character.verticalSpeed + gravity * dt);
+    character.verticalSpeed = Math.max(-CHARACTER.TERMINAL_SPEED * character.gravityScale, character.verticalSpeed + gravity * dt);
+    const wasGrounded = character.grounded;
+    const startY = centre.y;
 
     _desired.set(worldMoveVec.x * speed * dt, character.verticalSpeed * dt, worldMoveVec.z * speed * dt);
     character.controller.computeColliderMovement(character.collider, _desired, rapier.QueryFilterFlags.EXCLUDE_SENSORS);
     const moved = character.controller.computedMovement();
     let grounded = character.controller.computedGrounded();
+    findWall(character, moved.y);
     centre.set(centre.x + moved.x, centre.y + moved.y, centre.z + moved.z);
     // Props with no collider component (levels authored before colliders) keep their footprint.
     pushOutOfFootprints(centre, obstacles, isLegacySolidProp, DEFAULT_CONFIG.COLLISION_RADIUS);
@@ -349,7 +401,17 @@ export const stepCharacterPhysics = (
     character.collider.setTranslation(centre);
     character.body.setNextKinematicTranslation(centre);
 
-    modelObject.position.set(centre.x, centre.y - character.centreOffset, centre.z);
+    // A stair step taken in one frame on the ground (a rise or drop steeper than any walkable slope gives
+    // over this move): the body stays where it was drawn and catches up, rather than popping.
+    const rise = centre.y - startY;
+    const slopeRise = Math.hypot(moved.x, moved.z) * Math.tan(THREE.MathUtils.degToRad(CHARACTER.MAX_CLIMB_DEG)) + character.height * 0.01;
+    const offset = character.stepOffset;
+    if (wasGrounded && grounded && Math.abs(rise) > slopeRise) offset.x -= rise;
+    stepSpring(offset, 0, CHARACTER.STEP_SMOOTHING, dt);
+    const reach = character.height * CHARACTER.STEP_RATIO * 1.5;
+    if (Math.abs(offset.x) > reach) offset.x = Math.sign(offset.x) * reach;
+
+    modelObject.position.set(centre.x, centre.y - character.centreOffset + offset.x, centre.z);
     character.placedAt.copy(modelObject.position);
 };
 
@@ -368,6 +430,8 @@ export const usePlayerPhysics = (
     const isExhausted = useRef(false);
     const turningInPlace = useRef(false);
     const rig = useRef<CharacterRig | null>(null);
+    // How the character moves: springs on its velocity and facing, and its trajectory, which its animation reads.
+    const motion = useMemo(() => characterMotionOf(modelObject), [modelObject]);
 
     // Cache the terrain object reference to avoid searching every frame
     const activeTerrain = useRef<LevelObject | null>(null);
@@ -394,16 +458,16 @@ export const usePlayerPhysics = (
         return rig.current;
     };
 
-    /** Kinematic movement for the Sandbox: circle push-out against props, feet snapped to the terrain or the flat ground. */
-    const moveWithoutPhysics = (worldMoveVec: THREE.Vector3, speed: number, delta: number) => {
+    /** Kinematic movement for the Sandbox by (moveX, moveZ): circle push-out against props, feet snapped to the terrain or the flat ground. */
+    const moveWithoutPhysics = (moveX: number, moveZ: number) => {
         const { COLLISION_RADIUS } = DEFAULT_CONFIG;
 
         // Clone current pos to calculate next
         const nextPos = modelObject.position.clone();
 
-        if (worldMoveVec.lengthSq() > 0.001) {
-            // Predict next position (XZ)
-            nextPos.addScaledVector(worldMoveVec, speed * delta);
+        if (moveX * moveX + moveZ * moveZ > 1e-12) {
+            nextPos.x += moveX;
+            nextPos.z += moveZ;
 
             // Simple Circle-Circle Collision against Props
             pushOutOfFootprints(nextPos, obstacles, obj => obj.type !== 'foliage' && obj.type !== 'terrain', COLLISION_RADIUS);
@@ -431,7 +495,7 @@ export const usePlayerPhysics = (
         clipTurn?: number | null,
     ) => {
         const {
-            ROTATION_SPEED, STAMINA_DRAIN, STAMINA_REGEN, MAX_STAMINA, EXHAUSTION_RECOVERY
+            STAMINA_DRAIN, STAMINA_REGEN, MAX_STAMINA, EXHAUSTION_RECOVERY
         } = DEFAULT_CONFIG;
 
         // --- 1. Camera Basis ---
@@ -453,8 +517,20 @@ export const usePlayerPhysics = (
         }
         const isMoving = worldMoveVec.lengthSq() > 0.001;
 
+        // The step the movement is simulated over (with physics, long frames are cut short as the capsule's are).
+        const step = physics ? Math.min(delta, CHARACTER.MAX_STEP) : delta;
+        // Placed by something else (spawned, restarted, loaded, out of a vehicle): the motion starts again there, at rest.
+        if (Math.hypot(modelObject.position.x - motion.body.x, modelObject.position.z - motion.body.z) > CHARACTER.TELEPORT_DISTANCE) {
+            motion.place(modelObject.position.x, modelObject.position.z, modelObject.rotation.y);
+        } else if (Math.abs(wrapAngle(modelObject.rotation.y - motion.facing.x)) > 1e-4) {
+            motion.facing.x = wrapAngle(modelObject.rotation.y);
+            motion.facing.v = 0;
+        }
+
         // --- 3. Handle Rotation ---
-        let targetRotation = modelObject.rotation.y;
+        // The facing turns by spring toward where the character is going (or aiming); with nowhere asked
+        // for, it finishes the turn it was making.
+        let targetRotation: number | null = null;
 
         // A turn in place starting this step: +1 to the left, -1 to the right.
         let turnStarted = 0;
@@ -469,17 +545,25 @@ export const usePlayerPhysics = (
             if (isMoving) targetRotation = Math.atan2(worldMoveVec.x, worldMoveVec.z);
         }
 
-        const rotDiff = wrapAngle(targetRotation - modelObject.rotation.y);
-        const effectiveRotSpeed = input.isAiming ? ROTATION_SPEED * 2.0 : ROTATION_SPEED;
-        let turn = rotDiff * Math.min(1, effectiveRotSpeed * delta);
-        // A turn in place steps round at a walking pace rather than snapping to the aim, or exactly
-        // as its turn clip turns the character while one plays.
-        if (turningInPlace.current) {
-            turn = typeof clipTurn === 'number'
-                ? clipTurn
-                : THREE.MathUtils.clamp(turn, -TURN_IN_PLACE_SPEED * delta, TURN_IN_PLACE_SPEED * delta);
+        // Aiming turns twice as briskly.
+        const turnHalfLife = motion.settings.turnHalfLife * (input.isAiming ? 0.5 : 1);
+        if (turningInPlace.current && typeof clipTurn === 'number') {
+            // Exactly as the turn clip turns the character while one plays.
+            motion.turnBy(clipTurn, delta);
+        } else if (turningInPlace.current) {
+            // A turn in place steps round at a walking pace rather than snapping to the aim.
+            const before = motion.facing.x;
+            motion.turnToward(targetRotation ?? before, delta, turnHalfLife);
+            const turned = wrapAngle(motion.facing.x - before);
+            const most = TURN_IN_PLACE_SPEED * delta;
+            if (Math.abs(turned) > most) {
+                motion.facing.x = before;
+                motion.turnBy(Math.sign(turned) * most, delta);
+            }
+        } else if (targetRotation !== null || motion.goal.facing !== null) {
+            motion.turnToward(targetRotation ?? motion.goal.facing ?? motion.facing.x, delta, turnHalfLife);
         }
-        modelObject.rotation.y += turn;
+        modelObject.rotation.y = motion.facing.x;
 
         // --- 4. Stamina & Hysteresis Logic ---
         let effectiveSprint = false;
@@ -513,18 +597,24 @@ export const usePlayerPhysics = (
         let currentSpeed = effectiveSprint ? speeds.run : speeds.walk;
         if (input.isAiming) currentSpeed *= 0.5;
 
-        // Root motion travels exactly its distance over the step, as a unit direction at length / step.
-        const rootStep = physics ? Math.min(delta, CHARACTER.MAX_STEP) : delta;
-        const rootLength = rootTravel && rootStep > 0 ? Math.hypot(rootTravel.x, rootTravel.z) : 0;
-        const moveVec = rootTravel && rootStep > 0
-            ? (rootLength > 0 ? _rootMove.set(rootTravel.x / rootLength, 0, rootTravel.z / rootLength) : _rootMove.set(0, 0, 0))
-            : worldMoveVec;
-        const moveSpeed = rootTravel && rootStep > 0 ? rootLength / rootStep : currentSpeed;
+        // The springs carry the velocity toward the input's (speeding up and braking over a moment); root
+        // motion instead travels exactly its distance over the step. Either way the move is tried against
+        // the world over the step as a velocity.
+        if (rootTravel && step > 0) motion.drive(rootTravel.x, rootTravel.z, step);
+        else motion.advance(worldMoveVec.x * currentSpeed, worldMoveVec.z * currentSpeed, step, _move);
+        const moveX = rootTravel && step > 0 ? rootTravel.x : _move.x;
+        const moveZ = rootTravel && step > 0 ? rootTravel.z : _move.z;
         if (physics) {
-            stepCharacterPhysics(physics, getRig(physics), input, moveVec, moveSpeed, delta, obstacles, activeTerrain.current);
+            _velocity.set(step > 0 ? moveX / step : 0, 0, step > 0 ? moveZ / step : 0);
+            stepCharacterPhysics(physics, getRig(physics), input, _velocity, 1, delta, obstacles, activeTerrain.current);
         } else {
-            moveWithoutPhysics(moveVec, moveSpeed, delta);
+            moveWithoutPhysics(moveX, moveZ);
         }
+        motion.settle(modelObject.position.x, modelObject.position.z);
+        // Against a wall it slides along it rather than building up speed into it.
+        const wall = physics ? rig.current?.wall : null;
+        if (wall?.hit) motion.blockAgainst(wall.x, wall.z);
+        motion.record(step);
 
         // --- 6. Calculate Animation Inputs ---
         const charForward = new THREE.Vector3(0, 0, 1).applyQuaternion(modelObject.quaternion);

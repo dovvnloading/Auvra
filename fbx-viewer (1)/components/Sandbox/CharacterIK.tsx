@@ -7,6 +7,7 @@ import { findBone, IKPoseGuard, reachWithHand, supportGripPoint, type SupportGri
 import { mirrorBoneName } from '../../utils/retargeting';
 import { usePhysicsQueries } from '../../runtime/physicsQueries';
 import { crosshairTarget } from '../../runtime/aimTarget';
+import { CHARACTER_IK_FRAME_PRIORITY } from '../AnimationGraph/hooks/useGraphAnimator';
 import {
     createFootIKState,
     createLookAtIKState,
@@ -178,8 +179,8 @@ export const aimPitch = (direction: THREE.Vector3, weight: number): number =>
 
 /**
  * Applies a character blueprint's IK after its animation graph each frame (the graph animates at
- * priority -1, this runs at the default priority): foot planting on the ground under each foot and
- * a look-at toward the camera or the player.
+ * ANIMATION_FRAME_PRIORITY, this at CHARACTER_IK_FRAME_PRIORITY, before anything at the default priority
+ * reads the bones): foot planting on the ground under each foot and a look-at toward the camera or the player.
  */
 export const CharacterIK: React.FC<CharacterIKProps> = ({ model, settings, physicsId, aiming = false, supportGrip = null, muzzle }) => {
     const resolved = resolveCharacterIK(settings);
@@ -267,7 +268,7 @@ export const CharacterIK: React.FC<CharacterIKProps> = ({ model, settings, physi
             updateLookAtIK(lookBone, _lookTarget, { maxAngle: resolved.lookAtMaxAngle, weight: 1, forward: HEAD_FORWARD }, lookState, delta);
         }
         guard.commit();
-    });
+    }, CHARACTER_IK_FRAME_PRIORITY);
 
     return null;
 };

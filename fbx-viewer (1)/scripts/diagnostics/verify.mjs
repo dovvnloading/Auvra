@@ -89,6 +89,8 @@ const EXEMPT = new Map(Object.entries({
   'runtime/ik.ts': 'hot-loop',
   'runtime/ragdoll.ts': 'hot-loop',
   'runtime/motionMatching.ts': 'hot-loop',
+  'runtime/locomotion/springs.ts': 'pure-utility',
+  'runtime/locomotion/characterMotion.ts': 'hot-loop',
   'runtime/motionDatabase.ts': 'pure-utility',
   'runtime/proceduralRig.ts': 'hot-loop',
   'runtime/levelStreaming.ts': 'pure-utility',
