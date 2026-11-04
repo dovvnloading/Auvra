@@ -21,9 +21,15 @@ export interface MovementSettings {
     brakingHalfLife: number;
     /** Seconds the facing takes to close most of a turn. */
     turnHalfLife: number;
+    /**
+     * Setting off from a standstill toward a way further round than this (degrees), the character turns
+     * on the spot first (with its turn clip, when its animation has one) and sets off once it faces near
+     * the way; 0 sets off at once, turning as it goes.
+     */
+    turnFirstAngle: number;
 }
 
-export const DEFAULT_MOVEMENT_SETTINGS: MovementSettings = { accelerationHalfLife: 0.1, brakingHalfLife: 0.05, turnHalfLife: 0.12 };
+export const DEFAULT_MOVEMENT_SETTINGS: MovementSettings = { accelerationHalfLife: 0.1, brakingHalfLife: 0.05, turnHalfLife: 0.12, turnFirstAngle: 0 };
 
 /** How often the past is recorded, a second. */
 export const HISTORY_RATE = 30;
@@ -62,6 +68,8 @@ export class CharacterMotion {
     grounded = true;
     /** Facing somewhere of its own (an aim) rather than where it is going: its steps may then point another way than it faces. */
     strafing = false;
+    /** Downward speed it landed at this frame (units a second), 0 on any other frame. */
+    landed = 0;
     /** Where the last step meant to take the character, and where it started from, to tell what the world allowed. */
     private readonly from = { x: 0, z: 0 };
     private readonly history = new Float64Array(HISTORY_CAPACITY * HISTORY_STRIDE);

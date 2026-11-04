@@ -9,6 +9,7 @@ import { usePhysicsQueries } from '../../runtime/physicsQueries';
 import { crosshairTarget } from '../../runtime/aimTarget';
 import { CHARACTER_IK_FRAME_PRIORITY } from '../AnimationGraph/hooks/useGraphAnimator';
 import { findCharacterMotion } from '../../runtime/locomotion/characterMotion';
+import { stepSpring } from '../../runtime/locomotion/springs';
 import {
     createFootIKState,
     createLookAtIKState,
@@ -79,6 +80,12 @@ export const heldWeaponGrip = (
 
 /** How fast foot IK fades out on leaving the ground and back in on landing (per second). */
 const GROUND_BLEND_RATE = 12;
+/** A landing's dip: how much the pelvis sinks per unit of landing speed at first (a spring's push)... */
+const LANDING_DIP = 0.8;
+/** ...counting landings up to this fast (units a second)... */
+const MAX_LANDING_SPEED = 8;
+/** ...and how quickly it comes back up (a spring half-life, seconds). */
+const LANDING_HALF_LIFE = 0.12;
 /** How fast the other hand takes hold of and lets go of a weapon (per second). */
 const GRIP_BLEND_RATE = 14;
 const _gripTarget = new THREE.Vector3();
@@ -196,6 +203,8 @@ export const CharacterIK: React.FC<CharacterIKProps> = ({ model, settings, physi
     const [aimState] = useState(() => ({ weight: 0 }));
     // Feet follow the ground only while the character stands on it: off it they ease back to the animation.
     const [groundState] = useState(() => ({ weight: 1 }));
+    // A landing's dip: the pelvis sinks with the impact and comes back up, the knees bending.
+    const [landing] = useState(() => ({ x: 0, v: 0 }));
     const [gripState] = useState(() => ({ weight: 0, grip: null as HeldWeaponGrip | null }));
     useEffect(() => () => guard.release(), [guard, model]);
     useRestoreBeforeAnimation(guard);
@@ -229,10 +238,14 @@ export const CharacterIK: React.FC<CharacterIKProps> = ({ model, settings, physi
         if (!bones.length) return;
         guard.begin(bones);
         if (rig) {
-            const grounded = findCharacterMotion(model)?.grounded ?? true;
+            const motion = findCharacterMotion(model);
+            const grounded = motion?.grounded ?? true;
             groundState.weight += ((grounded ? 1 : 0) - groundState.weight) * (1 - Math.exp(-GROUND_BLEND_RATE * delta));
+            if (motion && motion.landed > 0) landing.v -= Math.min(motion.landed, MAX_LANDING_SPEED) * LANDING_DIP;
+            stepSpring(landing, 0, LANDING_HALF_LIFE, delta);
             updateFootIK(model, rig, physics.raycast, {
                 maxStep: resolved.footMaxStep, weight: groundState.weight, excludeObjectId: physicsId, lock: resolved.footLock && grounded,
+                pelvisDrop: landing.x,
             }, footState, delta);
         }
         if (spine.length) {

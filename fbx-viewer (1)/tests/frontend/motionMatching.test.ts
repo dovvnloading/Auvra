@@ -271,6 +271,19 @@ const walker = () => {
   return { model, clip };
 };
 
+describe('clip motion', () => {
+  it("reads which way a clip travels and faces at a time, in the clip's own facing", () => {
+    const database = new MotionDatabase([locomotion('strafe right', 1.5, 0), locomotion('turn left', 0, 0, 1.5, 2)]);
+    const strafe = database.travelAt(0, 0.5);
+    expect(Math.hypot(strafe.x, strafe.z)).toBeCloseTo(1.5, 1);
+    expect(Math.abs(strafe.x)).toBeGreaterThan(Math.abs(strafe.z) * 10);
+    // Turning on the spot at 1.5 radians a second.
+    expect(database.facingAt(1, 1) - database.facingAt(1, 0.5)).toBeCloseTo(0.75, 2);
+    const still = database.travelAt(1, 1);
+    expect(Math.hypot(still.x, still.z)).toBeLessThan(0.01);
+  });
+});
+
 describe('databases', () => {
   it('are shared by characters made from one model, and kept apart for another size', () => {
     const { model, clip } = walker();

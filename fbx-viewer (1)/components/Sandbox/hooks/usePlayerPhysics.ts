@@ -35,6 +35,10 @@ export const TURN_IN_PLACE_START = THREE.MathUtils.degToRad(70);
 export const TURN_IN_PLACE_END = THREE.MathUtils.degToRad(4);
 /** The fastest a turn in place turns the body, in radians per second. */
 export const TURN_IN_PLACE_SPEED = THREE.MathUtils.degToRad(300);
+/** Slower than this (units a second), a character setting off counts as standing: a sharp turn is made on the spot first. */
+const PIVOT_SPEED = 0.3;
+/** How fast a turn on the spot turns while no turn clip is turning the character (radians a second): a stepping pace. */
+const PIVOT_TURN_SPEED = THREE.MathUtils.degToRad(120);
 
 /**
  * Where an aiming character faces. Moving, it faces the aim. Standing, its feet stay put while the
@@ -160,6 +164,8 @@ export interface CharacterRig {
     stepOffset: Spring1;
     /** The wall the last step ran into (its outward normal on the ground), when it was blocked by one. */
     wall: { x: number; z: number; hit: boolean };
+    /** Downward speed the character landed at on the last step (units a second); 0 when it did not land. */
+    landed: number;
 }
 
 /** Off the ground after a jump, or for longer than FALL_DELAY: running over a bump or down a step is not a fall. */
@@ -235,6 +241,7 @@ export const createCharacterRig = ({ world, rapier }: CharacterPhysicsContext, m
         gravityScale: characterGravityScale(height),
         stepOffset: { x: 0, v: 0 },
         wall: { x: 0, z: 0, hit: false },
+        landed: 0,
     };
 };
 
@@ -358,6 +365,8 @@ export const stepCharacterPhysics = (
     character.verticalSpeed = Math.max(-CHARACTER.TERMINAL_SPEED * character.gravityScale, character.verticalSpeed + gravity * dt);
     const wasGrounded = character.grounded;
     const startY = centre.y;
+    const falling = Math.max(0, -character.verticalSpeed);
+    character.landed = 0;
 
     _desired.set(worldMoveVec.x * speed * dt, character.verticalSpeed * dt, worldMoveVec.z * speed * dt);
     character.controller.computeColliderMovement(character.collider, _desired, rapier.QueryFilterFlags.EXCLUDE_SENSORS);
@@ -388,6 +397,7 @@ export const stepCharacterPhysics = (
     }
 
     if (grounded && character.verticalSpeed < 0) character.verticalSpeed = 0;
+    if (grounded && !wasGrounded) character.landed = falling;
     character.grounded = grounded;
     if (grounded) {
         character.airborneTime = 0;
@@ -429,6 +439,8 @@ export const usePlayerPhysics = (
     const reportedStamina = useRef<number | null>(null);
     const isExhausted = useRef(false);
     const turningInPlace = useRef(false);
+    // Turning on the spot before setting off (MovementSettings.turnFirstAngle).
+    const pivoting = useRef(false);
     const rig = useRef<CharacterRig | null>(null);
     // How the character moves: springs on its velocity and facing, and its trajectory, which its animation reads.
     const motion = useMemo(() => characterMotionOf(modelObject), [modelObject]);
@@ -545,9 +557,36 @@ export const usePlayerPhysics = (
             if (isMoving) targetRotation = Math.atan2(worldMoveVec.x, worldMoveVec.z);
         }
 
+        // Setting off from a standstill far round from the way faced: turn on the spot first (by the turn
+        // clip's own turn when one plays) and set off once facing near the way.
+        const firstAngle = THREE.MathUtils.degToRad(motion.settings.turnFirstAngle);
+        const away = targetRotation === null ? 0 : Math.abs(wrapAngle(targetRotation - motion.facing.x));
+        if (firstAngle > 0 && !input.isAiming && isMoving && targetRotation !== null) {
+            if (!pivoting.current && motion.speed < PIVOT_SPEED && away > firstAngle) pivoting.current = true;
+            else if (pivoting.current && away < firstAngle * 0.5) pivoting.current = false;
+        } else {
+            pivoting.current = false;
+        }
+
         // Aiming turns twice as briskly.
         const turnHalfLife = motion.settings.turnHalfLife * (input.isAiming ? 0.5 : 1);
-        if (turningInPlace.current && typeof clipTurn === 'number') {
+        if (pivoting.current) {
+            const before = motion.facing.x;
+            if (typeof clipTurn === 'number' && Math.abs(clipTurn) > 1e-5 && Math.sign(clipTurn) === Math.sign(wrapAngle((targetRotation ?? before) - before))) {
+                // As the turn clip turns, never past the way asked for.
+                const left = wrapAngle((targetRotation ?? before) - before);
+                motion.turnBy(Math.abs(clipTurn) > Math.abs(left) ? left : clipTurn, delta);
+            } else {
+                // No turn clip turning it (yet): at a stepping pace, as a turn clip would.
+                motion.turnToward(targetRotation ?? before, delta, turnHalfLife);
+                const turned = wrapAngle(motion.facing.x - before);
+                const most = PIVOT_TURN_SPEED * delta;
+                if (Math.abs(turned) > most) {
+                    motion.facing.x = before;
+                    motion.turnBy(Math.sign(turned) * most, delta);
+                }
+            }
+        } else if (turningInPlace.current && typeof clipTurn === 'number') {
             // Exactly as the turn clip turns the character while one plays.
             motion.turnBy(clipTurn, delta);
         } else if (turningInPlace.current) {
@@ -600,6 +639,8 @@ export const usePlayerPhysics = (
         // The springs carry the velocity toward the input's (speeding up and braking over a moment); root
         // motion instead travels exactly its distance over the step. Either way the move is tried against
         // the world over the step as a velocity.
+        // While turning on the spot first, it holds still.
+        if (pivoting.current) currentSpeed = 0;
         if (rootTravel && step > 0) motion.drive(rootTravel.x, rootTravel.z, step);
         else motion.advance(worldMoveVec.x * currentSpeed, worldMoveVec.z * currentSpeed, step, _move);
         const moveX = rootTravel && step > 0 ? rootTravel.x : _move.x;
@@ -613,6 +654,7 @@ export const usePlayerPhysics = (
         motion.settle(modelObject.position.x, modelObject.position.z);
         motion.grounded = physics ? rig.current?.grounded ?? true : true;
         motion.strafing = input.isAiming;
+        motion.landed = physics ? rig.current?.landed ?? 0 : 0;
         // Against a wall it slides along it rather than building up speed into it.
         const wall = physics ? rig.current?.wall : null;
         if (wall?.hit) motion.blockAgainst(wall.x, wall.z);
