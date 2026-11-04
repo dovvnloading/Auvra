@@ -92,6 +92,7 @@ const EXEMPT = new Map(Object.entries({
   'runtime/locomotion/springs.ts': 'pure-utility',
   'runtime/locomotion/characterMotion.ts': 'hot-loop',
   'runtime/locomotion/inertialization.ts': 'hot-loop',
+  'runtime/MovementDebug.tsx': 'hot-loop',
   'runtime/motionDatabase.ts': 'pure-utility',
   'runtime/proceduralRig.ts': 'hot-loop',
   'runtime/levelStreaming.ts': 'pure-utility',

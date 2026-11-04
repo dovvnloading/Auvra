@@ -1,5 +1,6 @@
 
 import React from 'react';
+import type * as THREE from 'three';
 import { MousePointer2 } from 'lucide-react';
 import { AnimationGraphData } from '../../types';
 import { StateInspector } from './Inspectors/StateInspector';
@@ -22,6 +23,8 @@ interface InspectorPanelProps {
     onDeleteTransition: (id: string) => void;
     /** Shows a State Machine state's own states on the canvas. */
     onOpenStateMachine?: (id: string) => void;
+    /** The model the graph previews on, for what a Motion Match state's clips do on it. */
+    previewObject?: THREE.Object3D | null;
 }
 
 export const InspectorPanel: React.FC<InspectorPanelProps> = ({
@@ -32,7 +35,8 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
     availableClips,
     onDeleteState,
     onDeleteTransition,
-    onOpenStateMachine
+    onOpenStateMachine,
+    previewObject = null
 }) => {
     const selectedNode = graph.states.find(s => s.id === selectedNodeId);
     const selectedTransition = graph.transitions.find(t => t.id === selectedNodeId);
@@ -79,6 +83,8 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                         const clip = availableClips.find(item => item.name === name)?.clip;
                         return clip ? clipLoops(clip) : undefined;
                     }}
+                    previewObject={previewObject}
+                    clipByName={(name) => availableClips.find(item => item.name === name)?.clip ?? null}
                 />
              ) : selectedTransition ? (
                 <TransitionInspector 

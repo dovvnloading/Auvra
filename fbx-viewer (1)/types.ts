@@ -599,6 +599,8 @@ export interface Blueprint {
   weaponVolume?: number; // Base volume for weapon sounds
   /** Pose fixes applied after the animation graph each frame (runtime/ik.ts). */
   ik?: CharacterIKSettings;
+  /** How a player character speeds up, slows down and turns (runtime/locomotion/characterMotion.ts); defaults when left out. */
+  movement?: MovementTuning;
   /** A player's fire and aim clips, layered over its locomotion. */
   upperBody?: UpperBodySettings;
   /** Added on top of whatever the character is doing each time it is hurt (not by the hit that kills it). */
@@ -637,6 +639,18 @@ export interface BehaviorNode {
 export interface BehaviorTreeData {
   rootId: string;
   behaviorNodes: BehaviorNode[];
+}
+
+/** A character's movement, in the times a player feels; each left out keeps its default. */
+export interface MovementTuning {
+  /** Seconds to reach (most of) a faster speed (default 0.28). */
+  accelerate?: number;
+  /** Seconds to slow down or stop (default 0.14). */
+  brake?: number;
+  /** Seconds to turn (most of the way) round to face where it is going (default 0.34). */
+  turn?: number;
+  /** Setting off from a standstill toward a way further round than this (degrees), turn on the spot first; 0 never (default). */
+  turnFirst?: number;
 }
 
 export interface CharacterIKSettings {

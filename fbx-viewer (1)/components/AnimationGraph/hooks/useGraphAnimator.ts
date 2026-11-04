@@ -347,6 +347,7 @@ export const useGraphAnimator = (
         }
         // A Motion Match state picks the moment of its clips that best carries on the character's movement.
         let matched: string | null = null;
+        if (locomotion) locomotion.matched = null;
         let matchedScale = 1;
         if (currentState?.stateType === 'MotionMatch' && modelObject) {
             const names = currentState.blendSamples.map(sample => sample.clipName).filter((name): name is string => !!name && !!actionsMap[name]);
@@ -416,6 +417,7 @@ export const useGraphAnimator = (
                 const clipName = choice.clip >= 0 ? match.matcher.database.clips[choice.clip].name : null;
                 if (clipName && actionsMap[clipName]) {
                     matched = clipName;
+                    if (locomotion) locomotion.matched = clipName;
                     if (choice.jumped) {
                         // The jump cuts to the match at once; the inertializer eases the pose across (or,
                         // without one, it shows as a cut).
