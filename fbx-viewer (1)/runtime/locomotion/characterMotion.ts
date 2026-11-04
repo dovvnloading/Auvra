@@ -74,6 +74,8 @@ const FREE_TURN_DECAY = 4;
 
 export class CharacterMotion {
     settings: MovementSettings = { ...DEFAULT_MOVEMENT_SETTINGS };
+    /** Its controller has set its own settings (an AI's), which stay. */
+    tuned = false;
     /** Position on the ground, velocity and acceleration. */
     readonly body: PlanarSpring = { x: 0, z: 0, vx: 0, vz: 0, ax: 0, az: 0 };
     /** Facing and how fast it turns (radians a second). */

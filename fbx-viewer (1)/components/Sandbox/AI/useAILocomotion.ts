@@ -5,6 +5,18 @@ import { usesPathfinding } from './AIStateMachine';
 import { advanceWaypoint, useNavMeshContext, type LevelNavMesh } from '../../../runtime/navigation';
 import type { NavAgent } from '../../../runtime/navMesh';
 import { PLAYER_PHYSICS_ID, usePhysicsQueries } from '../../../runtime/physicsQueries';
+import { characterMotionOf, type MovementSettings } from '../../../runtime/locomotion/characterMotion';
+import { wrapAngle } from '../../../runtime/locomotion/springs';
+
+/**
+ * How AI characters speed up, slow down and turn: the same springs as the player's, tuned to the
+ * pace they always had (about 0.8 s to a walk, half a second to stop, a quarter of a second to turn).
+ */
+export const AI_MOVEMENT: MovementSettings = { accelerationHalfLife: 0.28, brakingHalfLife: 0.17, turnHalfLife: 0.1, turnFirstAngle: 0 };
+/** Attacking, an AI turns this many times more slowly, to give its target a chance to dodge. */
+const ATTACK_TURN_SLOWDOWN = 5;
+/** Moved further than this by something else (spawned, knocked back), its movement starts again there at rest. */
+const MOVED_ELSEWHERE = 0.5;
 
 interface LocomotionInput {
   enemyObject: THREE.Object3D;
@@ -58,6 +70,7 @@ export const useAILocomotion = () => {
   });
 
   // Reusable vectors to reduce GC
+  const vStep = useMemo(() => ({ x: 0, z: 0 }), []);
   const vDir = useMemo(() => new THREE.Vector3(), []);
   const vLook = useMemo(() => new THREE.Vector3(), []);
   const vRight = useMemo(() => new THREE.Vector3(), []);
@@ -135,7 +148,7 @@ export const useAILocomotion = () => {
 
   const updateLocomotion = (input: LocomotionInput) => {
     const { enemyObject, destination, targetFocus, state, delta } = input;
-    const { PHYSICS, STAMINA, DISTANCES } = AI_CONFIG;
+    const { STAMINA, DISTANCES } = AI_CONFIG;
     const tuning = input.tuning ?? DEFAULT_AI_TUNING;
 
     const distToDest = enemyObject.position.distanceTo(destination);
@@ -235,14 +248,25 @@ export const useAILocomotion = () => {
         if (moveVector.lengthSq() > 1e-8) moveVector.normalize();
     }
 
-    // 3. Physics Integration (Smooth Speed)
-    if (targetSpeed > physics.current.currentSpeed) {
-        physics.current.currentSpeed += PHYSICS.ACCELERATION * delta;
-        if (physics.current.currentSpeed > targetSpeed) physics.current.currentSpeed = targetSpeed;
-    } else {
-        physics.current.currentSpeed -= PHYSICS.DECELERATION * delta;
-        if (physics.current.currentSpeed < targetSpeed) physics.current.currentSpeed = targetSpeed;
+    // 3. Movement: the same springs as the player's carry the velocity toward the one asked for, so the
+    // character's animation sees where it is going (its trajectory) as it does for the player.
+    const motion = characterMotionOf(enemyObject);
+    if (motion.settings !== AI_MOVEMENT && !motion.tuned) {
+        motion.settings = AI_MOVEMENT;
+        motion.tuned = true;
     }
+    if (Math.hypot(enemyObject.position.x - motion.body.x, enemyObject.position.z - motion.body.z) > MOVED_ELSEWHERE) {
+        motion.place(enemyObject.position.x, enemyObject.position.z, enemyObject.rotation.y);
+    } else {
+        // Its own position may have been nudged a little (the crowd, a boundary): the motion follows.
+        motion.settle(enemyObject.position.x, enemyObject.position.z);
+    }
+    if (Math.abs(wrapAngle(enemyObject.rotation.y - motion.facing.x)) > 1e-4) {
+        motion.facing.x = wrapAngle(enemyObject.rotation.y);
+        motion.facing.v = 0;
+    }
+    const step = motion.advance(moveVector.x * targetSpeed, moveVector.z * targetSpeed, delta, vStep);
+    physics.current.currentSpeed = motion.speed;
 
     // 4. Apply Rotation
     // If we have a TargetFocus, look at it. Otherwise (or while detouring round an obstacle) look where we are going.
@@ -255,30 +279,24 @@ export const useAILocomotion = () => {
         vLook.y = 0; 
         if (vLook.lengthSq() > 0.001) {
             const targetRotation = Math.atan2(vLook.x, vLook.z);
-            let rotDiff = targetRotation - enemyObject.rotation.y;
-            while (rotDiff > Math.PI) rotDiff -= Math.PI * 2;
-            while (rotDiff < -Math.PI) rotDiff += Math.PI * 2;
-            
             // Slower turn speed when attacking to give player chance to dodge
-            const turnSpeed = state === 'ATTACKING' ? PHYSICS.ROTATION_SPEED * 0.2 : PHYSICS.ROTATION_SPEED;
-            enemyObject.rotation.y += rotDiff * turnSpeed * delta;
+            const halfLife = AI_MOVEMENT.turnHalfLife * (state === 'ATTACKING' ? ATTACK_TURN_SLOWDOWN : 1);
+            enemyObject.rotation.y = motion.turnToward(targetRotation, delta, halfLife);
         }
     } else if (state === 'PATROL' && physics.current.currentSpeed > 0.1) {
          // Face movement direction
-         const targetRotation = Math.atan2(moveVector.x, moveVector.z);
-         let rotDiff = targetRotation - enemyObject.rotation.y;
-         while (rotDiff > Math.PI) rotDiff -= Math.PI * 2;
-         while (rotDiff < -Math.PI) rotDiff += Math.PI * 2;
-         enemyObject.rotation.y += rotDiff * PHYSICS.ROTATION_SPEED * delta;
+         enemyObject.rotation.y = motion.turnToward(Math.atan2(moveVector.x, moveVector.z), delta);
     }
+    // Facing somewhere other than where it goes (a target it watches while strafing): its steps may point another way.
+    motion.strafing = state === 'STRAFING' || state === 'ATTACKING';
 
     // 5. Apply Position
     // On a navmesh the agent moves in its crowd: at the velocity asked for, bent away from other agents,
     // sliding along walls and stopping at ledges (still standing, it keeps the agent on the surface).
     // Without a place in the crowd it moves over the navmesh alone; off the navmesh, freely.
     vNext.copy(enemyObject.position);
-    const speed = physics.current.currentSpeed > 0.01 ? physics.current.currentSpeed : 0;
-    if (speed > 0) vNext.addScaledVector(moveVector, speed * delta);
+    vNext.x += step.x;
+    vNext.z += step.z;
     const place = crowd.current;
     if (place.navMesh !== navMesh) {
         place.agent?.remove();
@@ -291,7 +309,7 @@ export const useAILocomotion = () => {
         // Moved by something other than the crowd (spawned, knocked back): it carries on from there.
         if (Math.hypot(enemyObject.position.x - place.at.x, enemyObject.position.z - place.at.z) > 0.5) place.agent.teleport(enemyObject.position);
         kept = place.agent.position();
-        place.agent.move({ x: moveVector.x * speed, z: moveVector.z * speed }, tuning.runSpeed * 1.5);
+        place.agent.move({ x: delta > 0 ? step.x / delta : 0, z: delta > 0 ? step.z / delta : 0 }, tuning.runSpeed * 1.5);
     } else if (navMesh) {
         kept = navMesh.moveAlongSurface(enemyObject.position, vNext);
     }
@@ -305,6 +323,10 @@ export const useAILocomotion = () => {
     }
     enemyObject.position.copy(kept ?? vNext);
     place.at.copy(enemyObject.position);
+    // Where the world let it go; it stands on the navmesh or the ground.
+    motion.settle(enemyObject.position.x, enemyObject.position.z);
+    motion.grounded = true;
+    motion.record(delta);
 
     // 6. Calculate Local Graph Variables (InputX / InputY)
     // Project world moveVector onto local Forward/Right axis
