@@ -611,6 +611,8 @@ export const usePlayerPhysics = (
             moveWithoutPhysics(moveX, moveZ);
         }
         motion.settle(modelObject.position.x, modelObject.position.z);
+        motion.grounded = physics ? rig.current?.grounded ?? true : true;
+        motion.strafing = input.isAiming;
         // Against a wall it slides along it rather than building up speed into it.
         const wall = physics ? rig.current?.wall : null;
         if (wall?.hit) motion.blockAgainst(wall.x, wall.z);

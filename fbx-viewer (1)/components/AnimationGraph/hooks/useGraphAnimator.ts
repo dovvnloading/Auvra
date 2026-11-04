@@ -14,6 +14,7 @@ import { HISTORY_TIMES, MotionMatcher, TRAJECTORY_TIMES, type MotionTrajectory, 
 import { motionDatabaseWhenReady } from '../../../runtime/motionDatabase';
 import { findCharacterMotion, toCharacterSpace, type TrajectoryPoint } from '../../../runtime/locomotion/characterMotion';
 import { DEFAULT_INERTIAL_HALF_LIFE, Inertializer } from '../../../runtime/locomotion/inertialization';
+import { findBone } from '../../../runtime/ik';
 
 /**
  * Animation runs before every other frame callback (priority -1), so IK, sockets and attachments
@@ -164,6 +165,26 @@ const _modelScale = new THREE.Vector3();
 const GROUND_SPEED_RATE = 10;
 /** An inertial transition's offset fades over this share of its duration (a spring half-life). */
 const INERTIAL_SHARE = 1 / 3;
+/** The furthest orientation warping turns the hips from the clip's way of travel (radians). */
+const MAX_WARP = THREE.MathUtils.degToRad(60);
+/** Below this speed (in hips heights a second) a clip or a character is not going anywhere to warp toward. */
+const WARP_SPEED = 0.2;
+/** How quickly the warp follows a change in the angle, a second. */
+const WARP_RATE = 12;
+const UP = new THREE.Vector3(0, 1, 0);
+const _warpBone = new THREE.Quaternion();
+const _warpTurn = new THREE.Quaternion();
+const _warpParent = new THREE.Quaternion();
+
+/** Turns `bone` by `angle` radians about the world's up axis, its parent staying where it is. */
+const turnAboutUp = (bone: THREE.Object3D, angle: number) => {
+    bone.updateWorldMatrix(true, false);
+    bone.getWorldQuaternion(_warpBone).premultiply(_warpTurn.setFromAxisAngle(UP, angle));
+    if (bone.parent) bone.parent.getWorldQuaternion(_warpParent).invert();
+    else _warpParent.identity();
+    bone.quaternion.copy(_warpParent.multiply(_warpBone));
+    bone.updateMatrixWorld(true);
+};
 const _groundVelocity = new THREE.Vector3();
 const _modelQuaternion = new THREE.Quaternion();
 const _future: TrajectoryPoint = { x: 0, z: 0, facing: 0 };
@@ -222,6 +243,8 @@ export const useGraphAnimator = (
     const inertia = useRef<{ model: THREE.Object3D | null; inertializer: Inertializer | null }>({ model: null, inertializer: null });
     // Seconds since the current state was entered, and whether it was entered by crossfading.
     const entry = useRef({ seconds: 0, crossfade: true });
+    // Orientation warping: the hips and spine it turns, and the angle it turns them by now.
+    const warp = useRef({ model: null as THREE.Object3D | null, hips: null as THREE.Object3D | null, spine: [] as THREE.Object3D[], angle: 0 });
 
     const blendModeRef = () => extras.blendModeRef?.current ?? 'crossfade';
 
@@ -456,6 +479,36 @@ export const useGraphAnimator = (
                 inertializer.switchNow(delta);
             }
             inertializer.apply(delta);
+        }
+
+        // Orientation warping: a matched clip travelling another way than the character (a forward walk
+        // played while moving diagonally) has its hips and legs turned toward the way the character goes,
+        // and its spine turned back, so the steps fall where the character goes and the chest keeps its facing.
+        if (modelObject) {
+            const w = warp.current;
+            if (w.model !== modelObject) {
+                w.model = modelObject;
+                w.hips = findBone(modelObject, 'Hips');
+                w.spine = ['Spine', 'Spine1', 'Spine2'].map(name => findBone(modelObject, name)).filter((bone): bone is THREE.Object3D => !!bone);
+                w.angle = 0;
+            }
+            let wanted = 0;
+            const matcher = matching.current.matcher;
+            // Only while the character faces somewhere other than its way (aiming): turning, it faces where it goes.
+            if (currentState?.stateType === 'MotionMatch' && locomotion?.strafing && matcher && matcher.clip >= 0) {
+                const clipWay = matcher.database.travelAt(matcher.clip, matcher.time);
+                const body = matcher.database.body * matchedScale;
+                const going = toCharacterSpace(locomotion.body.x + locomotion.body.vx, locomotion.body.z + locomotion.body.vz, locomotion.body.x, locomotion.body.z, locomotion.facing.x);
+                if (Math.hypot(clipWay.x, clipWay.z) * matchedScale > WARP_SPEED * body && Math.hypot(going.x, going.z) > WARP_SPEED * body) {
+                    const turn = Math.atan2(going.x, going.z) - Math.atan2(clipWay.x, clipWay.z);
+                    wanted = THREE.MathUtils.clamp(Math.atan2(Math.sin(turn), Math.cos(turn)), -MAX_WARP, MAX_WARP);
+                }
+            }
+            w.angle += (wanted - w.angle) * (1 - Math.exp(-WARP_RATE * delta));
+            if (w.hips && Math.abs(w.angle) > 1e-4) {
+                turnAboutUp(w.hips, w.angle);
+                for (const bone of w.spine) turnAboutUp(bone, -w.angle / w.spine.length);
+            }
         }
         // The matcher keeps to the time the chosen clip has really reached.
         if (matched && matching.current.matcher && actionsMap[matched]) matching.current.matcher.time = actionsMap[matched].time;

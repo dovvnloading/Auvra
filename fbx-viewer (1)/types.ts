@@ -644,6 +644,8 @@ export interface CharacterIKSettings {
   footIK?: boolean;
   /** Highest ground step a foot reaches for, in metres (default 0.5). */
   footMaxStep?: number;
+  /** With footIK, a planted foot stays where it landed until it lifts, so feet do not slide (default on). */
+  footLock?: boolean;
   /** Turn a bone toward a target: the camera (players) or the player (enemies). */
   lookAt?: 'none' | 'camera' | 'player';
   /** Bone that looks (default 'Head'). */
