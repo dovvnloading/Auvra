@@ -10,8 +10,9 @@ import { rootMotionDelta, type RootMotion } from '../utils/rootMotion';
 import { actionPhase, syncBlendActions, syncLeader } from '../utils/syncGroups';
 import { curveVariableValue } from '../utils/curves';
 import { clipGroundSpeed, groundSpeedRate } from '../utils/groundSpeed';
-import { MotionMatcher } from '../../../runtime/motionMatching';
+import { MotionMatcher, TRAJECTORY_TIMES, type Vec2 } from '../../../runtime/motionMatching';
 import { motionDatabaseFor } from '../../../runtime/motionDatabase';
+import { findCharacterMotion, toCharacterSpace, type TrajectoryPoint } from '../../../runtime/locomotion/characterMotion';
 
 /**
  * Animation runs before every other frame callback (priority -1), so IK, sockets and attachments
@@ -19,6 +20,16 @@ import { motionDatabaseFor } from '../../../runtime/motionDatabase';
  * render loop.
  */
 export const ANIMATION_FRAME_PRIORITY = -1;
+/**
+ * Character controllers (input, movement, the graph variables they set) run before animation, so a
+ * frame's pose answers that frame's input rather than the last one's.
+ */
+export const LOCOMOTION_FRAME_PRIORITY = ANIMATION_FRAME_PRIORITY - 0.5;
+/**
+ * Character IK runs after animation and timelines (TIMELINE_FRAME_PRIORITY), and before anything at the
+ * default priority that reads the posed bones (a shot leaving the muzzle).
+ */
+export const CHARACTER_IK_FRAME_PRIORITY = ANIMATION_FRAME_PRIORITY + 0.75;
 
 /**
  * Steps every action's weight linearly toward its target, then rescales the results so they add
@@ -155,6 +166,8 @@ export const MOTION_MATCH_TWIN = '\u0000match';
 const matchedClipName = (name: string) => (name.endsWith(MOTION_MATCH_TWIN) ? name.slice(0, -MOTION_MATCH_TWIN.length) : name);
 const _groundVelocity = new THREE.Vector3();
 const _modelQuaternion = new THREE.Quaternion();
+const _future: TrajectoryPoint = { x: 0, z: 0, facing: 0 };
+const _trajectory = { positions: TRAJECTORY_TIMES.map((): Vec2 => ({ x: 0, z: 0 })), facings: TRAJECTORY_TIMES.map(() => 0) };
 const _rootBasis = new THREE.Matrix3();
 
 const rootBoneParent = (modelObject: THREE.Object3D, motion: RootMotion): THREE.Object3D | null => {
@@ -258,6 +271,8 @@ export const useGraphAnimator = (
 
         // 2. Target weights and playback speed of the current state; a blend's samples run in step.
         const currentState = graph.states.find(s => s.id === activeStateRef.current);
+        // A character a controller moves knows its own velocity and where it is going.
+        const locomotion = modelObject ? findCharacterMotion(modelObject) : undefined;
         if (modelObject) {
             modelObject.getWorldPosition(_groundAt);
             const last = ground.current.last;
@@ -270,6 +285,11 @@ export const useGraphAnimator = (
                 last.copy(_groundAt);
             } else {
                 ground.current.last = _groundAt.clone();
+            }
+            if (locomotion) {
+                // Exact rather than measured: no lag, and no jitter from uneven frames.
+                ground.current.speed = locomotion.speed;
+                ground.current.velocity.set(locomotion.body.vx, 0, locomotion.body.vz);
             }
         }
         // A Motion Match state picks the moment of its clips that best carries on the character's movement.
@@ -293,7 +313,19 @@ export const useGraphAnimator = (
                 matchedScale = modelObject.getWorldScale(_modelScale).x / (modelObject.scale.x || 1) || 1;
                 _groundVelocity.copy(ground.current.velocity).applyQuaternion(_modelQuaternion).divideScalar(matchedScale);
                 const velocity = { x: _groundVelocity.x, z: _groundVelocity.z };
-                const choice = match.matcher.step(delta, velocity, velocity, 0);
+                // Where the character's movement says it is going, seen from where it stands and faces now.
+                let trajectory: typeof _trajectory | undefined;
+                if (locomotion) {
+                    TRAJECTORY_TIMES.forEach((time, i) => {
+                        locomotion.predict(time, _future);
+                        const at = toCharacterSpace(_future.x, _future.z, locomotion.body.x, locomotion.body.z, locomotion.facing.x, matchedScale);
+                        _trajectory.positions[i].x = at.x;
+                        _trajectory.positions[i].z = at.z;
+                        _trajectory.facings[i] = _future.facing - locomotion.facing.x;
+                    });
+                    trajectory = _trajectory;
+                }
+                const choice = match.matcher.step(delta, velocity, velocity, 0, trajectory);
                 const clipName = choice.clip >= 0 ? match.matcher.database.clips[choice.clip].name : null;
                 if (clipName) {
                     // Each clip plays as itself or as its copy, whichever the last jump to it started.

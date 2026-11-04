@@ -3,6 +3,7 @@ import React, { useEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import { useFrame, useThree } from '@react-three/fiber';
 import { GraphRuntimeAPI } from '../AnimationGraph/GraphRuntime';
+import { LOCOMOTION_FRAME_PRIORITY } from '../AnimationGraph/hooks/useGraphAnimator';
 import { ProjectileManagerHandle } from './ProjectileManager';
 import { SandboxEntityHandle } from './SandboxEntity';
 import { usePlayerControls } from './hooks/usePlayerControls';
@@ -190,8 +191,13 @@ export const PlayerController: React.FC<PlayerControllerProps> = ({
     const upperBodyPlaying = useRef<string | null>(null);
     // A turn-in-place clip is playing on the legs.
     const turnPlaying = useRef(false);
+    // Shots this frame's input fired, taken once the pose is final (after animation and IK).
+    const pendingShots = useRef<{ weapon: ResolvedWeapon; shots: number; aiming: boolean } | null>(null);
 
+    // Input, weapons and movement run before the animation graph, so this frame's pose answers this
+    // frame's input and the graph reads where the character is now.
     useFrame((_, delta) => {
+        pendingShots.current = null;
         if (!enabled || !modelObject || !apiRef.current) return;
 
         // Disable controls if dead
@@ -298,8 +304,8 @@ export const PlayerController: React.FC<PlayerControllerProps> = ({
         }
 
         // --- Step C: Combat ---
-        // Over the shoulder the character is in view while aiming, so its muzzle flashes then too.
-        if (weapon && weaponStep.shots > 0) fireShots(weapon, weaponStep.shots, input.isAiming, camera, blueprint?.aimView === 'shoulder');
+        // Fired below, from the muzzle where this frame's animation and aim put it.
+        if (weapon && weaponStep.shots > 0) pendingShots.current = { weapon, shots: weaponStep.shots, aiming: input.isAiming };
 
         // --- Step D: Animation Graph Bridge ---
         apiRef.current.setVariable('Speed', isMoving ? 1 : 0);
@@ -315,6 +321,15 @@ export const PlayerController: React.FC<PlayerControllerProps> = ({
         apiRef.current.setVariable('IsFiring', firing && !reloading);
         apiRef.current.setVariable('IsAiming', input.isAiming);
         apiRef.current.setVariable('IsReloading', reloading);
+    }, LOCOMOTION_FRAME_PRIORITY);
+
+    // Shots leave the muzzle once animation and IK have posed the character for this frame.
+    useFrame(() => {
+        const pending = pendingShots.current;
+        if (!pending) return;
+        pendingShots.current = null;
+        // Over the shoulder the character is in view while aiming, so its muzzle flashes then too.
+        fireShots(pending.weapon, pending.shots, pending.aiming, camera, blueprint?.aimView === 'shoulder');
     });
 
 

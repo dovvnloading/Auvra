@@ -314,8 +314,12 @@ export class MotionMatcher {
 
     constructor(readonly database: MotionDatabase, readonly options: MotionMatcherOptions = DEFAULT_MATCHER_OPTIONS) {}
 
-    /** Advances by `dt` toward the desired movement; returns what to play now. */
-    step(dt: number, velocity: Vec2, desired: Vec2, desiredFacing: number): MotionChoice {
+    /**
+     * Advances by `dt` toward the desired movement; returns what to play now. `trajectory`, when given, is
+     * where the character's own movement says it will be at TRAJECTORY_TIMES (its space, the database's
+     * units); otherwise one is predicted from the velocities.
+     */
+    step(dt: number, velocity: Vec2, desired: Vec2, desiredFacing: number, trajectory?: { positions: Vec2[]; facings: number[] }): MotionChoice {
         const db = this.database;
         if (this.clip >= 0) {
             const clip = db.clips[this.clip];
@@ -329,7 +333,7 @@ export class MotionMatcher {
         if (this.sinceSearch >= this.options.searchInterval || this.clip < 0) {
             this.sinceSearch = 0;
             const playing = this.clip >= 0 ? db.frameOf(this.clip, this.time) : -1;
-            const query = buildQuery(db, playing, predictTrajectory(velocity, desired, desiredFacing));
+            const query = buildQuery(db, playing, trajectory ?? predictTrajectory(velocity, desired, desiredFacing));
             const best = db.search(query);
             if (best.frame >= 0) {
                 const candidate = db.frames[best.frame];
