@@ -6,12 +6,12 @@ import { animationEvents } from '../../../runtime/animationEvents';
 import { blendWeights1D, blendWeights2D, clampAnimationDelta, DEFAULT_BLEND_SECONDS, stepWeight } from '../utils/blending';
 import type { MontagePlayer } from '../utils/montage';
 import { crossedNotifies } from '../utils/notifies';
-import { rootMotionDelta, type RootMotion } from '../utils/rootMotion';
+import { extractRootMotion, rootMotionDelta, type RootMotion } from '../utils/rootMotion';
 import { actionPhase, syncBlendActions, syncLeader } from '../utils/syncGroups';
 import { curveVariableValue } from '../utils/curves';
 import { clipGroundSpeed, groundSpeedRate } from '../utils/groundSpeed';
-import { MotionMatcher, TRAJECTORY_TIMES, type Vec2 } from '../../../runtime/motionMatching';
-import { motionDatabaseFor } from '../../../runtime/motionDatabase';
+import { HISTORY_TIMES, MotionMatcher, TRAJECTORY_TIMES, type MotionTrajectory, type Vec2 } from '../../../runtime/motionMatching';
+import { motionDatabaseWhenReady } from '../../../runtime/motionDatabase';
 import { findCharacterMotion, toCharacterSpace, type TrajectoryPoint } from '../../../runtime/locomotion/characterMotion';
 
 /**
@@ -167,7 +167,13 @@ const matchedClipName = (name: string) => (name.endsWith(MOTION_MATCH_TWIN) ? na
 const _groundVelocity = new THREE.Vector3();
 const _modelQuaternion = new THREE.Quaternion();
 const _future: TrajectoryPoint = { x: 0, z: 0, facing: 0 };
-const _trajectory = { positions: TRAJECTORY_TIMES.map((): Vec2 => ({ x: 0, z: 0 })), facings: TRAJECTORY_TIMES.map(() => 0) };
+const _past: TrajectoryPoint = { x: 0, z: 0, facing: 0 };
+const _trajectory: Required<MotionTrajectory> = {
+    positions: TRAJECTORY_TIMES.map((): Vec2 => ({ x: 0, z: 0 })),
+    facings: TRAJECTORY_TIMES.map(() => 0),
+    past: HISTORY_TIMES.map((): Vec2 => ({ x: 0, z: 0 })),
+};
+
 const _rootBasis = new THREE.Matrix3();
 
 const rootBoneParent = (modelObject: THREE.Object3D, motion: RootMotion): THREE.Object3D | null => {
@@ -211,7 +217,7 @@ export const useGraphAnimator = (
     // How fast the character is moving over the ground (world units a second), for states that match it.
     const ground = useRef({ speed: 0, last: null as THREE.Vector3 | null, velocity: new THREE.Vector3() });
     // A Motion Match state's matcher, made for its clips on this model when it is first played.
-    const matching = useRef({ stateId: null as string | null, key: '', matcher: null as MotionMatcher | null, showing: {} as Record<string, string> });
+    const matching = useRef({ stateId: null as string | null, key: '', matcher: null as MotionMatcher | null, showing: {} as Record<string, string>, own: [] as THREE.AnimationClip[] });
 
     // -- FRAME LOOP --
     useFrame((state, rawDelta) => {
@@ -302,11 +308,24 @@ export const useGraphAnimator = (
             if (match.key !== key) {
                 match.key = key;
                 match.stateId = currentState.id;
+                match.matcher = null;
                 // Read from the model's own clips: the mixer plays copies with their travel taken out.
-                const clips = names.map(name => extras.sourceClips?.[name] ?? actionsMap[name].getClip());
-                const sources = clips.map(clip => clip.uuid);
-                const database = names.length ? motionDatabaseFor(modelObject, clips, sources) : null;
-                match.matcher = database ? new MotionMatcher(database) : null;
+                match.own = names.map(name => extras.sourceClips?.[name] ?? actionsMap[name].getClip());
+            }
+            if (!match.matcher && match.own.length) {
+                // Built in the background with each clip's mirrored copy; until then the state plays its first clip.
+                const built = motionDatabaseWhenReady(modelObject, match.own);
+                if (built?.database) {
+                    // A mirrored clip plays in place like the state's own clips.
+                    for (const clip of built.mirrored) {
+                        if (actionsMap[clip.name]) continue;
+                        const action = mixer.clipAction(extractRootMotion(clip, { root: modelObject })?.clip ?? clip);
+                        action.enabled = false;
+                        action.setEffectiveWeight(0);
+                        actionsMap[clip.name] = action;
+                    }
+                    match.matcher = new MotionMatcher(built.database);
+                }
             }
             if (match.matcher) {
                 // The character's velocity in its own space and in its model's units (the database's).
@@ -323,6 +342,12 @@ export const useGraphAnimator = (
                         _trajectory.positions[i].x = at.x;
                         _trajectory.positions[i].z = at.z;
                         _trajectory.facings[i] = _future.facing - locomotion.facing.x;
+                    });
+                    HISTORY_TIMES.forEach((time, i) => {
+                        locomotion.past(time, _past);
+                        const at = toCharacterSpace(_past.x, _past.z, locomotion.body.x, locomotion.body.z, locomotion.facing.x, matchedScale);
+                        _trajectory.past[i].x = at.x;
+                        _trajectory.past[i].z = at.z;
                     });
                     trajectory = _trajectory;
                 }

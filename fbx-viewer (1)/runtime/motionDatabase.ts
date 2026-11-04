@@ -2,7 +2,9 @@ import * as THREE from 'three';
 import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { findBone } from './ik';
 import { MotionDatabase, SAMPLE_RATE, type MotionClipSamples, type MotionSample } from './motionMatching';
-import { clipLoops } from '../utils/clipRanges';
+import { clipLoops, copyClipRange } from '../utils/clipRanges';
+import { bindPoseRig, mirroredClipName } from '../utils/animationBinding';
+import { mirrorHumanoidClip } from '../utils/retargeting';
 
 /**
  * Builds a motion matching database from a character's own clips: each clip played on a copy of the
@@ -224,4 +226,65 @@ export const motionDatabaseFor = (
     databases.set(key, database);
     if (databases.size > MAX_DATABASES) databases.delete(databases.keys().next().value as string);
     return database;
+};
+
+/** A database built in the background, and the mirrored copies of its clips it was built with. */
+export interface BuiltMotionDatabase {
+    database: MotionDatabase | null;
+    /** Each clip's mirrored copy (left and right swapped), named by mirroredClipName: the player plays one when matching picks it. */
+    mirrored: THREE.AnimationClip[];
+}
+
+/** Lets the browser draw a frame before the next piece of work. */
+const nextSlice = (): Promise<void> => new Promise(resolve => { setTimeout(resolve, 0); });
+
+const builds = new Map<string, { result: BuiltMotionDatabase | null }>();
+
+/**
+ * The database for `clips` on `model`, with a mirrored copy of every clip when `mirror` is set (a turn
+ * or a step one way then covers the other way too). It is built a clip at a time between frames, so a
+ * character does not hitch the first time it matches: null until it is ready, then the same result
+ * for every character made from the same model (see motionDatabaseFor for `sources`).
+ */
+export const motionDatabaseWhenReady = (
+    model: THREE.Object3D,
+    clips: readonly THREE.AnimationClip[],
+    sources: readonly string[] = clips.map(clip => clip.uuid),
+    mirror = true,
+): BuiltMotionDatabase | null => {
+    const key = `${rigKey(model)}|${mirror ? 'mirrored' : 'as-is'}|${sources.join('|')}`;
+    const known = builds.get(key);
+    if (known) return known.result;
+    const entry: { result: BuiltMotionDatabase | null } = { result: null };
+    builds.set(key, entry);
+    if (builds.size > MAX_DATABASES) builds.delete(builds.keys().next().value as string);
+    const own = [...clips];
+    void (async () => {
+        const mirrored: THREE.AnimationClip[] = [];
+        if (mirror) {
+            await nextSlice();
+            const rig = bindPoseRig(model);
+            for (const clip of rig ? own : []) {
+                await nextSlice();
+                try {
+                    const copy = mirrorHumanoidClip(rig!, clip, mirroredClipName(clip.name));
+                    copyClipRange(clip, copy);
+                    mirrored.push(copy);
+                } catch {
+                    // A clip that cannot be mirrored is matched as it is.
+                }
+            }
+        }
+        const sampled: MotionClipSamples[] = [];
+        for (const clip of [...own, ...mirrored]) {
+            await nextSlice();
+            const samples = sampleClip(model, clip, clipLoops(clip) ?? true);
+            if (samples) sampled.push(samples);
+        }
+        await nextSlice();
+        entry.result = { database: sampled.length > 0 ? new MotionDatabase(sampled) : null, mirrored };
+    })().catch(() => {
+        entry.result = { database: null, mirrored: [] };
+    });
+    return null;
 };
