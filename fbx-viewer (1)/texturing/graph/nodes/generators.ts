@@ -493,12 +493,11 @@ void main() {
     ivec2 base = ivec2(floor(p));
     vec4 result = vec4(0.0);
     float extent = p_size * (1.0 + p_sizeRandom) * max(p_stretch.x, p_stretch.y) * 0.75 + p_positionRandom * 0.5 + p_offset;
-    int reach = int(clamp(ceil(extent), 1.0, 3.0));
+    // Cells as far away as a copy can reach (big, stretched or far-moved copies span several).
+    int reach = int(clamp(ceil(extent), 1.0, 6.0));
     float topOrder = -1.0;
-    for (int y = -3; y <= 3; y++) {
-        if (abs(y) > reach) continue;
-        for (int x = -3; x <= 3; x++) {
-            if (abs(x) > reach) continue;
+    for (int y = -reach; y <= reach; y++) {
+        for (int x = -reach; x <= reach; x++) {
             ivec2 cell = base + ivec2(x, y);
             ivec2 id = wrapCell(cell, ivec2(p_columns, p_rows));
             if (hash1(id, uSeed + 11.0) < p_dropRandom) continue;
