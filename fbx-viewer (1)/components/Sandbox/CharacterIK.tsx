@@ -8,6 +8,7 @@ import { mirrorBoneName } from '../../utils/retargeting';
 import { usePhysicsQueries } from '../../runtime/physicsQueries';
 import { crosshairTarget } from '../../runtime/aimTarget';
 import { CHARACTER_IK_FRAME_PRIORITY } from '../AnimationGraph/hooks/useGraphAnimator';
+import { findCharacterMotion } from '../../runtime/locomotion/characterMotion';
 import {
     createFootIKState,
     createLookAtIKState,
@@ -33,6 +34,7 @@ export const resolveCharacterIK = (settings: CharacterIKSettings | undefined) =>
     return {
         footIK: settings?.footIK === true,
         footMaxStep: finite(settings?.footMaxStep, DEFAULT_FOOT_STEP, 0, 10),
+        footLock: settings?.footLock !== false,
         lookAt: settings?.lookAt === 'camera' || settings?.lookAt === 'player' ? settings.lookAt : 'none' as const,
         lookAtBone: settings?.lookAtBone?.trim() || DEFAULT_LOOK_BONE,
         lookAtMaxAngle: THREE.MathUtils.degToRad(finite(settings?.lookAtMaxAngle, DEFAULT_LOOK_ANGLE, 0, 180)),
@@ -75,6 +77,8 @@ export const heldWeaponGrip = (
         : null;
 };
 
+/** How fast foot IK fades out on leaving the ground and back in on landing (per second). */
+const GROUND_BLEND_RATE = 12;
 /** How fast the other hand takes hold of and lets go of a weapon (per second). */
 const GRIP_BLEND_RATE = 14;
 const _gripTarget = new THREE.Vector3();
@@ -190,6 +194,8 @@ export const CharacterIK: React.FC<CharacterIKProps> = ({ model, settings, physi
     const [footState] = useState(createFootIKState);
     const [lookState] = useState(createLookAtIKState);
     const [aimState] = useState(() => ({ weight: 0 }));
+    // Feet follow the ground only while the character stands on it: off it they ease back to the animation.
+    const [groundState] = useState(() => ({ weight: 1 }));
     const [gripState] = useState(() => ({ weight: 0, grip: null as HeldWeaponGrip | null }));
     useEffect(() => () => guard.release(), [guard, model]);
     useRestoreBeforeAnimation(guard);
@@ -223,7 +229,11 @@ export const CharacterIK: React.FC<CharacterIKProps> = ({ model, settings, physi
         if (!bones.length) return;
         guard.begin(bones);
         if (rig) {
-            updateFootIK(model, rig, physics.raycast, { maxStep: resolved.footMaxStep, weight: 1, excludeObjectId: physicsId }, footState, delta);
+            const grounded = findCharacterMotion(model)?.grounded ?? true;
+            groundState.weight += ((grounded ? 1 : 0) - groundState.weight) * (1 - Math.exp(-GROUND_BLEND_RATE * delta));
+            updateFootIK(model, rig, physics.raycast, {
+                maxStep: resolved.footMaxStep, weight: groundState.weight, excludeObjectId: physicsId, lock: resolved.footLock && grounded,
+            }, footState, delta);
         }
         if (spine.length) {
             // The lean eases in and out with aiming, and is shared by the spine bones bottom up.

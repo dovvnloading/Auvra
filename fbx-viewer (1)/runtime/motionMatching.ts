@@ -258,6 +258,18 @@ export class MotionDatabase {
         return speed < STANDING_SPEED * this.body ? 0 : speed;
     }
 
+    /**
+     * Which way and how fast a clip's root travels at a time, in the clip's own facing (the frame
+     * features use: forward is +z), in units a second.
+     */
+    travelAt(clip: number, time: number): Vec2 {
+        const entry = this.clips[clip];
+        if (!entry) return { x: 0, z: 0 };
+        const index = Math.max(0, Math.min(entry.samples.length - 1, Math.round(time * SAMPLE_RATE)));
+        const before = rootAt(entry, index, -1), after = rootAt(entry, index, 1), now = rootAt(entry, index, 0);
+        return localDirection((after.root.x - before.root.x) * SAMPLE_RATE / 2, (after.root.z - before.root.z) * SAMPLE_RATE / 2, now.facing);
+    }
+
     /** The database frame of a clip nearest a time, or -1. */
     frameOf(clip: number, time: number): number {
         if (clip < 0 || clip >= this.clips.length) return -1;

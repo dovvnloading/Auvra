@@ -61,7 +61,7 @@ class AnimationGraphSchemaTests(unittest.TestCase):
 
     def test_accepts_blueprint_ik_settings(self):
         blueprint = {"id": "bp1", "name": "Hero", "type": "Player Character",
-                     "ik": {"footIK": True, "footMaxStep": 0.4, "lookAt": "camera", "lookAtBone": "Head", "lookAtMaxAngle": 60}}
+                     "ik": {"footIK": True, "footMaxStep": 0.4, "footLock": False, "lookAt": "camera", "lookAtBone": "Head", "lookAtMaxAngle": 60}}
         validate_domain("blueprints", domain_document("blueprints", [blueprint]))
 
     def test_rejects_bad_blueprint_ik_settings(self):

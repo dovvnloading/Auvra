@@ -58,6 +58,10 @@ export class CharacterMotion {
     turnHalfLife = DEFAULT_MOVEMENT_SETTINGS.turnHalfLife;
     /** Seconds since the motion began; what the history is timed by. */
     time = 0;
+    /** Standing on something (its controller says): feet are planted only then. */
+    grounded = true;
+    /** Facing somewhere of its own (an aim) rather than where it is going: its steps may then point another way than it faces. */
+    strafing = false;
     /** Where the last step meant to take the character, and where it started from, to tell what the world allowed. */
     private readonly from = { x: 0, z: 0 };
     private readonly history = new Float64Array(HISTORY_CAPACITY * HISTORY_STRIDE);

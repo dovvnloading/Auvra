@@ -287,6 +287,17 @@ export const BlueprintInspectorPanel: React.FC<BlueprintInspectorPanelProps> = (
                                         />
                                     </label>
                                     {ik.footIK && (
+                                        <label className="flex items-center justify-between gap-4 text-xs text-gray-400">
+                                            <span>Keep planted feet still</span>
+                                            <input
+                                                type="checkbox"
+                                                checked={ik.footLock !== false}
+                                                onChange={(e) => updateIK({ footLock: e.target.checked ? undefined : false })}
+                                                className="rounded bg-gray-800 border-gray-600 text-blue-500 focus:ring-0"
+                                            />
+                                        </label>
+                                    )}
+                                    {ik.footIK && (
                                         <div className="flex items-center justify-between gap-4">
                                             <span className="text-xs text-gray-400 shrink-0">Max step (m)</span>
                                             <div className="w-28">
