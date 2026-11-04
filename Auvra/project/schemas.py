@@ -89,6 +89,7 @@ _NESTED_KEYS = {
     "lods": {"level", "maxDistance"},
     "render": {"visible", "radius", "selected", "lods"},
     "ik": {"footIK", "footMaxStep", "footLock", "lookAt", "lookAtBone", "lookAtMaxAngle", "aimPitch"},
+    "movement": {"accelerate", "brake", "turn", "turnFirst"},
     "upperBody": {"fireClip", "aimClip", "maskBone"},
     "carry": {"boneName", "position", "rotation"},
     "weapons": {"id", "name", "attachmentId", "muzzleSocket", "startsOwned", "carry", "fireMode", "fireRate", "damage", "magazine", "reserve", "reloadSeconds", "spread", "pellets", "projectileSpeed", "fireClip", "aimClip", "reloadClip", "idleClip", "walkClip", "runClip", "backClip", "leftClip", "rightClip", "jumpClip", "turnLeftClip", "turnRightClip", "supportGrip", "supportRotation", "gripPoint", "muzzlePoint"},

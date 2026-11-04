@@ -199,6 +199,7 @@ export const GraphEditor: React.FC<GraphEditorProps> = ({ visible }) => {
                             onDeleteState={handleDeleteState}
                             onDeleteTransition={handleDeleteTransition}
                             onOpenStateMachine={openStateMachine}
+                            previewObject={previewModel?.object ?? null}
                         />
                     )}
                 </div>

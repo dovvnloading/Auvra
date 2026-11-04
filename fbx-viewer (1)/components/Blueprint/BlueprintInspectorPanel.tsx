@@ -4,6 +4,7 @@ import type * as THREE from 'three';
 import { FileText, Database, Tag, Plus, Trash2, Zap, Scaling, Camera, Crosshair, Palette, Check, Box, Music, Play, Footprints, Brain } from 'lucide-react';
 import { BehaviorTreeEditor } from './BehaviorTreeEditor';
 import { WeaponsPanel, type WeaponFocus } from './WeaponsPanel';
+import { MovementSection } from './MovementSection';
 import { fitWeaponToHands, seatCarryOnBody } from '../../runtime/weaponFit';
 import { DEFAULT_HIT_REACT_AIMED } from '../Sandbox/hooks/useEntityHealth';
 import { findClipForRole } from '../AnimationGraph/utils/clipMatching';
@@ -259,6 +260,13 @@ export const BlueprintInspectorPanel: React.FC<BlueprintInspectorPanelProps> = (
                                         </p>
                                     </div>
                                 </div>
+                            )}
+
+                            {blueprint.type === 'Player Character' && (
+                                <MovementSection
+                                    movement={blueprint.movement ?? {}}
+                                    onChange={(changes, coalesce) => onUpdate(blueprint.id, { movement: { ...(blueprint.movement ?? {}), ...changes } }, { coalesce })}
+                                />
                             )}
 
                             <div className="space-y-2">

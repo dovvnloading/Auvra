@@ -1,4 +1,5 @@
 import React from 'react';
+import type * as THREE from 'three';
 import { Layers, Settings, Activity, Crown, Trash2, Link2, Network, GitFork } from 'lucide-react';
 import { GraphState, AnimationGraphData, StateType } from '../../../types';
 import { SingleStateConfig } from './SingleStateConfig';
@@ -29,6 +30,9 @@ interface StateInspectorProps {
     clipDuration?: number;
     /** Whether a clip says it loops, when it does. */
     clipLoop?: (name: string) => boolean | undefined;
+    /** The model the graph previews on, and its clips by name: what a Motion Match state's clips do on it. */
+    previewObject?: THREE.Object3D | null;
+    clipByName?: (name: string) => THREE.AnimationClip | null;
 }
 
 export const StateInspector: React.FC<StateInspectorProps> = ({
@@ -40,7 +44,9 @@ export const StateInspector: React.FC<StateInspectorProps> = ({
     blendParamOptions,
     onOpenStateMachine,
     clipDuration,
-    clipLoop
+    clipLoop,
+    previewObject = null,
+    clipByName
 }) => {
     const machine = node.stateType === 'StateMachine';
     const conduit = node.stateType === 'Conduit';
@@ -169,7 +175,7 @@ const curveVariableOptions = [
                         </button>
                     </div>
                 ) : node.stateType === 'MotionMatch' ? (
-                    <MotionMatchConfig node={node} updateState={updateState} clipOptions={clipOptions} />
+                    <MotionMatchConfig node={node} updateState={updateState} clipOptions={clipOptions} model={previewObject} clipByName={clipByName} />
                 ) : node.stateType === 'Single' ? (
                     <SingleStateConfig 
                         node={node} 

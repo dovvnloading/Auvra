@@ -1,4 +1,5 @@
 import { angleSpringAt, planarSpringAt, stepAngleSpring, wrapAngle, type PlanarSpring, type Spring1 } from './springs';
+import type { MovementTuning } from '../../types';
 
 /**
  * HOW A CHARACTER MOVES
@@ -30,6 +31,26 @@ export interface MovementSettings {
 }
 
 export const DEFAULT_MOVEMENT_SETTINGS: MovementSettings = { accelerationHalfLife: 0.1, brakingHalfLife: 0.05, turnHalfLife: 0.12, turnFirstAngle: 0 };
+
+/**
+ * A spring from rest covers nine tenths of its way in this many half-lives: what turns a half-life into
+ * the time a player feels ("reaches full speed in 0.28 s") and back.
+ */
+export const SETTLE_HALF_LIVES = 2.81;
+
+/** The settings a blueprint's movement tuning asks for, each missing or unusable value at its default. */
+export const resolveMovementSettings = (tuning: MovementTuning | undefined): MovementSettings => {
+    const seconds = (value: unknown, fallback: number) => (typeof value === 'number' && Number.isFinite(value) && value >= 0
+        ? Math.min(5, value) / SETTLE_HALF_LIVES
+        : fallback);
+    const first = tuning?.turnFirst;
+    return {
+        accelerationHalfLife: seconds(tuning?.accelerate, DEFAULT_MOVEMENT_SETTINGS.accelerationHalfLife),
+        brakingHalfLife: seconds(tuning?.brake, DEFAULT_MOVEMENT_SETTINGS.brakingHalfLife),
+        turnHalfLife: seconds(tuning?.turn, DEFAULT_MOVEMENT_SETTINGS.turnHalfLife),
+        turnFirstAngle: typeof first === 'number' && Number.isFinite(first) ? Math.min(180, Math.max(0, first)) : DEFAULT_MOVEMENT_SETTINGS.turnFirstAngle,
+    };
+};
 
 /** How often the past is recorded, a second. */
 export const HISTORY_RATE = 30;
@@ -70,6 +91,8 @@ export class CharacterMotion {
     strafing = false;
     /** Downward speed it landed at this frame (units a second), 0 on any other frame. */
     landed = 0;
+    /** The clip motion matching plays for it now (its animation says), null while none does: for the debug view. */
+    matched: string | null = null;
     /** Where the last step meant to take the character, and where it started from, to tell what the world allowed. */
     private readonly from = { x: 0, z: 0 };
     private readonly history = new Float64Array(HISTORY_CAPACITY * HISTORY_STRIDE);

@@ -67,7 +67,7 @@ interface PlayerControllerProps {
     enabled: boolean;
     levelObjects: LevelObject[]; // Collision source when there is no physics world
     /** The player's blueprint; its 'Walk Speed' / 'Run Speed' stats set the movement speeds. */
-    blueprint?: Pick<Blueprint, 'stats' | 'upperBody' | 'weapons' | 'aimView'>;
+    blueprint?: Pick<Blueprint, 'stats' | 'upperBody' | 'weapons' | 'aimView' | 'movement'>;
     onStaminaChange?: (val: number) => void;
     onAimChange?: (isAiming: boolean) => void;
     /** The held weapon and its ammunition, each time any of it changes. */
@@ -125,7 +125,7 @@ export const PlayerController: React.FC<PlayerControllerProps> = ({
     const { getInputState } = usePlayerControls(enabled);
 
     // 2. Physics & Locomotion System
-    const { updatePhysics, ride, hasPhysicsWorld } = usePlayerPhysics(modelObject, camera, onStaminaChange, levelObjects, blueprint?.stats);
+    const { updatePhysics, ride, hasPhysicsWorld } = usePlayerPhysics(modelObject, camera, onStaminaChange, levelObjects, blueprint?.stats, blueprint?.movement);
     // The vehicle the character rides in, while the player drives it.
     const riding = useRef<string | null>(null);
 

@@ -3,10 +3,10 @@ import { useLayoutEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import { useRapier, type RapierContext } from '@react-three/rapier';
 import { PlayerInputState } from './usePlayerControls';
-import { BlueprintStat, DEFAULT_MODEL_IMPORT_SETTINGS, LevelObject } from '../../../types';
+import { BlueprintStat, DEFAULT_MODEL_IMPORT_SETTINGS, LevelObject, type MovementTuning } from '../../../types';
 import { PLAYER_PHYSICS_ID, physicsUserData } from '../../../runtime/physicsQueries';
 import { flatGroundHeight, terrainSurfaceHeight } from '../../../runtime/terrainPhysics';
-import { characterMotionOf } from '../../../runtime/locomotion/characterMotion';
+import { characterMotionOf, resolveMovementSettings } from '../../../runtime/locomotion/characterMotion';
 import { stepSpring, wrapAngle, type Spring1 } from '../../../runtime/locomotion/springs';
 
 interface PhysicsConfig {
@@ -430,7 +430,8 @@ export const usePlayerPhysics = (
     camera: THREE.Camera,
     onStaminaChange?: (val: number) => void,
     obstacles: LevelObject[] = [], // Level collision data (no physics world)
-    stats?: readonly BlueprintStat[] // Blueprint 'Walk Speed' / 'Run Speed'
+    stats?: readonly BlueprintStat[], // Blueprint 'Walk Speed' / 'Run Speed'
+    movement?: MovementTuning // Blueprint movement tuning: how it speeds up, slows down and turns
 ) => {
     const physics = useOptionalRapier();
     const speeds = useMemo(() => resolveLocomotionSpeeds(stats), [stats]);
@@ -444,6 +445,8 @@ export const usePlayerPhysics = (
     const rig = useRef<CharacterRig | null>(null);
     // How the character moves: springs on its velocity and facing, and its trajectory, which its animation reads.
     const motion = useMemo(() => characterMotionOf(modelObject), [modelObject]);
+    const settings = useMemo(() => resolveMovementSettings(movement), [movement]);
+    motion.settings = settings;
 
     // Cache the terrain object reference to avoid searching every frame
     const activeTerrain = useRef<LevelObject | null>(null);
