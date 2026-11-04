@@ -20,7 +20,7 @@ const Figures: React.FC<{ title: string; stats: UvStats; size: number }> = ({ ti
             <span>Islands</span><span className="text-right tabular-nums text-zinc-200">{stats.islands}</span>
             <span>Picture used</span><span className="text-right tabular-nums text-zinc-200">{Math.round(stats.coverage * 100)}%</span>
             <span>Stretch (mean / worst)</span><span className="text-right tabular-nums text-zinc-200">{stats.stretch.mean.toFixed(2)} / {stats.stretch.worst > 20 ? '20+' : stats.stretch.worst.toFixed(1)}</span>
-            <span>Mirrored or folded</span><span className={`text-right tabular-nums ${stats.flipped ? 'text-red-400' : 'text-zinc-200'}`}>{stats.flipped}</span>
+            <span>Folded or overlapping</span><span className={`text-right tabular-nums ${stats.folded ? 'text-red-400' : 'text-zinc-200'}`} title="Triangles that face against their island or lie over others: those places share texels, so painting one paints the other. Shown in magenta in the UV stretch view.">{stats.folded}</span>
             <span>Texel density</span><span className="text-right tabular-nums text-zinc-200">{Math.round(stats.density.mean)} px/unit</span>
             <span>Density spread</span><span className="text-right tabular-nums text-zinc-200">{Math.round(stats.density.low)}–{Math.round(stats.density.high)}</span>
         </div>

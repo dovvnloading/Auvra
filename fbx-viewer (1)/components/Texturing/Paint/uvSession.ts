@@ -4,6 +4,7 @@ import { ownMaps } from '../../../runtime/materials/graphMaterial';
 import { projectService } from '../../../utils/projectService';
 import type { GpuImage } from '../../../texturing/gpu/textureGpu';
 import { triangleStretch } from '../../../texturing/uv/lscm';
+import { overlappingTriangles } from '../../../texturing/uv/overlap';
 import { DEFAULT_PACK, packIslands, type Island, type PackSettings, type Placement } from '../../../texturing/uv/pack';
 import { newTriangleTiles, transferPicture } from '../../../texturing/uv/transfer';
 import { DEFAULT_UNWRAP, unwrap, type UnwrapSettings } from '../../../texturing/uv/unwrap';
@@ -33,8 +34,16 @@ export interface UvStats {
     /** Pixels per model unit at the set's picture size: lowest, mean, highest over islands. */
     density: { low: number; mean: number; high: number };
     stretch: { mean: number; worst: number };
-    flipped: number;
+    /** Triangles facing against their island, or lying over other triangles: places that share texels. */
+    folded: number;
 }
+
+/** Corner numbers 0, 1, 2… for layouts kept two values per corner, in triangle order. */
+let inOrder = new Uint32Array(0);
+const cornersInOrder = (count: number): Uint32Array => {
+    if (inOrder.length < count) inOrder = Uint32Array.from({ length: count }, (_, i) => i);
+    return inOrder;
+};
 
 export interface UvProposal {
     charts: Chart[];
@@ -62,6 +71,8 @@ export class UvSession {
     unwrapSettings: UnwrapSettings = { ...DEFAULT_UNWRAP };
     packSettings: PackSettings = { ...DEFAULT_PACK };
     selected = new Set<number>();
+    /** Measures a dragged layout again for overlaps once the islands settle. */
+    private settleTimer: ReturnType<typeof setTimeout> | null = null;
     busy: string | null = null;
     status: string | null = null;
     /**
@@ -183,7 +194,11 @@ export class UvSession {
         this.setProposal(charts, placements);
     }
 
-    private setProposal(charts: Chart[], placements: Placement[]): void {
+    /**
+     * Makes `placements` the proposal and measures it. Moving islands keeps the selection; while they are
+     * dragged (`quick`), overlaps are looked for once they settle, so dragging stays smooth.
+     */
+    private setProposal(charts: Chart[], placements: Placement[], edit: { keepSelection?: boolean; quick?: boolean } = {}): void {
         const count = this.paint.part.indices.length;
         const cornerUv = new Float32Array(count * 2);
         const cornerKey = new Uint32Array(count);
@@ -196,17 +211,29 @@ export class UvSession {
                 cornerKey[face * 3 + k] = (c * 65536 + corner) >>> 0;
             }
         }));
-        const measured = this.measure(cornerUv, charts, new Set(newTriangleTiles(cornerUv)).size);
+        const measured = this.measure(cornerUv, charts, new Set(newTriangleTiles(cornerUv)).size, !edit.quick);
         this.proposal = { charts, placements, cornerUv, cornerKey, triangleStretch: measured.triangleStretch, stats: measured.stats };
-        this.selected.clear();
+        if (!edit.keepSelection) this.selected.clear();
+        if (this.settleTimer) clearTimeout(this.settleTimer);
+        this.settleTimer = edit.quick ? setTimeout(() => {
+            this.settleTimer = null;
+            const proposal = this.proposal;
+            if (!proposal) return;
+            const settled = this.measure(proposal.cornerUv, proposal.charts, proposal.stats.tiles, true);
+            this.proposal = { ...proposal, triangleStretch: settled.triangleStretch, stats: settled.stats };
+            this.emit();
+        }, 200) : null;
     }
 
-    /** Stretch per triangle and the layout's figures; `tiles` is how many UDIM tiles (pictures) it uses. */
-    private measure(cornerUv: Float32Array, charts: Chart[], tiles: number): { triangleStretch: Float32Array; stats: UvStats } {
+    /**
+     * Stretch per triangle and the layout's figures; `tiles` is how many UDIM tiles (pictures) it uses.
+     * Without `overlaps`, triangles lying over others are not looked for (while islands are dragged).
+     */
+    private measure(cornerUv: Float32Array, charts: Chart[], tiles: number, overlaps = true): { triangleStretch: Float32Array; stats: UvStats } {
         const { positions, faces, areas, faceCount } = this.topology;
         const stretch = new Float32Array(faceCount);
         const local = new Float64Array(6);
-        let flipped = 0;
+        let folded = 0;
         let weighted = 0;
         let worst = 1;
         let surface = 0;
@@ -226,13 +253,20 @@ export class UvSession {
             const signed = signedArea(f) * orientation[f];
             flat += Math.abs(signed);
             surface += areas[f];
-            if (signed < 0) { flipped++; stretch[f] = -1; continue; }
+            if (signed < 0) { folded++; stretch[f] = -1; continue; }
             if (orientation[f] < 0) { local[0] = -local[0]; local[2] = -local[2]; local[4] = -local[4]; }
             const s = triangleStretch(positions, faces, f, local, 0, 1, 2);
             stretch[f] = Math.min(1, (s.ratio - 1) / 2);
             worst = Math.max(worst, s.ratio);
             // A sliver squashed to nothing would swamp the mean: count it as badly stretched, no worse.
             weighted += Math.min(s.ratio, 20) * areas[f];
+        }
+        // An island wrapped round onto itself, or islands laid on each other: those places share texels
+        // (overlaps shallower than a quarter of a texel are rounding).
+        for (const f of overlaps ? overlappingTriangles(cornerUv, cornersInOrder(faceCount * 3), faceCount, false, 0.25 / this.paint.stack.size) : []) {
+            if (stretch[f] === -1) continue;
+            stretch[f] = -1;
+            folded++;
         }
         const size = this.paint.stack.size;
         const densities = charts.map((chart) => {
@@ -252,7 +286,7 @@ export class UvSession {
                 tiles,
                 density: { low: densities.length ? Math.min(...densities) : 0, mean, high: densities.length ? Math.max(...densities) : 0 },
                 stretch: { mean: surface > 0 ? weighted / surface : 1, worst },
-                flipped,
+                folded,
             },
         };
     }
@@ -264,7 +298,8 @@ export class UvSession {
             const uv = this.proposal.placements[i].uv;
             for (let k = 0; k < uv.length; k += 2) { uv[k] += du; uv[k + 1] += dv; }
         }
-        this.setProposal(this.proposal.charts, this.proposal.placements);
+        this.setProposal(this.proposal.charts, this.proposal.placements, { keepSelection: true, quick: true });
+        this.emit();
     }
 
     /** Turns or scales selected islands about their own middles. */
@@ -282,7 +317,8 @@ export class UvSession {
                 uv[k + 1] = cy + x * s + y * c;
             }
         }
-        this.setProposal(this.proposal.charts, this.proposal.placements);
+        this.setProposal(this.proposal.charts, this.proposal.placements, { keepSelection: true });
+        this.emit();
     }
 
     /** The island under a texture coordinate, if any. */

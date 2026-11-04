@@ -54,6 +54,7 @@ const EXEMPT = new Map(Object.entries({
   'texturing/uv/uvTopology.ts': 'pure-utility',
   'texturing/uv/lscm.ts': 'pure-utility',
   'texturing/uv/unwrap.ts': 'pure-utility',
+  'texturing/uv/overlap.ts': 'pure-utility',
   'texturing/uv/pack.ts': 'pure-utility',
   'texturing/uv/uvLayout.ts': 'pure-utility',
   'texturing/uv/transfer.ts': 'hot-loop',
