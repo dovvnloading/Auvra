@@ -21,7 +21,7 @@ def _graph(**state_fields):
             {
                 "id": "t1", "fromStateId": "s1", "toStateId": "s1", "duration": 0.2,
                 "conditions": [{"variableId": "v1", "operator": ">", "value": 0}],
-                "conditionMode": "any", "anyState": True, "priority": 10,
+                "conditionMode": "any", "anyState": True, "priority": 10, "blendMode": "inertial",
             }
         ],
         "activeStateId": "s1",

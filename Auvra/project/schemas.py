@@ -76,7 +76,7 @@ _NESTED_KEYS = {
     "subGraph": {"states", "transitions"},
     "notifies": {"id", "name", "time"},
     "blendSamples": {"id", "clipName", "position"},
-    "transitions": {"id", "fromStateId", "toStateId", "duration", "conditions", "exitTime", "conditionMode", "anyState", "priority"},
+    "transitions": {"id", "fromStateId", "toStateId", "duration", "conditions", "exitTime", "conditionMode", "anyState", "priority", "blendMode"},
     "conditions": {"variableId", "operator", "value"},
     "nodes": {"id", "type", "name", "position", "inputs", "outputs", "data", "customData"},
     "outputs": {"id", "name", "dataType", "direction"},

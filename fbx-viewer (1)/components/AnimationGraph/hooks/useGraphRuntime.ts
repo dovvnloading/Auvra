@@ -147,7 +147,7 @@ export const useGraphRuntime = (
     // -- Logic: Handles State Machine Transitions
     // A fresh reader whenever the states or clips change, so a live edit's clip reset is not read as a loop wrap.
     const getNormalizedTime = useMemo(() => createNormalizedTimeReader(graph.states, actionsMap), [graph.states, actionsMap]);
-    const { activeStateRef, previousStateRef, blendDurationRef } = useGraphStateMachine(graph, variablesRef, onActiveStateChange, getNormalizedTime);
+    const { activeStateRef, previousStateRef, blendDurationRef, blendModeRef } = useGraphStateMachine(graph, variablesRef, onActiveStateChange, getNormalizedTime);
 
     // -- Inputs: Handles Keyboard -> Variable Mapping
     useInputHandler(graph, enableInputs, setVariable);
@@ -163,6 +163,7 @@ export const useGraphRuntime = (
         eventSource,
         lod,
         sourceClips: clipsByName,
+        blendModeRef,
     });
 
     // Without a character controller (the editor preview) the graph applies its own root motion.
