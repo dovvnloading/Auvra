@@ -35,6 +35,8 @@ export class TextureGraphSession {
     readonly gpu: TextureGpu;
     readonly evaluator: TextureGraphEvaluator;
     readonly thumbnails = new Map<string, Thumbnail>();
+    /** The latest thumbnail read asked for, per node: a slower, older read that lands later is let go. */
+    private readonly thumbnailTickets = new Map<string, number>();
     readonly preview: PreviewSet = { baseColor: null, normal: null, orm: null, emissive: null, height: null, opacity: null, version: 0 };
     graph: TextureGraph;
     parameters: Record<string, unknown> = {};
@@ -126,7 +128,7 @@ export class TextureGraphSession {
                     this.emit();
                 },
             });
-            for (const id of [...this.thumbnails.keys()]) if (!graph.nodes.some((node) => node.id === id)) this.thumbnails.delete(id);
+            for (const id of [...this.thumbnails.keys()]) if (!graph.nodes.some((node) => node.id === id)) this.dropThumbnail(id);
             this.updatePreview();
             this.lastRun = { nodes: drawn, milliseconds: performance.now() - started };
         } catch (error) {
@@ -148,10 +150,16 @@ export class TextureGraphSession {
         return Object.values(state.outputs)[0] ?? null;
     }
 
+    /** Forgets a node's thumbnail, and any read of it still on its way. */
+    private dropThumbnail(nodeId: string): void {
+        this.thumbnails.delete(nodeId);
+        this.thumbnailTickets.set(nodeId, (this.thumbnailTickets.get(nodeId) ?? 0) + 1);
+    }
+
     private makeThumbnail(nodeId: string, state: NodeState): void {
         const image = Object.values(state.outputs)[0];
         if (!image) {
-            this.thumbnails.delete(nodeId);
+            this.dropThumbnail(nodeId);
             return;
         }
         const node = this.graph.nodes.find((candidate) => candidate.id === nodeId);
@@ -168,9 +176,22 @@ void main() {
             inputs: { source: image },
             uniforms: { gray: image.kind === 'gray' ? 1 : 0 },
         });
-        const pixels = this.gpu.readRgba8(preview, THUMBNAIL_SIZE, THUMBNAIL_SIZE, 'raw', true);
+        // Read without holding up the GPU: the thumbnail fills in once the drawing is done, and an older read
+        // that lands after a newer one is let go.
+        const ticket = (this.thumbnailTickets.get(nodeId) ?? 0) + 1;
+        this.thumbnailTickets.set(nodeId, ticket);
+        const signature = state.signature + (node?.type ?? '');
+        const reading = this.gpu.readRgba8Later(preview);
         this.gpu.release(preview);
-        this.thumbnails.set(nodeId, { signature: state.signature + (node?.type ?? ''), image: new ImageData(pixels, THUMBNAIL_SIZE, THUMBNAIL_SIZE) });
+        void reading.then((pixels) => {
+            if (!pixels || this.disposed || this.thumbnailTickets.get(nodeId) !== ticket) return;
+            // Bottom row first as read: top row first for the picture.
+            const row = THUMBNAIL_SIZE * 4;
+            const flipped = new Uint8ClampedArray(pixels.length);
+            for (let y = 0; y < THUMBNAIL_SIZE; y++) flipped.set(pixels.subarray((THUMBNAIL_SIZE - 1 - y) * row, (THUMBNAIL_SIZE - y) * row), y * row);
+            this.thumbnails.set(nodeId, { signature, image: new ImageData(flipped, THUMBNAIL_SIZE, THUMBNAIL_SIZE) });
+            this.emit();
+        });
     }
 
     /** Each engine channel's image: the first Output node set to it that drew. */

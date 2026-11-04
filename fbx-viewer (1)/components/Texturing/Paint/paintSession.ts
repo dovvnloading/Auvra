@@ -11,7 +11,7 @@ import type { GraphEntry, GraphResolver } from '../../../texturing/graph/registr
 import { readStoredGraph } from '../../../texturing/graph/stored';
 import { buildPartMesh, buildWholeMesh, type PartMesh } from '../../../texturing/mesh/partMesh';
 import { SurfacePicker } from '../../../texturing/mesh/picker';
-import { ROLE_LABELS, encodeChannels, materialGraphForTextures, tileAtlas, type ChannelTextureIds, type PictureLayout } from '../../../texturing/materialOutput';
+import { DEEP_EXPORT, ROLE_LABELS, encodeChannels, materialGraphForTextures, tileAtlas, type ChannelTextureIds, type PictureLayout } from '../../../texturing/materialOutput';
 import { PaintStack, type StackHost } from '../../../texturing/paint/paintStack';
 import { BUILTIN_GRAPHS } from '../../../texturing/paint/smartLibrary';
 import { applyPixelHistory, type HistoryEntry } from '../../../texturing/paint/strokes';
@@ -393,7 +393,7 @@ export class PaintSession {
             const base = `${this.target.modelName.replace(/\.[^.]+$/, '')}_${this.target.partName}`.replace(/[^\w-]+/g, '_');
             const files: Array<{ name: string; data: Blob }> = [];
             for (const tile of this.stack.tiles) {
-                const pictures = await encodeChannels(this.gpu, this.stack.channelImages(tile), this.stack.size, this.stack.size, layout, flipRows);
+                const pictures = await encodeChannels(this.gpu, this.stack.channelImages(tile), this.stack.size, this.stack.size, layout, flipRows, DEEP_EXPORT);
                 const suffix = this.stack.tiles.length > 1 ? `.${tile}` : '';
                 for (const picture of pictures) files.push({ name: `${base}_${picture.role}${suffix}.png`, data: picture.blob });
             }
