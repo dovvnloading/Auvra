@@ -18,6 +18,8 @@ export const useGraphStateMachine = (
     const previousStateRef = useRef<string | null>(null);
     // Crossfade length of the most recent transition, read by the animator on state entry.
     const blendDurationRef = useRef<number>(DEFAULT_BLEND_SECONDS);
+    // How the most recent transition meets its target state.
+    const blendModeRef = useRef<'crossfade' | 'inertial'>('crossfade');
     const conduits = useMemo(
         () => new Set(graph.states.filter(state => state.stateType === 'Conduit').map(state => state.id)),
         [graph.states],
@@ -64,6 +66,7 @@ export const useGraphStateMachine = (
                 category: 'runtime_transition',
             });
             blendDurationRef.current = blendSeconds(transition.duration);
+            blendModeRef.current = transition.blendMode === 'inertial' ? 'inertial' : 'crossfade';
             activeStateRef.current = transition.toStateId;
             if (onActiveStateChange) onActiveStateChange(transition.toStateId);
             span.finish('success');
@@ -73,6 +76,7 @@ export const useGraphStateMachine = (
     return {
         activeStateRef,
         previousStateRef,
-        blendDurationRef
+        blendDurationRef,
+        blendModeRef
     };
 };

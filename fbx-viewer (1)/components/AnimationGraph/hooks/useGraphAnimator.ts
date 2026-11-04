@@ -13,6 +13,7 @@ import { clipGroundSpeed, groundSpeedRate } from '../utils/groundSpeed';
 import { HISTORY_TIMES, MotionMatcher, TRAJECTORY_TIMES, type MotionTrajectory, type Vec2 } from '../../../runtime/motionMatching';
 import { motionDatabaseWhenReady } from '../../../runtime/motionDatabase';
 import { findCharacterMotion, toCharacterSpace, type TrajectoryPoint } from '../../../runtime/locomotion/characterMotion';
+import { DEFAULT_INERTIAL_HALF_LIFE, Inertializer } from '../../../runtime/locomotion/inertialization';
 
 /**
  * Animation runs before every other frame callback (priority -1), so IK, sockets and attachments
@@ -132,6 +133,8 @@ export interface AnimatorExtras {
     lod?: boolean;
     /** The model's own clips by name (the mixer plays copies), so characters made from one model share what is built from them. */
     sourceClips?: Record<string, THREE.AnimationClip>;
+    /** How the transition just taken meets its state (beside blendDurationRef); crossfade when left out. */
+    blendModeRef?: React.MutableRefObject<'crossfade' | 'inertial'>;
 }
 
 /** Roughly a character's size, for telling whether it is on screen. */
@@ -159,11 +162,8 @@ const _groundAt = new THREE.Vector3();
 const _modelScale = new THREE.Vector3();
 /** How quickly the measured ground speed follows the character's movement, per second. */
 const GROUND_SPEED_RATE = 10;
-/** Seconds a Motion Match state crossfades over when it jumps to another clip. */
-export const MOTION_MATCH_BLEND = 0.2;
-/** The name a Motion Match state's second copy of a clip plays under, so a jump within one clip crossfades too. */
-export const MOTION_MATCH_TWIN = '\u0000match';
-const matchedClipName = (name: string) => (name.endsWith(MOTION_MATCH_TWIN) ? name.slice(0, -MOTION_MATCH_TWIN.length) : name);
+/** An inertial transition's offset fades over this share of its duration (a spring half-life). */
+const INERTIAL_SHARE = 1 / 3;
 const _groundVelocity = new THREE.Vector3();
 const _modelQuaternion = new THREE.Quaternion();
 const _future: TrajectoryPoint = { x: 0, z: 0, facing: 0 };
@@ -217,7 +217,13 @@ export const useGraphAnimator = (
     // How fast the character is moving over the ground (world units a second), for states that match it.
     const ground = useRef({ speed: 0, last: null as THREE.Vector3 | null, velocity: new THREE.Vector3() });
     // A Motion Match state's matcher, made for its clips on this model when it is first played.
-    const matching = useRef({ stateId: null as string | null, key: '', matcher: null as MotionMatcher | null, showing: {} as Record<string, string>, own: [] as THREE.AnimationClip[] });
+    const matching = useRef({ stateId: null as string | null, key: '', matcher: null as MotionMatcher | null, own: [] as THREE.AnimationClip[] });
+    // Switches without a crossfade (motion matching's jumps, inertial transitions) fade out offsets on the model's bones.
+    const inertia = useRef<{ model: THREE.Object3D | null; inertializer: Inertializer | null }>({ model: null, inertializer: null });
+    // Seconds since the current state was entered, and whether it was entered by crossfading.
+    const entry = useRef({ seconds: 0, crossfade: true });
+
+    const blendModeRef = () => extras.blendModeRef?.current ?? 'crossfade';
 
     // -- FRAME LOOP --
     useFrame((state, rawDelta) => {
@@ -241,6 +247,16 @@ export const useGraphAnimator = (
         }
         const blend = blendDurationRef?.current ?? DEFAULT_BLEND_SECONDS;
         const variables = variablesRef.current;
+        if (modelObject && inertia.current.model !== modelObject) {
+            inertia.current.model = modelObject;
+            inertia.current.inertializer = new Inertializer(modelObject);
+        }
+        const inertializer = inertia.current.inertializer;
+        // Bones no clip moves would keep last frame's offset: they go back to the animation's own pose first.
+        inertializer?.restore();
+        // A switch this frame that the inertializer eases (none crossfades), and over how long.
+        let switchHalfLife = 0;
+        entry.current.seconds += delta;
 
         // 1. State entry: restart the entering state's clips with the transition's crossfade. A
         // state in the leaving state's sync group starts at its phase (a run picks up the walk's
@@ -248,6 +264,9 @@ export const useGraphAnimator = (
         if (activeStateRef.current !== previousStateRef.current) {
             // Entering a Motion Match state searches afresh.
             if (matching.current.matcher) matching.current.matcher.clip = -1;
+            const inertial = blendModeRef() === 'inertial' && !!inertializer && previousStateRef.current !== null;
+            entry.current = { seconds: 0, crossfade: !inertial };
+            if (inertial) switchHalfLife = Math.max(1e-3, blend * INERTIAL_SHARE);
             const enteringState = graph.states.find(s => s.id === activeStateRef.current);
             const leavingState = graph.states.find(s => s.id === previousStateRef.current);
             if (enteringState) {
@@ -258,7 +277,7 @@ export const useGraphAnimator = (
                     if (action) {
                         action.reset();
                         action.time = startPhase * action.getClip().duration;
-                        action.fadeIn(blend);
+                        if (!switchHalfLife) action.fadeIn(blend);
                         action.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce, loop ? Infinity : 1);
                         action.play();
                     }
@@ -353,31 +372,17 @@ export const useGraphAnimator = (
                 }
                 const choice = match.matcher.step(delta, velocity, velocity, 0, trajectory);
                 const clipName = choice.clip >= 0 ? match.matcher.database.clips[choice.clip].name : null;
-                if (clipName) {
-                    // Each clip plays as itself or as its copy, whichever the last jump to it started.
-                    const showing = match.showing[clipName];
-                    matched = showing && actionsMap[showing] ? showing : clipName;
+                if (clipName && actionsMap[clipName]) {
+                    matched = clipName;
                     if (choice.jumped) {
-                        let action = actionsMap[matched];
-                        if (mixer && action.getEffectiveWeight() >= 0.01) {
-                            // The clip is on show (playing, or fading out): the jump starts its other copy where the
-                            // match is and crossfades to it, instead of snapping the pose.
-                            const other = matched === clipName ? clipName + MOTION_MATCH_TWIN : clipName;
-                            if (!actionsMap[other]) {
-                                const twin = mixer.clipAction(action.getClip().clone());
-                                twin.clampWhenFinished = true;
-                                twin.enabled = false;
-                                twin.setEffectiveWeight(0);
-                                actionsMap[other] = twin;
-                            }
-                            matched = other;
-                            match.showing[clipName] = other;
-                            action = actionsMap[other];
-                        }
+                        // The jump cuts to the match at once; the inertializer eases the pose across (or,
+                        // without one, it shows as a cut).
+                        const action = actionsMap[clipName];
                         action.reset();
                         action.setLoop(THREE.LoopRepeat, Infinity);
                         action.time = choice.time;
                         action.play();
+                        switchHalfLife = DEFAULT_INERTIAL_HALF_LIFE;
                     }
                 }
             }
@@ -391,7 +396,7 @@ export const useGraphAnimator = (
                 // A Motion Match state has its clips' speeds in its database, where a clip standing still has none.
                 const database = matched ? matching.current.matcher?.database : undefined;
                 rate *= groundSpeedRate(ground.current.speed, targetWeights, name => (database
-                    ? database.clipSpeed(matchedClipName(name)) * matchedScale
+                    ? database.clipSpeed(name) * matchedScale
                     : clipGroundSpeed(modelObject, actionsMap[name].getClip()) * scale));
             }
             if (currentState.stateType === 'Single' || currentState.stateType === 'MotionMatch') {
@@ -407,7 +412,11 @@ export const useGraphAnimator = (
         Object.keys(actionsMap).forEach((name) => {
             currentWeights[name] = actionsMap[name].getEffectiveWeight();
         });
-        const nextWeights = stepActionWeights(currentWeights, targetWeights, delta, matched ? MOTION_MATCH_BLEND : blend);
+        // A Motion Match state's clips take over at once (once a crossfade into the state has run), as does
+        // a switch the inertializer eases.
+        const instant = switchHalfLife > 0 || (currentState?.stateType === 'MotionMatch' && !!inertializer
+            && (!entry.current.crossfade || entry.current.seconds >= blend));
+        const nextWeights = stepActionWeights(currentWeights, targetWeights, delta, instant ? 0 : blend);
 
         Object.keys(actionsMap).forEach((name) => {
             const action = actionsMap[name];
@@ -429,6 +438,25 @@ export const useGraphAnimator = (
         extras.montage?.current?.update(delta);
         mixer.update(delta);
         extras.montage?.current?.applyMeshSpaceRotation();
+        if (inertializer) {
+            if (switchHalfLife > 0) {
+                // How fast the new pose moves: the clips a moment earlier, then back to now.
+                if (delta > 0) {
+                    const playing = Object.values(actionsMap).filter(action => action.enabled && action.getEffectiveWeight() > 0);
+                    const times = playing.map(action => action.time);
+                    playing.forEach(action => { action.time -= delta * action.timeScale; });
+                    mixer.update(0);
+                    extras.montage?.current?.applyMeshSpaceRotation();
+                    inertializer.noteBefore(delta);
+                    playing.forEach((action, i) => { action.time = times[i]; });
+                    mixer.update(0);
+                    extras.montage?.current?.applyMeshSpaceRotation();
+                }
+                inertializer.halfLife = switchHalfLife;
+                inertializer.switchNow(delta);
+            }
+            inertializer.apply(delta);
+        }
         // The matcher keeps to the time the chosen clip has really reached.
         if (matched && matching.current.matcher && actionsMap[matched]) matching.current.matcher.time = actionsMap[matched].time;
 

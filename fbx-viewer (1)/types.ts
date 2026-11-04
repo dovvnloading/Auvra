@@ -482,6 +482,11 @@ export interface GraphTransition {
   anyState?: boolean;
   /** Higher fires first when several transitions are ready; default 0, ties keep list order. */
   priority?: number;
+  /**
+   * How the states meet: 'crossfade' (default) blends the two over `duration`; 'inertial' switches at
+   * once and eases away the difference over about a third of `duration`, keeping the motion's momentum.
+   */
+  blendMode?: 'crossfade' | 'inertial';
 }
 
 export interface AnimationGraphData {

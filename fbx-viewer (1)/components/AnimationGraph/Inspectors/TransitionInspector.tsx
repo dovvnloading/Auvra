@@ -11,6 +11,10 @@ const MATCH_OPTIONS = [
     { label: 'All', value: 'all' },
     { label: 'Any', value: 'any' },
 ];
+const BLEND_OPTIONS = [
+    { label: 'Crossfade', value: 'crossfade' },
+    { label: 'Inertial', value: 'inertial' },
+];
 
 const LABEL_CLASS = 'text-2xs text-gray-500 font-bold flex items-center gap-1.5';
 const FIELD_CLASS = 'w-full bg-gray-900 border border-gray-700 rounded text-xs text-gray-200 p-2 focus:outline-none focus:border-gray-500';
@@ -113,6 +117,21 @@ export const TransitionInspector: React.FC<TransitionInspectorProps> = ({
                         }}
                         className={FIELD_CLASS}
                     />
+                </div>
+
+                <div className="space-y-1.5">
+                    <span className={LABEL_CLASS}><ToggleLeft size={10} /> Blend</span>
+                    <Select
+                        value={transition.blendMode ?? 'crossfade'}
+                        onChange={(val) => updateTransition({ blendMode: val === 'inertial' ? 'inertial' : undefined })}
+                        options={BLEND_OPTIONS}
+                        placeholder="Blend"
+                    />
+                    <p className="text-2xs text-gray-600">
+                        {transition.blendMode === 'inertial'
+                            ? 'Switches at once and eases the pose across, keeping the motion’s momentum: crisper than a crossfade, for quick changes such as starts and stops.'
+                            : 'Blends the two states over the duration.'}
+                    </p>
                 </div>
 
                 <div className="space-y-1.5">
