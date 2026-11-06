@@ -3,11 +3,10 @@ import { frontendDiagnostics } from '../../../diagnostics/runtime';
 import { ownMaps } from '../../../runtime/materials/graphMaterial';
 import { projectService } from '../../../utils/projectService';
 import type { GpuImage } from '../../../texturing/gpu/textureGpu';
-import { triangleStretch } from '../../../texturing/uv/lscm';
-import { overlappingTriangles } from '../../../texturing/uv/overlap';
-import { DEFAULT_PACK, packIslands, type Island, type PackSettings, type Placement } from '../../../texturing/uv/pack';
+import { DEFAULT_PACK, type Island, type PackSettings, type Placement } from '../../../texturing/uv/pack';
 import { newTriangleTiles, transferPicture } from '../../../texturing/uv/transfer';
-import { DEFAULT_UNWRAP, unwrap, type UnwrapSettings } from '../../../texturing/uv/unwrap';
+import { DEFAULT_UNWRAP, type UnwrapSettings } from '../../../texturing/uv/unwrap';
+import { UvWorkClient, measureLayout, type UvStats } from '../../../texturing/uv/uvWork';
 import { applyLayout, buildLayout, decodeLayout, encodeLayout, restoreLayout, type UvLayoutFile } from '../../../texturing/uv/uvLayout';
 import { buildCharts, buildTopology, chartCoordinates, edgeKey, existingSeams, type Chart, type UvTopology } from '../../../texturing/uv/uvTopology';
 import { BEFORE, GpuResetError, pictureKey, pictureOwner, pictureOwners, picturePrecision } from '../../../texturing/paint/paintStack';
@@ -25,25 +24,7 @@ import type { PaintSession } from './paintSession';
  * the same.
  */
 
-export interface UvStats {
-    islands: number;
-    /** Share of the pictures (one per UDIM tile) the islands cover. */
-    coverage: number;
-    /** UDIM tiles the layout uses, a picture each. */
-    tiles: number;
-    /** Pixels per model unit at the set's picture size: lowest, mean, highest over islands. */
-    density: { low: number; mean: number; high: number };
-    stretch: { mean: number; worst: number };
-    /** Triangles facing against their island, or lying over other triangles: places that share texels. */
-    folded: number;
-}
-
-/** Corner numbers 0, 1, 2… for layouts kept two values per corner, in triangle order. */
-let inOrder = new Uint32Array(0);
-const cornersInOrder = (count: number): Uint32Array => {
-    if (inOrder.length < count) inOrder = Uint32Array.from({ length: count }, (_, i) => i);
-    return inOrder;
-};
+export type { UvStats } from '../../../texturing/uv/uvWork';
 
 export interface UvProposal {
     charts: Chart[];
@@ -102,13 +83,16 @@ export class UvSession {
     private readonly listeners = new Set<() => void>();
     private undoSteps: UvStep[] = [];
     private redoSteps: UvStep[] = [];
-    readonly current: UvStats;
+    /** The current layout's figures (overlaps counted once the worker has looked for them). */
+    current: UvStats;
     /** The current layout's seams, where its coordinates are cut. */
     private readonly currentSeams: Set<number>;
     /** Stretch per triangle of the current layout (0 kept shape … 1 badly stretched; −1 folded or overlapping). */
-    readonly currentStretch: Float32Array;
+    currentStretch: Float32Array;
     /** Whether the proposal is the current islands packed as they are (else an unwrap). */
     proposalKeepsShapes = false;
+    /** Unwrapping, packing and looking for overlaps, off the main thread. */
+    private readonly work: UvWorkClient;
 
     constructor(readonly paint: PaintSession, readonly host: UvSessionHost) {
         const part = paint.part;
@@ -119,9 +103,25 @@ export class UvSession {
         // Packing again keeps the grid of UDIM tiles the surface is laid over now.
         this.packSettings.tilesX = Math.max(...part.tiles.map((tile) => (tile - 1001) % 10)) + 1;
         this.packSettings.tilesY = Math.max(...part.tiles.map((tile) => Math.floor((tile - 1001) / 10))) + 1;
-        const measured = this.measure(Float32Array.from({ length: part.indices.length * 2 }, (_, i) => part.uvs[part.indices[i >> 1] * 2 + (i & 1)]), buildCharts(this.topology, this.seams), part.tiles.length);
-        this.current = measured.stats;
-        this.currentStretch = measured.triangleStretch;
+        this.work = new UvWorkClient(part.positions, part.indices);
+        // Stretch now; overlaps (slow on large models) once the worker has looked for them.
+        const cornerUv = Float32Array.from({ length: part.indices.length * 2 }, (_, i) => part.uvs[part.indices[i >> 1] * 2 + (i & 1)]);
+        const charts = buildCharts(this.topology, this.seams);
+        const quick = measureLayout(this.topology, cornerUv, charts.map((chart) => chart.faces), part.tiles.length, paint.stack.size, false);
+        this.current = quick.stats;
+        this.currentStretch = quick.triangleStretch;
+        this.work.measure(cornerUv, charts, part.tiles.length, paint.stack.size).then((measured) => {
+            this.current = measured.stats;
+            this.currentStretch = measured.triangleStretch;
+            this.emit();
+        }, () => undefined);
+    }
+
+    /** Stops the UV work (the set is closing). */
+    dispose(): void {
+        if (this.settleTimer) clearTimeout(this.settleTimer);
+        this.work.dispose();
+        this.listeners.clear();
     }
 
     // -----------------------------------------------------------------------
@@ -236,23 +236,23 @@ export class UvSession {
 
     /** Places seams automatically (keeping the ones marked by hand when asked) and flattens and packs. */
     unwrapAuto(keepSeams: boolean): void {
-        this.run('Unwrapping', () => {
-            const result = unwrap(this.topology, this.unwrapSettings, keepSeams ? this.seams : new Set());
+        this.run('Unwrapping', async () => {
+            const result = await this.work.unwrap(this.unwrapSettings, keepSeams ? this.seams : new Set());
             this.seams = result.seams;
             this.flat = result.flat;
             this.startIslands(false);
-            this.layOut(result.charts);
+            await this.layOut(result.charts);
         }, keepSeams ? 'Unwrap, keeping seams' : 'Unwrap afresh');
     }
 
     /** Flattens along exactly the seams there are now, and packs. */
     unwrapWithSeams(): void {
-        this.run('Unwrapping', () => {
-            const result = unwrap(this.topology, this.unwrapSettings, new Set(), this.seams);
+        this.run('Unwrapping', async () => {
+            const result = await this.work.unwrap(this.unwrapSettings, new Set(), this.seams);
             this.seams = result.seams;
             this.flat = result.flat;
             this.startIslands(false);
-            this.layOut(result.charts);
+            await this.layOut(result.charts);
         }, 'Unwrap these seams');
     }
 
@@ -273,12 +273,12 @@ export class UvSession {
      * the others, and is only moved and turned (no island is flattened again, and no seam is added).
      */
     packCurrent(): void {
-        this.run('Packing', () => {
+        this.run('Packing', async () => {
             const charts = buildCharts(this.topology, this.currentSeams);
             this.seams = new Set(this.currentSeams);
             this.flat = chartCoordinates(charts, this.paint.part.indices, this.paint.part.uvs).map((uv) => ({ uv }));
             this.startIslands(true);
-            this.layOut(charts);
+            await this.layOut(charts);
         }, 'Pack the current islands');
     }
 
@@ -289,15 +289,15 @@ export class UvSession {
         this.proposalKeepsShapes = keepsShapes;
     }
 
-    private run(label: string, work: () => void, step?: string): void {
+    /** Runs UV work (in the worker: the editor keeps answering meanwhile), kept for undo once it is done. */
+    private run(label: string, work: () => Promise<void>, step?: string): void {
+        if (this.busy) return;
         this.busy = label;
         this.emit();
-        // Let the panel show what is happening before the work holds the page.
-        setTimeout(() => {
-            // Kept for undo only once the work has changed something.
-            const before = step ? this.snapshot(step) : null;
+        const before = step ? this.snapshot(step) : null;
+        void (async () => {
             try {
-                work();
+                await work();
                 if (before) this.keep(before);
                 this.status = null;
             } catch (error) {
@@ -309,14 +309,14 @@ export class UvSession {
                 this.busy = null;
                 this.emit();
             }
-        }, 30);
+        })();
     }
 
     /**
      * Packs `charts` into a new proposal. Packing the same islands again keeps those kept in place where
      * they are, and gives islands made bigger or smaller their size against the rest.
      */
-    private layOut(charts: Chart[]): void {
+    private async layOut(charts: Chart[]): Promise<void> {
         const kept = this.proposal?.charts === charts ? this.proposal.placements : null;
         const islands: Island[] = charts.map((chart, i) => ({
             uv: this.flat[i].uv,
@@ -325,7 +325,7 @@ export class UvSession {
             densityScale: this.density.get(i) ?? 1,
             ...(kept && this.locked.has(i) ? { keepAt: kept[i].uv } : {}),
         }));
-        const placements = packIslands(islands, this.packSettings);
+        const placements = await this.work.pack(islands, this.packSettings);
         this.setProposal(charts, placements, { keepSelection: Boolean(kept) });
     }
 
@@ -350,84 +350,22 @@ export class UvSession {
             });
             firstKey += chart.vertexWeld.length;
         });
-        const measured = this.measure(cornerUv, charts, new Set(newTriangleTiles(cornerUv)).size, !edit.quick);
-        this.proposal = { charts, placements, cornerUv, cornerKey, triangleStretch: measured.triangleStretch, stats: measured.stats };
+        // Stretch at once; overlaps (slow on large models) looked for in the worker once the islands settle.
+        const tiles = new Set(newTriangleTiles(cornerUv)).size;
+        const measured = measureLayout(this.topology, cornerUv, charts.map((chart) => chart.faces), tiles, this.paint.stack.size, false);
+        const proposal: UvProposal = { charts, placements, cornerUv, cornerKey, triangleStretch: measured.triangleStretch, stats: measured.stats };
+        this.proposal = proposal;
         if (!edit.keepSelection) this.selected.clear();
         if (this.settleTimer) clearTimeout(this.settleTimer);
-        this.settleTimer = edit.quick ? setTimeout(() => {
+        this.settleTimer = setTimeout(() => {
             this.settleTimer = null;
-            const proposal = this.proposal;
-            if (!proposal) return;
-            const settled = this.measure(proposal.cornerUv, proposal.charts, proposal.stats.tiles, true);
-            this.proposal = { ...proposal, triangleStretch: settled.triangleStretch, stats: settled.stats };
-            this.emit();
-        }, 200) : null;
-    }
-
-    /**
-     * Stretch per triangle and the layout's figures; `tiles` is how many UDIM tiles (pictures) it uses.
-     * Without `overlaps`, triangles lying over others are not looked for (while islands are dragged).
-     */
-    private measure(cornerUv: Float32Array, charts: Chart[], tiles: number, overlaps = true): { triangleStretch: Float32Array; stats: UvStats } {
-        const { positions, faces, areas, faceCount } = this.topology;
-        const stretch = new Float32Array(faceCount);
-        const local = new Float64Array(6);
-        let folded = 0;
-        let weighted = 0;
-        let worst = 1;
-        let surface = 0;
-        let flat = 0;
-        // An island laid out mirrored as a whole (glTF counts texture rows from the top) is fine: a triangle is
-        // folded only when it faces against the rest of its own island.
-        const signedArea = (f: number) => ((cornerUv[f * 6 + 2] - cornerUv[f * 6]) * (cornerUv[f * 6 + 5] - cornerUv[f * 6 + 1]) - (cornerUv[f * 6 + 4] - cornerUv[f * 6]) * (cornerUv[f * 6 + 3] - cornerUv[f * 6 + 1])) / 2;
-        const orientation = new Float32Array(faceCount).fill(1);
-        for (const chart of charts) {
-            let sum = 0;
-            for (const f of chart.faces) sum += signedArea(f);
-            const sign = sum < 0 ? -1 : 1;
-            for (const f of chart.faces) orientation[f] = sign;
-        }
-        for (let f = 0; f < faceCount; f++) {
-            local.set(cornerUv.subarray(f * 6, f * 6 + 6));
-            const signed = signedArea(f) * orientation[f];
-            flat += Math.abs(signed);
-            surface += areas[f];
-            if (signed < 0) { folded++; stretch[f] = -1; continue; }
-            if (orientation[f] < 0) { local[0] = -local[0]; local[2] = -local[2]; local[4] = -local[4]; }
-            const s = triangleStretch(positions, faces, f, local, 0, 1, 2);
-            stretch[f] = Math.min(1, (s.ratio - 1) / 2);
-            worst = Math.max(worst, s.ratio);
-            // A sliver squashed to nothing would swamp the mean: count it as badly stretched, no worse.
-            weighted += Math.min(s.ratio, 20) * areas[f];
-        }
-        // An island wrapped round onto itself, or islands laid on each other: those places share texels
-        // (overlaps shallower than a quarter of a texel are rounding).
-        for (const f of overlaps ? overlappingTriangles(cornerUv, cornersInOrder(faceCount * 3), faceCount, false, 0.25 / this.paint.stack.size) : []) {
-            if (stretch[f] === -1) continue;
-            stretch[f] = -1;
-            folded++;
-        }
-        const size = this.paint.stack.size;
-        const densities = charts.map((chart) => {
-            let a3 = 0, a2 = 0;
-            for (const f of chart.faces) {
-                a3 += areas[f];
-                a2 += Math.abs(((cornerUv[f * 6 + 2] - cornerUv[f * 6]) * (cornerUv[f * 6 + 5] - cornerUv[f * 6 + 1]) - (cornerUv[f * 6 + 4] - cornerUv[f * 6]) * (cornerUv[f * 6 + 3] - cornerUv[f * 6 + 1])) / 2);
-            }
-            return a3 > 0 ? Math.sqrt(a2 / a3) * size : 0;
-        }).filter((value) => value > 0);
-        const mean = densities.length ? Math.sqrt(flat / Math.max(surface, 1e-12)) * size : 0;
-        return {
-            triangleStretch: stretch,
-            stats: {
-                islands: charts.length,
-                coverage: Math.min(1, flat / Math.max(1, tiles)),
-                tiles,
-                density: { low: densities.length ? Math.min(...densities) : 0, mean, high: densities.length ? Math.max(...densities) : 0 },
-                stretch: { mean: surface > 0 ? weighted / surface : 1, worst },
-                folded,
-            },
-        };
+            this.work.measure(cornerUv, charts, tiles, this.paint.stack.size).then((settled) => {
+                // Only for the layout it measured: islands moved meanwhile are measured again as they settle.
+                if (this.proposal?.cornerUv !== cornerUv) return;
+                this.proposal = { ...this.proposal, triangleStretch: settled.triangleStretch, stats: settled.stats };
+                this.emit();
+            }, () => undefined);
+        }, edit.quick ? 200 : 0);
     }
 
     /** Moves selected islands by (du, dv). A drag remembers the layout once, as it starts (see remember). */

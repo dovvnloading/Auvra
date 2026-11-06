@@ -60,6 +60,8 @@ const EXEMPT = new Map(Object.entries({
   'texturing/uv/pack.ts': 'pure-utility',
   'texturing/uv/uvLayout.ts': 'pure-utility',
   'texturing/uv/transfer.ts': 'hot-loop',
+  'texturing/uv/uvWork.ts': 'protocol-model',
+  'texturing/uv/uvWork.worker.ts': 'worker-protocol',
   'components/Texturing/Paint/uvSession.ts': 'direct',
   'components/Environment/renderBundle.ts': 'pure-utility',
   'components/Tools/Retexture/surfaceLimits.ts': 'pure-utility',

@@ -78,6 +78,7 @@ export const PaintWorkspace: React.FC = () => {
         let disposed = false;
         let made: PaintSession | null = null;
         let stopRestored: (() => void) | null = null;
+        let madeUv: UvSession | null = null;
         setOpening(true);
         setMessage(null);
         const target: PaintTarget = { modelId: model.id, modelName: model.name, object: model.object, partName: part.name, materials: part.materials, materialNames: part.materialNames.length ? part.materialNames : [part.rawName || part.name] };
@@ -110,10 +111,11 @@ export const PaintWorkspace: React.FC = () => {
                 putOnAfterOpen.current = false;
                 void opened.apply();
             }
-            setUv(new UvSession(opened, {
+            madeUv = new UvSession(opened, {
                 saveLayout: (id, bytes, meshes) => latest.current.saveModelUvLayout(id, bytes, meshes),
                 layoutReference: () => latest.current.models.find((item) => item.id === model.id)?.uvLayout,
-            }));
+            });
+            setUv(madeUv);
         }, (error: unknown) => {
             frontendDiagnostics.failure('paint_open_failed', error);
             if (!disposed) setMessage(error instanceof Error ? error.message : 'This surface could not be opened for painting.');
@@ -121,6 +123,7 @@ export const PaintWorkspace: React.FC = () => {
         return () => {
             disposed = true;
             stopRestored?.();
+            madeUv?.dispose();
             made?.dispose();
             // Spare pictures kept for reuse are given back to the GPU once the set is closed.
             made?.gpu.trimPool(0);
