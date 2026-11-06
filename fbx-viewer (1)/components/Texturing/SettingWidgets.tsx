@@ -94,8 +94,9 @@ export const EyedropperButton: React.FC<{ label: string; onPick: (colour: Rgba) 
             active={active}
             onClick={() => {
                 if (active) { stopPicking(); return; }
-                done.current = (colour) => onPick(colour);
-                startPicking({ kind: 'colour', label: label.toLowerCase(), done: done.current });
+                const handler = (colour: Rgba) => onPick(colour);
+                done.current = handler;
+                startPicking({ kind: 'colour', label: label.toLowerCase(), done: handler });
             }}
         ><EyedropperIcon size={12} /></IconButton>
     );
@@ -112,8 +113,9 @@ export const GradientPickButton: React.FC<{ label: string; onPick: (stops: Gradi
             active={active}
             onClick={() => {
                 if (active) { stopPicking(); return; }
-                done.current = (stops) => onPick(stops);
-                startPicking({ kind: 'gradient', label: label.toLowerCase(), done: done.current });
+                const handler = (stops: GradientStop[]) => onPick(stops);
+                done.current = handler;
+                startPicking({ kind: 'gradient', label: label.toLowerCase(), done: handler });
             }}
         ><RampIcon size={12} /></IconButton>
     );

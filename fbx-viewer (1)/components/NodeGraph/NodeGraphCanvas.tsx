@@ -187,7 +187,7 @@ export function NodeGraphCanvas<S>(props: NodeGraphCanvasProps<S>): React.ReactE
     const [frameTitle, setFrameTitle] = useState<string | null>(null);
     const [openGroups, setOpenGroups] = useState<ReadonlyMap<string, ReadonlyMap<string, boolean>>>(new Map());
     const [refused, setRefused] = useState<string | null>(null);
-    const refusedTimer = useRef<number>();
+    const refusedTimer = useRef<number | undefined>(undefined);
     const [heatOn, setHeatOn] = useState(() => readSetting('heat', false));
     const [snap, setSnap] = useState(() => readSetting('snap', false));
     const [showMap, setShowMap] = useState(() => readSetting('minimap', true));

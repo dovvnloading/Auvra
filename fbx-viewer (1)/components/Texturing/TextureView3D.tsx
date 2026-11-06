@@ -226,8 +226,7 @@ export const TextureView3D: React.FC<{
         if (world.object) {
             world.scene.remove(world.object);
             world.object.traverse((child) => {
-                const mesh = child as THREE.Mesh & THREE.LineSegments;
-                if ((mesh.isMesh && !child.userData.shared) || child.userData.overlay) mesh.geometry.dispose();
+                if (((child as THREE.Mesh).isMesh && !child.userData.shared) || child.userData.overlay) (child as THREE.Mesh).geometry.dispose();
             });
         }
         let object: THREE.Object3D;
@@ -427,8 +426,8 @@ export const TextureView3D: React.FC<{
                 <IconButton label={spin ? 'Stop turning' : 'Turn slowly'} active={spin} onClick={() => setSpin((value) => !value)}><RotateIcon size={13} /></IconButton>
             </div>
             <div className="flex items-center gap-1 border-b border-line px-2 py-0.5">
-                <Select value={shown} options={SHOWN} onChange={(value) => setShown(value as Shown)} className="w-32" />
-                <Select value={lighting} options={PREVIEW_LIGHTINGS} onChange={(value) => setLighting(value as PreviewLighting)} className="w-24" />
+                <Select value={shown} options={[...SHOWN]} onChange={(value) => setShown(value as Shown)} className="w-32" />
+                <Select value={lighting} options={[...PREVIEW_LIGHTINGS]} onChange={(value) => setLighting(value as PreviewLighting)} className="w-24" />
                 <span className="flex-1" />
                 <IconButton label={shadows ? 'Shadows: on' : 'Shadows: off'} active={shadows} onClick={() => setShadows((value) => !value)}><SunIcon size={13} /></IconButton>
                 <IconButton label={wireframe ? 'Hide the wireframe' : 'Show the wireframe'} active={wireframe} disabled={layout === 'uv'} onClick={() => setWireframe((value) => !value)}><GridIcon size={13} /></IconButton>
