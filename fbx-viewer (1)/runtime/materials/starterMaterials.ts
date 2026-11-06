@@ -3,14 +3,16 @@ import { OUTPUT_NODE_TYPE, defaultParams, normalizeMaterialGraph, type MaterialG
 /**
  * STARTER MATERIALS
  *
- * Ready shader graphs offered when a material is made, each a few nodes with measured values, to start
- * from and to check the physical surface against photos. Colours are as picked (sRGB).
+ * Ready shader graphs offered when a material is made, each a few nodes with values close to the real
+ * thing, to start from and to check the physical surface against photos. Colours are as picked (sRGB).
  *
  * - Car paint: a red metallic base under a glossy clear coat. Coats on cars are about 1.5 in index of
  *   refraction, which the coat uses; the base's flakes show as a broader, half-metal highlight.
  * - Frosted glass: clear soda-lime glass (index 1.52) seen through, its surface roughened so what is
  *   behind blurs.
- * - Velvet: a deep base with a bright, soft sheen at grazing angles, as its standing fibres catch light.
+ * - Velvet: a deep wine base under a bright pink sheen, as its standing fibres catch light at grazing
+ *   angles. The sheen is broad (roughness 0.65), so the edges glow over a wide band rather than a thin
+ *   rim, and at full strength, since the base alone is dark.
  * - Lacquered wood: grain drawn from stretched noise, under a satin lacquer coat.
  * - Rubber: a near-black, rough, plain surface: the standard material draws it.
  */
@@ -55,7 +57,7 @@ export const STARTER_MATERIALS: readonly StarterMaterial[] = [
         name: 'Velvet',
         description: 'A deep wine colour with a soft, bright sheen at the edges.',
         graph: () => normalizeMaterialGraph({
-            nodes: [output({ baseColor: [0.32, 0.03, 0.09], metalness: 0, roughness: 0.9, sheenColor: [0.85, 0.45, 0.6], sheenRoughness: 0.35 })],
+            nodes: [output({ baseColor: [0.4, 0.04, 0.11], metalness: 0, roughness: 0.9, sheenColor: [1, 0.55, 0.7], sheenRoughness: 0.65 })],
             links: [],
         }),
     },

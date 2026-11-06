@@ -905,7 +905,7 @@ export const MATERIAL_NODE_DEFINITIONS: MaterialNodeDef[] = [
     binary('min', 'Min', 'The smaller of A and B.', (a, b) => `min(${a}, ${b})`, [0, 0], ['minimum']),
     binary('max', 'Max', 'The larger of A and B.', (a, b) => `max(${a}, ${b})`, [0, 0], ['maximum']),
     binary('power', 'Power', 'A raised to B.', (a, b, context) => `pow(max(${a}, ${context.splat(0)}), ${b})`, [1, 2], ['exponent']),
-    binary('step', 'Step', '1 where B is at least A, else 0.', (a, b) => `step(${a}, ${b})`, [0.5, 0], ['threshold']),
+    { ...binary('step', 'Step', '1 where B is at least A, else 0.', (a, b) => `step(${a}, ${b})`, [0.5, 0], ['threshold']), main: 'b' },
     binary('modulo', 'Modulo', 'The remainder of A ÷ B (repeating patterns).', (a, b) => `mod(${a}, ${b})`, [0, 1], ['mod', 'remainder', 'repeat']),
     binary('arctangent2', 'Arctangent 2', 'The angle (radians) of the point (B, A).', (a, b) => `atan(${a}, ${b})`, [0, 1], ['atan2', 'angle']),
     {
@@ -967,6 +967,7 @@ export const MATERIAL_NODE_DEFINITIONS: MaterialNodeDef[] = [
         description: 'Where Value lies between A (0) and B (1).',
         inputs: [auto('a', 'A', fromParam('a')), auto('b', 'B', fromParam('b')), auto('value', 'Value', value(0.5))],
         outputs: [{ key: 'out', label: 'T', type: 'auto' }],
+        main: 'value',
         params: [float('a', 'A', 0), float('b', 'B', 1)],
         emit: (inputs) => ({ outputs: { out: `((${inputs.value} - ${inputs.a}) / (${inputs.b} - ${inputs.a}))` } }),
     },
@@ -1160,6 +1161,7 @@ export const MATERIAL_NODE_DEFINITIONS: MaterialNodeDef[] = [
             auto('whenFalse', 'False', value(0)),
         ],
         outputs: [{ key: 'out', label: 'Result', type: 'auto' }],
+        main: 'whenTrue',
         params: [select('comparison', 'Comparison', COMPARISONS), float('a', 'A', 0), float('b', 'B', 0.5)],
         emit: (inputs, context) => {
             const operator = COMPARISONS.some(([op]) => op === context.static('comparison')) ? String(context.static('comparison')) : '>';

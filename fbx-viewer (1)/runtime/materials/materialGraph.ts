@@ -54,6 +54,14 @@ export interface MaterialGraphNode {
      * nodes): each model material using the asset may set its own value (see withMaterialParameters).
      */
     parameter?: string;
+    /** A name of the user's own, shown on the canvas instead of the node's kind. The shader never sees it. */
+    name?: string;
+    /** The header's colour on the canvas (#rrggbb). The shader never sees it. */
+    color?: string;
+    /** Shown on the canvas as its header only. The shader never sees it. */
+    collapsed?: boolean;
+    /** Passes its main input straight through instead of doing its work (bypassInput). */
+    bypass?: boolean;
 }
 
 export interface MaterialGraphLink {
@@ -315,6 +323,16 @@ export const createMaterialGraph = (): MaterialGraph => ({
 
 export const MAX_COMMENT_LENGTH = 500;
 const COMMENT_COLOR = /^#[0-9a-f]{6}$/i;
+/** Longest name of a node's own. */
+export const MAX_NODE_NAME_LENGTH = 64;
+
+/** How a stored node is shown on the canvas, and whether it is bypassed: what it keeps of each, made safe. */
+const readNodeLook = (node: Partial<MaterialGraphNode>): Pick<MaterialGraphNode, 'name' | 'color' | 'collapsed' | 'bypass'> => ({
+    ...(typeof node.name === 'string' && node.name.trim() ? { name: node.name.trim().slice(0, MAX_NODE_NAME_LENGTH) } : {}),
+    ...(typeof node.color === 'string' && COMMENT_COLOR.test(node.color) ? { color: node.color.toLowerCase() } : {}),
+    ...(node.collapsed === true ? { collapsed: true } : {}),
+    ...(node.bypass === true ? { bypass: true } : {}),
+});
 
 const readComments = (value: unknown): MaterialGraphComment[] => {
     if (!Array.isArray(value)) return [];
@@ -367,6 +385,7 @@ export const normalizeMaterialGraph = (value: unknown): MaterialGraph => {
             y: finiteNumber(node.y) ? node.y : 0,
             params: Object.fromEntries(definition.params.map(param => [param.key, readParam(param, params[param.key])])),
             ...(PARAMETER_NODE_PARAMS[definition.type] && normalizeParameterName(node.parameter) ? { parameter: normalizeParameterName(node.parameter) } : {}),
+            ...readNodeLook(node),
         });
     }
     if (!nodes.some(node => node.type === OUTPUT_NODE_TYPE)) nodes.unshift(createMaterialGraph().nodes[0]);
@@ -564,6 +583,16 @@ export interface CompileOptions {
 
 const glslName = (id: string) => id.replace(/[^A-Za-z0-9]/g, '_').slice(0, 40);
 
+/**
+ * The input a node passes straight through when bypassed: its main one (the first, unless its definition
+ * names another), converted to each output's type. Only a node with inputs and outputs can be bypassed,
+ * and never the Material Output.
+ */
+export const bypassInput = (definition: MaterialNodeDef): MaterialInputDef | null => {
+    if (definition.type === OUTPUT_NODE_TYPE || !definition.inputs.length || !definition.outputs.length) return null;
+    return definition.inputs.find(input => input.key === definition.main) ?? definition.inputs[0];
+};
+
 /** Compiles the part of a (normalised) graph a stage needs to GLSL for graphMaterial.ts. */
 export const compileMaterialGraph = (graph: MaterialGraph, options: CompileOptions = {}): CompiledMaterialGraph => {
     const stage = options.stage ?? 'fragment';
@@ -662,6 +691,23 @@ export const compileMaterialGraph = (graph: MaterialGraph, options: CompileOptio
         if (visiting.has(node.id)) return null;
         visiting.add(node.id);
         const definition = DEFINITIONS.get(node.type)!;
+        const passed = node.bypass ? bypassInput(definition) : null;
+        if (passed) {
+            // Bypassed: only its main input is read, and each output is that value as the output's type.
+            const value = inputValue(node, passed);
+            const from = resolvedPortType(passed.type, node.id, autoTypes);
+            const outputs: Record<string, string> = {};
+            for (const port of definition.outputs) {
+                const type = resolvedPortType(port.type, node.id, autoTypes);
+                const local = `mg_${glslName(node.id)}_out_${port.key}_${counter++}`;
+                statements.push(`${type} ${local} = ${convertValue(value, from, type)};`);
+                outputs[port.key] = local;
+            }
+            visiting.delete(node.id);
+            results.set(node.id, outputs);
+            shape.push(`${node.id}:${node.type}:${autoTypes.get(node.id)}:bypass`);
+            return outputs;
+        }
         const inputs: Record<string, string> = {};
         for (const input of definition.inputs) inputs[input.key] = inputValue(node, input);
         const context = contextFor(node);
@@ -706,15 +752,16 @@ export const compileMaterialGraph = (graph: MaterialGraph, options: CompileOptio
 };
 
 /**
- * A graph's shape: its nodes' kinds, the settings written into the shader (choices, switches, code) and
- * its wiring; not its values, where its nodes sit, their parameter names or its comments. Graphs of one
- * shape compile to the same shaders, and differ only in their uniforms' values.
+ * A graph's shape: its nodes' kinds, the settings written into the shader (choices, switches, code), which
+ * nodes are bypassed and its wiring; not its values, where its nodes sit, their parameter names, how they
+ * are shown (names, colours, folding) or its comments. Graphs of one shape compile to the same shaders,
+ * and differ only in their uniforms' values.
  */
 export const materialGraphShape = (graph: MaterialGraph): string => JSON.stringify([
     graph.nodes.map((node) => {
         const definition = DEFINITIONS.get(node.type);
         const statics = definition ? definition.params.filter(param => STATIC_PARAM_KINDS.has(param.kind)).map(param => node.params[param.key] ?? null) : [];
-        return [node.id, node.type, statics];
+        return node.bypass ? [node.id, node.type, statics, 'bypass'] : [node.id, node.type, statics];
     }),
     graph.links.map(link => [link.fromNode, link.fromOutput, link.toNode, link.toInput]),
 ]);
@@ -722,14 +769,15 @@ export const materialGraphShape = (graph: MaterialGraph): string => JSON.stringi
 const looks = new WeakMap<MaterialGraph, string>();
 
 /**
- * What a graph draws with: everything but where its nodes sit and its comments. Two graphs alike here
- * shade every material alike, so moving nodes changes nothing a material draws. Graphs are never changed
- * in place, so each is read once.
+ * What a graph draws with: everything but where its nodes sit, how they are shown (their names, colours
+ * and folding) and its comments. Two graphs alike here shade every material alike, so moving, naming,
+ * colouring or folding nodes changes nothing a material draws; bypassing one does. Graphs are never
+ * changed in place, so each is read once.
  */
 export const materialGraphLook = (graph: MaterialGraph): string => {
     let look = looks.get(graph);
     if (look === undefined) {
-        look = JSON.stringify([graph.nodes.map(({ x: _x, y: _y, ...rest }) => rest), graph.links]);
+        look = JSON.stringify([graph.nodes.map(({ x: _x, y: _y, name: _name, color: _color, collapsed: _collapsed, ...rest }) => rest), graph.links]);
         looks.set(graph, look);
     }
     return look;

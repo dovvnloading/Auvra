@@ -152,6 +152,8 @@ export interface MaterialNodeDef {
     params: MaterialParamDef[];
     /** The auto type from the node's own static params (a Swizzle's mask), instead of its inputs. */
     autoType?: (statics: Readonly<Record<string, unknown>>) => MaterialValueType;
+    /** The input a bypassed node passes through, where it is not the first (a Step's value, not its edge). */
+    main?: string;
     /**
      * GLSL statements computing the outputs, given each input as an expression of its type;
      * returns each output as an expression (of its type) the statements made available.

@@ -1,32 +1,27 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { ChevronDownIcon, ChevronRightIcon, CommentAddIcon, FlowIcon, GraphIcon, PlusIcon, TrashIcon, WarningIcon } from '../UI/Icons';
+import { CommentAddIcon, FlowIcon, GraphIcon, PlusIcon, TrashIcon, WarningIcon } from '../UI/Icons';
 import { useAssets } from '../../context/AssetContext';
 import { projectService } from '../../utils/projectService';
 import { frontendDiagnostics } from '../../diagnostics/runtime';
 import {
     MAX_COMMENT_LENGTH,
-    MAX_PARAMETER_NAME_LENGTH,
     OUTPUT_NODE_TYPE,
-    PARAMETER_NODE_PARAMS,
     compileMaterialGraph,
     createMaterialGraph,
-    getMaterialNodeDefinition,
     materialGraphLook,
-    materialGraphSettings,
     materialGraphShape,
-    readParam,
     type MaterialGraph,
     type MaterialGraphNode,
-    type MaterialParamDef,
 } from '../../runtime/materials/materialGraph';
 import { MATERIALS_DOMAIN, materialAssetDocument, materialLibrary, type MaterialAsset } from '../../runtime/materials/materialLibrary';
 import { MaterialFromDescription } from './MaterialFromDescription';
 import { STARTER_MATERIALS } from '../../runtime/materials/starterMaterials';
 import { MaterialGraphCanvas } from './MaterialGraphCanvas';
 import { MaterialPreview, clearMaterialShaderError, useMaterialShaderError } from './MaterialPreview';
-import { ParamField } from './MaterialParamField';
+import { NodeInspector } from './MaterialNodeInspector';
 import { GraphHistory, createComment, nodeRect, removeNodes, showsPreview, withComments } from './materialGraphEditing';
 import { Popover } from '../UI/kit';
+import { FRAME_COLOURS, FRAME_COLOUR_NAMES } from '../NodeGraph/frames';
 import { OPEN_MATERIAL_EVENT, takeOpenMaterialRequest } from '../Texturing/Paint/openMaterial';
 import { isSmartMaterialAsset } from '../../texturing/paint/smartMaterials';
 import { createFunctionGraph, createTextureGraph } from '../../texturing/graph/document';
@@ -37,10 +32,11 @@ import { TextureGraphWorkspace, newTextureGraphStored } from '../Texturing/Textu
  *
  * The project's material assets: each a node graph wired into a Material Output, edited on a canvas
  * (MaterialGraphCanvas.tsx) where every node shows its value, and shown on a lit, shadowed preview
- * as it changes. With nothing selected the inspector shows the material's own settings (blend mode,
- * alpha clip, two-sided, unlit). Models' materials take an asset in Properties › Material Overrides;
- * every material using an asset follows edits to it straight away. Undo is kept for each material for
- * the session, so it survives switching tabs and switching material.
+ * as it changes. With nothing selected the inspector shows the material's own settings (alpha mode,
+ * alpha clip, two-sided, shading) and its values by group (MaterialNodeInspector.tsx). Models'
+ * materials take an asset in Properties › Material Overrides; every material using an asset follows
+ * edits to it straight away. Undo is kept for each material for the session, so it survives switching
+ * tabs and switching material.
  *
  * A material can instead be made by a texture graph (components/Texturing): images drawn node by
  * node into the pictures the material draws with.
@@ -48,7 +44,6 @@ import { TextureGraphWorkspace, newTextureGraphStored } from '../Texturing/Textu
 
 // Edits made in quick succession (dragging a slider) are saved together.
 const SAVE_DELAY_MS = 400;
-const COMMENT_COLORS = ['#3b4252', '#1e3a5f', '#14532d', '#713f12', '#7f1d1d', '#4c1d95', '#134e4a', '#57534e'];
 const PREVIEWS_KEY = 'auvra.materialNodePreviews';
 
 /** The material assets, re-rendering when they change. */
@@ -76,91 +71,6 @@ const historyOf = (id: string): GraphHistory => {
     let found = sessionHistories.get(id);
     if (!found) sessionHistories.set(id, found = new GraphHistory());
     return found;
-};
-
-/** Groups of the Material Output open from the start; the rest open once they are used. */
-const OPEN_GROUPS = new Set(['Base', 'Emission', 'Opacity']);
-
-const NodeInspector: React.FC<{
-    node: MaterialGraphNode;
-    textures: { id: string; name: string }[];
-    title?: string;
-    /** Inputs of the node that are wired: their values come from the wire. */
-    wired?: ReadonlySet<string>;
-    onChangeNode: (node: MaterialGraphNode, coalesce?: string) => void;
-}> = ({ node, textures, title, wired, onChangeNode }) => {
-    const definition = getMaterialNodeDefinition(node.type)!;
-    const [toggled, setToggled] = useState<Record<string, boolean>>({});
-    const blendMode = node.type === OUTPUT_NODE_TYPE ? materialGraphSettings({ nodes: [node], links: [] }).blendMode : null;
-    const field = (param: MaterialParamDef) => {
-        // The clip only matters to a masked material.
-        if (param.key === 'alphaClip' && blendMode !== 'masked') return null;
-        if (wired?.has(param.key)) {
-            return (
-                <div key={param.key} className="flex items-center justify-between text-2xs">
-                    <span className="text-gray-500">{param.label}</span>
-                    <span className="text-gray-400">Set by its wire</span>
-                </div>
-            );
-        }
-        return (
-            <ParamField
-                key={param.key}
-                param={param}
-                value={node.params[param.key]}
-                textures={textures}
-                onChange={(value) => onChangeNode({ ...node, params: { ...node.params, [param.key]: value } }, `${node.id}:${param.key}`)}
-            />
-        );
-    };
-    // Settings first, then the values of each group under a header of its own.
-    const loose = definition.params.filter(param => !param.group);
-    const groups = [...new Set(definition.params.flatMap(param => (param.group ? [param.group] : [])))];
-    const used = (group: string) => definition.params.some(param => param.group === group
-        && (wired?.has(param.key) || JSON.stringify(readParam(param, node.params[param.key])) !== JSON.stringify(param.default)));
-    return (
-        <div className="space-y-2 rounded border border-gray-800 bg-gray-900/60 p-2">
-            <div className="text-2xs font-bold text-gray-200">{title ?? definition.label}</div>
-            <p className="text-2xs leading-snug text-gray-500">{definition.description}</p>
-            {definition.params.length === 0 && <p className="text-2xs text-gray-500">No settings.</p>}
-            {loose.map(field)}
-            {groups.map((group) => {
-                const open = toggled[group] ?? (OPEN_GROUPS.has(group) || used(group));
-                return (
-                    <div key={group} className="border-t border-gray-800 pt-1.5">
-                        <button
-                            type="button"
-                            aria-expanded={open}
-                            onClick={() => setToggled((current) => ({ ...current, [group]: !open }))}
-                            className="flex w-full items-center gap-1 text-left text-2xs font-semibold text-gray-300 hover:text-white"
-                        >
-                            {open ? <ChevronDownIcon size={11} /> : <ChevronRightIcon size={11} />}
-                            {group}
-                            {!open && used(group) && <span className="ml-auto text-2xs font-normal text-gray-500">In use</span>}
-                        </button>
-                        {open && <div className="mt-1.5 space-y-2">{definition.params.filter(param => param.group === group).map(field)}</div>}
-                    </div>
-                );
-            })}
-            {PARAMETER_NODE_PARAMS[node.type] && (
-                <label className="block space-y-1" title="Name this value to let each model material using the asset set its own">
-                    <span className="text-2xs text-gray-500">Parameter name</span>
-                    <input
-                        aria-label="Parameter name"
-                        value={node.parameter ?? ''}
-                        placeholder="Not a parameter"
-                        maxLength={MAX_PARAMETER_NAME_LENGTH}
-                        onChange={(event) => {
-                            const { parameter: _previous, ...rest } = node;
-                            // Kept as typed (a trailing space included) and trimmed when read back.
-                            onChangeNode(event.target.value ? { ...rest, parameter: event.target.value } : rest, `${node.id}:parameter`);
-                        }}
-                        className="w-full rounded border border-gray-700 bg-gray-950 px-2 py-1 text-xs text-white"
-                    />
-                </label>
-            )}
-        </div>
-    );
 };
 
 export const MaterialGraphEditor: React.FC = () => {
@@ -340,7 +250,6 @@ export const MaterialGraphEditor: React.FC = () => {
         return {
             key: `${fragment.key}#${vertex.key}`,
             unused: new Set(fragment.unused.filter(id => vertexUnused.has(id))),
-            statements: fragment.statements.length + (fragment.connected.has('worldPositionOffset') ? vertex.statements.length : 0),
         };
     }, [shape]);
     // A change to the shader's shape compiles it afresh: forget the last error.
@@ -455,7 +364,12 @@ export const MaterialGraphEditor: React.FC = () => {
                         {error && <p className="text-2xs text-amber-400">{error}</p>}
                         {analysis && (
                             <p className="text-2xs text-gray-500">
-                                {graph.nodes.length} nodes · {analysis.statements} shader statements{analysis.unused.size ? ` · ${analysis.unused.size} unused` : ''}
+                                {graph.nodes.length === 1 ? '1 node' : `${graph.nodes.length} nodes`}
+                                {analysis.unused.size > 0 && (
+                                    <span title="Nodes that feed nothing the material reads: dimmed on the canvas">
+                                        {' · '}{analysis.unused.size} not used
+                                    </span>
+                                )}
                             </p>
                         )}
 
@@ -472,19 +386,23 @@ export const MaterialGraphEditor: React.FC = () => {
                                             update(withComments(graph, [...(graph.comments ?? []), created]), true);
                                             select([], created.id);
                                         }}
+                                        title="Put a frame round the selected nodes"
                                         className="flex items-center gap-1 rounded bg-gray-800 px-2 py-1 text-2xs text-gray-200 hover:bg-gray-700"
                                     >
-                                        <CommentAddIcon size={12} /> Comment
+                                        <CommentAddIcon size={12} /> Frame
                                     </button>
                                 </div>
                             </div>
                         ) : comment ? (
                             <div className="space-y-2 rounded border border-gray-800 bg-gray-900/60 p-2">
-                                <div className="text-2xs font-bold text-gray-200">Comment</div>
-                                <textarea aria-label="Comment text" value={comment.text} maxLength={MAX_COMMENT_LENGTH} rows={2} onChange={(event) => changeComment({ text: event.target.value })} className="w-full rounded border border-gray-700 bg-gray-950 px-2 py-1 text-xs text-white" />
+                                <div className="text-2xs font-bold text-gray-200">Frame</div>
+                                <label className="block space-y-1">
+                                    <span className="text-2xs text-gray-500">Title</span>
+                                    <input aria-label="Frame title" value={comment.text} maxLength={MAX_COMMENT_LENGTH} onChange={(event) => changeComment({ text: event.target.value })} className="w-full rounded border border-gray-700 bg-gray-950 px-2 py-1 text-xs text-white" />
+                                </label>
                                 <div className="flex flex-wrap gap-1">
-                                    {COMMENT_COLORS.map(color => (
-                                        <button key={color} aria-label={`Comment colour ${color}`} aria-pressed={comment.color === color} onClick={() => changeComment({ color })}
+                                    {FRAME_COLOURS.map(color => (
+                                        <button key={color} aria-label={`Frame colour: ${FRAME_COLOUR_NAMES[color] ?? 'Other'}`} title={FRAME_COLOUR_NAMES[color]} aria-pressed={comment.color === color} onClick={() => changeComment({ color })}
                                             className={`h-5 w-5 rounded border ${comment.color === color ? 'border-white' : 'border-gray-700'}`} style={{ background: color }} />
                                     ))}
                                 </div>
