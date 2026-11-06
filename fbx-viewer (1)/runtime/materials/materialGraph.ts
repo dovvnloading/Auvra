@@ -37,6 +37,7 @@ import {
 } from './materialTypes';
 import { MATERIAL_NODE_DEFINITIONS, OUTPUT_NODE_TYPE } from './materialNodes';
 import { hasHelper } from './materialGlsl';
+import { NODE_CODE_END, nodeCodeMark } from './shaderErrors';
 
 export * from './materialTypes';
 export { MATERIAL_NODE_DEFINITIONS, OUTPUT_NODE_TYPE, REROUTE_NODE_TYPE, swizzleMask } from './materialNodes';
@@ -672,7 +673,7 @@ export const compileMaterialGraph = (graph: MaterialGraph, options: CompileOptio
                 if (!hasHelper(name)) throw new Error(`No material GLSL helper ${name}.`);
                 helpers.add(name);
             },
-            global: (source) => { globals.push(source); },
+            global: (source) => { globals.push(`${nodeCodeMark(node.id)}\n${source}\n${NODE_CODE_END}`); },
             splat: (value) => (autoType === 'float' ? `float(${value})` : `${autoType}(${value})`),
         };
     };
@@ -720,12 +721,14 @@ export const compileMaterialGraph = (graph: MaterialGraph, options: CompileOptio
             const value = inputValue(node, passed);
             const from = resolvedPortType(passed.type, node.id, autoTypes);
             const outputs: Record<string, string> = {};
+            statements.push(nodeCodeMark(node.id));
             for (const port of definition.outputs) {
                 const type = resolvedPortType(port.type, node.id, autoTypes);
                 const local = `mg_${glslName(node.id)}_out_${port.key}_${counter++}`;
                 statements.push(`${type} ${local} = ${convertValue(value, from, type)};`);
                 outputs[port.key] = local;
             }
+            statements.push(NODE_CODE_END);
             visiting.delete(node.id);
             results.set(node.id, outputs);
             shape.push(`${node.id}:${node.type}:${autoTypes.get(node.id)}:bypass`);
@@ -742,8 +745,9 @@ export const compileMaterialGraph = (graph: MaterialGraph, options: CompileOptio
         const context = contextFor(node);
         const emitted = definition.emit(inputs, context);
         // Each output is stored in a local of its own, so a value read by several nodes is computed once.
+        // The node's code is marked, so a compile error in it can be shown on the node (shaderErrors.ts).
         const outputs: Record<string, string> = {};
-        statements.push(...(emitted.statements ?? []));
+        statements.push(nodeCodeMark(node.id), ...(emitted.statements ?? []));
         for (const port of definition.outputs) {
             const expression = emitted.outputs[port.key];
             const type = resolvedPortType(port.type, node.id, autoTypes);
@@ -751,6 +755,7 @@ export const compileMaterialGraph = (graph: MaterialGraph, options: CompileOptio
             statements.push(`${type} ${local} = ${expression};`);
             outputs[port.key] = local;
         }
+        statements.push(NODE_CODE_END);
         visiting.delete(node.id);
         results.set(node.id, outputs);
         shape.push(`${node.id}:${node.type}:${autoTypes.get(node.id)}:${JSON.stringify(staticParams(node, definition))}`);

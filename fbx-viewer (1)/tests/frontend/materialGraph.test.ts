@@ -464,7 +464,8 @@ describe('material graph v2', () => {
       links: [link('code', 'out', 'out', 'roughness')],
     });
     const compiled = compileMaterialGraph(graph);
-    expect(compiled.globals).toEqual(['float mg_code_fn(vec4 a, vec4 b, vec4 c, vec4 d) {\nreturn float(a.x * 2.0);\n}']);
+    // Marked as the node's code, so a mistake in it is shown on the node (shaderErrors.ts).
+    expect(compiled.globals).toEqual(['// mg-node:code\nfloat mg_code_fn(vec4 a, vec4 b, vec4 c, vec4 d) {\nreturn float(a.x * 2.0);\n}\n// mg-end']);
     expect(compiled.outputs.roughness).toMatch(/^mg_code_out_out_\d+$/);
   });
 });
