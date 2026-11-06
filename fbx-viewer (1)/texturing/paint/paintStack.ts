@@ -213,11 +213,17 @@ void main() {
 const MASK_KINDS = { paint: 0, fill: 1, generator: 2, levels: 3, blur: 4, invert: 5 } as const;
 const MASK_BLENDS = { multiply: 0, add: 1, subtract: 2, replace: 3, max: 4, min: 5 } as const;
 
-/** Baked maps kept at 16 bits: where each texel is, and smooth values that steps would show in. */
-const FINE_MAPS: ReadonlySet<MeshMapName> = new Set(['position', 'height', 'curvature']);
+/**
+ * Baked maps kept at 16 bits, on the GPU and when saved: where each texel is, normals, and smooth values
+ * that steps would show in. Only the ID colours are fine at 8.
+ */
+const FINE_MAPS: ReadonlySet<MeshMapName> = new Set(['position', 'height', 'curvature', 'ambientOcclusion', 'thickness', 'normal', 'worldNormal']);
 
 /** Picture keys: a layer's channel, or a mask effect. */
 export const pictureKey = (owner: string, channel?: PaintChannel): string => (channel ? `${owner}:${channel}` : owner);
+
+/** Painted height and normals are kept in half floats (8 bits would step slopes and lighting); the rest at 8 bits. */
+export const picturePrecision = (key: string): 8 | 16 => (key.endsWith(':height') || key.endsWith(':normal') ? 16 : 8);
 
 /** The owner of the pictures of what the surface wore before painting began, carried onto a new layout. */
 export const BEFORE = 'before';
@@ -308,10 +314,23 @@ export class PaintStack {
                 const tile = Number(tileName);
                 if (!this.tiles.includes(tile) || !picture?.assetId) continue;
                 try {
-                    const bitmap = await readPicture(await this.host.fetchPicture(picture.assetId));
-                    const texture = new THREE.Texture(bitmap);
-                    texture.flipY = false;
-                    texture.premultiplyAlpha = false;
+                    const blob = await this.host.fetchPicture(picture.assetId);
+                    let texture: THREE.Texture;
+                    let width: number;
+                    let height: number;
+                    let bitmap: ImageBitmap | null = null;
+                    if (await pngBitDepth(blob) === 16) {
+                        // Kept at 16 bits (painted height and normals): read whole, as a browser reads it at 8.
+                        const fine = await readPng16(blob);
+                        texture = new THREE.DataTexture(fine.data, fine.width, fine.height, THREE.RGBAFormat, THREE.FloatType);
+                        ({ width, height } = fine);
+                    } else {
+                        bitmap = await readPicture(blob);
+                        texture = new THREE.Texture(bitmap);
+                        texture.flipY = false;
+                        texture.premultiplyAlpha = false;
+                        ({ width, height } = bitmap);
+                    }
                     texture.colorSpace = THREE.NoColorSpace;
                     texture.minFilter = texture.magFilter = THREE.NearestFilter;
                     texture.generateMipmaps = false;
@@ -319,10 +338,10 @@ export class PaintStack {
                     const image = this.picture(key, tile);
                     // Kept at another size (the set was resized): scaled with the colour of see-through
                     // pixels left out, so stroke edges do not darken.
-                    const fragment = bitmap.width === this.size && bitmap.height === this.size ? 'void main() { outColor = texture(source, vUv); }' : RESAMPLE;
+                    const fragment = width === this.size && height === this.size ? 'void main() { outColor = texture(source, vUv); }' : RESAMPLE;
                     this.gpu.passNow(image, { fragment, inputs: { source: texture } });
                     texture.dispose();
-                    bitmap.close();
+                    bitmap?.close();
                 } catch {
                     // A picture that will not read leaves the layer empty rather than the set unopenable.
                 }
@@ -384,7 +403,7 @@ export class PaintStack {
         if (!byTile) this.pictures.set(key, byTile = new Map());
         let image = byTile.get(tile);
         if (!image) {
-            image = this.gpu.image(this.size, this.size, 'color', 8);
+            image = this.gpu.image(this.size, this.size, 'color', picturePrecision(key));
             this.gpu.clear(image, fill);
             byTile.set(tile, image);
         }
@@ -421,9 +440,12 @@ export class PaintStack {
             // Marked kept as its pixels are read: a stroke landing while they are stored marks it again.
             this.unsaved.delete(entry);
             if (!image) continue;
-            const pixels = this.gpu.readRgba8(image, this.size, this.size, 'raw', false);
+            // Half-float pictures are kept as 16-bit PNGs, the rest at 8 bits.
+            const encoded = image.precision === 8
+                ? encodePng(this.gpu.readRgba8(image, this.size, this.size, 'raw', false), this.size, this.size)
+                : encodePng16(this.gpu.readUint16(image, this.size, this.size, 'color', false), this.size, this.size, 4);
             try {
-                stored.set(entry, await this.host.storePicture(await encodePng(pixels, this.size, this.size)));
+                stored.set(entry, await this.host.storePicture(await encoded));
             } catch (error) {
                 this.unsaved.add(entry);
                 throw error;
@@ -491,14 +513,10 @@ export class PaintStack {
                 if (!image) continue;
                 let blob: Blob;
                 if (FINE_MAPS.has(name as MeshMapName)) {
-                    // 8 bits would step these in 1/255ths of the model: noise and triplanar masks read from them would turn blocky.
-                    const values = this.gpu.readFloat(image);
+                    // 8 bits would step these in 1/255ths: noise and triplanar masks read from them would turn
+                    // blocky, and normals and occlusion would band once lit. Read a strip at a time.
                     const gray = image.kind === 'gray';
-                    const samples = new Uint16Array(image.width * image.height * (gray ? 1 : 4));
-                    const quantize = (value: number) => Math.round(Math.min(1, Math.max(0, value)) * 65535);
-                    if (gray) for (let p = 0; p < samples.length; p++) samples[p] = quantize(values[p * 4]);
-                    else for (let i = 0; i < samples.length; i++) samples[i] = (i & 3) === 3 ? 65535 : quantize(values[i]);
-                    blob = await encodePng16(samples, image.width, image.height, gray ? 1 : 4);
+                    blob = await encodePng16(this.gpu.readUint16(image, image.width, image.height, gray ? 'gray' : 'color', false), image.width, image.height, gray ? 1 : 4);
                 } else {
                     blob = await encodePng(this.gpu.readRgba8(image, this.size, this.size, image.kind === 'gray' ? 'gray' : 'raw', false), this.size, this.size);
                 }
@@ -624,7 +642,8 @@ export class PaintStack {
 
     /** Baked normal, painted normal detail and painted height's slopes, laid together. */
     private finalNormal(tile: number, detail: GpuImage, height: GpuImage | null): GpuImage {
-        const out = this.gpu.image(this.size, this.size, 'color', 8);
+        // Half floats, so the 16-bit export holds 16 bits of detail.
+        const out = this.gpu.image(this.size, this.size, 'color', 16);
         const baked = this.meshMaps(tile).normal;
         this.gpu.passNow(out, {
             fragment: `uniform int uHasHeight;\nuniform float uStrength;
@@ -825,8 +844,8 @@ void main() {
         const cached = this.fills.get(key);
         if (cached?.signature === signature) return cached.image;
         if (cached) this.gpu.release(cached.image);
-        // Height keeps its smooth steps; other channels are fine at 8 bits.
-        const image = this.gpu.image(this.size, this.size, 'color', channel === 'height' ? 16 : 8);
+        // Height and normals keep their smooth steps; other channels are fine at 8 bits.
+        const image = this.gpu.image(this.size, this.size, 'color', channel === 'height' || channel === 'normal' ? 16 : 8);
         const extent = this.part.bounds.getSize(new THREE.Vector3());
         this.raster.draw(image, tile, CAST, {
             uniforms: {

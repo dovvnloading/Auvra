@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { GLSL_LIBRARY } from '../gpu/glslLibrary';
-import type { GpuImage, TextureGpu } from '../gpu/textureGpu';
+import type { GpuImage, ImagePrecision, TextureGpu } from '../gpu/textureGpu';
 import { jumpFlood } from '../graph/nodes/distance';
 import { padImage } from '../bake/meshBaker';
 import { tileOf, tileOffset, type PartMesh } from '../mesh/partMesh';
@@ -88,6 +88,7 @@ export const newTriangleTiles = (cornerUv: Float32Array | Float64Array): Uint16A
  * (two per corner, triangle order). `source` is one picture, or the picture of each of the part's current
  * tiles (UDIM). With `tile`, only the triangles landing in that tile of the new layout are drawn, at their
  * place in it; without, every triangle is drawn within 0..1. `normalMap` re-frames tangent normals.
+ * `precision` is the result's (8 bits, or 16 for half-float pictures such as painted height).
  */
 export const transferPicture = async (
     gpu: TextureGpu,
@@ -97,6 +98,7 @@ export const transferPicture = async (
     size: number,
     normalMap = false,
     tile?: number,
+    precision: ImagePrecision = 8,
 ): Promise<GpuImage> => {
     const sourceOf = typeof source === 'function' ? source : () => source;
     const landing = tile === undefined ? null : newTriangleTiles(cornerUv);
@@ -127,7 +129,7 @@ export const transferPicture = async (
         depthTest: false,
         depthWrite: false,
     });
-    const drawn = gpu.image(size, size, 'color', 8);
+    const drawn = gpu.image(size, size, 'color', precision);
     const coverage = gpu.image(size, size, 'gray', 8);
     gpu.clear(drawn, [0, 0, 0, 0]);
     // Where the surface is, drawn on its own: a painted layer's clear texels are still surface.

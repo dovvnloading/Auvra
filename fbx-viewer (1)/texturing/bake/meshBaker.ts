@@ -135,7 +135,8 @@ export const bakeMeshMaps = async (gpu: TextureGpu, sources: BakeSources, settin
 
                 // Detail: the high-poly surface (or the surface's own normal map) as world and tangent normals, and height.
                 const worldNormal = take(gpu.image(size, size, 'color', 16));
-                const tangentNormal = take(gpu.image(size, size, 'color', 8));
+                // Normals at 8 bits show steps across smooth curves once lit: kept in half floats.
+                const tangentNormal = take(gpu.image(size, size, 'color', 16));
                 const height = take(gpu.image(size, size, 'gray', 16));
                 const front = settings.frontDistance * diagonal;
                 const rear = settings.rearDistance * diagonal;
@@ -358,7 +359,7 @@ export const bakeMeshMaps = async (gpu: TextureGpu, sources: BakeSources, settin
                     maps.id = id;
                 }
                 if (want.has('worldNormal')) {
-                    const encoded = take(gpu.image(size, size, 'color', 8));
+                    const encoded = take(gpu.image(size, size, 'color', 16));
                     gpu.passNow(encoded, { fragment: 'void main() { vec4 n = texelFetch(source, ivec2(gl_FragCoord.xy), 0); outColor = vec4(n.a > 0.5 ? normalize(n.xyz) * 0.5 + 0.5 : vec3(0.5, 0.5, 1.0), 1.0); }', inputs: { source: worldNormal } });
                     maps.worldNormal = encoded;
                 }

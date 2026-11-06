@@ -316,10 +316,13 @@ const random = (seed: number): number => {
     return (h >>> 0) / 4294967295;
 };
 
+/** A block of a picture's pixels, bottom row first: bytes for 8-bit pictures, half floats for half-float ones. */
+export type BlockPixels = Uint8Array | Uint16Array;
+
 export interface PixelPatch {
     key: string;
     tile: number;
-    rects: Array<{ x: number; y: number; width: number; height: number; before: Uint8Array; after: Uint8Array | null }>;
+    rects: Array<{ x: number; y: number; width: number; height: number; before: BlockPixels; after: BlockPixels | null }>;
 }
 
 export interface HistoryEntry {
@@ -327,6 +330,41 @@ export interface HistoryEntry {
     document?: { before: PaintDocument; after: PaintDocument };
     pixels?: PixelPatch[];
 }
+
+/** Bytes of pixels an undo step holds. */
+export const historyBytes = (entry: HistoryEntry): number => {
+    let bytes = 0;
+    for (const patch of entry.pixels ?? []) for (const rect of patch.rects) bytes += rect.before.byteLength + (rect.after?.byteLength ?? 0);
+    return bytes;
+};
+
+/** Reads a block of a picture. Half-float pictures are read as 32-bit floats (which every GPU allows) and kept as half floats. */
+const readBlock = (gpu: TextureGpu, image: GpuImage, x: number, y: number, width: number, height: number): BlockPixels => {
+    if (image.precision === 8) {
+        const pixels = new Uint8Array(width * height * 4);
+        gpu.renderer.readRenderTargetPixels(image.target, x, y, width, height, pixels);
+        return pixels;
+    }
+    const block = gpu.image(width, height, 'color', 32);
+    gpu.passNow(block, { fragment: 'uniform vec2 uAt;\nvoid main() { outColor = texelFetch(source, ivec2(gl_FragCoord.xy + uAt), 0); }', inputs: { source: image }, uniforms: { uAt: new THREE.Vector2(x, y) } });
+    const floats = new Float32Array(width * height * 4);
+    gpu.renderer.readRenderTargetPixels(block.target, 0, 0, width, height, floats);
+    gpu.release(block);
+    const halves = new Uint16Array(floats.length);
+    for (let i = 0; i < floats.length; i++) halves[i] = THREE.DataUtils.toHalfFloat(floats[i]);
+    return halves;
+};
+
+/** Puts a block read by readBlock back into its picture. */
+const writeBlock = (gpu: TextureGpu, image: GpuImage, pixels: BlockPixels, region: { x: number; y: number; width: number; height: number }): void => {
+    if (pixels instanceof Uint8Array) {
+        gpu.write(image, pixels, region);
+        return;
+    }
+    const floats = new Float32Array(pixels.length);
+    for (let i = 0; i < pixels.length; i++) floats[i] = THREE.DataUtils.fromHalfFloat(pixels[i]);
+    gpu.write(image, floats, region);
+};
 
 const BLOCK = 32;
 
@@ -361,7 +399,7 @@ export class Stroke {
             this.masks.set(tile, mask);
             for (const key of this.keys()) {
                 const picture = stack.picture(key, tile, target.kind === 'mask' ? [1, 1, 1, 1] : [0, 0, 0, 0]);
-                const copy = gpu.image(stack.size, stack.size, 'color', 8);
+                const copy = gpu.image(stack.size, stack.size, 'color', picture.precision);
                 gpu.copy(picture, copy);
                 this.before.set(`${key}|${tile}`, copy);
             }
@@ -550,9 +588,7 @@ export class Stroke {
                         const y = by * BLOCK;
                         const width = Math.min(stack.size, (end + 1) * BLOCK) - x;
                         const height = Math.min(stack.size, y + BLOCK) - y;
-                        const pixels = new Uint8Array(width * height * 4);
-                        gpu.renderer.readRenderTargetPixels(before.target, x, y, width, height, pixels);
-                        rects.push({ x, y, width, height, before: pixels, after: null });
+                        rects.push({ x, y, width, height, before: readBlock(gpu, before, x, y, width, height), after: null });
                         if (i < xs.length) start = xs[i];
                     }
                 }
@@ -586,19 +622,15 @@ export class Stroke {
     }
 }
 
-/** Puts back (or forward) the pixels an entry changed. Returns the channels to put together again. */
+/** Puts back (or forward) the pixels an entry changed, and puts the set together again. */
 export const applyPixelHistory = (stack: PaintStack, patches: readonly PixelPatch[], direction: 'undo' | 'redo'): void => {
     const gpu = stack.host.gpu;
     for (const patch of patches) {
         const picture = stack.picture(patch.key, patch.tile);
         for (const rect of patch.rects) {
-            if (direction === 'undo' && !rect.after) {
-                const now = new Uint8Array(rect.width * rect.height * 4);
-                gpu.renderer.readRenderTargetPixels(picture.target, rect.x, rect.y, rect.width, rect.height, now);
-                rect.after = now;
-            }
+            if (direction === 'undo' && !rect.after) rect.after = readBlock(gpu, picture, rect.x, rect.y, rect.width, rect.height);
             const pixels = direction === 'undo' ? rect.before : rect.after;
-            if (pixels) gpu.write(picture, pixels, { x: rect.x, y: rect.y, width: rect.width, height: rect.height });
+            if (pixels) writeBlock(gpu, picture, pixels, { x: rect.x, y: rect.y, width: rect.width, height: rect.height });
         }
         stack.touch(patch.key, patch.tile);
     }
