@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { BrushIcon, BucketIcon, EraserIcon, EyedropperIcon, FrameIcon, RedoIcon, ScissorsIcon, SelectBoxIcon, UndoIcon, WarningIcon } from '../../UI/Icons';
+import { BrushIcon, BucketIcon, EraserIcon, EyedropperIcon, FrameIcon, RedoIcon, ScissorsIcon, SelectBoxIcon, SplineIcon, UndoIcon, WarningIcon } from '../../UI/Icons';
 import { useAssets } from '../../../context/AssetContext';
 import { useScene } from '../../../context/SceneContext';
 import { frontendDiagnostics } from '../../../diagnostics/runtime';
@@ -7,7 +7,9 @@ import { materialLibrary } from '../../../runtime/materials/materialLibrary';
 import { overrideTextureFlipY } from '../../../utils/materialOverrides';
 import { MESH_MAP_LABELS, MESH_MAPS } from '../../../texturing/graph/nodes/io';
 import { readStoredGraph } from '../../../texturing/graph/stored';
-import { CHANNEL_LABELS, allLayers, mapLayer, readPaintDocument, type MaskEffect } from '../../../texturing/paint/paintTypes';
+import { CHANNEL_LABELS, allLayers, mapLayer, paintId, readPaintDocument, type MaskEffect } from '../../../texturing/paint/paintTypes';
+import type { SurfacePath } from '../../../texturing/paint/paths';
+import { PathPanel } from './PathPanel';
 import { MAX_ID_COLOURS } from '../../../texturing/paint/paintStack';
 import { PICK_LABELS, PICK_MODES, changeTriangles, matchesId, type PickMode } from '../../../texturing/paint/selection';
 import { DEFAULT_BRUSH, MAX_BRUSH_SIZE, type BrushSettings, type StrokeTarget } from '../../../texturing/paint/strokes';
@@ -22,7 +24,7 @@ import { LayerPanel, type LayerSelection } from './LayerPanel';
 import { useMaterialSections, type MaterialChoice } from './MaterialPicker';
 import { SliderRow } from './PaintFields';
 import { PaintSession, findPaintAsset, paintGraphResolver, type PaintTarget } from './paintSession';
-import { PaintViewport, type PaintTool, type SurfaceHit, type ViewMode } from './PaintViewport';
+import { PaintViewport, type PaintTool, type PathEdit, type SurfaceHit, type ViewMode, type ViewportCommands } from './PaintViewport';
 import { SetPanel } from './SetPanel';
 import { UvPanel } from './UvPanel';
 import { UvSession } from './uvSession';
@@ -215,6 +217,40 @@ export const PaintWorkspace: React.FC = () => {
         return true;
     }, [effect, layer, session]);
 
+    // Paths: kept in the set's document; the path tool adds, picks and drags their points.
+    const viewportCommands = useRef<ViewportCommands | null>(null);
+    const [pathId, setPathId] = useState<string | null>(null);
+    const [pathPoint, setPathPoint] = useState<number | null>(null);
+    const paths = useMemo(() => document?.paths ?? [], [document]);
+    const activePath = paths.find((each) => each.id === pathId) ?? null;
+    const extent = useMemo(() => { const box = session?.part.bounds; return box ? Math.max(box.max.x - box.min.x, box.max.y - box.min.y, box.max.z - box.min.z, 1e-6) : 1; }, [session]);
+    const changePaths = useCallback((next: SurfacePath[], label: string, coalesce?: string) => {
+        if (session) session.change({ ...session.document, paths: next }, label, coalesce);
+    }, [session]);
+    const pathEdit: PathEdit = useMemo(() => ({
+        path: activePath,
+        point: pathPoint,
+        onAdd: (position, normal, size) => {
+            if (!session) return;
+            const point = { position, normal, size, opacity: 1 };
+            if (!activePath) {
+                const created: SurfacePath = { id: paintId('p'), name: `Path ${paths.length + 1}`, points: [point], closed: false, style: 'brush', gap: 0.2, font: 'sans-serif' };
+                changePaths([...paths, created], 'Start a path');
+                setPathId(created.id);
+                setPathPoint(0);
+                return;
+            }
+            const at = pathPoint === null ? activePath.points.length : pathPoint + 1;
+            changePaths(paths.map((each) => (each.id === activePath.id ? { ...each, points: [...each.points.slice(0, at), point, ...each.points.slice(at)] } : each)), 'Add a path point');
+            setPathPoint(at);
+        },
+        onSelect: setPathPoint,
+        onMove: (index, position, normal) => {
+            if (!activePath) return;
+            changePaths(paths.map((each) => (each.id === activePath.id ? { ...each, points: each.points.map((point, i) => (i === index ? { ...point, position, normal } : point)) } : each)), 'Move a path point', `${activePath.id}:move:${index}`);
+        },
+    }), [activePath, changePaths, pathPoint, paths, session]);
+
     const maskImage = useCallback((tile: number) => (session && layer ? session.stack.cachedMask(layer.id, tile) : null), [layer, session]);
     // The mask view's layer has its mask kept whole while it is shown.
     const layerId = layer?.id ?? null;
@@ -246,6 +282,7 @@ export const PaintWorkspace: React.FC = () => {
             else if (key === 'e') setTool('erase');
             else if (key === 'g') setTool('island');
             else if (key === 'q') setTool('polygon');
+            else if (key === 'l') setTool('path');
             else if (key === 'p') setTool('pick');
             else if (key === 's') setTool('seam');
         };
@@ -296,6 +333,7 @@ export const PaintWorkspace: React.FC = () => {
                     <IconButton label="Fill a UV island" shortcut="G" active={tool === 'island'} onClick={() => setTool('island')}><BucketIcon size={14} /></IconButton>
                     <IconButton label="Fill polygons: a triangle, a quad, a mesh part, a UV piece or an edge loop" shortcut="Q" active={tool === 'polygon'} onClick={() => setTool('polygon')}><SelectBoxIcon size={14} /></IconButton>
                     {tool === 'polygon' && <Select value={pickMode} options={PICK_MODES.map((mode) => ({ value: mode, label: PICK_LABELS[mode] }))} onChange={(mode) => setPickMode(mode as PickMode)} className="w-28" />}
+                    <IconButton label="Draw a path on the surface: paint along it, fill it, ribbons, stitches and text" shortcut="L" active={tool === 'path'} onClick={() => { setTool('path'); setPanel('brush'); }}><SplineIcon size={14} /></IconButton>
                     <IconButton label="Pick a colour" shortcut="P" active={tool === 'pick'} onClick={() => setTool('pick')}><EyedropperIcon size={14} /></IconButton>
                     <IconButton label="Mark or clear seams (Shift clears)" shortcut="S" active={tool === 'seam'} onClick={() => setTool('seam')}><ScissorsIcon size={14} /></IconButton>
                     <span className="mx-1 h-4 w-px bg-zinc-800" />
@@ -317,7 +355,8 @@ export const PaintWorkspace: React.FC = () => {
                         <PaintViewport session={session} tool={tool} brush={brush} target={target} view={view === 'uv2d' ? 'material' : view} maskImage={maskImage}
                             onBrushSize={(size) => setBrush({ ...brush, size })}
                             onPick={(color) => { setBrush({ ...brush, values: { ...brush.values, baseColor: color } }); setTool('paint'); }}
-                            onMessage={setMessage} frameSignal={frameSignal} uv={uv} pickMode={pickMode} onSurfacePick={onSurfacePick} />
+                            onMessage={setMessage} frameSignal={frameSignal} uv={uv} pickMode={pickMode} onSurfacePick={onSurfacePick}
+                            pathEdit={tool === 'path' ? pathEdit : null} commands={viewportCommands} />
                     ) : (
                         <div className="flex flex-1 items-center justify-center text-xs text-zinc-500">
                             {opening ? <span className="flex items-center gap-2"><Spinner /> Laying out the surface…</span> : message ?? (part ? '' : 'Pick a texture set on the left to paint it.')}
@@ -347,7 +386,14 @@ export const PaintWorkspace: React.FC = () => {
                 </div>
                 {session ? (
                     panel === 'layers' ? <LayerPanel session={session} selection={selection} onSelect={setSelection} resolve={resolve} graphs={graphs} textures={textures} onPaintWith={paintWith} onMessage={setMessage} onUseTool={setTool} />
-                        : panel === 'brush' ? <div className="min-h-0 flex-1 overflow-y-auto"><BrushPanel brush={brush} onChange={setBrush} channels={session.document.channels} paintingMask={target?.kind === 'mask'} textures={textures} onPick={() => setTool('pick')}
+                        : panel === 'brush' ? <div className="min-h-0 flex-1 overflow-y-auto">{tool === 'path' && (
+                            <PathPanel paths={paths} path={activePath} point={pathPoint} extent={extent} graphs={graphs} onPick={(id) => { setPathId(id); setPathPoint(null); }}
+                                onNew={() => { setPathId(null); setPathPoint(null); setMessage('Click the model to start the new path.'); }}
+                                onChange={(next, label, coalesce) => changePaths(paths.map((each) => (each.id === next.id ? next : each)), label, coalesce)}
+                                onDelete={(id) => { changePaths(paths.filter((each) => each.id !== id), 'Delete path'); setPathId(null); setPathPoint(null); }}
+                                onSelectPoint={setPathPoint}
+                                onPaint={(how) => { if (activePath) void viewportCommands.current?.paintPath(activePath, how); }} />
+                        )}<BrushPanel brush={brush} onChange={setBrush} channels={session.document.channels} paintingMask={target?.kind === 'mask'} textures={textures} onPick={() => setTool('pick')}
                             paintWith={previewHost ? { sections: brushSections, host: previewHost, onPick: paintWith, onMessage: setMessage } : undefined} onMessage={setMessage} /></div>
                             : panel === 'uvs' && uv ? <div className="min-h-0 flex-1 overflow-y-auto"><UvPanel uv={uv} onSeamTool={() => setTool('seam')} onApplied={() => { if (!uv.proposal) { putOnAfterOpen.current = uv.putOnWhenOpen; setReopen((value) => value + 1); } }} /></div>
                                 : <div className="min-h-0 flex-1 overflow-y-auto"><SetPanel session={session} models={paintable} onReopen={() => setReopen((value) => value + 1)} /></div>
