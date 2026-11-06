@@ -87,7 +87,8 @@ export const MaterialGraphEditor: React.FC = () => {
     const shaderError = useMaterialShaderError();
     // The nodes a failed compile was traced back to, marked on the canvas with what is wrong.
     const nodeErrors = useMaterialNodeErrors();
-    const canvasMarks = { nodeErrors };
+    // The canvas takes node errors as a plain record (node id -> message).
+    const canvasMarks = useMemo(() => ({ nodeErrors: Object.fromEntries(nodeErrors) as Record<string, string> }), [nodeErrors]);
     const asset = assets.find(candidate => candidate.id === selectedId) ?? assets[0] ?? null;
     // A material another tab asked to open (Paint's "edit a copy"): taken when this tab opens, and while it is open.
     useEffect(() => {
