@@ -1,4 +1,4 @@
-import React, { useSyncExternalStore } from 'react';
+import React, { useState, useSyncExternalStore } from 'react';
 import { CheckIcon, CrossIcon, GridIcon, LockIcon, MinusIcon, PackageIcon, PlusIcon, RotateIcon, ScissorsIcon, UnlockIcon, WandIcon } from '../../UI/Icons';
 import { Button, Segmented, Spinner } from '../../UI/kit';
 import type { UvSession, UvStats } from './uvSession';
@@ -26,6 +26,8 @@ const Figures: React.FC<{ title: string; stats: UvStats; size: number }> = ({ ti
 
 export const UvPanel: React.FC<{ uv: UvSession; onSeamTool: () => void; onApplied: () => void }> = ({ uv, onSeamTool, onApplied }) => {
     useSyncExternalStore(uv.subscribe, uv.getVersion);
+    const [relaxEdges, setRelaxEdges] = useState(false);
+    const [densityTarget, setDensityTarget] = useState(0);
     const busy = Boolean(uv.busy);
     const set = uv.unwrapSettings;
     const pack = uv.packSettings;
@@ -84,6 +86,24 @@ export const UvPanel: React.FC<{ uv: UvSession; onSeamTool: () => void; onApplie
                     ) : (
                         <p className="text-2xs leading-snug text-zinc-500">Pick islands in the UV layout (2D) view to turn them, resize them or keep them in place. Drag to move them; Ctrl+Z undoes UV edits there.</p>
                     )}
+                    <div className="text-2xs font-semibold text-zinc-300">{uv.selected.size ? 'Shape of the picked islands' : 'Shape of every island'}</div>
+                    <div className="grid grid-cols-2 gap-1.5">
+                        <Button size="sm" disabled={busy} onClick={() => uv.relaxIslands(relaxEdges)}>Relax</Button>
+                        <Button size="sm" disabled={busy} onClick={() => uv.straightenIslands()}>Straighten</Button>
+                    </div>
+                    <label className="flex items-center gap-1.5 text-2xs text-zinc-300">
+                        <input type="checkbox" className="accent-sky-500" checked={relaxEdges} onChange={(event) => setRelaxEdges(event.target.checked)} />
+                        Relax their edges too
+                    </label>
+                    <p className="text-2xs leading-snug text-zinc-500">Relax eases stretch inside each island; Straighten turns each island so its edges run along U and V.</p>
+                    <div className="text-2xs font-semibold text-zinc-300">Texel density</div>
+                    <p className="text-2xs text-zinc-400">{Math.round(uv.texelDensity)} texels per model unit{uv.selected.size ? ' (picked islands)' : ''}.</p>
+                    <Row label="Texels per unit" value={densityTarget || Math.round(uv.texelDensity)} min={1} max={4096} step={1} onChange={setDensityTarget} />
+                    <div className="grid grid-cols-2 gap-1.5">
+                        <Button size="sm" disabled={busy} onClick={() => uv.evenTexelDensity()}>Even out</Button>
+                        <Button size="sm" disabled={busy || !densityTarget} onClick={() => uv.evenTexelDensity(densityTarget)}>Set to this</Button>
+                    </div>
+                    <p className="text-2xs leading-snug text-zinc-500">Even out gives the islands one density, theirs together; Set to this gives them the density above (type another set's figure to match it). Pack again to fit them.</p>
                 </section>
             )}
 
