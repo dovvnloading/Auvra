@@ -56,6 +56,9 @@ export interface BrushSettings {
     maskValue: number;
 }
 
+/** The largest brush radius, in screen pixels: the size sliders and the ] key stop here. */
+export const MAX_BRUSH_SIZE = 600;
+
 export const DEFAULT_BRUSH: BrushSettings = {
     size: 40,
     hardness: 0.6,

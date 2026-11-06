@@ -1,6 +1,6 @@
 import React from 'react';
 import { CHANNEL_IS_COLOR, CHANNEL_LABELS, type PaintChannel } from '../../../texturing/paint/paintTypes';
-import type { BrushSettings } from '../../../texturing/paint/strokes';
+import { MAX_BRUSH_SIZE, type BrushSettings } from '../../../texturing/paint/strokes';
 import { Segmented } from '../../UI/kit';
 import { Select } from '../../UI/Select';
 import { ColourFieldRgb } from '../../UI/ColourPicker';
@@ -60,7 +60,7 @@ export const BrushPanel: React.FC<{
             </section>
             <section className="space-y-2">
                 <div className="text-2xs font-semibold text-zinc-300">Brush</div>
-                <Row label="Size" value={brush.size} min={1} max={400} step={1} suffix="px" onChange={(size) => set({ size })} />
+                <Row label="Size" value={brush.size} min={1} max={MAX_BRUSH_SIZE} step={1} suffix="px" onChange={(size) => set({ size })} />
                 <Row label="Hardness" value={brush.hardness} min={0} max={1} onChange={(hardness) => set({ hardness })} />
                 <Row label="Flow" value={brush.flow} min={0.01} max={1} onChange={(flow) => set({ flow })} />
                 <Row label="Opacity" value={brush.opacity} min={0} max={1} onChange={(opacity) => set({ opacity })} />

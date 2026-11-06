@@ -8,7 +8,7 @@ import { overrideTextureFlipY } from '../../../utils/materialOverrides';
 import { MESH_MAP_LABELS, MESH_MAPS } from '../../../texturing/graph/nodes/io';
 import { readStoredGraph } from '../../../texturing/graph/stored';
 import { CHANNEL_LABELS, allLayers, readPaintDocument } from '../../../texturing/paint/paintTypes';
-import { DEFAULT_BRUSH, type BrushSettings, type StrokeTarget } from '../../../texturing/paint/strokes';
+import { DEFAULT_BRUSH, MAX_BRUSH_SIZE, type BrushSettings, type StrokeTarget } from '../../../texturing/paint/strokes';
 import { listModelParts, type ModelPart } from '../../Tools/Retexture/parts';
 import { IconButton, Segmented, Spinner } from '../../UI/kit';
 import { Select } from '../../UI/Select';
@@ -243,7 +243,7 @@ export const PaintWorkspace: React.FC = () => {
                     <IconButton label="Frame the model" shortcut="F" onClick={() => setFrameSignal((value) => value + 1)}><FrameIcon size={14} /></IconButton>
                     <span className="mx-1 h-4 w-px bg-zinc-800" />
                     <span className="text-2xs text-zinc-500">Size</span>
-                    <input type="range" min={1} max={400} value={brush.size} onChange={(event) => setBrush({ ...brush, size: Number(event.target.value) })} className="h-1 w-24 accent-sky-500" aria-label="Brush size" />
+                    <input type="range" min={1} max={MAX_BRUSH_SIZE} value={brush.size} onChange={(event) => setBrush({ ...brush, size: Number(event.target.value) })} className="h-1 w-24 accent-sky-500" aria-label="Brush size" />
                     <span className="w-8 text-2xs tabular-nums text-zinc-400">{brush.size}</span>
                     <Segmented value={brush.projection} options={[{ value: 'screen', label: 'Screen' }, { value: 'surface', label: 'Surface' }]} onChange={(projection) => setBrush({ ...brush, projection })} label="Brush projection" />
                     <span className="flex-1" />
