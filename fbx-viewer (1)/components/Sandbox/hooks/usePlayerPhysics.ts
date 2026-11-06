@@ -508,6 +508,8 @@ export const usePlayerPhysics = (
         rootTravel?: { readonly x: number; readonly z: number } | null,
         /** While a turn clip plays, the radians it turned the character this step: the turn in place follows it. */
         clipTurn?: number | null,
+        /** The clip turning (clipTurn) turns the character round: the facing follows it while moving too. */
+        clipTurnsRound = false,
     ) => {
         const {
             STAMINA_DRAIN, STAMINA_REGEN, MAX_STAMINA, EXHAUSTION_RECOVERY
@@ -589,6 +591,14 @@ export const usePlayerPhysics = (
                     motion.turnBy(Math.sign(turned) * most, delta);
                 }
             }
+        } else if (clipTurnsRound && !input.isAiming && targetRotation !== null
+            && !(typeof clipTurn === 'number' && Math.abs(clipTurn) > 1e-5 && Math.sign(clipTurn) !== Math.sign(wrapAngle(targetRotation - motion.facing.x)))) {
+            // Turning round, the clip that turns round sets the pace (its feet step round as it turns), never
+            // past the way asked for; a step it has not turned holds. Turning the other way, or once it has
+            // played, the movement turns the character again.
+            const left = wrapAngle(targetRotation - motion.facing.x);
+            const turn = typeof clipTurn === 'number' ? clipTurn : 0;
+            motion.turnBy(Math.abs(turn) > Math.abs(left) ? left : turn, delta);
         } else if (turningInPlace.current && typeof clipTurn === 'number') {
             // Exactly as the turn clip turns the character while one plays.
             motion.turnBy(clipTurn, delta);

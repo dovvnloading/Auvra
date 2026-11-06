@@ -176,6 +176,17 @@ describe('search', () => {
     expect(database.frameOf(0, 100)).toBe(database.frames.length - 1);
     expect(database.frameOf(5, 0)).toBe(-1);
   });
+
+  it('sees a turn round that ends still turning as having turned round, not as spinning on past its end', () => {
+    // Turns half a circle in 0.6 s, at full rate to its last moment.
+    const turn = locomotion('turn round', 0, 1.5, Math.PI / 0.6, 0.6, 2, false);
+    const ended = turn.samples[turn.samples.length - 1].facing;
+    const features = frameFeatures(turn, 0);
+    const last = TRAJECTORY_TIMES.length - 1;
+    // A second ahead, well past the clip's end, it faces the way it ended.
+    const facing = Math.atan2(features[TRAJECTORY_TIMES.length * 2 + last * 2], features[TRAJECTORY_TIMES.length * 2 + last * 2 + 1]);
+    expect(Math.abs(Math.atan2(Math.sin(facing - ended), Math.cos(facing - ended)))).toBeLessThan(1e-6);
+  });
 });
 
 describe('matcher', () => {
@@ -472,5 +483,43 @@ describe('steering', () => {
       facings: TRAJECTORY_TIMES.map(t => at(t).facing),
     });
     expect(database.clips[reversing.clip].name).toBe('turn round');
+  });
+});
+
+describe('turning round', () => {
+  /** Slows while turning half a circle, then walks off the other way. */
+  const turnRound = () => shaped('turn round', 1.2, t => 1.5 * Math.abs(1 - t / 0.6), () => Math.PI / 1.2);
+
+  it('reads a clip turning between its samples, not in steps', () => {
+    const database = new MotionDatabase([turnRound()]);
+    // Frames come faster than samples: half a sample on turns half as far as a whole one.
+    const at = (time: number) => database.facingAt(0, time);
+    const sample = 1 / SAMPLE_RATE;
+    const half = at(0.3 + sample / 2) - at(0.3);
+    const whole = at(0.3 + sample) - at(0.3);
+    expect(whole).toBeGreaterThan(0);
+    expect(half / whole).toBeCloseTo(0.5, 5);
+  });
+
+  it('marks the clips that turn the character round', () => {
+    const database = new MotionDatabase([locomotion('idle', 0, 0), locomotion('walk', 0, 1.5), shaped('start', 1.2, t => Math.min(1.5, 2 * t)), turnRound()]);
+    expect(database.turnsRound).toEqual([false, false, false, true]);
+  });
+
+  it('plays a turn round through while the turn asked for goes its way, and lets go when it goes the other way', () => {
+    const turn = turnRound();
+    const database = new MotionDatabase([locomotion('idle', 0, 0), locomotion('walk', 0, 1.5), turn]);
+    const matcher = new MotionMatcher(database, { ...DEFAULT_MATCHER_OPTIONS, searchInterval: 0 });
+    matcher.clip = 2;
+    matcher.time = 0.2;
+    const walking = { x: 0, z: 1.5 };
+    // Asked to walk on straight but still turned well round the way the clip turns: it carries on with the turn.
+    const sameWay = { positions: TRAJECTORY_TIMES.map(t => ({ x: 0, z: 1.5 * t })), facings: TRAJECTORY_TIMES.map(() => Math.PI / 2) };
+    for (let i = 0; i < 10; i++) expect(matcher.step(1 / 60, walking, walking, 0, sameWay).jumped).toBe(false);
+    expect(database.clips[matcher.clip].name).toBe('turn round');
+    // Asked to turn the other way: it searches again and leaves the turn.
+    const otherWay = { positions: TRAJECTORY_TIMES.map(t => ({ x: 0, z: 1.5 * t })), facings: TRAJECTORY_TIMES.map(() => -Math.PI / 2) };
+    for (let i = 0; i < 10; i++) matcher.step(1 / 60, walking, walking, 0, otherWay);
+    expect(database.clips[matcher.clip].name).toBe('walk');
   });
 });
