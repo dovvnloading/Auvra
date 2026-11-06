@@ -46,7 +46,14 @@ const settled = () => until(() => webGpuWaiting() === 0);
 const finish = async (state: RootState): Promise<void> => {
   // Makes this frame's work happen now, so the time it took is the time it cost.
   if (isGpuRenderer(state.gl)) {
-    await (state.gl as unknown as GpuRenderer).core.device.queue.onSubmittedWorkDone();
+    const { core } = state.gl as unknown as GpuRenderer;
+    try {
+      await core.device.queue.onSubmittedWorkDone();
+    } catch (error) {
+      // A lost device fails everything after it: what it said when it went is the useful part.
+      const lost = await Promise.race([core.lost, new Promise<null>((resolve) => setTimeout(() => resolve(null), 1000))]);
+      throw new Error(`The WebGPU device stopped (${lost ? `${lost.reason}: ${lost.message}` : String(error)})`);
+    }
     return;
   }
   state.gl.getContext().readPixels(0, 0, 1, 1, WebGL2RenderingContext.RGBA, WebGL2RenderingContext.UNSIGNED_BYTE, new Uint8Array(4));

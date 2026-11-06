@@ -350,6 +350,15 @@ export class MaterialPool {
     }
   }
 
+  /** Gives back everything, for a renderer that is closing: its materials are its own, unlike its pictures and vertices. */
+  destroy(): void {
+    for (const entry of this.live) entry.material.removeEventListener("dispose", this.onDispose);
+    this.live.clear();
+    this.unheld.clear();
+    this.lastPacks.clear();
+    this.buffer.destroy();
+  }
+
   private release(material: THREE.Material): void {
     material.removeEventListener("dispose", this.onDispose);
     const entry = this.entries.get(material);

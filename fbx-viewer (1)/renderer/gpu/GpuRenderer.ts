@@ -49,10 +49,14 @@ const FAILED_FRAMES_TO_GIVE_UP = 60;
 const VITAL_PASSES: ReadonlySet<string> = new Set(["surfaces", "deferred-lighting", "present"]);
 const VISIBILITY_ALL = 7; // vertex | fragment | compute
 
+/**
+ * What every renderer on a device shares: the pictures and vertices, which cost an upload each. Materials are each
+ * renderer's own (a slice of numbers and a bind group, made again at once): sharing them across renderers let one
+ * renderer's draws read what another had left in the pool, and lit surfaces came out wrong in the next view.
+ */
 interface SharedPools {
   geometries: GeometryPool;
   textures: TexturePool;
-  materials: MaterialPool;
 }
 
 const pools = new WeakMap<GPUDevice, SharedPools>();
@@ -60,8 +64,7 @@ const pools = new WeakMap<GPUDevice, SharedPools>();
 const poolsFor = (core: GpuCore): SharedPools => {
   let shared = pools.get(core.device);
   if (!shared) {
-    const textures = new TexturePool(core.device, core.features);
-    shared = { geometries: new GeometryPool(core.device), textures, materials: new MaterialPool(core.device, textures) };
+    shared = { geometries: new GeometryPool(core.device), textures: new TexturePool(core.device, core.features) };
     pools.set(core.device, shared);
   }
   return shared;
@@ -157,8 +160,8 @@ export class GpuRenderer implements GpuRendererApi {
     this.core = core;
     const shared = poolsFor(core);
     this.geometries = shared.geometries;
-    this.materials = shared.materials;
     this.textures = shared.textures;
+    this.materials = new MaterialPool(core.device, shared.textures);
     const { device } = core;
     this.capabilities = {
       isWebGL2: false,
@@ -324,6 +327,7 @@ export class GpuRenderer implements GpuRendererApi {
     this.destroyTargets();
     for (const { gpu } of this.gpuScenes.values()) gpu.destroy();
     this.gpuScenes.clear();
+    this.materials.destroy();
     this.sceneBindGroup = null;
     this.boundScene = null;
     this.viewBuffer.destroy();

@@ -126,8 +126,10 @@ const main = async () => {
 
     // WebGPU on the processor goes through Vulkan's SwiftShader, which the browser brings along. Asking for GL's
     // SwiftShader as well leaves the browser with no WebGPU adapter at all.
+    // A headless Linux browser has no window surface for Vulkan, and loses its device without being told not to want one.
+    const linuxVulkan = process.platform === 'linux' ? ['--use-angle=vulkan', '--disable-vulkan-surface'] : [];
     const softwareGpu = onWebGpu
-      ? ['--enable-unsafe-webgpu', '--enable-features=Vulkan', '--use-vulkan=swiftshader', '--use-webgpu-adapter=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist']
+      ? ['--enable-unsafe-webgpu', '--enable-features=Vulkan', '--use-vulkan=swiftshader', '--use-webgpu-adapter=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist', ...linuxVulkan]
       : ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'];
     const gpuFlags = realGpu ? ['--ignore-gpu-blocklist', ...(onWebGpu ? ['--enable-unsafe-webgpu'] : [])] : softwareGpu;
     browser = spawn(browserPath(), [
