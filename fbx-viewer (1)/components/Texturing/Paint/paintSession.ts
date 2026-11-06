@@ -11,6 +11,7 @@ import type { GraphEntry, GraphResolver } from '../../../texturing/graph/registr
 import { readStoredGraph } from '../../../texturing/graph/stored';
 import { buildPartMesh, buildWholeMesh, type PartMesh } from '../../../texturing/mesh/partMesh';
 import type { SurfacePicker } from '../../../texturing/mesh/picker';
+import { SurfaceSelector } from '../../../texturing/paint/selection';
 import { DEEP_EXPORT, ROLE_LABELS, encodeChannels, materialGraphForTextures, tileAtlas, type ChannelTextureIds, type PictureLayout } from '../../../texturing/materialOutput';
 import { GpuResetError, PaintStack, pictureOwners, type StackHost } from '../../../texturing/paint/paintStack';
 import { BUILTIN_GRAPHS } from '../../../texturing/paint/smartLibrary';
@@ -117,6 +118,28 @@ export class PaintSession {
     /** False while the GPU context is lost (or after it came back, until the set opens again). */
     get usable(): boolean {
         return this.stack.usable;
+    }
+
+    private picks: SurfaceSelector | null = null;
+
+    /** Finds the triangles a polygon pick takes in (its quads and loops worked out the first time). */
+    get selector(): SurfaceSelector {
+        if (!this.picks) this.picks = new SurfaceSelector(this.part);
+        return this.picks;
+    }
+
+    /** The baked ID map's colour where a triangle is met at `uv`, or null without an ID map. */
+    idColourAt(triangle: number, uv: THREE.Vector2): [number, number, number] | null {
+        const part = this.part;
+        const image = this.stack.meshMaps(part.triangleTile[triangle]).id;
+        if (!image || !this.usable) return null;
+        const at = new THREE.Vector2(uv.x - part.triangleShift[triangle * 2], uv.y - part.triangleShift[triangle * 2 + 1]);
+        const probe = this.gpu.image(1, 1, 'color', 32);
+        // The texel itself, never a blend of neighbouring IDs.
+        this.gpu.passNow(probe, { fragment: 'uniform vec2 uAt;\nvoid main() { ivec2 size = textureSize(source, 0); outColor = texelFetch(source, clamp(ivec2(fract(uAt) * vec2(size)), ivec2(0), size - 1), 0); }', inputs: { source: image }, uniforms: { uAt: at } });
+        const value = this.gpu.readFloat(probe);
+        this.gpu.release(probe);
+        return [value[0], value[1], value[2]];
     }
 
     /** Why painting waits (a new UV layout being put on), or null. */

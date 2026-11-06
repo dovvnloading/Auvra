@@ -25,6 +25,8 @@ import {
     type PaintLayer,
     type TilePictures,
 } from './paintTypes';
+import { SELECTION_WIDTH, selectionBytes } from './selection';
+import { AXIS_INDEX } from './projections';
 import { DirtyRegion, alignRect, clampRect, expandRect, scissorOf, type Rect } from './regions';
 import { SparsePicture } from './sparsePicture';
 
@@ -305,8 +307,12 @@ uniform int uChannel;
 uniform vec3 uCentre;
 uniform float uExtent;
 uniform float uOffset;
+uniform int uAxis;
+uniform int uMirror;
+uniform int uMirrorAxis;
 vec4 read(vec2 uv) {
-    vec4 c = texture(uTexture, uv);
+    // Round a ball or tube the picture's u jumps from 1 back to 0: read without mipmaps there, so no seam shows.
+    vec4 c = uProjection >= 3 ? textureLod(uTexture, uv, 0.0) : texture(uTexture, uv);
     if (uGray == 1) c.rgb = c.rrr;
     if (uSrgb == 1) c.rgb = linearToSrgb(c.rgb);
     if (uRebuildNormal == 1) { vec2 xy = c.xy * 2.0 - 1.0; c.rgb = vec3(xy, sqrt(saturate(1.0 - dot(xy, xy)))) * 0.5 + 0.5; }
@@ -328,12 +334,52 @@ void main() {
         return;
     }
     vec3 n = normalize(vNormal);
+    vec3 pos = vPos;
+    // Symmetry: a place on the near side of the middle reads as its mirror image on the far side.
+    if (uMirror == 1 && pos[uMirrorAxis] < uCentre[uMirrorAxis]) {
+        pos[uMirrorAxis] = 2.0 * uCentre[uMirrorAxis] - pos[uMirrorAxis];
+        n[uMirrorAxis] = -n[uMirrorAxis];
+    }
+    mat2 r = rotate2(radians(uRotation));
+    if (uProjection >= 2) {
+        // Flat along an axis, round a ball (poles on the axis) or round a tube (along the axis).
+        vec3 d = pos - uCentre;
+        int a = uAxis == 0 ? 2 : 0;
+        int b = uAxis == 1 ? 2 : 1;
+        vec3 axisDir = vec3(uAxis == 0 ? 1.0 : 0.0, uAxis == 1 ? 1.0 : 0.0, uAxis == 2 ? 1.0 : 0.0);
+        vec2 uv;
+        vec3 t;
+        vec3 bt;
+        if (uProjection == 2) {
+            uv = vec2(d[a], d[b]) / uExtent + uOffset;
+            t = vec3(a == 0 ? 1.0 : 0.0, 0.0, a == 2 ? 1.0 : 0.0);
+            bt = vec3(0.0, b == 1 ? 1.0 : 0.0, b == 2 ? 1.0 : 0.0);
+        } else {
+            float around = atan(d[b], d[a]) / 6.28318530718 + 0.5;
+            vec3 radial = d - axisDir * dot(d, axisDir);
+            t = normalize(cross(axisDir, radial) + vec3(1e-6));
+            if (uProjection == 4) {
+                uv = vec2(around, dot(d, axisDir) / uExtent + uOffset);
+                bt = axisDir;
+            } else {
+                uv = vec2(around, acos(clamp(dot(normalize(d + vec3(1e-6)), axisDir), -1.0, 1.0)) / 3.14159265);
+                bt = normalize(cross(normalize(d + vec3(1e-6)), t));
+            }
+        }
+        uv = r * (uv * uScale);
+        if (uNormalMap == 0) { outColor = vec4(read(uv).rgb, 1.0); return; }
+        vec3 slopeFlat = lean(uv, r, t, bt);
+        vec3 bentFlat = normalize(n + slopeFlat - n * dot(n, slopeFlat));
+        mat3 frameFlat = surfaceFrame(n);
+        vec3 localFlat = abs(determinant(frameFlat)) > 1e-8 ? inverse(frameFlat) * bentFlat : transpose(frameFlat) * bentFlat;
+        outColor = vec4(normalize(localFlat) * 0.5 + 0.5, 1.0);
+        return;
+    }
     vec3 w = pow(abs(n), vec3(uSharpness));
     w /= max(w.x + w.y + w.z, 1e-5);
     // Where the position map puts this place (with an offset of 0.5), so a texture graph's triplanar
     // projection reading that map lays a pattern exactly where this does.
-    vec3 q = ((vPos - uCentre) / uExtent + uOffset) * uScale;
-    mat2 r = rotate2(radians(uRotation));
+    vec3 q = ((pos - uCentre) / uExtent + uOffset) * uScale;
     vec2 ux = r * q.zy;
     vec2 uy = r * q.xz;
     vec2 uz = r * q.xy;
@@ -350,7 +396,35 @@ void main() {
     outColor = vec4(normalize(local) * 0.5 + 0.5, 1.0);
 }`;
 
-const MASK_KINDS = { paint: 0, fill: 1, generator: 2, levels: 3, blur: 4, invert: 5, below: 6 } as const;
+const MASK_KINDS = { paint: 0, fill: 1, generator: 2, levels: 3, blur: 4, invert: 5, below: 6, polygon: 7, id: 8 } as const;
+
+/** The most colours an ID colour mask takes. */
+export const MAX_ID_COLOURS = 16;
+
+/** The triangles of a polygon mask, white where a picked one lies (a texel per triangle number in uSelection). */
+const POLYGON_MASK = /* glsl */ `
+uniform sampler2D uSelection;
+void main() {
+    int t = int(vIds.z + 0.5);
+    outColor = vec4(texelFetch(uSelection, ivec2(t % ${SELECTION_WIDTH}, t / ${SELECTION_WIDTH}), 0).r > 0.5 ? 1.0 : 0.0);
+}`;
+
+/** White where the baked ID map holds one of the colours (each channel within the tolerance). */
+const ID_MASK = /* glsl */ `
+uniform vec2 uAt;
+uniform vec3 uColours[${MAX_ID_COLOURS}];
+uniform int uCount;
+uniform float uTolerance;
+void main() {
+    vec3 c = texelFetch(idMap, ivec2(gl_FragCoord.xy + uAt), 0).rgb;
+    float m = 0.0;
+    for (int i = 0; i < ${MAX_ID_COLOURS}; i++) {
+        if (i >= uCount) break;
+        vec3 d = abs(c - uColours[i]);
+        if (max(d.x, max(d.y, d.z)) <= uTolerance) { m = 1.0; break; }
+    }
+    outColor = vec4(m);
+}`;
 const MASK_BLENDS = { multiply: 0, add: 1, subtract: 2, replace: 3, max: 4, min: 5 } as const;
 const FILTER_KINDS = { blur: 0, sharpen: 1, hsl: 2, levels: 3, warp: 4, invert: 5 } as const;
 
@@ -505,6 +579,8 @@ export class PaintStack {
     /** The painted normal detail of each tile, padded (the final normal is built on it). */
     private readonly detail = new Map<number, GpuImage>();
     private readonly fills = new Map<string, Cached>();
+    /** Polygon masks, whole tiles, by `effect|tile` (signed with their triangles). */
+    private readonly polygonMasks = new Map<string, Cached>();
     /** Graph pictures copied with smaller versions of themselves, for casting. */
     private readonly castCopies = new Map<string, { signature: string; target: THREE.WebGLRenderTarget }>();
     private readonly evaluators = new Map<string, TextureGraphEvaluator>();
@@ -558,6 +634,7 @@ export class PaintStack {
         this.outputs.clear();
         this.detail.clear();
         this.fills.clear();
+        this.polygonMasks.clear();
         this.castCopies.clear();
         this.padding.clear();
         this.watchedMasks.clear();
@@ -982,7 +1059,32 @@ export class PaintStack {
     setDocument(document: PaintDocument): void {
         if (document === this.document) return;
         this.document = document;
+        // Polygon masks of effects that are gone are let go of (undo bringing one back draws it again).
+        const effects = new Set(allLayers(document.layers).flatMap((layer) => (layer.mask ?? []).map((effect) => effect.id)));
+        for (const [key, cached] of this.polygonMasks) {
+            if (effects.has(key.slice(0, key.indexOf('|')))) continue;
+            this.gpu.release(cached.image);
+            this.polygonMasks.delete(key);
+        }
         this.invalidate();
+    }
+
+    /** A polygon mask effect's triangles drawn on a whole tile (kept until its triangles change). */
+    private polygonMask(effect: MaskEffect, tile: number): GpuImage {
+        const key = `${effect.id}|${tile}`;
+        const signature = (effect.triangles ?? []).join(',');
+        const cached = this.polygonMasks.get(key);
+        if (cached && cached.signature === signature) return cached.image;
+        if (cached) this.gpu.release(cached.image);
+        const image = this.gpu.image(this.size, this.size, 'gray', 8);
+        const bytes = selectionBytes(effect.triangles ?? [], this.part.indices.length / 3);
+        const selection = new THREE.DataTexture(bytes.data, bytes.width, bytes.height, THREE.RedFormat, THREE.UnsignedByteType);
+        selection.needsUpdate = true;
+        // Edge lines too, so thin triangles are not lost; a picked triangle wins a texel it shares.
+        this.raster.draw(image, tile, POLYGON_MASK, { blend: 'max', clear: [0, 0, 0, 0], uniforms: { uSelection: selection } });
+        selection.dispose();
+        this.polygonMasks.set(key, { signature, image });
+        return image;
     }
 
     private markAll(): void {
@@ -1425,7 +1527,7 @@ void main() {
             // Channels drawn from the same graph share its evaluator, so the nodes they have in common are drawn once.
             const drawn = await this.graphState(fill.graphId, fill.output, fill.values, tile, `${layerId}:graph:${fill.graphId}`);
             if (!drawn) return null;
-            const projection: FillProjection = { projection: fill.projection ?? 'uv', scale: fill.scale ?? 1, rotation: fill.rotation ?? 0, sharpness: fill.sharpness ?? 4 };
+            const projection: FillProjection = { projection: fill.projection ?? 'uv', scale: fill.scale ?? 1, rotation: fill.rotation ?? 0, sharpness: fill.sharpness ?? 4, ...(fill.axis ? { axis: fill.axis } : {}), ...(fill.mirror ? { mirror: fill.mirror } : {}) };
             if (projection.projection === 'uv' && projection.scale === 1 && projection.rotation === 0) {
                 // Drawn straight along the UVs: a cast kept from earlier settings is let go.
                 const stale = this.fills.get(key);
@@ -1466,7 +1568,7 @@ void main() {
         const texture = fill.kind === 'texture' ? this.host.texture(fill.textureId) : current as THREE.Texture | null;
         if (!texture) return fill.kind === 'current' ? { image: null, kind: 3, value: CHANNEL_DEFAULT[channel] } : null;
         const projection: FillProjection = fill.kind === 'texture'
-            ? { projection: fill.projection, scale: fill.scale, rotation: fill.rotation, sharpness: fill.sharpness }
+            ? { projection: fill.projection, scale: fill.scale, rotation: fill.rotation, sharpness: fill.sharpness, ...(fill.axis ? { axis: fill.axis } : {}), ...(fill.mirror ? { mirror: fill.mirror } : {}) }
             : { projection: 'uv', scale: 1, rotation: 0, sharpness: 4 };
         const image = this.cast(key, [texture.uuid, texture.version], texture, channel, tile, projection, {
             gray: false,
@@ -1490,7 +1592,10 @@ void main() {
         this.raster.draw(image, tile, CAST, {
             uniforms: {
                 uTexture: texture,
-                uProjection: projection.projection === 'triplanar' ? 1 : 0,
+                uProjection: { uv: 0, triplanar: 1, planar: 2, spherical: 3, cylindrical: 4 }[projection.projection] ?? 0,
+                uAxis: AXIS_INDEX[projection.axis ?? 'y'],
+                uMirror: projection.mirror && projection.projection !== 'uv' ? 1 : 0,
+                uMirrorAxis: AXIS_INDEX[projection.mirror ?? 'x'],
                 uScale: projection.scale,
                 uRotation: projection.rotation,
                 uSharpness: projection.sharpness,
@@ -1582,6 +1687,21 @@ void main() {
                 owned = true;
             }
         }
+        if (effect.kind === 'polygon') {
+            src = this.polygonMask(effect, area.tile);
+            at = area.at;
+        }
+        if (effect.kind === 'id') {
+            const idMap = this.meshMaps(area.tile).id;
+            const colours = (effect.colors ?? []).slice(0, MAX_ID_COLOURS);
+            // Like a polygon mask with nothing picked, it covers nothing until colours are picked (on a baked ID map).
+            src = this.gpu.image(area.width, area.height, 'gray', 16);
+            owned = true;
+            if (idMap && colours.length) {
+                const list = Array.from({ length: MAX_ID_COLOURS }, (_, i) => new THREE.Vector3(...(colours[i] ?? [0, 0, 0])));
+                this.gpu.passNow(src, { fragment: ID_MASK, inputs: { idMap }, uniforms: { uAt: area.at, uColours: list, uCount: colours.length, uTolerance: effect.tolerance ?? 0.02 } });
+            } else this.gpu.clear(src, [0, 0, 0, 1]);
+        }
         if ((effect.kind === 'paint' || effect.kind === 'generator' || effect.kind === 'below') && !src) return m;
         const next = this.gpu.image(area.width, area.height, 'gray', 16);
         this.gpu.passNow(next, {
@@ -1630,6 +1750,8 @@ void main() {
         for (const image of this.detail.values()) this.gpu.release(image);
         for (const byTile of this.pictures.values()) for (const picture of byTile.values()) picture.dispose();
         for (const cached of this.fills.values()) this.gpu.release(cached.image);
+        for (const cached of this.polygonMasks.values()) this.gpu.release(cached.image);
+        this.polygonMasks.clear();
         for (const image of this.watchedMasks.values()) this.gpu.release(image);
         for (const evaluator of this.evaluators.values()) evaluator.dispose();
         for (const copy of this.castCopies.values()) copy.target.dispose();
