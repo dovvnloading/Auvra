@@ -109,12 +109,73 @@ const DEFINITIONS = new Map(MATERIAL_NODE_DEFINITIONS.map(definition => [definit
 
 export const getMaterialNodeDefinition = (type: string): MaterialNodeDef | undefined => DEFINITIONS.get(type);
 
-/** Material Output inputs each stage computes. */
+/** Material Output inputs each stage computes (the fragment stage's physical inputs too, where a graph uses them: physicalOutputs). */
 export const STAGE_OUTPUTS: Record<MaterialStage, readonly string[]> = {
-    fragment: ['baseColor', 'opacity', 'metalness', 'roughness', 'normal', 'emissive', 'occlusion'],
+    fragment: ['baseColor', 'opacity', 'metalness', 'roughness', 'normal', 'emissive', 'emissiveStrength', 'occlusion'],
     vertex: ['worldPositionOffset'],
     shadow: ['opacity'],
 };
+
+// ---------------------------------------------------------------------------
+// The physical surface
+// ---------------------------------------------------------------------------
+
+/**
+ * Parts of the physical surface a graph can use. A graph using none is drawn by the standard material;
+ * one using any is drawn by the physical material, with only the parts it uses switched on.
+ */
+export type PhysicalFeature = 'specular' | 'anisotropy' | 'coat' | 'sheen' | 'thinFilm' | 'transmission' | 'dispersion';
+
+export const PHYSICAL_FEATURES: readonly PhysicalFeature[] = ['specular', 'anisotropy', 'coat', 'sheen', 'thinFilm', 'transmission', 'dispersion'];
+
+/** The Material Output inputs each part reads. */
+export const PHYSICAL_FEATURE_OUTPUTS: Record<PhysicalFeature, readonly string[]> = {
+    specular: ['specularWeight', 'specularColor', 'ior'],
+    anisotropy: ['anisotropy', 'anisotropyRotation'],
+    coat: ['coat', 'coatRoughness', 'coatNormal'],
+    sheen: ['sheenColor', 'sheenRoughness'],
+    thinFilm: ['thinFilm', 'thinFilmThickness'],
+    transmission: ['transmission', 'thickness', 'attenuationColor', 'attenuationDistance'],
+    dispersion: ['dispersion'],
+};
+
+/** The inputs that switch each part on, when wired or set away from their default (a coat's roughness alone makes no coat). */
+const FEATURE_SWITCHES: Record<PhysicalFeature, readonly string[]> = {
+    specular: ['specularWeight', 'specularColor', 'ior'],
+    anisotropy: ['anisotropy'],
+    coat: ['coat'],
+    sheen: ['sheenColor'],
+    thinFilm: ['thinFilm'],
+    transmission: ['transmission'],
+    dispersion: ['dispersion'],
+};
+
+const sameValue = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
+
+/**
+ * The parts of the physical surface a (normalised) graph uses: those whose switching input is wired into
+ * the Material Output or set there away from its default. Dispersion only shows through transmission.
+ */
+export const materialGraphFeatures = (graph: MaterialGraph): PhysicalFeature[] => {
+    const output = graph.nodes.find(node => node.type === OUTPUT_NODE_TYPE);
+    if (!output) return [];
+    const definition = DEFINITIONS.get(OUTPUT_NODE_TYPE)!;
+    const wired = new Set(graph.links.filter(link => link.toNode === output.id).map(link => link.toInput));
+    const used = (key: string): boolean => {
+        if (wired.has(key)) return true;
+        const param = definition.params.find(candidate => candidate.key === key);
+        return !!param && !sameValue(readParam(param, output.params[key]), param.default);
+    };
+    const features = PHYSICAL_FEATURES.filter(feature => FEATURE_SWITCHES[feature].some(used));
+    return features.includes('transmission') ? features : features.filter(feature => feature !== 'dispersion');
+};
+
+/**
+ * The Material Output inputs a physical material's fragment stage computes beyond the standard ones: the
+ * specular values always (a physical material reads them), and the inputs of each part in use.
+ */
+export const physicalOutputs = (features: readonly PhysicalFeature[]): string[] =>
+    [...new Set(['specular' as PhysicalFeature, ...features].flatMap(feature => PHYSICAL_FEATURE_OUTPUTS[feature]))];
 
 // ---------------------------------------------------------------------------
 // Params

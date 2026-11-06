@@ -22,6 +22,9 @@ import {
   type MaterialOverrides,
   type MaterialTextureSlot,
   type ModelMaterialInfo,
+  type PhysicalOverrideColor,
+  type PhysicalOverrideNumber,
+  type PhysicalValues,
   type MaterialParameterSetting,
 } from '../../utils/materialOverrides';
 import { ColourField } from '../UI/ColourPicker';
@@ -108,9 +111,11 @@ const SliderField: React.FC<{
   max: number;
   step: number;
   overridden: boolean;
+  /** What the value reads as, where a number would not say it (no absorption at all). */
+  display?: string;
   onChange: (value: number) => void;
   onReset: () => void;
-}> = ({ label, value, min, max, step, overridden, onChange, onReset }) => {
+}> = ({ label, value, min, max, step, overridden, display, onChange, onReset }) => {
   const id = useId();
   return (
     <FieldRow label={label} htmlFor={id} overridden={overridden} onReset={onReset}>
@@ -124,8 +129,104 @@ const SliderField: React.FC<{
         onChange={(event) => onChange(Number(event.target.value))}
         className="flex-1 min-w-0 accent-blue-500"
       />
-      <span className="w-9 text-right text-2xs font-mono text-gray-400">{formatNumber(value)}</span>
+      <span className="w-9 text-right text-2xs font-mono text-gray-400">{display ?? formatNumber(value)}</span>
     </FieldRow>
+  );
+};
+
+type PhysicalField = PhysicalOverrideNumber | PhysicalOverrideColor;
+
+/** One physical value: a slider for a number, a colour field for a colour. */
+interface PhysicalFieldDef {
+  field: PhysicalField;
+  label: string;
+  min?: number;
+  max?: number;
+  step?: number;
+}
+
+/** A physical material's values in Material Overrides, by group, in the order a surface is built up. */
+const PHYSICAL_GROUPS: ReadonlyArray<{ title: string; fields: readonly PhysicalFieldDef[]; inUse: (values: PhysicalValues) => boolean }> = [
+  {
+    title: 'Coat',
+    fields: [{ field: 'coat', label: 'Coat', min: 0, max: 1, step: 0.01 }, { field: 'coatRoughness', label: 'Coat roughness', min: 0, max: 1, step: 0.01 }],
+    inUse: (values) => values.coat > 0,
+  },
+  {
+    title: 'Sheen',
+    fields: [{ field: 'sheenColor', label: 'Sheen colour' }, { field: 'sheenRoughness', label: 'Sheen roughness', min: 0, max: 1, step: 0.01 }],
+    inUse: (values) => values.sheenColor !== '#000000',
+  },
+  {
+    title: 'Specular',
+    fields: [
+      { field: 'specularWeight', label: 'Specular strength', min: 0, max: 1, step: 0.01 },
+      { field: 'specularColor', label: 'Specular colour' },
+      { field: 'ior', label: 'Index of refraction', min: 1, max: 2.5, step: 0.01 },
+      { field: 'anisotropy', label: 'Anisotropy', min: 0, max: 1, step: 0.01 },
+      { field: 'anisotropyRotation', label: 'Anisotropy direction', min: 0, max: 360, step: 1 },
+    ],
+    inUse: (values) => values.specularWeight !== 1 || values.specularColor !== '#ffffff' || Math.abs(values.ior - 1.5) > 1e-3 || values.anisotropy > 0,
+  },
+  {
+    title: 'Thin film',
+    fields: [{ field: 'thinFilm', label: 'Thin film', min: 0, max: 1, step: 0.01 }, { field: 'thinFilmThickness', label: 'Thin film thickness (nm)', min: 0, max: 1200, step: 10 }],
+    inUse: (values) => values.thinFilm > 0,
+  },
+  {
+    title: 'Transmission',
+    fields: [
+      { field: 'transmission', label: 'Transmission', min: 0, max: 1, step: 0.01 },
+      { field: 'thickness', label: 'Thickness', min: 0, max: 2, step: 0.005 },
+      { field: 'attenuationColor', label: 'Absorption colour' },
+      { field: 'attenuationDistance', label: 'Absorption distance', min: 0.01, max: 10, step: 0.01 },
+      { field: 'dispersion', label: 'Dispersion', min: 0, max: 1, step: 0.01 },
+    ],
+    inUse: (values) => values.transmission > 0,
+  },
+];
+
+const isColorField = (field: PhysicalField): field is PhysicalOverrideColor => field === 'sheenColor' || field === 'attenuationColor' || field === 'specularColor';
+
+/**
+ * A physical material's coat, sheen, specular, thin film and transmission values (glTF's material
+ * extensions), each group under a header of its own that opens when the material uses it.
+ */
+const PhysicalFields: React.FC<{
+  values: PhysicalValues;
+  override: MaterialOverride;
+  onChange: (field: PhysicalField, value: number | string | undefined) => void;
+}> = ({ values, override, onChange }) => {
+  const [toggled, setToggled] = useState<Record<string, boolean>>({});
+  // What the material shows: its own values, with this override's on top.
+  const shown = { ...values, ...Object.fromEntries(Object.entries(override).filter(([key]) => key in values)) } as PhysicalValues;
+  return (
+    <div className="space-y-1">
+      {PHYSICAL_GROUPS.map((group) => {
+        const overridden = group.fields.some(({ field }) => override[field] !== undefined);
+        const open = toggled[group.title] ?? (group.inUse(shown) || overridden);
+        return (
+          <div key={group.title} className="border-t border-gray-800/80 pt-1">
+            <button type="button" aria-expanded={open} onClick={() => setToggled((current) => ({ ...current, [group.title]: !open }))}
+              className="flex w-full items-center gap-1 text-left text-2xs font-semibold text-gray-300 hover:text-white">
+              {open ? <ChevronDownIcon size={11} /> : <ChevronRightIcon size={11} />}
+              {group.title}
+              {!open && (group.inUse(shown) || overridden) && <span className="ml-auto text-2xs font-normal text-gray-500">In use</span>}
+            </button>
+            {open && (
+              <div className="mt-1 space-y-1">
+                {group.fields.map(({ field, label, min = 0, max = 1, step = 0.01 }) => (isColorField(field)
+                  ? <ColorField key={field} label={label} value={shown[field]} overridden={override[field] !== undefined}
+                    onChange={(value) => onChange(field, value)} onReset={() => onChange(field, undefined)} />
+                  : <SliderField key={field} label={label} value={shown[field]} min={min} max={max} step={step} overridden={override[field] !== undefined}
+                    display={field === 'attenuationDistance' && !Number.isFinite(shown[field]) ? 'none' : undefined}
+                    onChange={(value) => onChange(field, value)} onReset={() => onChange(field, undefined)} />))}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
   );
 };
 
@@ -542,6 +643,10 @@ const MaterialEditorSession: React.FC<MaterialEditorProps> = ({ model, textures,
         {base.hasMetalnessSlot && (
           <TextureField label="Metalness map" value={override.metalnessTextureId} textures={textures} status={textureStatus(override.metalnessTextureId, 'metalness')}
             found={foundTexture(override.metalnessTextureId, 'metalness')} onChange={(value) => editField(material.name, 'metalnessTextureId', value)} />
+        )}
+        {base.physical && (
+          <PhysicalFields values={base.physical} override={override}
+            onChange={(field, value) => editField(material.name, field, value as MaterialOverride[typeof field])} />
         )}
         {material.instanceCount > 1 && (
           <p className="text-2xs text-gray-600 pt-1">Applies to {material.instanceCount} materials named “{material.name}”.</p>
