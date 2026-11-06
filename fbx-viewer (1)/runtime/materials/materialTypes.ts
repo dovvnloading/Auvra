@@ -52,9 +52,9 @@ export const BUILTIN_TYPES: Record<MaterialBuiltin, MaterialValueType> = {
  * float, color, vec2, vec3, texture and ramp params are uniforms (changing them keeps the shader);
  * select, boolean and code params are written into the shader (changing them rebuilds it).
  */
-export type MaterialParamKind = 'float' | 'color' | 'vec2' | 'vec3' | 'texture' | 'ramp' | 'select' | 'boolean' | 'code';
+export type MaterialParamKind = 'float' | 'color' | 'vec2' | 'vec3' | 'texture' | 'ramp' | 'select' | 'boolean' | 'code' | 'text';
 
-export const STATIC_PARAM_KINDS: ReadonlySet<MaterialParamKind> = new Set(['select', 'boolean', 'code']);
+export const STATIC_PARAM_KINDS: ReadonlySet<MaterialParamKind> = new Set(['select', 'boolean', 'code', 'text']);
 
 /** A colour ramp: stops by position (0 to 1), colours in sRGB. */
 export interface MaterialRamp {

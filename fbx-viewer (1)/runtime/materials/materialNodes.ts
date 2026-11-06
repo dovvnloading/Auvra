@@ -19,6 +19,9 @@ import type {
 
 export const OUTPUT_NODE_TYPE = 'output';
 export const REROUTE_NODE_TYPE = 'reroute';
+/** Named links: a Send and the Receives of its name stand for wires between them (namedMaterialLinks). */
+export const NAMED_SEND_TYPE = 'namedSend';
+export const NAMED_RECEIVE_TYPE = 'namedReceive';
 export const UDIM_ATLAS_NODE_TYPE = 'udimAtlas';
 
 /** UDIM tile numbers written in a list (anything but digits between them), each once, in the order given. */
@@ -1260,6 +1263,30 @@ export const MATERIAL_NODE_DEFINITIONS: MaterialNodeDef[] = [
         params: [{ key: 'on', label: 'On', kind: 'boolean', default: true }],
         reads: (statics) => [statics.on === false ? 'whenOff' : 'whenOn'],
         emit: (inputs, context) => ({ outputs: { out: context.static('on') === false ? inputs.whenOff : inputs.whenOn } }),
+    },
+
+    // ------------------------------------------------------------------ Named links
+    {
+        type: NAMED_SEND_TYPE,
+        label: 'Send',
+        category: 'Utility',
+        description: 'Sends what it takes in under a name: every Receive of the same name gives it out, with no wire across the graph between them.',
+        keywords: ['named link', 'portal', 'wireless', 'teleport', 'broadcast'],
+        inputs: [auto('in', 'In', value(0))],
+        outputs: [{ key: 'out', label: 'Out', type: 'auto' }],
+        params: [{ key: 'name', label: 'Name', kind: 'text', default: '' }],
+        emit: (inputs) => ({ outputs: { out: inputs.in } }),
+    },
+    {
+        type: NAMED_RECEIVE_TYPE,
+        label: 'Receive',
+        category: 'Utility',
+        description: 'Gives out what the first Send of its name takes in, as if wired to it.',
+        keywords: ['named link', 'portal', 'wireless', 'teleport'],
+        inputs: [auto('in', 'In', value(0))],
+        outputs: [{ key: 'out', label: 'Out', type: 'auto' }],
+        params: [{ key: 'name', label: 'Name', kind: 'text', default: '' }],
+        emit: (inputs) => ({ outputs: { out: inputs.in } }),
     },
 
     // ------------------------------------------------------------------ Custom

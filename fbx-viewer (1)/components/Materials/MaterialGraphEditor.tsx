@@ -8,6 +8,7 @@ import {
     OUTPUT_NODE_TYPE,
     compileMaterialGraph,
     createMaterialGraph,
+    getMaterialNodeDefinition,
     materialGraphLook,
     materialGraphShape,
     type MaterialGraph,
@@ -361,9 +362,19 @@ export const MaterialGraphEditor: React.FC = () => {
                         </div>
                         <MaterialPreview assetId={asset.id} graph={shadingGraph ?? graph} previewNodeIds={previewNodeIds} />
                         {shaderError && (
-                            <div role="alert" className="rounded border border-red-900 bg-red-950/60 p-2">
-                                <div className="mb-1 flex items-center gap-1 text-2xs font-bold text-red-300"><WarningIcon size={12} /> The shader does not compile</div>
-                                <pre className="max-h-40 overflow-auto whitespace-pre-wrap font-mono text-2xs leading-4 text-red-200">{shaderError}</pre>
+                            <div role="alert" className="space-y-1 rounded border border-red-900 bg-red-950/60 p-2">
+                                <div className="flex items-center gap-1 text-2xs font-bold text-red-300"><WarningIcon size={12} /> The shader does not compile</div>
+                                {/* What is wrong in plain words, on the nodes it was traced to; the compiler's own lines behind Details. */}
+                                {[...nodeErrors].map(([id, message]) => {
+                                    const failing = graph.nodes.find(candidate => candidate.id === id);
+                                    const label = failing ? failing.name ?? getMaterialNodeDefinition(failing.type)?.label ?? failing.type : 'A node';
+                                    return <p key={id} className="text-2xs leading-snug text-red-100"><span className="font-semibold">{label}:</span> {message}</p>;
+                                })}
+                                {nodeErrors.size === 0 && <p className="text-2xs leading-snug text-red-100">Something in the graph made code the graphics card cannot build.</p>}
+                                <details className="text-2xs text-red-300/80">
+                                    <summary className="cursor-pointer select-none">Details</summary>
+                                    <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap font-mono leading-4 text-red-200">{shaderError}</pre>
+                                </details>
                             </div>
                         )}
                         {error && <p className="text-2xs text-amber-400">{error}</p>}
@@ -379,7 +390,7 @@ export const MaterialGraphEditor: React.FC = () => {
                         )}
 
                         {single ? (
-                            <NodeInspector key={single.id} node={single} textures={textures} wired={single.id === outputNode?.id ? outputWired : undefined} onChangeNode={changeNode} />
+                            <NodeInspector key={single.id} node={single} textures={textures} wired={single.id === outputNode?.id ? outputWired : undefined} error={nodeErrors.get(single.id)} onChangeNode={changeNode} />
                         ) : selected.size > 1 ? (
                             <div className="space-y-2 rounded border border-gray-800 bg-gray-900/60 p-2">
                                 <div className="text-2xs font-bold text-gray-200">{selected.size} nodes selected</div>
