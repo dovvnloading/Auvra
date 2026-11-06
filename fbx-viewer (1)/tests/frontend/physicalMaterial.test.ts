@@ -6,6 +6,7 @@ import { isGraphUpgraded } from '../../runtime/materials/physicalSurface';
 import { shaderStageNames } from '../../runtime/materials/shaderStages';
 import { patchWeatherMaterial, setSurfaceWeather } from '../../runtime/weatherSurfaces';
 import { rebuildNormalZ } from '../../utils/textureCompression/compressTextures';
+import { MATERIAL_UNLIT, rayMaterialFor, raysSeeMaterial } from '../../runtime/raytracing/rayScene';
 
 const node = (id: string, type: string, params: Record<string, unknown> = {}) => ({ id, type, x: 0, y: 0, params: { ...defaultParams(type), ...params } });
 const link = (fromNode: string, fromOutput: string, toNode: string, toInput: string) => ({ fromNode, fromOutput, toNode, toInput });
@@ -199,5 +200,28 @@ describe('the composed shader stages on a physical material', () => {
         bindMaterialGraph(material, surface());
         expect(shaderStageNames(material)).toEqual(['graph', 'weather']);
         expect(compile(material).fragmentShader).toContain('weatherOpen()');
+    });
+});
+
+describe('bounced light off a physical graph', () => {
+    const linear = (value: number) => new THREE.Color().setRGB(value, value, value, THREE.SRGBColorSpace).r;
+
+    it('still takes the graph\'s base colour, and its glow at its strength', () => {
+        const paint = new THREE.MeshStandardMaterial({ color: 0xff0000 });
+        bindMaterialGraph(paint, surface({ baseColor: [0.5, 0.5, 0.5], coat: 1, emissive: [0, 0.5, 0], emissiveStrength: 4 }));
+        expect(paint.type).toBe('MeshPhysicalMaterial');
+        expect(raysSeeMaterial(paint)).toBe(true);
+        const look = rayMaterialFor(paint, () => [1, 1, 1]);
+        expect(look.albedo[0]).toBeCloseTo(linear(0.5));
+        expect(look.flags & MATERIAL_UNLIT).toBe(0);
+        expect(look.emissive[1]).toBeCloseTo(linear(0.5) * 4);
+    });
+
+    it('passes through a graph\'s glass, as through imported glass', () => {
+        const glass = new THREE.MeshStandardMaterial();
+        bindMaterialGraph(glass, surface({ transmission: 1 }));
+        expect(raysSeeMaterial(glass)).toBe(false);
+        bindMaterialGraph(glass, surface());
+        expect(raysSeeMaterial(glass)).toBe(true);
     });
 });
