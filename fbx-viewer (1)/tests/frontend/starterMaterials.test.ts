@@ -30,6 +30,12 @@ describe('starter materials', () => {
         }
     });
 
+    it('give velvet a broad, bright sheen, so its edges glow rather than show a faint rim', () => {
+        const { params } = starter('velvet').graph().nodes[0];
+        expect(Math.max(...(params.sheenColor as number[]))).toBe(1);
+        expect(params.sheenRoughness).toBeGreaterThanOrEqual(0.5);
+    });
+
     it('make a fresh graph each time, so editing one leaves the starter as it was', () => {
         const first = starter('velvet').graph();
         first.nodes[0].params.roughness = 0.1;
