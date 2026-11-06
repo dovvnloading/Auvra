@@ -34,8 +34,8 @@ export interface MaterialOverride {
   /** A material asset (materials domain) whose node graph shades the material instead. */
   materialId?: string;
   /**
-   * Values for the material asset's parameters: a number, or an RGB / XYZ triple. A list, not a
-   * map by name, so no parameter name ever becomes a document key.
+   * Values for the material asset's parameters: a number, or 2, 3 or 4 numbers (a Vector 2, a colour
+   * or a Vector). A list, not a map by name, so no parameter name ever becomes a document key.
    */
   parameters?: MaterialParameterSetting[];
 }
@@ -80,12 +80,16 @@ const MAX_PARAMETER_MAGNITUDE = 1e6;
 const parameterNumber = (value: unknown): number | undefined =>
   typeof value === 'number' && Number.isFinite(value) ? clamp(value, -MAX_PARAMETER_MAGNITUDE, MAX_PARAMETER_MAGNITUDE) : undefined;
 
+/** Numbers a vector parameter holds: a Vector 2, a colour or Vector, or four. */
+const MIN_PARAMETER_COMPONENTS = 2;
+const MAX_PARAMETER_COMPONENTS = 4;
+
 const normalizeParameterValue = (value: unknown): number | number[] | undefined => {
   const single = parameterNumber(value);
   if (single !== undefined) return single;
-  if (!Array.isArray(value) || value.length !== 3) return undefined;
-  const triple = value.map(parameterNumber);
-  return triple.every((component): component is number => component !== undefined) ? triple : undefined;
+  if (!Array.isArray(value) || value.length < MIN_PARAMETER_COMPONENTS || value.length > MAX_PARAMETER_COMPONENTS) return undefined;
+  const components = value.map(parameterNumber);
+  return components.every((component): component is number => component !== undefined) ? components : undefined;
 };
 
 const normalizeParameters = (value: unknown): MaterialParameterSetting[] | undefined => {

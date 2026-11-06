@@ -182,12 +182,29 @@ describe('material parameters', () => {
         { name: 'Tint', value: [0, 0, 1] },
         { name: ' padded', value: 1 },
         { name: 'Pair', value: [1, 2] },
+        { name: 'Quad', value: [1, 2, 3, 4] },
+        { name: 'One', value: [1] },
+        { name: 'Five', value: [1, 2, 3, 4, 5] },
         { name: 'Word', value: 'x' },
       ],
     });
-    expect(override?.parameters).toEqual([{ name: 'Strength', value: 3 }, { name: 'Tint', value: [1, 0, 0] }]);
-    expect(materialParameterValues(override?.parameters)).toEqual({ Strength: 3, Tint: [1, 0, 0] });
+    // A number, or 2, 3 or 4 numbers (a Vector 2, a colour or Vector).
+    expect(override?.parameters).toEqual([
+      { name: 'Pair', value: [1, 2] }, { name: 'Quad', value: [1, 2, 3, 4] }, { name: 'Strength', value: 3 }, { name: 'Tint', value: [1, 0, 0] },
+    ]);
+    expect(materialParameterValues(override?.parameters)).toEqual({ Pair: [1, 2], Quad: [1, 2, 3, 4], Strength: 3, Tint: [1, 0, 0] });
     expect(normalizeMaterialOverride({ parameters: { Tint: 1 } })).toBeNull();
+  });
+
+  it('saves a Vector 2 parameter and gives it to the graph', () => {
+    const graph = normalizeMaterialGraph({
+      nodes: [node('out', OUTPUT_NODE_TYPE), { ...node('offset', 'vector2', { value: [0, 0] }), parameter: 'Offset' }, node('pan', 'tilingOffset')],
+      links: [link('offset', 'out', 'pan', 'uv')],
+    });
+    expect(materialGraphParameters(graph).map(parameter => [parameter.name, parameter.param.kind])).toEqual([['Offset', 'vec2']]);
+    const saved = normalizeMaterialOverride({ materialId: 'm', parameters: [{ name: 'Offset', value: [0.5, -2] }] });
+    const set = withMaterialParameters(graph, materialParameterValues(saved?.parameters));
+    expect(set.nodes.find(n => n.id === 'offset')?.params.value).toEqual([0.5, -2]);
   });
 
   it('gives each material using an asset its own values, on the same shader', () => {

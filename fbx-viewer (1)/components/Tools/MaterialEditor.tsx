@@ -209,7 +209,7 @@ const ParameterField: React.FC<{ parameter: MaterialParameter; value: number | n
   return (
     <FieldRow label={name} overridden={overridden} onReset={reset}>
       {components.map((component, index) => (
-        <NumberInput key={index} label={`${name} ${'XYZ'[index]}`} value={component} step={0.05}
+        <NumberInput key={index} label={`${name} ${'XYZW'[index]}`} value={component} step={0.05}
           onChange={(next) => onChange(components.map((old, at) => (at === index ? next : old)))} />
       ))}
     </FieldRow>
