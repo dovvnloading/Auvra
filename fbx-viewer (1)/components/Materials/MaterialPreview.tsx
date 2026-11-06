@@ -75,22 +75,22 @@ const ShaderErrorCatcher: React.FC = () => {
 // ---------------------------------------------------------------------------
 
 const subscribeLibrary = (listener: () => void) => materialLibrary.subscribe(listener);
-const libraryVersion = () => materialLibrary.version;
+const texturesLoaded = () => materialLibrary.texturesLoaded;
 /** Animated previews redraw at this rate. */
 const ANIMATED_PREVIEW_FPS = 15;
 
 const NodePreviewPass: React.FC<{ graph: MaterialGraph; nodeIds: readonly string[] }> = ({ graph, nodeIds }) => {
     const renderer = useThree(state => state.gl);
     const previewer = useMemo(() => new MaterialNodePreviewer(), []);
-    const version = useSyncExternalStore(subscribeLibrary, libraryVersion);
+    // Only textures finishing loading matter here, not every change to the library (moving nodes changes it too).
+    const loaded = useSyncExternalStore(subscribeLibrary, texturesLoaded);
     const dirty = useRef(true);
     const last = useRef(0);
     useEffect(() => () => previewer.dispose(), [previewer]);
     useEffect(() => {
-        // Textures that finish loading change the library's version, and reach the previews here.
         previewer.setGraph(graph, nodeIds, materialLibrary.textureLookup());
         dirty.current = true;
-    }, [graph, nodeIds, version, previewer]);
+    }, [graph, nodeIds, loaded, previewer]);
     useFrame((state) => {
         const now = state.clock.elapsedTime;
         if (!dirty.current && !(previewer.animated && now - last.current >= 1 / ANIMATED_PREVIEW_FPS)) return;

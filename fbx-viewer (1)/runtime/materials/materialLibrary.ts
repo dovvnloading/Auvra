@@ -174,6 +174,8 @@ class MaterialLibrary {
     version = 0;
     /** Counts projects opened (replaceAll), for what is kept per project for the session. */
     generation = 0;
+    /** Counts textures that finished loading, for what draws with them without being bound here (node previews). */
+    texturesLoaded = 0;
     private readonly assets = new Map<string, MaterialAsset>();
     private readonly listeners = new Set<() => void>();
     private readonly bound = new Map<THREE.MeshStandardMaterial, Binding>();
@@ -312,6 +314,7 @@ class MaterialLibrary {
             texture.flipY = flipY;
             texture.needsUpdate = true;
             this.textures.set(key, texture);
+            this.texturesLoaded++;
             // Every graph sampling it picks it up.
             this.rebindAll();
             this.emit();
