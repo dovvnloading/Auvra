@@ -10,7 +10,7 @@ import { OUTPUT_NODE_TYPE, SUBGRAPH_NODE_TYPE } from '../../texturing/graph/node
 import { textureNodeDefinition, type GraphEntry, type GraphResolver } from '../../texturing/graph/registry';
 import { bakeSignature, readStoredGraph, type StoredTextureGraph } from '../../texturing/graph/stored';
 import { OUTPUT_CHANNELS, OUTPUT_CHANNEL_LABELS, type GraphParameter, type GraphParameterKind, type OutputChannel, type TexGraphNode, type TexParamDef, type TextureGraph } from '../../texturing/graph/types';
-import { DEEP_EXPORT, ROLE_LABELS, encodeChannels, materialGraphForTextures, type ChannelImages, type ChannelTextureIds, type MaterialChannel, type PictureLayout } from '../../texturing/materialOutput';
+import { DEEP_EXPORT, ROLE_LABELS, encodeChannels, materialGraphForTextures, type ChannelImages, type ChannelTextureIds, type MaterialChannel, type PictureLayout, materialReadsPicture } from '../../texturing/materialOutput';
 import { download, makeZip } from '../../texturing/zip';
 import { Button, Segmented, Spinner } from '../UI/kit';
 import { Select } from '../UI/Select';
@@ -322,7 +322,8 @@ const Workspace: React.FC<{
             materialLibrary.upsert(next);
             onSave(next, true);
             void textureStore.discard(previous);
-            setMessage({ text: `The material now draws with ${pictures.length} new picture${pictures.length === 1 ? '' : 's'} at ${width} × ${height}.`, tone: 'info' });
+            const drawn = pictures.filter((picture) => materialReadsPicture(picture.role)).length;
+            setMessage({ text: `The material now draws with ${drawn} new picture${drawn === 1 ? '' : 's'} at ${width} × ${height}.`, tone: 'info' });
         } catch (error) {
             if (!(error instanceof AbortedError)) {
                 frontendDiagnostics.failure('texture_graph_bake_failed', error);

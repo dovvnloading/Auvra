@@ -466,7 +466,7 @@ export class PaintSession {
             this.stack.setDocument(document);
             this.asset = {
                 ...(materialLibrary.get(this.asset.id) ?? this.asset),
-                graph: materialGraphForTextures(ids, { opacityMode: images.opacity ? 'masked' : undefined, tiles: atlas ? { columns: atlas.columns, rows: atlas.rows } : undefined }),
+                graph: materialGraphForTextures(ids, { opacityMode: images.opacity ? 'masked' : undefined, tiles: atlas ?? undefined }),
                 paint: document as unknown as Record<string, unknown>,
             };
             materialLibrary.upsert(this.asset);
