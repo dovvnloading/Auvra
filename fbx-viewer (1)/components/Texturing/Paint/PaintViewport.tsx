@@ -4,7 +4,7 @@ import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment
 import type { GpuImage, TextureGpu } from '../../../texturing/gpu/textureGpu';
 import { tileGeometry } from '../../../texturing/mesh/partMesh';
 import type { MeshMapName } from '../../../texturing/graph/nodes/io';
-import { renderDepth, Stroke, type BrushSettings, type StrokeTarget } from '../../../texturing/paint/strokes';
+import { MAX_BRUSH_SIZE, renderDepth, Stroke, type BrushSettings, type StrokeTarget } from '../../../texturing/paint/strokes';
 import type { PaintChannel } from '../../../texturing/paint/paintTypes';
 import type { PaintSession } from './paintSession';
 import type { UvSession } from './uvSession';
@@ -345,11 +345,15 @@ export const PaintViewport: React.FC<{
     const pickColour = (x: number, y: number) => {
         const hit = hitAt(x, y);
         if (!hit) return;
-        const tile = 1001 + Math.floor(hit.uv.x) + 10 * Math.floor(hit.uv.y);
+        // The picture and place the triangle is drawn with: coordinates past 0..1 on a set that is not laid
+        // out in UDIM tiles wrap onto its one picture, as they do on the model.
+        const part = session.part;
+        const tile = part.triangleTile[hit.triangle];
         const image = stack.outputs.get(tile)?.baseColor;
         if (!image) return;
+        const at = new THREE.Vector2(hit.uv.x - part.triangleShift[hit.triangle * 2], hit.uv.y - part.triangleShift[hit.triangle * 2 + 1]);
         const probe = gpu.image(1, 1, 'color', 32);
-        gpu.passNow(probe, { fragment: 'uniform vec2 uAt;\nvoid main() { outColor = texture(source, uAt); }', inputs: { source: image }, uniforms: { uAt: new THREE.Vector2(hit.uv.x - Math.floor(hit.uv.x), hit.uv.y - Math.floor(hit.uv.y)) } });
+        gpu.passNow(probe, { fragment: 'uniform vec2 uAt;\nvoid main() { outColor = texture(source, fract(uAt)); }', inputs: { source: image }, uniforms: { uAt: at } });
         const value = gpu.readFloat(probe);
         gpu.release(probe);
         onPick([value[0], value[1], value[2]]);
@@ -432,7 +436,7 @@ export const PaintViewport: React.FC<{
             if (element && (element.tagName === 'INPUT' || element.tagName === 'TEXTAREA' || element.isContentEditable)) return;
             if (!host.current?.matches(':hover')) return;
             if (event.key === '[') onBrushSize(Math.max(1, Math.round(brush.size / 1.15)));
-            else if (event.key === ']') onBrushSize(Math.min(600, Math.round(brush.size * 1.15) + 1));
+            else if (event.key === ']') onBrushSize(Math.min(MAX_BRUSH_SIZE, Math.round(brush.size * 1.15) + 1));
             else if (event.key.toLowerCase() === 'f' && !event.ctrlKey) frame();
         };
         window.addEventListener('keydown', onKey);
