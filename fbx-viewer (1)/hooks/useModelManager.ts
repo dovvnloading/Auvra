@@ -961,11 +961,16 @@ export const useModelManager = (
 
         // Clear DB overrides
         await dbOperations.updateModelTextureOverrides(modelId, {});
-        // Kept: edited in the Materials panel, possibly saved while the reset ran.
+        // Kept: edited in the Materials panel, possibly saved while the reset ran. Painted base maps
+        // (Retexture's results, the mask tool's pictures, older texture overrides taken in) come off, so the
+        // model wears its imported maps again.
         const latest = modelsRef.current.find((candidate) => candidate.id === modelId) ?? model;
-        newModelData.materialOverrides = latest.materialOverrides;
+        const kept = normalizeMaterialOverrides(latest.materialOverrides);
+        const materialOverrides = withoutPaintedBaseMaps(kept);
+        if (materialOverrides !== kept) await dbOperations.updateModelMaterialOverrides(modelId, materialOverrides);
+        newModelData.materialOverrides = materialOverrides;
         newModelData.boneRoles = latest.boneRoles;
-        attachMaterialOverrides(newModelData.object, normalizeMaterialOverrides(latest.materialOverrides), detachMaterialOverrides(latest.object));
+        attachMaterialOverrides(newModelData.object, materialOverrides, detachMaterialOverrides(latest.object));
 
         setModels(prev => prev.map(m => {
             if (m.id === modelId) {

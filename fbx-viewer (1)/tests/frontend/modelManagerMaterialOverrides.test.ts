@@ -148,3 +148,59 @@ describe('useModelManager material overrides during long operations', () => {
     vi.unstubAllGlobals();
   });
 });
+
+describe('Reset Textures', () => {
+  beforeEach(() => {
+    mocks.dbOperations.updateModelMaterialOverrides.mockReset();
+    mocks.dbOperations.updateModelMaterialOverrides.mockResolvedValue(undefined);
+    mocks.dbOperations.updateModelTextureOverrides.mockReset();
+    mocks.dbOperations.updateModelTextureOverrides.mockResolvedValue(undefined);
+  });
+
+  it('takes painted base maps off, saves that, and leaves the model wearing its imported look', async () => {
+    const existing = bodyModel('m1', 'blob:robot');
+    const visor = new THREE.MeshStandardMaterial({ map: new THREE.Texture() });
+    visor.name = 'Visor';
+    existing.model.object.add(new THREE.Mesh(new THREE.BoxGeometry(), visor));
+    // A Retexture result on the body, beside its own roughness; a plain base map chosen for the visor.
+    const painted = tagOverrideTexture(new THREE.Texture(), 'R', 'map');
+    const plain = tagOverrideTexture(new THREE.Texture(), 'P', 'map');
+    existing.model.materialOverrides = { Body: { roughness: 0.3, mapTextureId: 'R', paintedMap: true }, Visor: { mapTextureId: 'P' } };
+    applyMaterialOverrides(existing.model.object, existing.model.materialOverrides as never, (id) => (id === 'R' ? painted : plain));
+    const reset = bodyModel('m1');
+    const imported = reset.body.map;
+    const resetVisor = new THREE.MeshStandardMaterial({ map: new THREE.Texture() });
+    resetVisor.name = 'Visor';
+    reset.model.object.add(new THREE.Mesh(new THREE.BoxGeometry(), resetVisor));
+    mocks.loadFBXFile.mockResolvedValue(reset.model);
+    vi.stubGlobal('fetch', vi.fn(async () => ({ blob: async () => new Blob(['fbx']) })));
+    const disposedPainted = vi.fn();
+    painted.addEventListener('dispose', disposedPainted);
+    const { result } = renderManager(existing.model);
+
+    await act(() => result.current.resetModelTexture('m1'));
+    const kept = { Body: { roughness: 0.3 }, Visor: { mapTextureId: 'P' } };
+    expect(mocks.dbOperations.updateModelTextureOverrides).toHaveBeenCalledWith('m1', {});
+    expect(mocks.dbOperations.updateModelMaterialOverrides).toHaveBeenCalledWith('m1', kept);
+    const published = result.current.models[0];
+    expect(published.object).toBe(reset.model.object);
+    expect(published.materialOverrides).toEqual(kept);
+    expect(reset.body.map).toBe(imported);
+    expect([reset.body.transparent, reset.body.side, reset.body.roughness]).toEqual([false, THREE.FrontSide, 0.3]);
+    expect(resetVisor.map).toBe(plain);
+    expect(disposedPainted).toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+
+  it('saves nothing more when there are no painted base maps', async () => {
+    const existing = bodyModel('m1', 'blob:robot');
+    existing.model.materialOverrides = { Body: { roughness: 0.3 } };
+    mocks.loadFBXFile.mockResolvedValue(bodyModel('m1').model);
+    vi.stubGlobal('fetch', vi.fn(async () => ({ blob: async () => new Blob(['fbx']) })));
+    const { result } = renderManager(existing.model);
+    await act(() => result.current.resetModelTexture('m1'));
+    expect(mocks.dbOperations.updateModelMaterialOverrides).not.toHaveBeenCalled();
+    expect(result.current.models[0].materialOverrides).toEqual({ Body: { roughness: 0.3 } });
+    vi.unstubAllGlobals();
+  });
+});
