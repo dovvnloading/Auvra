@@ -4,6 +4,7 @@ import { ChevronDownIcon, ChevronRightIcon, MaterialIcon, ResetIcon, SaveIcon, S
 import type { LoadedModelData, TextureData } from '../../types';
 import { Select } from '../UI/Select';
 import { materialAssetUse, materialLibrary } from '../../runtime/materials/materialLibrary';
+import { isSmartMaterialAsset } from '../../texturing/paint/smartMaterials';
 import { materialGraphParameters, type MaterialParameter } from '../../runtime/materials/materialGraph';
 import {
   MAX_EMISSIVE_INTENSITY,
@@ -295,8 +296,8 @@ const MaterialAssetField: React.FC<{
 }> = ({ value, takesAsset, materialType, onChange }) => {
   const version = useSyncExternalStore((listener) => materialLibrary.subscribe(listener), () => materialLibrary.version);
   const assets = useMemo(() => materialLibrary.list(), [version]);
-  const drawing = useMemo(() => assets.filter((asset) => materialAssetUse(asset) === 'material'), [assets]);
-  const waiting = useMemo(() => assets.filter((asset) => materialAssetUse(asset) === 'needsPictures'), [assets]);
+  const drawing = useMemo(() => assets.filter((asset) => !isSmartMaterialAsset(asset) && materialAssetUse(asset) === 'material'), [assets]);
+  const waiting = useMemo(() => assets.filter((asset) => !isSmartMaterialAsset(asset) && materialAssetUse(asset) === 'needsPictures'), [assets]);
   const options = useMemo(() => {
     const list = [{ label: 'Its own', value: '' }, ...drawing.map((asset) => ({ label: asset.name, value: asset.id }))];
     if (value && !drawing.some((asset) => asset.id === value)) {

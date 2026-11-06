@@ -27,6 +27,8 @@ import { MaterialPreview, clearMaterialShaderError, useMaterialShaderError } fro
 import { ParamField } from './MaterialParamField';
 import { GraphHistory, createComment, nodeRect, removeNodes, showsPreview, withComments } from './materialGraphEditing';
 import { Popover } from '../UI/kit';
+import { OPEN_MATERIAL_EVENT, takeOpenMaterialRequest } from '../Texturing/Paint/openMaterial';
+import { isSmartMaterialAsset } from '../../texturing/paint/smartMaterials';
 import { createFunctionGraph, createTextureGraph } from '../../texturing/graph/document';
 import { TextureGraphWorkspace, newTextureGraphStored } from '../Texturing/TextureGraphWorkspace';
 
@@ -162,7 +164,9 @@ const NodeInspector: React.FC<{
 };
 
 export const MaterialGraphEditor: React.FC = () => {
-    const assets = useMaterialAssets();
+    const allAssets = useMaterialAssets();
+    // Saved smart materials are painting presets, not materials to edit or give to models.
+    const assets = useMemo(() => allAssets.filter((candidate) => !isSmartMaterialAsset(candidate)), [allAssets]);
     const { textures, removeMaterialAsset } = useAssets();
     const [selectedId, setSelectedId] = useState<string | null>(null);
     const [selection, setSelection] = useState<string[]>([]);
@@ -172,6 +176,16 @@ export const MaterialGraphEditor: React.FC = () => {
     const [, setHistoryVersion] = useState(0);
     const shaderError = useMaterialShaderError();
     const asset = assets.find(candidate => candidate.id === selectedId) ?? assets[0] ?? null;
+    // A material another tab asked to open (Paint's "edit a copy"): taken when this tab opens, and while it is open.
+    useEffect(() => {
+        const takeRequest = () => {
+            const id = takeOpenMaterialRequest();
+            if (id) { setSelectedId(id); setSelection([]); }
+        };
+        takeRequest();
+        window.addEventListener(OPEN_MATERIAL_EVENT, takeRequest);
+        return () => window.removeEventListener(OPEN_MATERIAL_EVENT, takeRequest);
+    }, []);
     const pending = useRef(new Map<string, ReturnType<typeof setTimeout>>());
     /** The graph before a drag began, recorded for undo when the drag ends. */
     const dragBase = useRef(new Map<string, MaterialGraph>());

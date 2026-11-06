@@ -1,5 +1,5 @@
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import * as THREE from 'three';
 import { SceneProvider, useScene } from './context/SceneContext';
 import { NotificationProvider } from './context/NotificationContext';
@@ -14,6 +14,7 @@ import { OperationProvider } from './context/OperationContext';
 import { OperationCenter } from './components/UI/OperationCenter';
 import { AppDialogHost } from './components/UI/AppDialogHost';
 import { frontendDiagnostics } from './diagnostics/runtime';
+import { OPEN_MATERIAL_EVENT } from './components/Texturing/Paint/openMaterial';
 
 // Each tab's code comes when the tab is first opened, so the window comes up on what it shows first.
 const RetextureEditor = React.lazy(() => import('./components/Tools/RetextureEditor').then((module) => ({ default: module.RetextureEditor })));
@@ -38,6 +39,12 @@ const AppContent: React.FC = () => {
     () => frontendDiagnostics.wrap('editor_mode', 'change', setActiveTab, { category: 'action' }),
     [],
   );
+  // Another tab (Paint's "edit a copy") asks for a material to be opened: show the Materials tab, which takes the request.
+  useEffect(() => {
+    const openMaterials = () => changeActiveTab('materials');
+    window.addEventListener(OPEN_MATERIAL_EVENT, openMaterials);
+    return () => window.removeEventListener(OPEN_MATERIAL_EVENT, openMaterials);
+  }, [changeActiveTab]);
 
   // Scene State
   const [activeClip, setActiveClip] = useState<THREE.AnimationClip | null>(null);
