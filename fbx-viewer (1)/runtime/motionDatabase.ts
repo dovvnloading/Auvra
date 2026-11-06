@@ -123,9 +123,12 @@ export const smoothSeries = (values: readonly number[], loop: boolean, half: num
         return values[j - laps * n] + lap * laps;
     };
     return values.map((_, i) => {
+        // A series that does not loop is averaged over a window that shrinks evenly toward its ends, so a
+        // steady change (a clip setting off or stopping) keeps its pace there instead of stalling.
+        const reach = loop ? half : Math.min(half, i, n - 1 - i);
         let sum = 0;
-        for (let j = i - half; j <= i + half; j++) sum += at(j);
-        return sum / (2 * half + 1);
+        for (let j = i - reach; j <= i + reach; j++) sum += at(j);
+        return sum / (2 * reach + 1);
     });
 };
 
@@ -150,8 +153,57 @@ const restYaw = (model: THREE.Object3D, name: string): number | null => {
 
 const wrapAngle = (angle: number) => Math.atan2(Math.sin(angle), Math.cos(angle));
 
-/** A clip sampled for matching on a copy of `model`, or null when the model has no hips and feet to read. */
-export const sampleClip = (model: THREE.Object3D, clip: THREE.AnimationClip, loop = true): MotionClipSamples | null => {
+/** A clip's ends differing by less than this share of the hips' height in the feet's places... */
+const LOOP_POSE_GAP = 0.25;
+/** ...and by less than this many hips heights a second in speed, plus this share of the faster end's speed... */
+const LOOP_SPEED_GAP = 0.3;
+const LOOP_SPEED_SHARE = 0.25;
+/** ...and turning less than this over the clip (radians), its end flows back into its start. */
+const LOOP_TURN = Math.PI / 4;
+
+/** A point seen from a character at `root` facing `facing` (forward +z), as motion matching describes clips. */
+const fromCharacter = (point: { x: number; y: number; z: number }, root: { x: number; y: number; z: number }, facing: number) => {
+    const dx = point.x - root.x, dz = point.z - root.z;
+    const c = Math.cos(facing), s = Math.sin(facing);
+    return { x: dx * c - dz * s, y: point.y - root.y, z: dx * s + dz * c };
+};
+
+/**
+ * Whether a sampled clip loops, for one its import does not say: its end (`end`, the pose at its very
+ * last moment, else its last sample) flows back into its first moment, with the feet in the same places
+ * under the body, the same speed, and no turn round. A start (standing to walking), a stop, a turn of
+ * 180 degrees or a landing plays once.
+ */
+export const looksLooping = (samples: readonly MotionSample[], end: MotionSample = samples[samples.length - 1]): boolean => {
+    const n = samples.length;
+    if (n < 4) return true;
+    const ground = Math.min(...samples.map(sample => Math.min(sample.leftFoot.y, sample.rightFoot.y)));
+    const body = Math.max(1e-3, samples.reduce((sum, sample) => sum + sample.hips.y, 0) / n - ground);
+    // The pose at the clip's very end, which a loop brings back to its first.
+    const first = samples[0], last = end;
+    let gap = 0;
+    for (const foot of ['leftFoot', 'rightFoot'] as const) {
+        const a = fromCharacter(first[foot], first.hips, first.facing);
+        const b = fromCharacter(last[foot], last.hips, last.facing);
+        gap = Math.max(gap, Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z));
+    }
+    gap = Math.max(gap, Math.abs((first.hips.y - ground) - (last.hips.y - ground)));
+    // Speed over the first and the last quarter, so the sway within a stride evens out.
+    const span = Math.max(3, Math.floor((n - 1) / 4));
+    const speed = (from: number, to: number) => Math.hypot(samples[to].root.x - samples[from].root.x, samples[to].root.z - samples[from].root.z) * SAMPLE_RATE / (to - from);
+    const startSpeed = speed(0, span), endSpeed = speed(n - 1 - span, n - 1);
+    const speedGap = Math.abs(startSpeed - endSpeed);
+    const turn = Math.abs(last.facing - first.facing);
+    return gap < LOOP_POSE_GAP * body
+        && speedGap < LOOP_SPEED_GAP * body + LOOP_SPEED_SHARE * Math.max(startSpeed, endSpeed)
+        && turn < LOOP_TURN;
+};
+
+/**
+ * A clip sampled for matching on a copy of `model`, or null when the model has no hips and feet to read.
+ * `loop` says whether it loops; left out, that is read from the clip itself (looksLooping).
+ */
+export const sampleClip = (model: THREE.Object3D, clip: THREE.AnimationClip, loopAsSaid?: boolean): MotionClipSamples | null => {
     const copy = cloneSkinned(model);
     copy.position.set(0, 0, 0);
     copy.quaternion.identity();
@@ -178,10 +230,18 @@ export const sampleClip = (model: THREE.Object3D, clip: THREE.AnimationClip, loo
         const at = point(hips);
         samples.push({ root: { x: at.x, y: 0, z: at.z }, facing: heading, hips: at, leftFoot: point(leftFoot), rightFoot: point(rightFoot) });
     }
+    // The pose at the clip's very end (the samples stop a frame short of it), to tell whether it loops;
+    // read a hair before it, as the clip repeats and its full length is its start again.
+    mixer.setTime(Math.max(0, clip.duration - 1e-4));
+    copy.updateMatrixWorld(true);
+    const endYaw = yawOf(chest);
+    const endHips = point(hips);
+    const end: MotionSample = { root: { x: endHips.x, y: 0, z: endHips.z }, facing: heading + wrapAngle(endYaw - lastYaw), hips: endHips, leftFoot: point(leftFoot), rightFoot: point(rightFoot) };
     mixer.stopAllAction();
     mixer.uncacheRoot(copy);
     const first = samples[0].root, last = samples[samples.length - 1].root;
     if (Math.hypot(last.x - first.x, last.z - first.z) < IN_PLACE_TRAVEL) travelFromFeet(samples);
+    const loop = loopAsSaid ?? looksLooping(samples, end);
     footContacts(samples, loop);
     // The root and facing follow the body's course, not the sway of each step.
     const half = Math.round(SMOOTHING * SAMPLE_RATE);
@@ -221,7 +281,7 @@ export const motionDatabaseFor = (
 ): MotionDatabase | null => {
     const key = `${rigKey(model)}|${sources.join('|')}`;
     if (databases.has(key)) return databases.get(key) ?? null;
-    const sampled = clips.map(clip => sampleClip(model, clip, clipLoops(clip) ?? true)).filter((entry): entry is MotionClipSamples => entry !== null);
+    const sampled = clips.map(clip => sampleClip(model, clip, clipLoops(clip))).filter((entry): entry is MotionClipSamples => entry !== null);
     const database = sampled.length > 0 ? new MotionDatabase(sampled) : null;
     databases.set(key, database);
     if (databases.size > MAX_DATABASES) databases.delete(databases.keys().next().value as string);
@@ -278,7 +338,7 @@ export const motionDatabaseWhenReady = (
         const sampled: MotionClipSamples[] = [];
         for (const clip of [...own, ...mirrored]) {
             await nextSlice();
-            const samples = sampleClip(model, clip, clipLoops(clip) ?? true);
+            const samples = sampleClip(model, clip, clipLoops(clip));
             if (samples) sampled.push(samples);
         }
         await nextSlice();

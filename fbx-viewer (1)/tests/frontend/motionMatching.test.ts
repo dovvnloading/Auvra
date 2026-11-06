@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_MATCHER_OPTIONS, END_MARGIN, FEATURE_SIZE, HISTORY_TIMES, MotionDatabase, MotionMatcher, SAMPLE_RATE, TRAJECTORY_TIMES, buildQuery, frameFeatures, predictTrajectory,
-  type MotionClipSamples, type MotionSample,
+  restFrom, steadyTrajectory, STEER_TURN, type MotionClipSamples, type MotionSample,
 } from '../../runtime/motionMatching';
 import * as THREE from 'three';
 import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
-import { footContacts, motionDatabaseFor, smoothSeries, travelFromFeet } from '../../runtime/motionDatabase';
+import { footContacts, looksLooping, motionDatabaseFor, smoothSeries, travelFromFeet } from '../../runtime/motionDatabase';
 
 /*
  * Motion matching on synthetic locomotion: clips whose root moves at a known velocity (and turns),
@@ -45,6 +45,38 @@ const library = () => [
   locomotion('strafe right', 1.5, 0),
   locomotion('turn left', 0, 1.2, 1.5),
 ];
+
+/**
+ * A clip that plays once, going straight ahead at `speedAt(t)` m/s and turning `turnAt(t)` rad/s: a start,
+ * a stop, a turn round. Its feet step while it moves and stand still beside each other when it does not.
+ */
+const shaped = (name: string, seconds: number, speedAt: (t: number) => number, turnAt: (t: number) => number = () => 0): MotionClipSamples => {
+  const samples: MotionSample[] = [];
+  let x = 0, z = 0, facing = 0, step = 0;
+  const n = Math.round(seconds * SAMPLE_RATE);
+  for (let i = 0; i < n; i++) {
+    const t = i / SAMPLE_RATE;
+    const speed = speedAt(t);
+    const side = { x: Math.cos(facing), z: -Math.sin(facing) };
+    const forward = { x: Math.sin(facing), z: Math.cos(facing) };
+    const stride = Math.min(0.3, speed * 0.2);
+    const phase = Math.sin(step);
+    const foot = (sign: number) => ({
+      x: x + side.x * 0.15 * sign + forward.x * stride * phase * sign,
+      y: Math.max(0, phase * sign) * stride / 3,
+      z: z + side.z * 0.15 * sign + forward.z * stride * phase * sign,
+    });
+    samples.push({ root: { x, y: 0, z }, facing, hips: { x, y: 1, z }, leftFoot: foot(-1), rightFoot: foot(1) });
+    x += (speed * Math.sin(facing)) / SAMPLE_RATE;
+    z += (speed * Math.cos(facing)) / SAMPLE_RATE;
+    facing += turnAt(t) / SAMPLE_RATE;
+    if (speed > 0.05) step += (4 * Math.PI) / SAMPLE_RATE;
+  }
+  return { name, loop: false, samples };
+};
+
+/** Walking at 1.5 m/s and coming to a stop at 0.6 s, then standing to the end at 1.2 s. */
+const stopping = () => shaped('stop', 1.2, t => Math.max(0, 1.5 - 2.5 * t));
 
 describe('features', () => {
   it("describe a clip's future path and facing in the character's own space", () => {
@@ -284,6 +316,46 @@ describe('clip motion', () => {
   });
 });
 
+describe('clips that play once', () => {
+  it('are told from loops: a start, a stop and a turn round each play once', () => {
+    expect(looksLooping(locomotion('walk', 0, 1.5).samples)).toBe(true);
+    expect(looksLooping(locomotion('idle', 0, 0).samples)).toBe(true);
+    expect(looksLooping(shaped('start', 1.2, t => Math.min(1.5, 2 * t)).samples)).toBe(false);
+    expect(looksLooping(stopping().samples)).toBe(false);
+    expect(looksLooping(shaped('turn round', 1.2, () => 1.2, () => Math.PI / 1.2).samples)).toBe(false);
+  });
+
+  it("know where a stop has come to rest, and leave its standing end out of the search", () => {
+    const stop = stopping();
+    const rest = restFrom(stop, 1);
+    expect(rest / SAMPLE_RATE).toBeGreaterThan(0.5);
+    expect(rest / SAMPLE_RATE).toBeLessThan(0.7);
+    // A clip still moving at its end has no rest.
+    expect(restFrom(locomotion('walk', 0, 1.5, 0, 2, 2, false), 1)).toBe(Math.round(2 * SAMPLE_RATE));
+    // Standing still is for the looping idle: no search lands on the stop once it stands.
+    const database = new MotionDatabase([locomotion('idle', 0, 0), stop]);
+    const stopTimes = database.frames.filter(frame => frame.clip === 1).map(frame => frame.time);
+    expect(stopTimes.length).toBeGreaterThan(0);
+    expect(Math.max(...stopTimes)).toBeLessThan(rest / SAMPLE_RATE);
+  });
+
+  it('hand over to the best match elsewhere once played to the end, never going back into the end', () => {
+    const database = new MotionDatabase([locomotion('idle', 0, 0), locomotion('walk', 0, 1.5), stopping()]);
+    const matcher = new MotionMatcher(database);
+    // The stop is playing its last moments, standing.
+    matcher.clip = 2;
+    matcher.time = 1.1;
+    const still = { x: 0, z: 0 };
+    const played: string[] = [];
+    for (let i = 0; i < 120; i++) played.push(database.clips[matcher.step(1 / 60, still, still, 0).clip].name);
+    expect(played[played.length - 1]).toBe('idle');
+    // Once it has ended, the stop is not started again.
+    const ended = played.findIndex(name => name !== 'stop');
+    expect(ended).toBeGreaterThanOrEqual(0);
+    expect(played.slice(ended)).not.toContain('stop');
+  });
+});
+
 describe('databases', () => {
   it('are shared by characters made from one model, and kept apart for another size', () => {
     const { model, clip } = walker();
@@ -341,5 +413,64 @@ describe('sampled clips', () => {
     expect(samples.slice(14, 23).some(sample => sample.contacts![0])).toBe(false);
     expect(samples.slice(14, 23).every(sample => sample.contacts![1])).toBe(true);
     expect(samples.slice(1, 11).some(sample => sample.contacts![1])).toBe(false);
+  });
+});
+
+describe('steering', () => {
+  /** An arc at `speed` m/s turning `turn` radians a second, as the movement would ask for it. */
+  const arc = (speed: number, turn: number) => ({
+    positions: TRAJECTORY_TIMES.map(t => ({ x: (speed / turn) * (1 - Math.cos(turn * t)), z: (speed / turn) * Math.sin(turn * t) })),
+    facings: TRAJECTORY_TIMES.map(t => turn * t),
+  });
+  /** Slows to a stop while turning, then walks off the other way: a turn of 180 degrees. */
+  const turnRound = () => shaped('turn round', 1.2, t => 1.5 * Math.abs(1 - t / 0.6), () => Math.PI / 1.2);
+
+  it('takes the bend out of a path, keeping its pace and which way it goes relative to the facing', () => {
+    // Walking round a quarter circle in a second becomes walking straight on, nearly as far.
+    const bent = steadyTrajectory(arc(1.5, Math.PI / 2));
+    bent.positions.forEach(position => expect(Math.abs(position.x)).toBeLessThan(1e-6));
+    expect(bent.positions[bent.positions.length - 1].z).toBeGreaterThan(1.4);
+    expect(bent.positions[bent.positions.length - 1].z).toBeLessThan(1.5);
+    bent.facings.forEach(facing => expect(Math.abs(facing)).toBeLessThan(1e-9));
+    // A sideways path with the facing held (aiming) stays sideways.
+    const sideways = steadyTrajectory({ positions: TRAJECTORY_TIMES.map(t => ({ x: 1.5 * t, z: 0 })), facings: TRAJECTORY_TIMES.map(() => 0) });
+    sideways.positions.forEach((position, i) => {
+      expect(position.x).toBeCloseTo(1.5 * TRAJECTORY_TIMES[i], 6);
+      expect(position.z).toBeCloseTo(0, 6);
+    });
+    // Turning further than the movement steers keeps the rest of the turn.
+    const round = steadyTrajectory({ positions: TRAJECTORY_TIMES.map(() => ({ x: 0, z: 0 })), facings: [0, 0, (160 * Math.PI) / 180] });
+    expect(round.facings[2]).toBeCloseTo((160 * Math.PI) / 180 - STEER_TURN, 6);
+  });
+
+  it('steers clips that travel and keep to their line, not ones that stand or turn round', () => {
+    const database = new MotionDatabase([
+      locomotion('idle', 0, 0), locomotion('walk', 0, 1.5), shaped('start', 1.2, t => Math.min(1.5, 2 * t)), turnRound(),
+    ]);
+    expect(database.clips.map((clip, c) => [clip.name, database.steered[c]])).toEqual([
+      ['idle', false], ['walk', true], ['start', true], ['turn round', false],
+    ]);
+  });
+
+  it('walks round a bend instead of turning round, and still turns round when asked to', () => {
+    const turn = turnRound();
+    const database = new MotionDatabase([locomotion('idle', 0, 0), locomotion('walk', 0, 1.5), turn]);
+    const walking = { x: 0, z: 1.5 };
+    // Walking, and asked to bend round by 80 degrees over the next second: it walks on, steered.
+    const steering = new MotionMatcher(database);
+    steering.clip = 1;
+    steering.time = 0.5;
+    steering.step(1 / 60, walking, walking, 0, arc(1.5, (80 * Math.PI) / 180));
+    expect(database.clips[steering.clip].name).toBe('walk');
+    // Asked to turn round (the path the turn itself takes): it turns round.
+    const at = (t: number) => turn.samples[Math.round(t * SAMPLE_RATE)];
+    const reversing = new MotionMatcher(database);
+    reversing.clip = 1;
+    reversing.time = 0.5;
+    reversing.step(1 / 60, walking, walking, 0, {
+      positions: TRAJECTORY_TIMES.map(t => ({ x: at(t).root.x, z: at(t).root.z })),
+      facings: TRAJECTORY_TIMES.map(t => at(t).facing),
+    });
+    expect(database.clips[reversing.clip].name).toBe('turn round');
   });
 });
