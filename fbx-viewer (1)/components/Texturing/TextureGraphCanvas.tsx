@@ -1,76 +1,214 @@
-import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { CommentAddIcon, FrameIcon, PlusIcon, RedoIcon, UndoIcon, WarningIcon } from '../UI/Icons';
-import { unknownNodeMessage } from '../../texturing/graph/evaluator';
-import { OUTPUT_NODE_TYPE } from '../../texturing/graph/nodes/io';
-import { placeholderDefinition, textureNodeDefinition, type GraphResolver } from '../../texturing/graph/registry';
-import { OUTPUT_CHANNEL_LABELS, type OutputChannel, type PortKind, type TexGraphNode, type TexNodeDef, type TextureGraph } from '../../texturing/graph/types';
-import { IconButton } from '../UI/kit';
+import React, { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import {
-    HEADER,
-    NODE_WIDTH,
-    THUMB,
-    boundsOf,
-    bodyHeight,
-    changeComment,
-    connect,
-    copyNodes,
-    createComment,
-    moveNodes,
-    nodeRect,
-    outputKinds,
-    overlaps,
-    pasteNodes,
-    pinPosition,
-    readClipboard,
-    rectFrom,
-    removeNodes,
-    unusedNodes,
-    wirePath,
-    MAX_COMMENT_TITLE,
-    type GraphClipboard,
-    type Point,
-} from './graphEditing';
-import { NodePalette, type PaletteChoice } from './NodePalette';
-import type { TextureGraphSession } from './textureGraphSession';
+    CircleDashedIcon, CubeIcon, DropletsIcon, EyeIcon, GearIcon, GraphIcon, ImageIcon, MaterialIcon, MergeIcon, MountainIcon, MoveIcon, SelectBoxIcon,
+    SlidersIcon, SparklesIcon, TilesIcon, WindIcon, type IconComponent,
+} from '../UI/Icons';
+import type { FinderEntry } from '../NodeGraph/finder';
+import type { EditableFrame, EditableGraph, EditableLink, EditableNode, NodeLook, PinSet } from '../NodeGraph/model';
+import { NodeGraphCanvas, type NodeGraphAdapter } from '../NodeGraph/NodeGraphCanvas';
+import type { MenuItem, NodeView, PinKindStyle } from '../NodeGraph/types';
+import { createNode, newNodeId } from '../../texturing/graph/document';
+import { mainInput, unknownNodeMessage } from '../../texturing/graph/evaluator';
+import { INPUT_NODE_TYPE, MESH_MAPS, MESH_MAP_LABELS, MESH_MAP_NODE_TYPE, OUTPUT_NODE_TYPE, REROUTE_NODE_TYPE, SUBGRAPH_NODE_TYPE } from '../../texturing/graph/nodes/io';
+import { NODE_CATEGORY_ORDER, TEXTURE_NODE_DEFINITIONS, placeholderDefinition, textureNodeDefinition, type GraphResolver } from '../../texturing/graph/registry';
+import { OUTPUT_CHANNELS, OUTPUT_CHANNEL_LABELS, type OutputChannel, type TexGraphComment, type TexGraphLink, type TexGraphNode, type TexNodeDef, type TextureGraph } from '../../texturing/graph/types';
+import { copyNodes, outputKinds, readClipboard, unusedNodes, type Point } from './graphEditing';
+import { NODE_PICTURE_SIZE, requestNodePictures, useNodePicture, type PictureRequest } from './nodePictures';
+import { THUMBNAIL_SIZE, type TextureGraphSession } from './textureGraphSession';
 
 /**
- * The texture graph's canvas. Every node shows its picture. Left-drag empty space to select with a
- * box (Shift adds), middle- or right-drag to pan, wheel to zoom. Space, right-click or double-click
- * empty space opens the node list where the pointer is. Drag from a pin to wire it; a wire dropped
- * on empty space offers the nodes to end it on. Alt-click a wire to cut it. Double-click a node to
- * look at it in the 2D view, a comment's title to rename it. Delete removes, Ctrl+C/X/V/D copy, cut,
- * paste and duplicate, Ctrl+Z/Y undo and redo, C comments the selection, F frames it (or everything).
- * A node of a type this build does not have shows as a placeholder with its wires.
+ * The texture graph's canvas: the shared node graph canvas (components/NodeGraph) given texture
+ * nodes. Every node shows its picture, pins spread down its sides. Double-click a node to look at it
+ * in the 2D view; open a graph used as a node to edit it in place. A node of a type this build does
+ * not have shows as a placeholder with its wires.
  */
 
-const KIND_COLORS: Record<PortKind | 'any', string> = { color: '#e9b949', gray: '#a3a3a3', any: '#f5f5f5' };
-const KIND_WORDS: Record<PortKind | 'any', string> = { color: 'colour', gray: 'grey', any: 'colour or grey' };
-const CATEGORY_TINTS: Record<string, string> = {
-    'Inputs and outputs': '#2563eb', 'Mesh maps': '#0891b2', Noises: '#7c3aed', Patterns: '#9333ea', Shapes: '#a855f7',
-    Adjustments: '#059669', Blending: '#0d9488', Transforms: '#ca8a04', Warps: '#d97706', 'Blurs and sharpening': '#65a30d',
-    'Edges and distance': '#db2777', 'Height and normals': '#4f46e5', Utility: '#52525b',
+const KINDS: Readonly<Record<string, PinKindStyle>> = {
+    color: { colour: '#e9b949', words: 'colour' },
+    gray: { colour: '#a3a3a3', words: 'grey' },
+    any: { colour: '#f5f5f5', words: 'colour or grey' },
 };
-const MIN_SCALE = 0.12;
-const MAX_SCALE = 2.5;
-const DRAG_THRESHOLD = 4;
+/** Any image goes into any input: grey reads as grey colour, colour as its brightness. */
+const match = (from: string, to: string): number => (from === to || from === 'any' || to === 'any' ? 2 : 1);
 
-let memoryClipboard: GraphClipboard | null = null;
+const CATEGORY_TINTS: Record<string, string> = {
+    'Inputs and outputs': '#3f4a5c', 'Mesh maps': '#2f5560', Noises: '#4b3f6b', Patterns: '#523d66', Shapes: '#5a4170',
+    Adjustments: '#2f5a48', Blending: '#2d5653', Transforms: '#5f5230', Warps: '#634a2c', 'Blurs and sharpening': '#45562e',
+    'Edges and distance': '#5f3448', 'Height and normals': '#3d4370', Utility: '#46474d', 'Graphs in this project': '#3b4a63',
+};
+const CATEGORY_MARKS: Record<string, IconComponent> = {
+    'Inputs and outputs': ImageIcon, 'Mesh maps': CubeIcon, Noises: SparklesIcon, Patterns: TilesIcon, Shapes: CircleDashedIcon,
+    Adjustments: SlidersIcon, Blending: MergeIcon, Transforms: MoveIcon, Warps: WindIcon, 'Blurs and sharpening': DropletsIcon,
+    'Edges and distance': SelectBoxIcon, 'Height and normals': MountainIcon, Utility: GearIcon, 'Graphs in this project': GraphIcon,
+};
+const OUTPUT_TINT = '#2b4a6b';
+const MISSING_TINT = '#5a4317';
+const NODE_WIDTH = 140;
+const GRAPHS_CATEGORY = 'Graphs in this project';
 
-interface Viewport { x: number; y: number; scale: number }
+const LOOK_KEYS = ['name', 'color', 'collapsed', 'bypass'] as const;
 
-type PendingWire = { side: 'in' | 'out'; nodeId: string; key: string; kind: PortKind | 'any'; to: Point };
-type Gesture =
-    | { kind: 'pan'; startX: number; startY: number; lastX: number; lastY: number; moved: boolean; button: number }
-    | { kind: 'move'; start: Point; base: TextureGraph; ids: Set<string>; moved: boolean }
-    | { kind: 'marquee'; start: Point; additive: boolean }
-    | { kind: 'wire'; wire: PendingWire }
-    | { kind: 'comment'; id: string; start: Point; base: TextureGraph; ids: Set<string>; resize: boolean };
+// ---- the graph read into the canvas's shape, and back ----
+
+const editableNodes = new WeakMap<TexGraphNode, EditableNode<TexGraphNode>>();
+const editableLinks = new WeakMap<TexGraphLink, EditableLink>();
+const linkSources = new WeakMap<EditableLink, TexGraphLink>();
+const editableFrames = new WeakMap<TexGraphComment, EditableFrame>();
+const frameSources = new WeakMap<EditableFrame, TexGraphComment>();
+
+/** The fields of a node's look that are set (a texture node and an editable node both carry them). */
+const lookOf = (node: NodeLook): NodeLook => ({
+    ...(node.name ? { name: node.name } : {}),
+    ...(node.color ? { color: node.color } : {}),
+    ...(node.collapsed ? { collapsed: true } : {}),
+    ...(node.bypass ? { bypass: true } : {}),
+});
+
+const toNode = (node: TexGraphNode): EditableNode<TexGraphNode> => {
+    let found = editableNodes.get(node);
+    if (!found) editableNodes.set(node, found = { id: node.id, type: node.type, x: node.x, y: node.y, ...lookOf(node), source: node });
+    return found;
+};
+const toLink = (link: TexGraphLink): EditableLink => {
+    let found = editableLinks.get(link);
+    if (!found) {
+        found = { from: link.from, fromPin: link.fromOutput, to: link.to, toPin: link.toInput };
+        editableLinks.set(link, found);
+        linkSources.set(found, link);
+    }
+    return found;
+};
+const toFrame = (comment: TexGraphComment): EditableFrame => {
+    let found = editableFrames.get(comment);
+    if (!found) {
+        found = { id: comment.id, x: comment.x, y: comment.y, width: comment.width, height: comment.height, title: comment.text, colour: comment.color };
+        editableFrames.set(comment, found);
+        frameSources.set(found, comment);
+    }
+    return found;
+};
+
+const fromNode = (node: EditableNode<TexGraphNode>): TexGraphNode => {
+    const source = node.source;
+    if (editableNodes.get(source) === node) return source;
+    const next: TexGraphNode = { ...source, id: node.id, x: node.x, y: node.y };
+    for (const key of LOOK_KEYS) delete next[key];
+    Object.assign(next, lookOf(node));
+    editableNodes.set(next, { ...node, source: next });
+    return next;
+};
+
+/** The texture graph with the canvas's edit written back; `base` when nothing changed. */
+const fromEditable = (editable: EditableGraph<TexGraphNode>, base: TextureGraph): TextureGraph => {
+    const nodes = editable.nodes.map(fromNode);
+    const links = editable.links.map((link) => linkSources.get(link) ?? { from: link.from, fromOutput: link.fromPin, to: link.to, toInput: link.toPin });
+    const comments = editable.frames.map((frame) => frameSources.get(frame) ?? { id: frame.id, x: frame.x, y: frame.y, width: frame.width, height: frame.height, text: frame.title, color: frame.colour });
+    const same = <T,>(a: readonly T[], b: readonly T[] | undefined) => a.length === (b?.length ?? 0) && a.every((item, index) => item === b![index]);
+    if (same(nodes, base.nodes) && same(links, base.links) && same(comments, base.comments)) return base;
+    const { comments: _old, ...rest } = base;
+    return comments.length ? { ...rest, nodes, links, comments } : { ...rest, nodes, links };
+};
+
+// ---- the node finder's choices ----
+
+const typeEntry = (definition: TexNodeDef): FinderEntry => ({
+    id: definition.type,
+    label: definition.label,
+    category: definition.category,
+    description: definition.description,
+    keywords: definition.keywords,
+    inputs: definition.inputs.map((port) => port.kind),
+    outputs: definition.outputs.map((port) => port.kind),
+});
+
+const NODE_ENTRIES: readonly FinderEntry[] = (() => {
+    const entries: FinderEntry[] = [];
+    for (const definition of TEXTURE_NODE_DEFINITIONS) {
+        if (definition.type === OUTPUT_NODE_TYPE || definition.type === MESH_MAP_NODE_TYPE || definition.type === SUBGRAPH_NODE_TYPE) continue;
+        entries.push(typeEntry(definition));
+    }
+    // One entry per output channel and per mesh map, so they come ready set.
+    for (const channel of OUTPUT_CHANNELS) {
+        entries.push({
+            id: `output:${channel}`,
+            label: `Output: ${OUTPUT_CHANNEL_LABELS[channel]}`,
+            category: 'Inputs and outputs',
+            description: channel === 'custom' ? 'A named image the graph gives, for using it inside other graphs.' : `The material's ${OUTPUT_CHANNEL_LABELS[channel].toLowerCase()}.`,
+            keywords: ['output', 'result', 'channel', channel, ...(channel === 'custom' ? ['named', 'other graphs', 'mask'] : [])],
+            inputs: ['any'],
+            outputs: [],
+        });
+    }
+    for (const map of MESH_MAPS) {
+        entries.push({
+            id: `mesh:${map}`,
+            label: `Mesh map: ${MESH_MAP_LABELS[map]}`,
+            category: 'Mesh maps',
+            description: `The ${MESH_MAP_LABELS[map].toLowerCase()} map baked from the model the graph is used on.`,
+            keywords: ['mesh map', 'baked', map],
+            inputs: [],
+            outputs: ['any'],
+        });
+    }
+    const order = (entry: FinderEntry) => NODE_CATEGORY_ORDER.indexOf(entry.category as typeof NODE_CATEGORY_ORDER[number]);
+    return entries.map((entry, index) => ({ entry, index })).sort((a, b) => order(a.entry) - order(b.entry) || a.index - b.index).map((item) => item.entry);
+})();
+
+/** Pictures the finder draws: every node that makes an image on its own (not outputs, inputs, pictures or reroute points). */
+const PICTURE_REQUESTS: readonly PictureRequest[] = NODE_ENTRIES.flatMap((entry): PictureRequest[] => {
+    if (entry.id.startsWith('mesh:')) return [{ key: entry.id, type: MESH_MAP_NODE_TYPE, params: { map: entry.id.slice(5) } }];
+    if (entry.id.includes(':') || [INPUT_NODE_TYPE, REROUTE_NODE_TYPE, 'bitmap'].includes(entry.id)) return [];
+    return [{ key: entry.id, type: entry.id }];
+});
+
+const CategoryMark: React.FC<{ category: string; size: number }> = ({ category, size }) => {
+    const Mark = CATEGORY_MARKS[category] ?? GearIcon;
+    return (
+        <span className="flex items-center justify-center rounded-sm text-white/85" style={{ width: size, height: size, background: CATEGORY_TINTS[category] ?? CATEGORY_TINTS.Utility }}>
+            <Mark size={Math.round(size * 0.55)} />
+        </span>
+    );
+};
+
+/** An entry's picture, drawn once for the session; its category's mark until then (or when it has none). */
+const EntryPicture: React.FC<{ entry: FinderEntry; size: number }> = ({ entry, size }) => {
+    const picture = useNodePicture(entry.id);
+    const canvas = useRef<HTMLCanvasElement>(null);
+    useEffect(() => {
+        if (picture && picture !== 'failed') canvas.current?.getContext('2d')?.putImageData(picture, 0, 0);
+    }, [picture]);
+    if (!picture || picture === 'failed') return <CategoryMark category={entry.category} size={size} />;
+    return <canvas ref={canvas} width={NODE_PICTURE_SIZE} height={NODE_PICTURE_SIZE} className="rounded-sm" style={{ width: size, height: size }} />;
+};
+
+const renderPicture = (entry: FinderEntry, size: number): React.ReactNode => <EntryPicture entry={entry} size={size} />;
+const startPictures = () => requestNodePictures(PICTURE_REQUESTS);
+
+/** A node's picture, painted when the session makes this node's thumbnail anew (and only then). */
+const Thumbnail = React.memo(({ session, nodeId }: { session: TextureGraphSession; nodeId: string }) => {
+    const canvas = useRef<HTMLCanvasElement>(null);
+    const subscribe = useCallback((listener: () => void) => session.subscribeThumbnail(nodeId, listener), [nodeId, session]);
+    const signature = useSyncExternalStore(subscribe, () => session.thumbnails.get(nodeId)?.signature ?? '');
+    useEffect(() => {
+        const thumbnail = session.thumbnails.get(nodeId);
+        const context = canvas.current?.getContext('2d');
+        if (!context) return;
+        if (!thumbnail) {
+            context.fillStyle = '#18181b';
+            context.fillRect(0, 0, THUMBNAIL_SIZE, THUMBNAIL_SIZE);
+            return;
+        }
+        context.putImageData(thumbnail.image, 0, 0);
+    }, [nodeId, session, signature]);
+    return <canvas ref={canvas} width={THUMBNAIL_SIZE} height={THUMBNAIL_SIZE} className="rounded-sm" style={{ width: THUMBNAIL_SIZE, height: THUMBNAIL_SIZE }} />;
+});
+Thumbnail.displayName = 'Thumbnail';
 
 export interface TextureGraphCanvasProps {
     graph: TextureGraph;
     session: TextureGraphSession;
     resolve: GraphResolver;
-    /** Graphs the node list offers as sub-graph nodes. */
+    /** Graphs the node finder offers as sub-graph nodes. */
     graphs: ReadonlyArray<{ id: string; name: string }>;
     selection: ReadonlySet<string>;
     selectedComment: string | null;
@@ -84,534 +222,163 @@ export interface TextureGraphCanvasProps {
     /** `commit` false: a step of a drag, recorded when it ends; `coalesce` merges quick edits. */
     onChange: (graph: TextureGraph, commit: boolean, coalesce?: string) => void;
     onAddSubgraph: (graphId: string, at: Point) => TexGraphNode | null;
+    /** Opens the graph a sub-graph node uses, in place. */
+    onOpenGraph?: (nodeId: string) => void;
     onUndo: () => void;
     onRedo: () => void;
 }
 
-/** A node's picture, painted when the session makes this node's thumbnail anew (and only then). */
-const Thumbnail = React.memo(({ session, nodeId }: { session: TextureGraphSession; nodeId: string }) => {
-    const canvas = useRef<HTMLCanvasElement>(null);
-    const subscribe = useCallback((listener: () => void) => session.subscribeThumbnail(nodeId, listener), [nodeId, session]);
-    const signature = useSyncExternalStore(subscribe, () => session.thumbnails.get(nodeId)?.signature ?? '');
-    useEffect(() => {
-        const thumbnail = session.thumbnails.get(nodeId);
-        const context = canvas.current?.getContext('2d');
-        if (!context) return;
-        if (!thumbnail) {
-            context.fillStyle = '#18181b';
-            context.fillRect(0, 0, THUMB, THUMB);
-            return;
-        }
-        context.putImageData(thumbnail.image, 0, 0);
-    }, [nodeId, session, signature]);
-    return <canvas ref={canvas} width={THUMB} height={THUMB} className="pointer-events-none rounded-sm" style={{ width: THUMB, height: THUMB, imageRendering: 'auto' }} />;
-});
-Thumbnail.displayName = 'Thumbnail';
-
-/** A comment's title, typed in place after a double-click and kept on Enter or on leaving the box. */
-const CommentTitle: React.FC<{ text: string; onDone: (text: string | null) => void }> = ({ text, onDone }) => {
-    const [draft, setDraft] = useState(text);
-    const finished = useRef(false);
-    const finish = (value: string | null) => {
-        if (finished.current) return;
-        finished.current = true;
-        onDone(value);
-    };
-    return (
-        <input
-            autoFocus
-            aria-label="Comment title"
-            value={draft}
-            maxLength={MAX_COMMENT_TITLE}
-            onChange={(event) => setDraft(event.target.value)}
-            onPointerDown={(event) => event.stopPropagation()}
-            onDoubleClick={(event) => event.stopPropagation()}
-            onFocus={(event) => event.target.select()}
-            onBlur={() => finish(draft)}
-            onKeyDown={(event) => {
-                event.stopPropagation();
-                if (event.key === 'Enter') finish(draft);
-                if (event.key === 'Escape') finish(null);
-            }}
-            className="w-full rounded bg-black/40 px-1 text-xs font-semibold text-zinc-100 outline-none ring-1 ring-sky-500/60"
-        />
-    );
-};
-
-export const TextureGraphCanvas: React.FC<TextureGraphCanvasProps> = ({
-    graph, session, resolve, graphs, selection, selectedComment, viewed, canUndo, canRedo, notice, onSelect, onView, onChange, onAddSubgraph, onUndo, onRedo,
-}) => {
-    const root = useRef<HTMLDivElement>(null);
-    const [viewport, setViewport] = useState<Viewport>({ x: 40, y: 40, scale: 0.85 });
-    const [gesture, setGesture] = useState<Gesture | null>(null);
-    const [pointer, setPointer] = useState<Point>({ x: 0, y: 0 });
-    const [marqueeEnd, setMarqueeEnd] = useState<Point | null>(null);
-    const [palette, setPalette] = useState<{ at: Point; screen: Point; bounds: { width: number; height: number }; wire?: PendingWire } | null>(null);
-    const [editingComment, setEditingComment] = useState<string | null>(null);
+export const TextureGraphCanvas: React.FC<TextureGraphCanvasProps> = (props) => {
+    const { graph, session, resolve, graphs, selection, selectedComment, viewed, canUndo, canRedo, notice, onUndo, onRedo } = props;
+    const latest = useRef(props);
+    latest.current = props;
     const sessionVersion = useSyncExternalStore(session.subscribe, session.getVersion);
+    const opens = Boolean(props.onOpenGraph);
+
+    const editable = useMemo<EditableGraph<TexGraphNode>>(() => ({
+        nodes: graph.nodes.map(toNode),
+        links: graph.links.map(toLink),
+        frames: (graph.comments ?? []).map(toFrame),
+    }), [graph.comments, graph.links, graph.nodes]);
 
     // Each node's definition (a placeholder for types this build does not have, so their wires show),
-    // the nodes by id, the kind of every output, and which inputs are wired: worked out once per graph.
+    // the kind of every output, and the nodes nothing reaches an output from: worked out once per graph.
     const known = useMemo(() => new Map(graph.nodes.map((node) => [node.id, textureNodeDefinition(node, resolve)])), [graph.nodes, resolve]);
     const placeholders = useMemo(() => new Map(graph.nodes.filter((node) => !known.get(node.id)).map((node) => [node.id, placeholderDefinition(node, graph.links)])), [graph.links, graph.nodes, known]);
     const definition = useCallback((node: TexGraphNode): TexNodeDef | null => known.get(node.id) ?? placeholders.get(node.id) ?? null, [known, placeholders]);
-    const nodeById = useMemo(() => new Map(graph.nodes.map((node) => [node.id, node])), [graph.nodes]);
     const kindOf = useMemo(() => outputKinds(graph, definition), [definition, graph]);
-    const wiredInputs = useMemo(() => new Set(graph.links.map((link) => `${link.to}:${link.toInput}`)), [graph.links]);
     const unused = useMemo(() => unusedNodes(graph), [graph]);
 
-    const toGraph = useCallback((clientX: number, clientY: number): Point => {
-        const box = root.current?.getBoundingClientRect();
-        return { x: (clientX - (box?.left ?? 0) - viewport.x) / viewport.scale, y: (clientY - (box?.top ?? 0) - viewport.y) / viewport.scale };
-    }, [viewport]);
-
-    const frame = useCallback((ids?: ReadonlySet<string>) => {
-        const box = root.current?.getBoundingClientRect();
-        const nodes = graph.nodes.filter((node) => !ids?.size || ids.has(node.id));
-        const bounds = boundsOf(nodes.map((node) => nodeRect(node, definition(node))));
-        if (!box || !bounds) return;
-        const scale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, Math.min((box.width - 80) / bounds.width, (box.height - 80) / bounds.height, 1.2)));
-        setViewport({ scale, x: box.width / 2 - (bounds.x + bounds.width / 2) * scale, y: box.height / 2 - (bounds.y + bounds.height / 2) * scale });
-    }, [definition, graph.nodes]);
-
-    // Frame the graph the first time it is shown.
-    const framed = useRef(false);
-    useLayoutEffect(() => {
-        if (framed.current || !graph.nodes.length) return;
-        framed.current = true;
-        frame();
-    }, [frame, graph.nodes.length]);
-
-    const onWheel = useCallback((event: WheelEvent) => {
-        event.preventDefault();
-        const box = root.current!.getBoundingClientRect();
-        const mx = event.clientX - box.left;
-        const my = event.clientY - box.top;
-        setViewport((current) => {
-            const scale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, current.scale * Math.exp(-event.deltaY * 0.0015)));
-            return { scale, x: mx - (mx - current.x) * (scale / current.scale), y: my - (my - current.y) * (scale / current.scale) };
-        });
-    }, []);
-    useEffect(() => {
-        const element = root.current;
-        element?.addEventListener('wheel', onWheel, { passive: false });
-        return () => element?.removeEventListener('wheel', onWheel);
-    }, [onWheel]);
-
-    const openPalette = useCallback((clientX: number, clientY: number, wire?: PendingWire) => {
-        const box = root.current!.getBoundingClientRect();
-        setPalette({ at: toGraph(clientX, clientY), screen: { x: clientX - box.left, y: clientY - box.top }, bounds: { width: box.width, height: box.height }, wire });
-    }, [toGraph]);
-
-    /** The kind a pin carries: an output's as worked out for the graph, an input's as it is declared. */
-    const pinKind = (nodeId: string, side: 'in' | 'out', key: string): PortKind | 'any' => {
-        if (side === 'out') return kindOf(nodeId, key);
-        const node = nodeById.get(nodeId);
-        return (node && definition(node)?.inputs.find((port) => port.key === key)?.kind) ?? 'any';
-    };
-
-    // ---- pointer handling ----
-    const onPointerDown = (event: React.PointerEvent) => {
-        if (palette) setPalette(null);
-        const target = event.target as HTMLElement;
-        root.current?.setPointerCapture(event.pointerId);
-        const at = toGraph(event.clientX, event.clientY);
-        if (event.button === 1 || event.button === 2) {
-            setGesture({ kind: 'pan', startX: event.clientX, startY: event.clientY, lastX: event.clientX, lastY: event.clientY, moved: false, button: event.button });
-            return;
+    // Each node's view, the same object while it shows the same (so only changed cards redraw).
+    const viewCache = useRef(new Map<string, { key: string; view: NodeView }>());
+    const views = useMemo(() => {
+        void sessionVersion;
+        const result = new Map<string, NodeView>();
+        for (const node of graph.nodes) {
+            const def = definition(node);
+            const missing = placeholders.has(node.id);
+            const state = session.state(node.id);
+            const isOutput = node.type === OUTPUT_NODE_TYPE;
+            const error = missing ? unknownNodeMessage(node.type) : state?.error;
+            const kindTitle = isOutput ? (String(node.params.name || '') || OUTPUT_CHANNEL_LABELS[node.params.channel as OutputChannel] || 'Output') : def?.label ?? node.type;
+            const view: NodeView = {
+                title: node.name || kindTitle,
+                tint: missing ? MISSING_TINT : isOutput ? OUTPUT_TINT : CATEGORY_TINTS[def?.category ?? 'Utility'] ?? CATEGORY_TINTS.Utility,
+                layout: node.type === REROUTE_NODE_TYPE ? 'dot' : 'edges',
+                width: NODE_WIDTH,
+                body: missing ? 48 : THUMBNAIL_SIZE,
+                inputs: (def?.inputs ?? []).map((port) => ({ key: port.key, label: port.label, kind: port.kind, ...(port.group ? { group: port.group } : {}) })),
+                outputs: (def?.outputs ?? []).map((port) => ({ key: port.key, label: port.label, kind: kindOf(node.id, port.key) })),
+                ...(unused.has(node.id) ? { unused: true } : {}),
+                ...(error ? { error } : {}),
+                ...(missing ? { missing: true } : {}),
+                ...(state && !error && state.milliseconds >= 20 ? { badge: `${Math.round(state.milliseconds)} ms` } : {}),
+                description: node.name ? `${kindTitle}: ${def?.description ?? ''}` : def?.description,
+                canBypass: Boolean(!missing && def && mainInput(def)),
+                canDelete: true,
+                ...(isOutput ? { output: true } : {}),
+                ...(opens && node.type === SUBGRAPH_NODE_TYPE && typeof node.params.graph === 'string' && resolve(node.params.graph) ? { canOpen: true } : {}),
+                searchText: `${kindTitle} ${def?.category ?? ''}`,
+            };
+            const key = JSON.stringify(view);
+            const cached = viewCache.current.get(node.id);
+            if (cached?.key === key) result.set(node.id, cached.view);
+            else { viewCache.current.set(node.id, { key, view }); result.set(node.id, view); }
         }
-        const pin = target.closest('[data-pin]') as HTMLElement | null;
-        if (pin) {
-            const nodeId = pin.dataset.node!;
-            const side = pin.dataset.pin as 'in' | 'out';
-            const key = pin.dataset.key!;
-            if (side === 'in') {
-                // Dragging a wire off an input picks it up from its other end.
-                const existing = graph.links.find((link) => link.to === nodeId && link.toInput === key);
-                if (existing) {
-                    onChange({ ...graph, links: graph.links.filter((link) => link !== existing) }, true);
-                    setGesture({ kind: 'wire', wire: { side: 'out', nodeId: existing.from, key: existing.fromOutput, kind: pinKind(existing.from, 'out', existing.fromOutput), to: at } });
-                    return;
-                }
-            }
-            setGesture({ kind: 'wire', wire: { side, nodeId, key, kind: pinKind(nodeId, side, key), to: at } });
-            return;
-        }
-        const commentElement = target.closest('[data-comment]') as HTMLElement | null;
-        if (commentElement && !target.closest('[data-node]')) {
-            const id = commentElement.dataset.comment!;
-            const comment = graph.comments?.find((candidate) => candidate.id === id);
-            if (comment) {
-                const inside = new Set(graph.nodes.filter((node) => overlaps(nodeRect(node, definition(node)), comment) && node.x >= comment.x && node.y >= comment.y).map((node) => node.id));
-                onSelect([], id);
-                setGesture({ kind: 'comment', id, start: at, base: graph, ids: inside, resize: Boolean(target.closest('[data-resize]')) });
-                return;
-            }
-        }
-        const nodeElement = target.closest('[data-node]') as HTMLElement | null;
-        if (nodeElement) {
-            const id = nodeElement.dataset.node!;
-            let ids = new Set(selection);
-            if (event.shiftKey) {
-                if (ids.has(id)) ids.delete(id); else ids.add(id);
-            } else if (!ids.has(id)) ids = new Set([id]);
-            onSelect([...ids]);
-            setGesture({ kind: 'move', start: at, base: graph, ids, moved: false });
-            return;
-        }
-        setGesture({ kind: 'marquee', start: at, additive: event.shiftKey });
-        setMarqueeEnd(at);
-    };
+        return result;
+    }, [definition, graph.nodes, kindOf, opens, placeholders, resolve, session, sessionVersion, unused]);
 
-    const onPointerMove = (event: React.PointerEvent) => {
-        const at = toGraph(event.clientX, event.clientY);
-        setPointer(at);
-        if (!gesture) return;
-        if (gesture.kind === 'pan') {
-            const moved = gesture.moved || Math.hypot(event.clientX - gesture.startX, event.clientY - gesture.startY) > DRAG_THRESHOLD;
-            setViewport((current) => ({ ...current, x: current.x + event.clientX - gesture.lastX, y: current.y + event.clientY - gesture.lastY }));
-            setGesture({ ...gesture, lastX: event.clientX, lastY: event.clientY, moved });
-        } else if (gesture.kind === 'move') {
-            const dx = at.x - gesture.start.x;
-            const dy = at.y - gesture.start.y;
-            if (!gesture.moved && Math.hypot(dx, dy) * viewport.scale < DRAG_THRESHOLD) return;
-            setGesture({ ...gesture, moved: true });
-            onChange(moveNodes(gesture.base, gesture.ids, dx, dy), false);
-        } else if (gesture.kind === 'marquee') {
-            setMarqueeEnd(at);
-        } else if (gesture.kind === 'wire') {
-            setGesture({ kind: 'wire', wire: { ...gesture.wire, to: at } });
-        } else if (gesture.kind === 'comment') {
-            const dx = at.x - gesture.start.x;
-            const dy = at.y - gesture.start.y;
-            const comments = (gesture.base.comments ?? []).map((comment) => (comment.id !== gesture.id ? comment : gesture.resize
-                ? { ...comment, width: Math.max(80, Math.round(comment.width + dx)), height: Math.max(60, Math.round(comment.height + dy)) }
-                : { ...comment, x: Math.round(comment.x + dx), y: Math.round(comment.y + dy) }));
-            const moved = gesture.resize ? gesture.base : moveNodes(gesture.base, gesture.ids, dx, dy);
-            onChange({ ...moved, comments }, false);
-        }
-    };
+    const entries = useMemo<readonly FinderEntry[]>(() => [
+        ...NODE_ENTRIES,
+        ...graphs.map((entry) => {
+            const used = resolve(entry.id)?.graph;
+            return {
+                id: `graph:${entry.id}`,
+                label: entry.name,
+                category: GRAPHS_CATEGORY,
+                description: 'This graph used as one node: its exposed parameters are its settings.',
+                keywords: ['graph', 'sub-graph', 'subgraph', 'group'],
+                inputs: (used?.nodes ?? []).filter((node) => node.type === INPUT_NODE_TYPE).map((node) => (node.params.kind === 'gray' ? 'gray' : 'color')),
+                outputs: (used?.nodes ?? []).filter((node) => node.type === OUTPUT_NODE_TYPE).map(() => 'any'),
+            };
+        }),
+    ], [graphs, resolve]);
 
-    const endWire = (wire: PendingWire, target: HTMLElement | null, clientX: number, clientY: number) => {
-        const pin = target?.closest('[data-pin]') as HTMLElement | null;
-        if (pin && pin.dataset.pin !== wire.side && pin.dataset.node !== wire.nodeId) {
-            const other = { nodeId: pin.dataset.node!, key: pin.dataset.key! };
-            const link = wire.side === 'out'
-                ? { from: wire.nodeId, fromOutput: wire.key, to: other.nodeId, toInput: other.key }
-                : { from: other.nodeId, fromOutput: other.key, to: wire.nodeId, toInput: wire.key };
-            onChange(connect(graph, link), true);
-            return;
-        }
-        if (!pin) openPalette(clientX, clientY, wire);
-    };
+    const renderBody = useCallback((nodeId: string, view: NodeView) => (view.missing ? null : <Thumbnail session={session} nodeId={nodeId} />), [session]);
 
-    const onPointerUp = (event: React.PointerEvent) => {
-        root.current?.releasePointerCapture(event.pointerId);
-        const current = gesture;
-        setGesture(null);
-        if (!current) return;
-        if (current.kind === 'pan') {
-            if (!current.moved && current.button === 2) openPalette(event.clientX, event.clientY);
-        } else if (current.kind === 'move') {
-            if (current.moved) onChange(moveNodes(current.base, current.ids, toGraph(event.clientX, event.clientY).x - current.start.x, toGraph(event.clientX, event.clientY).y - current.start.y), true);
-        } else if (current.kind === 'comment') {
-            onChange(graph, true);
-        } else if (current.kind === 'marquee') {
-            const end = marqueeEnd ?? current.start;
-            setMarqueeEnd(null);
-            const box = rectFrom(current.start, end);
-            if (box.width < 3 && box.height < 3) {
-                if (!current.additive) onSelect([]);
-                return;
-            }
-            const inside = graph.nodes.filter((node) => overlaps(nodeRect(node, definition(node)), box)).map((node) => node.id);
-            onSelect(current.additive ? [...new Set([...selection, ...inside])] : inside);
-        } else if (current.kind === 'wire') {
-            endWire(current.wire, document.elementFromPoint(event.clientX, event.clientY) as HTMLElement | null, event.clientX, event.clientY);
-        }
-    };
-
-    const onDoubleClick = (event: React.MouseEvent) => {
-        // The canvas holds the pointer while a button is down, so the event arrives on the canvas itself:
-        // look up what is really under the pointer.
-        const target = (document.elementFromPoint(event.clientX, event.clientY) as HTMLElement | null) ?? (event.target as HTMLElement);
-        const nodeElement = target.closest('[data-node]') as HTMLElement | null;
-        if (nodeElement) {
-            onView(nodeElement.dataset.node!);
-            return;
-        }
-        const title = target.closest('[data-comment-title]') as HTMLElement | null;
-        if (title) {
-            setEditingComment(title.dataset.commentTitle!);
-            return;
-        }
-        if (!target.closest('[data-comment]')) openPalette(event.clientX, event.clientY);
-    };
-
-    const finishTitle = (id: string, text: string | null) => {
-        setEditingComment(null);
-        const comment = graph.comments?.find((candidate) => candidate.id === id);
-        if (text === null || !comment || text === comment.text) return;
-        onChange(changeComment(graph, id, { text }), true);
-    };
-
-    const choose = (choice: PaletteChoice) => {
-        if (!palette) return;
-        let next = graph;
-        let created: TexGraphNode | null = null;
-        if (choice.kind === 'graph') {
-            created = onAddSubgraph(choice.graphId, palette.at);
-            if (!created) { setPalette(null); return; }
-            next = { ...graph, nodes: [...graph.nodes, created] };
-        } else {
-            const { createNodeAt } = choice;
-            created = createNodeAt(palette.at);
-            next = { ...graph, nodes: [...graph.nodes, created] };
-        }
-        const wire = palette.wire;
-        if (wire && created) {
-            const definition = textureNodeDefinition(created, resolve);
-            if (wire.side === 'out') {
-                const input = definition?.inputs.find((port) => port.kind === 'any' || wire.kind === 'any' || port.kind === wire.kind) ?? definition?.inputs[0];
-                if (input) next = connect(next, { from: wire.nodeId, fromOutput: wire.key, to: created.id, toInput: input.key });
-            } else {
-                const output = definition?.outputs.find((port) => port.kind === 'any' || wire.kind === 'any' || port.kind === wire.kind) ?? definition?.outputs[0];
-                if (output) next = connect(next, { from: created.id, fromOutput: output.key, to: wire.nodeId, toInput: wire.key });
-            }
-        }
-        onChange(next, true);
-        if (created) onSelect([created.id]);
-        setPalette(null);
-    };
-
-    // ---- keys ----
-    useEffect(() => {
-        const onKey = (event: KeyboardEvent) => {
-            const element = event.target as HTMLElement | null;
-            if (element && (element.tagName === 'INPUT' || element.tagName === 'TEXTAREA' || element.isContentEditable)) return;
-            if (!root.current?.matches(':hover') && !root.current?.contains(document.activeElement)) return;
-            const mod = event.ctrlKey || event.metaKey;
-            const key = event.key.toLowerCase();
-            if (mod && key === 'z') { event.preventDefault(); if (event.shiftKey) onRedo(); else onUndo(); return; }
-            if (mod && key === 'y') { event.preventDefault(); onRedo(); return; }
-            if ((key === 'delete' || key === 'backspace') && (selection.size || selectedComment)) {
-                event.preventDefault();
-                let next = removeNodes(graph, selection);
-                if (selectedComment) next = { ...next, comments: (next.comments ?? []).filter((comment) => comment.id !== selectedComment) };
-                onChange(next, true);
-                onSelect([]);
-                return;
-            }
-            if (mod && (key === 'c' || key === 'x') && selection.size) {
-                event.preventDefault();
-                memoryClipboard = copyNodes(graph, selection);
-                void navigator.clipboard?.writeText(JSON.stringify(memoryClipboard)).catch(() => undefined);
-                if (key === 'x') { onChange(removeNodes(graph, selection), true); onSelect([]); }
-                return;
-            }
-            if (mod && key === 'v') {
-                event.preventDefault();
-                const paste = (clipboard: GraphClipboard | null) => {
-                    if (!clipboard?.nodes.length) return;
-                    const result = pasteNodes(graph, clipboard, pointer);
-                    onChange(result.graph, true);
-                    onSelect(result.ids);
-                };
-                if (navigator.clipboard?.readText) void navigator.clipboard.readText().then((text) => paste(readClipboard(text) ?? memoryClipboard), () => paste(memoryClipboard));
-                else paste(memoryClipboard);
-                return;
-            }
-            if (mod && key === 'd' && selection.size) {
-                event.preventDefault();
-                const copied = copyNodes(graph, selection);
-                const bounds = boundsOf(copied.nodes.map((node) => nodeRect(node, definition(node))))!;
-                const result = pasteNodes(graph, copied, { x: bounds.x + 30, y: bounds.y + 30 });
-                onChange(result.graph, true);
-                onSelect(result.ids);
-                return;
-            }
-            if (mod) return;
-            if (key === 'f') { event.preventDefault(); frame(selection.size ? selection : undefined); return; }
-            if (key === ' ') {
-                event.preventDefault();
-                const box = root.current!.getBoundingClientRect();
-                openPalette(box.left + pointer.x * viewport.scale + viewport.x, box.top + pointer.y * viewport.scale + viewport.y);
-                return;
-            }
-            if (key === 'c' && selection.size) {
-                const comment = createComment(graph.nodes.filter((node) => selection.has(node.id)).map((node) => nodeRect(node, definition(node))), pointer);
-                onChange({ ...graph, comments: [...(graph.comments ?? []), comment] }, true);
-                onSelect([], comment.id);
-            }
+    const adapter = useMemo<NodeGraphAdapter<TexGraphNode>>(() => {
+        const pins = (node: EditableNode<TexGraphNode>): PinSet => {
+            const def = textureNodeDefinition(node.source, latest.current.resolve);
+            return {
+                inputs: (def?.inputs ?? []).map((port) => ({ key: port.key, kind: port.kind })),
+                outputs: (def?.outputs ?? []).map((port) => ({ key: port.key, kind: port.kind === 'any' ? def?.kindOf?.(node.source.params) ?? 'any' : port.kind })),
+            };
         };
-        window.addEventListener('keydown', onKey);
-        return () => window.removeEventListener('keydown', onKey);
-    }, [definition, frame, graph, onChange, onRedo, onSelect, onUndo, openPalette, pointer, selectedComment, selection, viewport]);
+        const create = (entryId: string, at: Point): EditableNode<TexGraphNode> | null => {
+            const x = Math.round(at.x);
+            const y = Math.round(at.y);
+            if (entryId.startsWith('graph:')) {
+                const made = latest.current.onAddSubgraph(entryId.slice(6), { x, y });
+                return made ? toNode(made) : null;
+            }
+            if (entryId.startsWith('output:')) return toNode(createNode(OUTPUT_NODE_TYPE, x, y, { channel: entryId.slice(7), name: '' }));
+            if (entryId.startsWith('mesh:')) return toNode(createNode(MESH_MAP_NODE_TYPE, x, y, { map: entryId.slice(5) }));
+            return toNode(createNode(entryId, x, y));
+        };
+        const menuItems = (nodeId: string): MenuItem[] => [
+            { label: 'Show in the 2D view', icon: <EyeIcon size={12} />, shortcut: 'Double-click', onSelect: () => latest.current.onView(nodeId) },
+        ];
+        return {
+            kind: 'texture',
+            kinds: KINDS,
+            match,
+            entries,
+            renderPicture,
+            onFinderOpen: startPictures,
+            createNode: create,
+            createReroute: (at) => toNode(createNode(REROUTE_NODE_TYPE, Math.round(at.x), Math.round(at.y))),
+            pins,
+            newId: () => newNodeId(),
+            copy: (current, ids) => JSON.stringify(copyNodes(fromEditable(current, latest.current.graph), ids)),
+            paste: (text) => {
+                const clipboard = readClipboard(text);
+                if (!clipboard?.nodes.length) return null;
+                // Fresh objects, so the pasted copies never share settings with what they were copied from.
+                return { nodes: clipboard.nodes.map((node) => toNode(structuredClone(node))), links: clipboard.links.map((link) => toLink({ ...link })) };
+            },
+            looks: true,
+            renderBody,
+            menuItems,
+            onOpenNode: (nodeId) => latest.current.onView(nodeId),
+            onOpenGraph: (nodeId) => latest.current.onOpenGraph?.(nodeId),
+        };
+    }, [entries, renderBody]);
 
-    // ---- drawing ----
-    const linkPaths = graph.links.map((link) => {
-        const from = nodeById.get(link.from);
-        const to = nodeById.get(link.to);
-        if (!from || !to) return null;
-        const a = pinPosition(from, definition(from), 'out', link.fromOutput);
-        const b = pinPosition(to, definition(to), 'in', link.toInput);
-        const kind = pinKind(link.from, 'out', link.fromOutput);
-        const selected = selection.has(link.from) || selection.has(link.to);
-        return (
-            <g key={`${link.from}:${link.fromOutput}>${link.to}:${link.toInput}`}>
-                <path d={wirePath(a, b)} stroke="transparent" strokeWidth={12} fill="none" style={{ pointerEvents: 'stroke', cursor: 'pointer' }}
-                    onPointerDown={(event) => {
-                        if (!event.altKey) return;
-                        event.stopPropagation();
-                        onChange({ ...graph, links: graph.links.filter((candidate) => candidate !== link) }, true);
-                    }}>
-                    <title>Alt-click to cut this wire</title>
-                </path>
-                <path d={wirePath(a, b)} stroke={KIND_COLORS[kind]} strokeOpacity={selected ? 1 : 0.7} strokeWidth={selected ? 2.4 : 1.6} fill="none" pointerEvents="none" />
-            </g>
-        );
-    });
-
-    let pendingPath: React.ReactNode = null;
-    if (gesture?.kind === 'wire') {
-        const node = nodeById.get(gesture.wire.nodeId);
-        if (node) {
-            const pin = pinPosition(node, definition(node), gesture.wire.side, gesture.wire.key);
-            const path = gesture.wire.side === 'out' ? wirePath(pin, gesture.wire.to) : wirePath(gesture.wire.to, pin);
-            pendingPath = <path d={path} stroke={KIND_COLORS[gesture.wire.kind]} strokeWidth={2} strokeDasharray="6 4" fill="none" />;
-        }
-    }
-
-    const marquee = gesture?.kind === 'marquee' && marqueeEnd ? rectFrom(gesture.start, marqueeEnd) : null;
-    void sessionVersion;
-
-    const renderNode = (node: TexGraphNode) => {
-        const def = definition(node);
-        const state = session.state(node.id);
-        const selected = selection.has(node.id);
-        const isViewed = viewed === node.id;
-        const isOutput = node.type === OUTPUT_NODE_TYPE;
-        const label = isOutput ? (String(node.params.name || '') || OUTPUT_CHANNEL_LABELS[node.params.channel as OutputChannel] || 'Output') : def?.label ?? node.type;
-        const tint = isOutput ? '#1d4ed8' : CATEGORY_TINTS[def?.category ?? 'Utility'] ?? '#52525b';
-        const body = bodyHeight(def);
-        const unknown = placeholders.has(node.id);
-        const error = unknown ? unknownNodeMessage(node.type) : state?.error ?? null;
-        return (
-            <div
-                key={node.id}
-                data-node={node.id}
-                className={`absolute select-none rounded-md border shadow-lg ${unknown ? 'border-dashed' : ''} ${selected ? 'border-white' : unknown ? 'border-amber-500' : error ? 'border-red-500' : isViewed ? 'border-sky-400' : 'border-zinc-700'}`}
-                style={{ left: node.x, top: node.y, width: NODE_WIDTH, background: '#1c1c1f', opacity: unused.has(node.id) && !selected ? 0.55 : 1 }}
-                title={error ?? def?.description}
-            >
-                <div className="flex items-center gap-1 rounded-t-md px-1.5 text-2xs font-semibold text-white" style={{ height: HEADER, background: unknown ? '#78350f' : tint }}>
-                    <span className="truncate">{label}</span>
-                    <span className="flex-1" />
-                    {error && <WarningIcon size={11} className={`shrink-0 ${unknown ? 'text-amber-200' : 'text-red-200'}`} />}
-                    {state && !error && state.milliseconds >= 20 && <span className="shrink-0 font-mono text-[9px] font-normal text-white/70">{Math.round(state.milliseconds)}ms</span>}
-                </div>
-                <div className="relative flex items-center justify-center" style={{ height: body }}>
-                    {unknown
-                        ? <p className="px-2 text-center text-2xs leading-snug text-amber-200/80">Not available in this version. Settings and wires are kept.</p>
-                        : <Thumbnail session={session} nodeId={node.id} />}
-                </div>
-                {def?.inputs.map((port) => {
-                    const at = pinPosition(node, def, 'in', port.key);
-                    const kind = port.kind;
-                    const wired = wiredInputs.has(`${node.id}:${port.key}`);
-                    return (
-                        <div key={`in:${port.key}`} className="group absolute" style={{ left: -6, top: at.y - node.y - 6 }}>
-                            <div data-pin="in" data-node={node.id} data-key={port.key} title={`${port.label} (${KIND_WORDS[kind]})`}
-                                className="h-3 w-3 cursor-crosshair rounded-full border-2" style={{ borderColor: KIND_COLORS[kind], background: wired ? KIND_COLORS[kind] : '#111' }} />
-                            <span className="pointer-events-none absolute right-4 top-[-2px] hidden whitespace-nowrap rounded bg-black/80 px-1 text-[10px] text-zinc-200 group-hover:block">{port.label}</span>
-                        </div>
-                    );
-                })}
-                {def?.outputs.map((port) => {
-                    const at = pinPosition(node, def, 'out', port.key);
-                    const kind = pinKind(node.id, 'out', port.key);
-                    return (
-                        <div key={`out:${port.key}`} className="group absolute" style={{ left: NODE_WIDTH - 6, top: at.y - node.y - 6 }}>
-                            <div data-pin="out" data-node={node.id} data-key={port.key} title={`${port.label} (${KIND_WORDS[kind]})`}
-                                className="h-3 w-3 cursor-crosshair rounded-full border-2" style={{ borderColor: KIND_COLORS[kind], background: KIND_COLORS[kind] }} />
-                            {def.outputs.length > 1 && <span className="pointer-events-none absolute left-4 top-[-2px] whitespace-nowrap text-[10px] text-zinc-400">{port.label}</span>}
-                        </div>
-                    );
-                })}
-            </div>
-        );
-    };
+    const onEdit = useCallback((next: EditableGraph<TexGraphNode>, coalesce?: string) => {
+        const current = latest.current.graph;
+        const written = fromEditable(next, current);
+        if (written !== current) latest.current.onChange(written, true, coalesce);
+    }, []);
+    const onSelect = useCallback((ids: string[], frame?: string | null) => latest.current.onSelect(ids, frame ?? null), []);
 
     return (
-        <div className="relative min-h-0 min-w-0 flex-1 overflow-hidden bg-[#121214]" onContextMenu={(event) => event.preventDefault()}>
-            <div
-                ref={root}
-                tabIndex={0}
-                aria-label="Texture graph canvas"
-                className="absolute inset-0 outline-none"
-                onPointerDown={onPointerDown}
-                onPointerMove={onPointerMove}
-                onPointerUp={onPointerUp}
-                onDoubleClick={onDoubleClick}
-                style={{
-                    cursor: gesture?.kind === 'pan' ? 'grabbing' : 'default',
-                    backgroundImage: 'radial-gradient(circle, #2a2a2e 1px, transparent 1px)',
-                    backgroundSize: `${24 * viewport.scale}px ${24 * viewport.scale}px`,
-                    backgroundPosition: `${viewport.x}px ${viewport.y}px`,
-                }}
-            >
-                <div className="absolute left-0 top-0 origin-top-left" style={{ transform: `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.scale})` }}>
-                    {(graph.comments ?? []).map((comment) => (
-                        <div key={comment.id} data-comment={comment.id}
-                            className={`absolute rounded-md border ${selectedComment === comment.id ? 'border-white/70' : 'border-white/10'}`}
-                            style={{ left: comment.x, top: comment.y, width: comment.width, height: comment.height, background: `${comment.color}55` }}>
-                            <div data-comment-title={comment.id} title="Double-click to rename" className="flex h-6 items-center rounded-t-md px-2 text-xs font-semibold text-zinc-100" style={{ background: `${comment.color}cc` }}>
-                                {editingComment === comment.id
-                                    ? <CommentTitle text={comment.text} onDone={(text) => finishTitle(comment.id, text)} />
-                                    : <span className="truncate">{comment.text || 'Comment'}</span>}
-                            </div>
-                            <div data-resize className="absolute bottom-0 right-0 h-3 w-3 cursor-se-resize" />
-                        </div>
-                    ))}
-                    <svg className="pointer-events-none absolute left-0 top-0 overflow-visible" width={1} height={1}>
-                        <g style={{ pointerEvents: 'auto' }}>{linkPaths}</g>
-                        {pendingPath}
-                    </svg>
-                    {graph.nodes.map(renderNode)}
-                    {marquee && <div className="pointer-events-none absolute border border-sky-400 bg-sky-400/10" style={{ left: marquee.x, top: marquee.y, width: marquee.width, height: marquee.height }} />}
-                </div>
-            </div>
-            <div className="absolute left-2 top-2 flex items-center gap-1 rounded-md border border-zinc-800 bg-zinc-900/90 p-1 shadow">
-                <IconButton label="Add a node" shortcut="Space" onClick={() => { const box = root.current!.getBoundingClientRect(); openPalette(box.left + box.width / 2, box.top + box.height / 2); }}><PlusIcon size={14} /></IconButton>
-                <IconButton label="Undo" shortcut="Ctrl+Z" disabled={!canUndo} onClick={onUndo}><UndoIcon size={14} /></IconButton>
-                <IconButton label="Redo" shortcut="Ctrl+Y" disabled={!canRedo} onClick={onRedo}><RedoIcon size={14} /></IconButton>
-                <IconButton label="Frame" shortcut="F" onClick={() => frame(selection.size ? selection : undefined)}><FrameIcon size={14} /></IconButton>
-                <IconButton label="Comment the selection" shortcut="C" disabled={!selection.size} onClick={() => {
-                    const comment = createComment(graph.nodes.filter((node) => selection.has(node.id)).map((node) => nodeRect(node, definition(node))), pointer);
-                    onChange({ ...graph, comments: [...(graph.comments ?? []), comment] }, true);
-                    onSelect([], comment.id);
-                }}><CommentAddIcon size={14} /></IconButton>
-            </div>
-            {notice && (
-                <div role="status" className="absolute right-2 top-2 flex max-w-[min(420px,calc(100%-220px))] gap-1.5 rounded-md border border-amber-900 bg-zinc-950/95 px-2 py-1.5 text-2xs leading-snug text-amber-200 shadow">
-                    <WarningIcon size={12} className="mt-px shrink-0" />
-                    <div className="min-w-0">{notice}</div>
-                </div>
-            )}
-            <div className="pointer-events-none absolute bottom-2 left-2 rounded bg-zinc-900/80 px-2 py-1 text-2xs text-zinc-400">
-                {session.busy ? 'Drawing…' : `${graph.nodes.length} nodes · drew ${session.lastRun.nodes} in ${Math.round(session.lastRun.milliseconds)} ms`}
-            </div>
-            {palette && (
-                <NodePalette
-                    at={palette.screen}
-                    bounds={palette.bounds}
-                    graphs={graphs}
-                    wireKind={palette.wire ? { side: palette.wire.side, kind: palette.wire.kind } : null}
-                    onChoose={choose}
-                    onClose={() => setPalette(null)}
-                />
-            )}
-        </div>
+        <NodeGraphCanvas
+            label="Texture graph"
+            graph={editable}
+            views={views}
+            adapter={adapter}
+            selection={selection}
+            selectedFrame={selectedComment}
+            highlighted={viewed}
+            canUndo={canUndo}
+            canRedo={canRedo}
+            onUndo={onUndo}
+            onRedo={onRedo}
+            undoKeys="workspace"
+            onSelect={onSelect}
+            onEdit={onEdit}
+            notice={notice}
+            status={session.busy ? 'Drawing…' : `${graph.nodes.length} nodes · drew ${session.lastRun.nodes} in ${Math.round(session.lastRun.milliseconds)} ms`}
+        />
     );
 };
-
