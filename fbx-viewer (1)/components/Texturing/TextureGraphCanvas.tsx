@@ -1,7 +1,8 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { CommentAddIcon, FrameIcon, PlusIcon, RedoIcon, UndoIcon, WarningIcon } from '../UI/Icons';
+import { unknownNodeMessage } from '../../texturing/graph/evaluator';
 import { OUTPUT_NODE_TYPE } from '../../texturing/graph/nodes/io';
-import { textureNodeDefinition, type GraphResolver } from '../../texturing/graph/registry';
+import { placeholderDefinition, textureNodeDefinition, type GraphResolver } from '../../texturing/graph/registry';
 import { OUTPUT_CHANNEL_LABELS, type OutputChannel, type PortKind, type TexGraphNode, type TexNodeDef, type TextureGraph } from '../../texturing/graph/types';
 import { IconButton } from '../UI/kit';
 import {
@@ -10,20 +11,22 @@ import {
     THUMB,
     boundsOf,
     bodyHeight,
+    changeComment,
     connect,
     copyNodes,
     createComment,
     moveNodes,
     nodeRect,
+    outputKinds,
     overlaps,
     pasteNodes,
     pinPosition,
-    portKind,
     readClipboard,
     rectFrom,
     removeNodes,
     unusedNodes,
     wirePath,
+    MAX_COMMENT_TITLE,
     type GraphClipboard,
     type Point,
 } from './graphEditing';
@@ -35,8 +38,9 @@ import type { TextureGraphSession } from './textureGraphSession';
  * box (Shift adds), middle- or right-drag to pan, wheel to zoom. Space, right-click or double-click
  * empty space opens the node list where the pointer is. Drag from a pin to wire it; a wire dropped
  * on empty space offers the nodes to end it on. Alt-click a wire to cut it. Double-click a node to
- * look at it in the 2D view. Delete removes, Ctrl+C/X/V/D copy, cut, paste and duplicate,
- * Ctrl+Z/Y undo and redo, C comments the selection, F frames it (or everything).
+ * look at it in the 2D view, a comment's title to rename it. Delete removes, Ctrl+C/X/V/D copy, cut,
+ * paste and duplicate, Ctrl+Z/Y undo and redo, C comments the selection, F frames it (or everything).
+ * A node of a type this build does not have shows as a placeholder with its wires.
  */
 
 const KIND_COLORS: Record<PortKind | 'any', string> = { color: '#e9b949', gray: '#a3a3a3', any: '#f5f5f5' };
@@ -73,6 +77,8 @@ export interface TextureGraphCanvasProps {
     viewed: string | null;
     canUndo: boolean;
     canRedo: boolean;
+    /** Something the user should know about the graph (parts that could not be opened), shown over the canvas. */
+    notice?: React.ReactNode;
     onSelect: (ids: string[], comment?: string | null) => void;
     onView: (nodeId: string) => void;
     /** `commit` false: a step of a drag, recorded when it ends; `coalesce` merges quick edits. */
@@ -82,11 +88,11 @@ export interface TextureGraphCanvasProps {
     onRedo: () => void;
 }
 
-/** A node's picture, painted whenever the session draws it anew. */
-const Thumbnail: React.FC<{ session: TextureGraphSession; nodeId: string }> = ({ session, nodeId }) => {
+/** A node's picture, painted when the session makes this node's thumbnail anew (and only then). */
+const Thumbnail = React.memo(({ session, nodeId }: { session: TextureGraphSession; nodeId: string }) => {
     const canvas = useRef<HTMLCanvasElement>(null);
-    const version = useSyncExternalStore(session.subscribe, session.getVersion);
-    const painted = useRef('');
+    const subscribe = useCallback((listener: () => void) => session.subscribeThumbnail(nodeId, listener), [nodeId, session]);
+    const signature = useSyncExternalStore(subscribe, () => session.thumbnails.get(nodeId)?.signature ?? '');
     useEffect(() => {
         const thumbnail = session.thumbnails.get(nodeId);
         const context = canvas.current?.getContext('2d');
@@ -94,29 +100,64 @@ const Thumbnail: React.FC<{ session: TextureGraphSession; nodeId: string }> = ({
         if (!thumbnail) {
             context.fillStyle = '#18181b';
             context.fillRect(0, 0, THUMB, THUMB);
-            painted.current = '';
             return;
         }
-        if (painted.current === thumbnail.signature) return;
-        painted.current = thumbnail.signature;
         context.putImageData(thumbnail.image, 0, 0);
-    }, [nodeId, session, version]);
+    }, [nodeId, session, signature]);
     return <canvas ref={canvas} width={THUMB} height={THUMB} className="pointer-events-none rounded-sm" style={{ width: THUMB, height: THUMB, imageRendering: 'auto' }} />;
+});
+Thumbnail.displayName = 'Thumbnail';
+
+/** A comment's title, typed in place after a double-click and kept on Enter or on leaving the box. */
+const CommentTitle: React.FC<{ text: string; onDone: (text: string | null) => void }> = ({ text, onDone }) => {
+    const [draft, setDraft] = useState(text);
+    const finished = useRef(false);
+    const finish = (value: string | null) => {
+        if (finished.current) return;
+        finished.current = true;
+        onDone(value);
+    };
+    return (
+        <input
+            autoFocus
+            aria-label="Comment title"
+            value={draft}
+            maxLength={MAX_COMMENT_TITLE}
+            onChange={(event) => setDraft(event.target.value)}
+            onPointerDown={(event) => event.stopPropagation()}
+            onDoubleClick={(event) => event.stopPropagation()}
+            onFocus={(event) => event.target.select()}
+            onBlur={() => finish(draft)}
+            onKeyDown={(event) => {
+                event.stopPropagation();
+                if (event.key === 'Enter') finish(draft);
+                if (event.key === 'Escape') finish(null);
+            }}
+            className="w-full rounded bg-black/40 px-1 text-xs font-semibold text-zinc-100 outline-none ring-1 ring-sky-500/60"
+        />
+    );
 };
 
 export const TextureGraphCanvas: React.FC<TextureGraphCanvasProps> = ({
-    graph, session, resolve, graphs, selection, selectedComment, viewed, canUndo, canRedo, onSelect, onView, onChange, onAddSubgraph, onUndo, onRedo,
+    graph, session, resolve, graphs, selection, selectedComment, viewed, canUndo, canRedo, notice, onSelect, onView, onChange, onAddSubgraph, onUndo, onRedo,
 }) => {
     const root = useRef<HTMLDivElement>(null);
     const [viewport, setViewport] = useState<Viewport>({ x: 40, y: 40, scale: 0.85 });
     const [gesture, setGesture] = useState<Gesture | null>(null);
     const [pointer, setPointer] = useState<Point>({ x: 0, y: 0 });
     const [marqueeEnd, setMarqueeEnd] = useState<Point | null>(null);
-    const [palette, setPalette] = useState<{ at: Point; screen: Point; wire?: PendingWire } | null>(null);
+    const [palette, setPalette] = useState<{ at: Point; screen: Point; bounds: { width: number; height: number }; wire?: PendingWire } | null>(null);
+    const [editingComment, setEditingComment] = useState<string | null>(null);
     const sessionVersion = useSyncExternalStore(session.subscribe, session.getVersion);
 
-    const definitions = useMemo(() => new Map(graph.nodes.map((node) => [node.id, textureNodeDefinition(node, resolve)])), [graph.nodes, resolve]);
-    const definition = useCallback((node: TexGraphNode): TexNodeDef | null => definitions.get(node.id) ?? null, [definitions]);
+    // Each node's definition (a placeholder for types this build does not have, so their wires show),
+    // the nodes by id, the kind of every output, and which inputs are wired: worked out once per graph.
+    const known = useMemo(() => new Map(graph.nodes.map((node) => [node.id, textureNodeDefinition(node, resolve)])), [graph.nodes, resolve]);
+    const placeholders = useMemo(() => new Map(graph.nodes.filter((node) => !known.get(node.id)).map((node) => [node.id, placeholderDefinition(node, graph.links)])), [graph.links, graph.nodes, known]);
+    const definition = useCallback((node: TexGraphNode): TexNodeDef | null => known.get(node.id) ?? placeholders.get(node.id) ?? null, [known, placeholders]);
+    const nodeById = useMemo(() => new Map(graph.nodes.map((node) => [node.id, node])), [graph.nodes]);
+    const kindOf = useMemo(() => outputKinds(graph, definition), [definition, graph]);
+    const wiredInputs = useMemo(() => new Set(graph.links.map((link) => `${link.to}:${link.toInput}`)), [graph.links]);
     const unused = useMemo(() => unusedNodes(graph), [graph]);
 
     const toGraph = useCallback((clientX: number, clientY: number): Point => {
@@ -159,10 +200,15 @@ export const TextureGraphCanvas: React.FC<TextureGraphCanvasProps> = ({
 
     const openPalette = useCallback((clientX: number, clientY: number, wire?: PendingWire) => {
         const box = root.current!.getBoundingClientRect();
-        setPalette({ at: toGraph(clientX, clientY), screen: { x: clientX - box.left, y: clientY - box.top }, wire });
+        setPalette({ at: toGraph(clientX, clientY), screen: { x: clientX - box.left, y: clientY - box.top }, bounds: { width: box.width, height: box.height }, wire });
     }, [toGraph]);
 
-    const pinKind = (nodeId: string, side: 'in' | 'out', key: string) => portKind(graph, nodeId, side, key, resolve);
+    /** The kind a pin carries: an output's as worked out for the graph, an input's as it is declared. */
+    const pinKind = (nodeId: string, side: 'in' | 'out', key: string): PortKind | 'any' => {
+        if (side === 'out') return kindOf(nodeId, key);
+        const node = nodeById.get(nodeId);
+        return (node && definition(node)?.inputs.find((port) => port.key === key)?.kind) ?? 'any';
+    };
 
     // ---- pointer handling ----
     const onPointerDown = (event: React.PointerEvent) => {
@@ -294,7 +340,19 @@ export const TextureGraphCanvas: React.FC<TextureGraphCanvasProps> = ({
             onView(nodeElement.dataset.node!);
             return;
         }
+        const title = target.closest('[data-comment-title]') as HTMLElement | null;
+        if (title) {
+            setEditingComment(title.dataset.commentTitle!);
+            return;
+        }
         if (!target.closest('[data-comment]')) openPalette(event.clientX, event.clientY);
+    };
+
+    const finishTitle = (id: string, text: string | null) => {
+        setEditingComment(null);
+        const comment = graph.comments?.find((candidate) => candidate.id === id);
+        if (text === null || !comment || text === comment.text) return;
+        onChange(changeComment(graph, id, { text }), true);
     };
 
     const choose = (choice: PaletteChoice) => {
@@ -392,8 +450,8 @@ export const TextureGraphCanvas: React.FC<TextureGraphCanvasProps> = ({
 
     // ---- drawing ----
     const linkPaths = graph.links.map((link) => {
-        const from = graph.nodes.find((node) => node.id === link.from);
-        const to = graph.nodes.find((node) => node.id === link.to);
+        const from = nodeById.get(link.from);
+        const to = nodeById.get(link.to);
         if (!from || !to) return null;
         const a = pinPosition(from, definition(from), 'out', link.fromOutput);
         const b = pinPosition(to, definition(to), 'in', link.toInput);
@@ -416,7 +474,7 @@ export const TextureGraphCanvas: React.FC<TextureGraphCanvasProps> = ({
 
     let pendingPath: React.ReactNode = null;
     if (gesture?.kind === 'wire') {
-        const node = graph.nodes.find((candidate) => candidate.id === gesture.wire.nodeId);
+        const node = nodeById.get(gesture.wire.nodeId);
         if (node) {
             const pin = pinPosition(node, definition(node), gesture.wire.side, gesture.wire.key);
             const path = gesture.wire.side === 'out' ? wirePath(pin, gesture.wire.to) : wirePath(gesture.wire.to, pin);
@@ -436,28 +494,31 @@ export const TextureGraphCanvas: React.FC<TextureGraphCanvasProps> = ({
         const label = isOutput ? (String(node.params.name || '') || OUTPUT_CHANNEL_LABELS[node.params.channel as OutputChannel] || 'Output') : def?.label ?? node.type;
         const tint = isOutput ? '#1d4ed8' : CATEGORY_TINTS[def?.category ?? 'Utility'] ?? '#52525b';
         const body = bodyHeight(def);
-        const error = state?.error ?? (!def ? `This build has no "${node.type}" node.` : null);
+        const unknown = placeholders.has(node.id);
+        const error = unknown ? unknownNodeMessage(node.type) : state?.error ?? null;
         return (
             <div
                 key={node.id}
                 data-node={node.id}
-                className={`absolute select-none rounded-md border shadow-lg ${selected ? 'border-white' : error ? 'border-red-500' : isViewed ? 'border-sky-400' : 'border-zinc-700'}`}
+                className={`absolute select-none rounded-md border shadow-lg ${unknown ? 'border-dashed' : ''} ${selected ? 'border-white' : unknown ? 'border-amber-500' : error ? 'border-red-500' : isViewed ? 'border-sky-400' : 'border-zinc-700'}`}
                 style={{ left: node.x, top: node.y, width: NODE_WIDTH, background: '#1c1c1f', opacity: unused.has(node.id) && !selected ? 0.55 : 1 }}
                 title={error ?? def?.description}
             >
-                <div className="flex items-center gap-1 rounded-t-md px-1.5 text-2xs font-semibold text-white" style={{ height: HEADER, background: tint }}>
+                <div className="flex items-center gap-1 rounded-t-md px-1.5 text-2xs font-semibold text-white" style={{ height: HEADER, background: unknown ? '#78350f' : tint }}>
                     <span className="truncate">{label}</span>
                     <span className="flex-1" />
-                    {error && <WarningIcon size={11} className="shrink-0 text-red-200" />}
+                    {error && <WarningIcon size={11} className={`shrink-0 ${unknown ? 'text-amber-200' : 'text-red-200'}`} />}
                     {state && !error && state.milliseconds >= 20 && <span className="shrink-0 font-mono text-[9px] font-normal text-white/70">{Math.round(state.milliseconds)}ms</span>}
                 </div>
                 <div className="relative flex items-center justify-center" style={{ height: body }}>
-                    <Thumbnail session={session} nodeId={node.id} />
+                    {unknown
+                        ? <p className="px-2 text-center text-2xs leading-snug text-amber-200/80">Not available in this version. Settings and wires are kept.</p>
+                        : <Thumbnail session={session} nodeId={node.id} />}
                 </div>
                 {def?.inputs.map((port) => {
                     const at = pinPosition(node, def, 'in', port.key);
                     const kind = port.kind;
-                    const wired = graph.links.some((link) => link.to === node.id && link.toInput === port.key);
+                    const wired = wiredInputs.has(`${node.id}:${port.key}`);
                     return (
                         <div key={`in:${port.key}`} className="group absolute" style={{ left: -6, top: at.y - node.y - 6 }}>
                             <div data-pin="in" data-node={node.id} data-key={port.key} title={`${port.label} (${KIND_WORDS[kind]})`}
@@ -504,7 +565,11 @@ export const TextureGraphCanvas: React.FC<TextureGraphCanvasProps> = ({
                         <div key={comment.id} data-comment={comment.id}
                             className={`absolute rounded-md border ${selectedComment === comment.id ? 'border-white/70' : 'border-white/10'}`}
                             style={{ left: comment.x, top: comment.y, width: comment.width, height: comment.height, background: `${comment.color}55` }}>
-                            <div className="truncate rounded-t-md px-2 py-1 text-xs font-semibold text-zinc-100" style={{ background: `${comment.color}cc` }}>{comment.text}</div>
+                            <div data-comment-title={comment.id} title="Double-click to rename" className="flex h-6 items-center rounded-t-md px-2 text-xs font-semibold text-zinc-100" style={{ background: `${comment.color}cc` }}>
+                                {editingComment === comment.id
+                                    ? <CommentTitle text={comment.text} onDone={(text) => finishTitle(comment.id, text)} />
+                                    : <span className="truncate">{comment.text || 'Comment'}</span>}
+                            </div>
                             <div data-resize className="absolute bottom-0 right-0 h-3 w-3 cursor-se-resize" />
                         </div>
                     ))}
@@ -527,12 +592,19 @@ export const TextureGraphCanvas: React.FC<TextureGraphCanvasProps> = ({
                     onSelect([], comment.id);
                 }}><CommentAddIcon size={14} /></IconButton>
             </div>
+            {notice && (
+                <div role="status" className="absolute right-2 top-2 flex max-w-[min(420px,calc(100%-220px))] gap-1.5 rounded-md border border-amber-900 bg-zinc-950/95 px-2 py-1.5 text-2xs leading-snug text-amber-200 shadow">
+                    <WarningIcon size={12} className="mt-px shrink-0" />
+                    <div className="min-w-0">{notice}</div>
+                </div>
+            )}
             <div className="pointer-events-none absolute bottom-2 left-2 rounded bg-zinc-900/80 px-2 py-1 text-2xs text-zinc-400">
                 {session.busy ? 'Drawing…' : `${graph.nodes.length} nodes · drew ${session.lastRun.nodes} in ${Math.round(session.lastRun.milliseconds)} ms`}
             </div>
             {palette && (
                 <NodePalette
                     at={palette.screen}
+                    bounds={palette.bounds}
                     graphs={graphs}
                     wireKind={palette.wire ? { side: palette.wire.side, kind: palette.wire.kind } : null}
                     onChoose={choose}

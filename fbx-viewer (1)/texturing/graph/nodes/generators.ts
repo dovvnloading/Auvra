@@ -1,10 +1,55 @@
 import { anyIn, bool, colorIn, float, grayIn, int, onePass, out, seed, select, vec2 } from '../nodeKit';
 import type { TexNodeDef } from '../types';
+import { meshMapKey } from './io';
 
 /** Noises, patterns and shapes: nodes that make an image from nothing (or shape what they are given). */
 
 const NOISE_KINDS: ReadonlyArray<[string, string]> = [['perlin', 'Gradient (Perlin)'], ['value', 'Value'], ['cells', 'Cells']];
 const FRACTAL_STYLES: ReadonlyArray<[string, string]> = [['fbm', 'Smooth'], ['ridged', 'Ridged'], ['billow', 'Billowy'], ['turbulence', 'Turbulent']];
+
+/** 3D noise: fractal Perlin noise read at a place on the model (a position map's colour). */
+const NOISE_3D = /* glsl */ `uniform sampler2D meshPos;
+uniform int hasMesh;
+vec3 grad3(ivec3 c, float s) {
+    float a = hash1(c, s) * TAU;
+    float z = hash1(c, s + 9.1) * 2.0 - 1.0;
+    float r = sqrt(1.0 - z * z);
+    return vec3(r * cos(a), r * sin(a), z);
+}
+float perlin3(vec3 p, float s) {
+    ivec3 i = ivec3(floor(p));
+    vec3 f = fract(p);
+    vec3 u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+    float n000 = dot(grad3(i, s), f);
+    float n100 = dot(grad3(i + ivec3(1, 0, 0), s), f - vec3(1, 0, 0));
+    float n010 = dot(grad3(i + ivec3(0, 1, 0), s), f - vec3(0, 1, 0));
+    float n110 = dot(grad3(i + ivec3(1, 1, 0), s), f - vec3(1, 1, 0));
+    float n001 = dot(grad3(i + ivec3(0, 0, 1), s), f - vec3(0, 0, 1));
+    float n101 = dot(grad3(i + ivec3(1, 0, 1), s), f - vec3(1, 0, 1));
+    float n011 = dot(grad3(i + ivec3(0, 1, 1), s), f - vec3(0, 1, 1));
+    float n111 = dot(grad3(i + ivec3(1, 1, 1), s), f - vec3(1, 1, 1));
+    return mix(mix(mix(n000, n100, u.x), mix(n010, n110, u.x), u.y), mix(mix(n001, n101, u.x), mix(n011, n111, u.x), u.y), u.z) * 1.6;
+}
+void main() {
+    vec3 p = w_position == 1 ? c_position(vUv).xyz : hasMesh == 1 ? texture(meshPos, vUv).xyz : vec3(vUv, 0.0);
+    float sum = 0.0;
+    float amplitude = 1.0;
+    float total = 0.0;
+    float scale = p_scale;
+    for (int o = 0; o < 10; o++) {
+        if (o >= p_octaves) break;
+        // Turbulent: pushed about by the octaves before, as in Fractal noise.
+        vec3 at = p_style == 3 ? p + vec3(sum, -sum, sum * 0.5) * 0.04 : p;
+        float n = perlin3(at * scale + float(o) * 17.3, uSeed + float(o));
+        if (p_style == 1) n = 1.0 - 2.0 * abs(n);
+        else if (p_style >= 2) n = 2.0 * abs(n) - 1.0;
+        sum += n * amplitude;
+        total += amplitude;
+        amplitude *= p_roughness;
+        scale *= 2.0;
+    }
+    outColor = vec4(saturate(0.5 + 0.5 * sum / total * p_contrast));
+}`;
 
 export const GENERATOR_NODES: TexNodeDef[] = [
     onePass({
@@ -147,58 +192,31 @@ void main() {
     outColor = vec4(sum / total);
 }`,
     }),
-    onePass({
-        type: 'noise3d',
-        label: '3D noise',
-        category: 'Mesh maps',
-        description: 'Fractal noise in 3D, read at each pixel\'s place on the model, so it runs across UV seams unbroken. Wire a position map in.',
-        keywords: ['3d', 'solid', 'seamless', 'world', 'position'],
-        inputs: [colorIn('position', 'Position')],
-        outputs: [out('gray')],
-        params: [float('scale', 'Scale', 6, 0.1, 200, { softMax: 50 }), int('octaves', 'Octaves', 5, 1, 10), float('roughness', 'Roughness', 0.5, 0, 1), select('style', 'Style', 'fbm', FRACTAL_STYLES), float('contrast', 'Contrast', 1, 0, 4), seed()],
-        sizeFrom: 'input',
-        cost: (params) => Number(params.octaves) * 8,
-        glsl: `vec3 grad3(ivec3 c, float s) {
-    float a = hash1(c, s) * TAU;
-    float z = hash1(c, s + 9.1) * 2.0 - 1.0;
-    float r = sqrt(1.0 - z * z);
-    return vec3(r * cos(a), r * sin(a), z);
-}
-float perlin3(vec3 p, float s) {
-    ivec3 i = ivec3(floor(p));
-    vec3 f = fract(p);
-    vec3 u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
-    float n000 = dot(grad3(i, s), f);
-    float n100 = dot(grad3(i + ivec3(1, 0, 0), s), f - vec3(1, 0, 0));
-    float n010 = dot(grad3(i + ivec3(0, 1, 0), s), f - vec3(0, 1, 0));
-    float n110 = dot(grad3(i + ivec3(1, 1, 0), s), f - vec3(1, 1, 0));
-    float n001 = dot(grad3(i + ivec3(0, 0, 1), s), f - vec3(0, 0, 1));
-    float n101 = dot(grad3(i + ivec3(1, 0, 1), s), f - vec3(1, 0, 1));
-    float n011 = dot(grad3(i + ivec3(0, 1, 1), s), f - vec3(0, 1, 1));
-    float n111 = dot(grad3(i + ivec3(1, 1, 1), s), f - vec3(1, 1, 1));
-    return mix(mix(mix(n000, n100, u.x), mix(n010, n110, u.x), u.y), mix(mix(n001, n101, u.x), mix(n011, n111, u.x), u.y), u.z) * 1.6;
-}
-void main() {
-    vec3 p = w_position == 1 ? c_position(vUv).xyz : vec3(vUv, 0.0);
-    float sum = 0.0;
-    float amplitude = 1.0;
-    float total = 0.0;
-    float scale = p_scale;
-    for (int o = 0; o < 10; o++) {
-        if (o >= p_octaves) break;
-        // Turbulent: pushed about by the octaves before, as in Fractal noise.
-        vec3 at = p_style == 3 ? p + vec3(sum, -sum, sum * 0.5) * 0.04 : p;
-        float n = perlin3(at * scale + float(o) * 17.3, uSeed + float(o));
-        if (p_style == 1) n = 1.0 - 2.0 * abs(n);
-        else if (p_style >= 2) n = 2.0 * abs(n) - 1.0;
-        sum += n * amplitude;
-        total += amplitude;
-        amplitude *= p_roughness;
-        scale *= 2.0;
-    }
-    outColor = vec4(saturate(0.5 + 0.5 * sum / total * p_contrast));
-}`,
-    }),
+    {
+        ...onePass({
+            type: 'noise3d',
+            label: '3D noise',
+            category: 'Mesh maps',
+            description: 'Fractal noise in 3D, read at each pixel\'s place on the model, so it runs across UV seams unbroken. Uses the model\'s position map unless one is wired in.',
+            keywords: ['3d', 'solid', 'seamless', 'world', 'position'],
+            inputs: [colorIn('position', 'Position')],
+            outputs: [out('gray')],
+            params: [float('scale', 'Scale', 6, 0.1, 200, { softMax: 50 }), int('octaves', 'Octaves', 5, 1, 10), float('roughness', 'Roughness', 0.5, 0, 1), select('style', 'Style', 'fbm', FRACTAL_STYLES), float('contrast', 'Contrast', 1, 0, 4), seed()],
+            sizeFrom: 'input',
+            glsl: '',
+        }),
+        async run(context) {
+            const image = context.image('gray');
+            // Wired in, else the model's own position map, else the flat picture's place.
+            const mesh = context.input('position') ? null : context.external(meshMapKey('position'));
+            await context.pass(image, NOISE_3D, {
+                cost: Number(context.params.octaves) * 8,
+                inputs: { meshPos: mesh ?? context.gpu.constant('black') },
+                uniforms: { hasMesh: mesh ? 1 : 0 },
+            });
+            return { out: image };
+        },
+    },
 
     // ---- shapes and patterns ----
     onePass({

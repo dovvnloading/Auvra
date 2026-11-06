@@ -125,10 +125,18 @@ export const OUTPUT_CHANNELS = ['baseColor', 'normal', 'roughness', 'metallic', 
 export type OutputChannel = typeof OUTPUT_CHANNELS[number];
 export const OUTPUT_CHANNEL_LABELS: Record<OutputChannel, string> = {
     baseColor: 'Base colour', normal: 'Normal', roughness: 'Roughness', metallic: 'Metallic', height: 'Height',
-    ambientOcclusion: 'Ambient occlusion', emissive: 'Emissive', opacity: 'Opacity', custom: 'Other',
+    ambientOcclusion: 'Ambient occlusion', emissive: 'Emissive', opacity: 'Opacity', custom: 'Named image',
 };
+/** Each channel's kind; a named image ('custom') is colour unless its Output node says grey. */
 export const CHANNEL_KIND: Record<OutputChannel, PortKind> = {
     baseColor: 'color', normal: 'color', roughness: 'gray', metallic: 'gray', height: 'gray', ambientOcclusion: 'gray', emissive: 'color', opacity: 'gray', custom: 'color',
+};
+
+/** The kind of image an Output node gives: its channel's, or for a named image the kind chosen on it. */
+export const outputNodeKind = (params: Readonly<Record<string, unknown>>): PortKind => {
+    const channel = (OUTPUT_CHANNELS as readonly string[]).includes(String(params.channel)) ? params.channel as OutputChannel : 'custom';
+    if (channel === 'custom') return params.kind === 'gray' ? 'gray' : 'color';
+    return CHANNEL_KIND[channel];
 };
 
 /** Everything a node sees while it draws. */

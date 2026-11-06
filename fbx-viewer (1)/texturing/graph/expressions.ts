@@ -75,8 +75,9 @@ const parse = (source: string): Node => {
             expect(')');
             return inner;
         }
-        if (token.text === '-' || token.text === '!') return { kind: 'unary', op: token.text, value: unary() };
-        if (token.text === '+') return unary();
+        // A sign takes in a power after it, as in written maths: -2^2 is -(2^2), and 2^-1 still reads.
+        if (token.text === '-' || token.text === '!') return { kind: 'unary', op: token.text, value: expression(PRECEDENCE['^']) };
+        if (token.text === '+') return expression(PRECEDENCE['^']);
         throw new Error(`Unexpected "${token.text}"`);
     };
     const unary = (): Node => primary();

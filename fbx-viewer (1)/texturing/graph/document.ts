@@ -1,5 +1,5 @@
 import { evaluateExpression, type ExprValue } from './expressions';
-import { INPUT_NODE_TYPE, OUTPUT_NODE_TYPE, SUBGRAPH_NODE_TYPE } from './nodes/io';
+import { INPUT_NODE_TYPE, MESH_READING_NODE_TYPES, OUTPUT_NODE_TYPE, SUBGRAPH_NODE_TYPE } from './nodes/io';
 import { textureNodeDefinitionByType } from './registry';
 import {
     isParamLink,
@@ -21,11 +21,54 @@ import {
  * settings from the graph's parameters.
  */
 
-export const MAX_NODES = 1500;
+/** Nodes a graph opens with at most: far past what the canvas and the GPU can work with, so only a broken file reaches it. */
+export const MAX_NODES = 20000;
+export const MAX_PARAMETERS = 128;
 export const MIN_SIZE_LOG2 = 4;
 export const MAX_SIZE_LOG2 = 13;
 export const DEFAULT_SIZE_LOG2 = 10;
 const PARAMETER_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,47}$/;
+
+// ---------------------------------------------------------------------------
+// Seeds
+// ---------------------------------------------------------------------------
+
+/**
+ * Whole numbers hashed together into one (32 bits, unsigned): every input bit reaches every output
+ * bit, so neighbouring seeds give unrelated results and no two pairs line up the way a sum would.
+ */
+export const mixSeeds = (...parts: number[]): number => {
+    let h = 0x9e3779b9;
+    for (const part of parts) {
+        h = Math.imul(h ^ (Math.round(Number.isFinite(part) ? part : 0) >>> 0), 0x85ebca6b);
+        h ^= h >>> 13;
+        h = Math.imul(h, 0xc2b2ae35);
+        h ^= h >>> 16;
+    }
+    return h >>> 0;
+};
+
+/** A text (a node's name) as a whole number for mixing into seeds. */
+export const seedOfText = (text: string): number => {
+    let h = 0x811c9dc5;
+    for (let i = 0; i < text.length; i++) h = Math.imul(h ^ text.charCodeAt(i), 0x01000193);
+    return h >>> 0;
+};
+
+/**
+ * The seed a node's shaders see: its graph's seed and its own hashed together. Shaders add small
+ * steps to it (seed + 1.0, seed + 13.17 * octave), so it is kept under 2^20, where a 32-bit float
+ * still tells those steps apart; the half keeps it off whole numbers.
+ */
+export const shaderSeed = (graphSeed: number, nodeSeed: number): number => (mixSeeds(graphSeed, nodeSeed) & 0xfffff) + 0.5;
+
+/**
+ * The seed a graph used as a node runs with. Each copy mixes in the seed of the graph it sits in and
+ * its own name, so copies look different (and change with the outer graph's seed); a copy set not to
+ * vary takes its look from its own seed alone, so copies with one seed match.
+ */
+export const subgraphRunSeed = (outerSeed: number, nodeId: string, ownSeed: number, vary: boolean, innerGraphSeed: number): number =>
+    vary ? mixSeeds(outerSeed, seedOfText(nodeId), ownSeed, innerGraphSeed) : mixSeeds(innerGraphSeed, ownSeed);
 
 const finite = (value: unknown, fallback: number): number => (typeof value === 'number' && Number.isFinite(value) ? value : fallback);
 const clamp = (value: number, low: number, high: number): number => Math.min(high, Math.max(low, value));
@@ -74,7 +117,7 @@ export const createTextureGraph = (): TextureGraph => {
 /** A blank graph for masks and filters used inside other graphs: one grey input, one output. */
 export const createFunctionGraph = (): TextureGraph => {
     const input = createNode(INPUT_NODE_TYPE, 40, 120, { name: 'input', kind: 'gray', fallback: 'black' });
-    const output = createNode(OUTPUT_NODE_TYPE, 420, 120, { channel: 'custom', name: 'Result' });
+    const output = createNode(OUTPUT_NODE_TYPE, 420, 120, { channel: 'custom', name: 'Result', kind: 'gray' });
     return { version: 1, size: { w: DEFAULT_SIZE_LOG2, h: DEFAULT_SIZE_LOG2 }, seed: 0, nodes: [input, output], links: [{ from: input.id, fromOutput: 'out', to: output.id, toInput: 'in' }], parameters: [] };
 };
 
@@ -128,34 +171,46 @@ export const coerceParameter = (kind: GraphParameterKind, value: unknown, option
     }
 };
 
-/** A stored graph made safe to use, or a fresh one when it is not a graph. */
-export const normalizeTextureGraph = (value: unknown): TextureGraph => {
+/**
+ * A stored graph made safe to use, with what had to be left out of it said in words. Nodes of a type
+ * this build does not know are kept as they are, settings and wires included, so a build that knows
+ * them draws them again; the editor shows them as placeholders.
+ */
+export const readTextureGraph = (value: unknown): { graph: TextureGraph; problems: string[] } => {
     const raw = value as Partial<TextureGraph> | null;
-    if (!raw || typeof raw !== 'object' || !Array.isArray(raw.nodes)) return createTextureGraph();
+    if (!raw || typeof raw !== 'object' || !Array.isArray(raw.nodes)) return { graph: createTextureGraph(), problems: [] };
+    const problems: string[] = [];
     const ids = new Set<string>();
     const nodes: TexGraphNode[] = [];
+    let unreadable = 0;
     for (const candidate of raw.nodes.slice(0, MAX_NODES)) {
         const node = candidate as Partial<TexGraphNode> | null;
-        if (!node || typeof node.id !== 'string' || !node.id || ids.has(node.id) || typeof node.type !== 'string') continue;
-        if (node.type !== SUBGRAPH_NODE_TYPE && !textureNodeDefinitionByType(node.type)) continue;
+        if (!node || typeof node.id !== 'string' || !node.id || ids.has(node.id) || typeof node.type !== 'string' || !node.type) {
+            unreadable++;
+            continue;
+        }
         ids.add(node.id);
         const definition = textureNodeDefinitionByType(node.type);
-        const params = { ...(definition ? defaultNodeParams(definition) : {}), ...(node.params && typeof node.params === 'object' ? node.params : {}) };
+        const own = node.params && typeof node.params === 'object' && !Array.isArray(node.params) ? node.params : {};
+        const params = definition ? { ...defaultNodeParams(definition), ...own } : { ...own };
         const result: TexGraphNode = { id: node.id, type: node.type, x: finite(node.x, 0), y: finite(node.y, 0), params };
         const size = readSize(node.size);
         if (size) result.size = size;
         if (node.precision === 8 || node.precision === 16 || node.precision === 32) result.precision = node.precision;
         nodes.push(result);
     }
+    if (raw.nodes.length > MAX_NODES) problems.push(`This graph has ${raw.nodes.length} nodes: only the first ${MAX_NODES} could be opened.`);
+    if (unreadable) problems.push(`${unreadable} damaged node${unreadable === 1 ? ' was' : 's were'} left out.`);
     const links: TexGraphLink[] = [];
     const taken = new Set<string>();
+    let refused = 0;
     for (const candidate of Array.isArray(raw.links) ? raw.links : []) {
         const link = candidate as Partial<TexGraphLink> | null;
-        if (!link || typeof link.from !== 'string' || typeof link.to !== 'string' || typeof link.fromOutput !== 'string' || typeof link.toInput !== 'string') continue;
-        if (!ids.has(link.from) || !ids.has(link.to) || link.from === link.to) continue;
+        if (!link || typeof link.from !== 'string' || typeof link.to !== 'string' || typeof link.fromOutput !== 'string' || typeof link.toInput !== 'string') { refused++; continue; }
+        if (!ids.has(link.from) || !ids.has(link.to) || link.from === link.to) { refused++; continue; }
         // One wire into an input.
         const key = `${link.to}:${link.toInput}`;
-        if (taken.has(key)) continue;
+        if (taken.has(key)) { refused++; continue; }
         taken.add(key);
         links.push({ from: link.from, fromOutput: link.fromOutput, to: link.to, toInput: link.toInput });
     }
@@ -174,21 +229,33 @@ export const normalizeTextureGraph = (value: unknown): TextureGraph => {
         });
     }
     const parameters: GraphParameter[] = [];
-    for (const candidate of Array.isArray(raw.parameters) ? raw.parameters.slice(0, 128) : []) {
+    const storedParameters = Array.isArray(raw.parameters) ? raw.parameters : [];
+    for (const candidate of storedParameters.slice(0, MAX_PARAMETERS)) {
         const parameter = readParameter(candidate);
         if (parameter && !parameters.some((existing) => existing.name === parameter.name)) parameters.push(parameter);
     }
+    if (storedParameters.length > MAX_PARAMETERS) problems.push(`Only the first ${MAX_PARAMETERS} of its ${storedParameters.length} parameters could be opened.`);
+    const kept = dropCycles(nodes, links);
+    refused += links.length - kept.length;
+    if (refused) problems.push(`${refused} wire${refused === 1 ? ' was' : 's were'} left out: ${refused === 1 ? 'it' : 'they'} led nowhere, doubled up on one input or made a loop.`);
     const graph: TextureGraph = {
         version: 1,
         size: { w: clamp(Math.round(finite(raw.size?.w, DEFAULT_SIZE_LOG2)), MIN_SIZE_LOG2, MAX_SIZE_LOG2), h: clamp(Math.round(finite(raw.size?.h, DEFAULT_SIZE_LOG2)), MIN_SIZE_LOG2, MAX_SIZE_LOG2) },
         seed: clamp(Math.round(finite(raw.seed, 0)), 0, 999),
         nodes,
-        links: dropCycles(nodes, links),
+        links: kept,
         parameters,
     };
     if (comments.length) graph.comments = comments;
-    return graph;
+    return { graph, problems };
 };
+
+/** A stored graph made safe to use, or a fresh one when it is not a graph. */
+export const normalizeTextureGraph = (value: unknown): TextureGraph => readTextureGraph(value).graph;
+
+/** Node types this build does not know, as a graph names them (each once). */
+export const unknownNodeTypes = (graph: Pick<TextureGraph, 'nodes'>): string[] =>
+    [...new Set(graph.nodes.filter((node) => node.type !== SUBGRAPH_NODE_TYPE && !textureNodeDefinitionByType(node.type)).map((node) => node.type))];
 
 /** True when wiring `from` into `to` would make a loop. */
 export const wouldCycle = (graph: Pick<TextureGraph, 'nodes' | 'links'>, from: string, to: string): boolean => {
@@ -211,8 +278,35 @@ export const wouldCycle = (graph: Pick<TextureGraph, 'nodes' | 'links'>, from: s
     return false;
 };
 
+/** True when the wires make no loop (Kahn's order: every node can be taken once all that feed it are). */
+const acyclic = (links: readonly TexGraphLink[]): boolean => {
+    const feeds = new Map<string, number>();
+    const downstream = new Map<string, string[]>();
+    for (const link of links) {
+        feeds.set(link.to, (feeds.get(link.to) ?? 0) + 1);
+        if (!feeds.has(link.from)) feeds.set(link.from, 0);
+        const list = downstream.get(link.from);
+        if (list) list.push(link.to);
+        else downstream.set(link.from, [link.to]);
+    }
+    const ready = [...feeds].filter(([, count]) => count === 0).map(([id]) => id);
+    let taken = 0;
+    while (ready.length) {
+        const id = ready.pop()!;
+        taken++;
+        for (const next of downstream.get(id) ?? []) {
+            const left = feeds.get(next)! - 1;
+            feeds.set(next, left);
+            if (left === 0) ready.push(next);
+        }
+    }
+    return taken === feeds.size;
+};
+
 /** The links in order, leaving out any that would close a loop. */
 const dropCycles = (nodes: readonly TexGraphNode[], links: readonly TexGraphLink[]): TexGraphLink[] => {
+    // A graph without loops (nearly all) keeps every wire without checking each in turn.
+    if (acyclic(links)) return [...links];
     const kept: TexGraphLink[] = [];
     for (const link of links) if (!wouldCycle({ nodes: nodes as TexGraphNode[], links: kept }, link.from, link.to)) kept.push(link);
     return kept;
@@ -232,9 +326,12 @@ export const parameterValues = (graph: TextureGraph, given: Readonly<Record<stri
     return values;
 };
 
-/** What formulas see: each parameter as a number or vector, the graph's size and seed. */
-export const formulaScope = (graph: TextureGraph, values: Readonly<Record<string, unknown>>, width: number, height: number): Record<string, ExprValue> => {
-    const scope: Record<string, ExprValue> = { $size: width, $width: width, $height: height, $seed: graph.seed };
+/**
+ * What formulas see: each parameter as a number or vector, the graph's size and seed (inside another
+ * graph, the seed this copy of it runs with).
+ */
+export const formulaScope = (graph: TextureGraph, values: Readonly<Record<string, unknown>>, width: number, height: number, seed: number = graph.seed): Record<string, ExprValue> => {
+    const scope: Record<string, ExprValue> = { $size: width, $width: width, $height: height, $seed: seed };
     for (const parameter of graph.parameters) {
         const value = values[parameter.name];
         if (typeof value === 'number') scope[parameter.name] = value;
@@ -343,6 +440,22 @@ export const graphTextureIds = (graph: TextureGraph): string[] => {
 /** The graphs a graph uses as nodes. */
 export const graphDependencies = (graph: TextureGraph): string[] =>
     [...new Set(graph.nodes.filter((node) => node.type === SUBGRAPH_NODE_TYPE && typeof node.params.graph === 'string' && node.params.graph).map((node) => node.params.graph as string))];
+
+/** True when a graph (or one it uses, at any depth) reads a model's mesh maps: where the surface is, which way it faces, its baked maps. */
+export const graphReadsMeshMaps = (graph: TextureGraph, resolve: (id: string) => { graph: TextureGraph } | undefined): boolean => {
+    const seen = new Set<string>();
+    const reads = (g: TextureGraph): boolean => {
+        if (g.nodes.some((node) => MESH_READING_NODE_TYPES.has(node.type))) return true;
+        for (const id of graphDependencies(g)) {
+            if (seen.has(id)) continue;
+            seen.add(id);
+            const entry = resolve(id);
+            if (entry && reads(entry.graph)) return true;
+        }
+        return false;
+    };
+    return reads(graph);
+};
 
 /**
  * A key for everything a graph draws from: its nodes and wires (not where they sit), every graph it

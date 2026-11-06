@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { SearchIcon } from '../UI/Icons';
 import { createNode } from '../../texturing/graph/document';
 import { MESH_MAPS, MESH_MAP_LABELS, MESH_MAP_NODE_TYPE, OUTPUT_NODE_TYPE } from '../../texturing/graph/nodes/io';
@@ -45,7 +45,7 @@ const ENTRIES: Entry[] = (() => {
             label: `Output: ${OUTPUT_CHANNEL_LABELS[channel]}`,
             category: 'Inputs and outputs',
             description: channel === 'custom' ? 'A named image the graph gives, for using it inside other graphs.' : `The material's ${OUTPUT_CHANNEL_LABELS[channel].toLowerCase()}.`,
-            words: `output result channel ${channel} ${OUTPUT_CHANNEL_LABELS[channel]}`.toLowerCase(),
+            words: `output result channel ${channel} ${OUTPUT_CHANNEL_LABELS[channel]}${channel === 'custom' ? ' other graphs mask grey' : ''}`.toLowerCase(),
             inputs: ['any'],
             outputs: [],
             choice: { kind: 'node', createNodeAt: (at) => createNode(OUTPUT_NODE_TYPE, at.x, at.y, { channel, name: '' }) },
@@ -72,18 +72,37 @@ const fits = (entry: Entry, wire: { side: 'in' | 'out'; kind: PortKind | 'any' }
     return ports.some((kind) => kind === 'any' || wire.kind === 'any' || kind === wire.kind);
 };
 
+/** The list's width (w-72), its tallest, and the room it keeps from the canvas's edges. */
+const PALETTE_WIDTH = 288;
+const PALETTE_HEIGHT = 420;
+const MARGIN = 8;
+
 export const NodePalette: React.FC<{
     at: Point;
+    /** The canvas's size: the list opens at the pointer but always wholly inside it. */
+    bounds: { width: number; height: number };
     graphs: ReadonlyArray<{ id: string; name: string }>;
     wireKind: { side: 'in' | 'out'; kind: PortKind | 'any' } | null;
     onChoose: (choice: PaletteChoice) => void;
     onClose: () => void;
-}> = ({ at, graphs, wireKind, onChoose, onClose }) => {
+}> = ({ at, bounds, graphs, wireKind, onChoose, onClose }) => {
     const [query, setQuery] = useState('');
     const [active, setActive] = useState(0);
     const input = useRef<HTMLInputElement>(null);
     const list = useRef<HTMLDivElement>(null);
+    const panel = useRef<HTMLDivElement>(null);
+    const [height, setHeight] = useState(PALETTE_HEIGHT);
     useEffect(() => { input.current?.focus(); }, []);
+    // Its real height (a short list is shorter than the most), for keeping its bottom inside.
+    useLayoutEffect(() => {
+        const element = panel.current;
+        if (!element) return undefined;
+        const measure = () => setHeight(element.offsetHeight);
+        measure();
+        const observer = new ResizeObserver(measure);
+        observer.observe(element);
+        return () => observer.disconnect();
+    }, []);
 
     const entries = useMemo(() => {
         const graphEntries: Entry[] = graphs.map((graph) => ({
@@ -122,13 +141,17 @@ export const NodePalette: React.FC<{
         list.current?.querySelector(`[data-index="${active}"]`)?.scrollIntoView({ block: 'nearest' });
     }, [active]);
 
-    const left = Math.max(8, at.x);
-    const top = Math.max(8, at.y);
+    // At the pointer, moved back in where it would run past the canvas's right or bottom edge; a canvas
+    // too short for the whole list gets a shorter one.
+    const maxHeight = Math.max(120, Math.min(PALETTE_HEIGHT, bounds.height - MARGIN * 2));
+    const left = Math.max(MARGIN, Math.min(at.x, bounds.width - PALETTE_WIDTH - MARGIN));
+    const top = Math.max(MARGIN, Math.min(at.y, bounds.height - Math.min(height, maxHeight) - MARGIN));
     let lastCategory = '';
     return (
         <div
+            ref={panel}
             className="absolute z-30 flex w-72 flex-col overflow-hidden rounded-md border border-zinc-700 bg-zinc-900 shadow-2xl"
-            style={{ left, top, maxHeight: 420 }}
+            style={{ left, top, maxHeight }}
             onPointerDown={(event) => event.stopPropagation()}
             onDoubleClick={(event) => event.stopPropagation()}
         >

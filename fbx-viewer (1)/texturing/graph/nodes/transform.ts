@@ -352,7 +352,8 @@ export const TRANSFORM_NODES: TexNodeDef[] = [
         kindFrom: 'in',
         cost: () => 5,
         glsl: `void main() {
-    vec2 texel = 1.0 / uSize;
+    // A pixel of the input, not of this node: a size change here only resamples the result.
+    vec2 texel = 1.0 / vec2(textureSize(t_in, 0));
     vec4 c = c_in(vUv);
     vec4 around = (c_in(vUv + vec2(texel.x, 0.0)) + c_in(vUv - vec2(texel.x, 0.0)) + c_in(vUv + vec2(0.0, texel.y)) + c_in(vUv - vec2(0.0, texel.y))) * 0.25;
     outColor = vec4(c.rgb + (c.rgb - around.rgb) * p_amount, c.a);
@@ -391,9 +392,11 @@ export const TRANSFORM_NODES: TexNodeDef[] = [
         sizeFrom: 'input',
         cost: () => 4,
         glsl: `void main() {
-    vec2 texel = 1.0 / uSize;
+    // Slopes across a pixel of the input, as slope per unit of the image: the same look at any size of this node.
+    vec2 inputSize = vec2(textureSize(t_in, 0));
+    vec2 texel = 1.0 / inputSize;
     vec2 g = vec2(g_in(vUv + vec2(texel.x, 0.0)) - g_in(vUv - vec2(texel.x, 0.0)), g_in(vUv + vec2(0.0, texel.y)) - g_in(vUv - vec2(0.0, texel.y)));
-    g *= uSize.x / 512.0;
+    g *= inputSize.x / 512.0;
     float a = radians(p_angle);
     outColor = vec4(saturate(0.5 + dot(g, vec2(cos(a), sin(a))) * p_intensity));
 }`,

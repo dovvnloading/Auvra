@@ -1,9 +1,28 @@
 import { describe, expect, it } from 'vitest';
 import { evaluateExpression, expressionError } from '../../texturing/graph/expressions';
-import { createTextureGraph, normalizeTextureGraph, parameterValues, formulaScope, resolveNodeParams, wouldCycle, graphTextureIds } from '../../texturing/graph/document';
+import {
+    MAX_NODES,
+    createFunctionGraph,
+    createTextureGraph,
+    formulaScope,
+    graphReadsMeshMaps,
+    graphTextureIds,
+    mixSeeds,
+    normalizeTextureGraph,
+    parameterValues,
+    readTextureGraph,
+    resolveNodeParams,
+    shaderSeed,
+    subgraphRunSeed,
+    unknownNodeTypes,
+    wouldCycle,
+} from '../../texturing/graph/document';
 import { sampleCurve } from '../../texturing/graph/nodeKit';
-import { labelIslands } from '../../texturing/graph/nodes/distance';
-import { TEXTURE_NODE_DEFINITIONS, textureNodeDefinitionByType } from '../../texturing/graph/registry';
+import { islandLabelRows, labelIslands, packMask } from '../../texturing/graph/nodes/distance';
+import { pixelProcessorCost } from '../../texturing/graph/nodes/io';
+import { TEXTURE_NODE_DEFINITIONS, placeholderDefinition, textureNodeDefinition, textureNodeDefinitionByType } from '../../texturing/graph/registry';
+import { outputNodeKind, type TextureGraph } from '../../texturing/graph/types';
+import { GraphHistory, materialHistory } from '../../components/Texturing/graphEditing';
 import { bakeSignature, readStoredGraph } from '../../texturing/graph/stored';
 import { crc32 } from '../../texturing/zip';
 import { materialAssetDocument, readMaterialAsset, withoutAssetTexture } from '../../runtime/materials/materialLibrary';
@@ -18,6 +37,15 @@ describe('texture graph formulas', () => {
         expect(evaluateExpression('a > 1 ? 10 : 20', { a: 2 })).toBe(10);
         expect(evaluateExpression('lerp(0, 10, 0.25)', {})).toBe(2.5);
         expect(evaluateExpression('-x', { x: 3 })).toBe(-3);
+    });
+
+    it('takes a power before a sign, as written maths does', () => {
+        expect(evaluateExpression('-2^2', {})).toBe(-4);
+        expect(evaluateExpression('(-2)^2', {})).toBe(4);
+        expect(evaluateExpression('2^-1', {})).toBe(0.5);
+        expect(evaluateExpression('-2 * 3', {})).toBe(-6);
+        expect(evaluateExpression('-x^2 + 1', { x: 3 })).toBe(-8);
+        expect(evaluateExpression('!0 && 1', {})).toBe(1);
     });
 
     it('explains formulas that do not read, without running anything', () => {
@@ -41,26 +69,69 @@ describe('texture graph documents', () => {
         expect(normalizeTextureGraph(JSON.parse(JSON.stringify(graph)))).toEqual(graph);
     });
 
-    it('drops unknown nodes, dangling wires, second wires into one input, and loops', () => {
-        const graph = normalizeTextureGraph({
+    it('drops dangling wires, second wires into one input, and loops, and says so', () => {
+        const { graph, problems } = readTextureGraph({
             nodes: [
                 { id: 'a', type: 'levels', x: 0, y: 0, params: {} },
                 { id: 'b', type: 'invert', x: 0, y: 0, params: {} },
-                { id: 'c', type: 'not-a-node', x: 0, y: 0, params: {} },
+                { id: 'c', type: 'blur', x: 0, y: 0, params: {} },
             ],
             links: [
                 { from: 'a', fromOutput: 'out', to: 'b', toInput: 'in' },
                 { from: 'b', fromOutput: 'out', to: 'a', toInput: 'in' },
                 { from: 'a', fromOutput: 'out', to: 'b', toInput: 'in' },
                 { from: 'c', fromOutput: 'out', to: 'b', toInput: 'in' },
+                { from: 'gone', fromOutput: 'out', to: 'c', toInput: 'in' },
             ],
             parameters: [{ name: 'bad name', kind: 'float', default: 1 }, { name: 'wear', kind: 'float', default: 2 }],
         });
-        expect(graph.nodes.map((node) => node.id)).toEqual(['a', 'b']);
+        expect(graph.nodes.map((node) => node.id)).toEqual(['a', 'b', 'c']);
         expect(graph.links).toEqual([{ from: 'a', fromOutput: 'out', to: 'b', toInput: 'in' }]);
         expect(graph.parameters.map((parameter) => parameter.name)).toEqual(['wear']);
+        expect(problems.join(' ')).toMatch(/4 wires were left out/);
         expect(wouldCycle(graph, 'b', 'a')).toBe(true);
         expect(wouldCycle(graph, 'a', 'b')).toBe(false);
+    });
+
+    it('keeps nodes of unknown types with their settings and wires, so nothing is lost on the next save', () => {
+        const stored = {
+            nodes: [
+                { id: 'a', type: 'perlinNoise', x: 0, y: 0, params: {} },
+                { id: 'future', type: 'snowCover', x: 40, y: 10, params: { depth: 0.3, nested: { a: [1, 2] } }, size: { mode: 'graph', w: 1, h: 0 }, precision: 32 },
+                { id: 'out', type: 'output', x: 0, y: 0, params: { channel: 'baseColor' } },
+            ],
+            links: [
+                { from: 'a', fromOutput: 'out', to: 'future', toInput: 'height' },
+                { from: 'future', fromOutput: 'covered', to: 'out', toInput: 'in' },
+            ],
+            parameters: [],
+        };
+        const { graph, problems } = readTextureGraph(stored);
+        expect(problems).toEqual([]);
+        const kept = graph.nodes.find((node) => node.id === 'future')!;
+        expect(kept).toEqual({ id: 'future', type: 'snowCover', x: 40, y: 10, params: { depth: 0.3, nested: { a: [1, 2] } }, size: { mode: 'graph', w: 1, h: 0 }, precision: 32 });
+        expect(graph.links).toEqual(stored.links);
+        expect(unknownNodeTypes(graph)).toEqual(['snowCover']);
+        // Read again (as the next save would be), nothing changes.
+        expect(normalizeTextureGraph(JSON.parse(JSON.stringify(graph)))).toEqual(graph);
+        // On the canvas it keeps a pin for each of its wires.
+        const placeholder = placeholderDefinition(kept, graph.links);
+        expect(placeholder.inputs.map((port) => port.key)).toEqual(['height']);
+        expect(placeholder.outputs.map((port) => port.key)).toEqual(['covered']);
+        expect(textureNodeDefinition(kept, () => undefined)).toBeNull();
+    });
+
+    it('opens big graphs whole and says what it could not open', () => {
+        const nodes = Array.from({ length: 3000 }, (_, i) => ({ id: `n${i}`, type: 'invert', x: i, y: 0, params: {} }));
+        const links = nodes.slice(1).map((node, i) => ({ from: `n${i}`, fromOutput: 'out', to: node.id, toInput: 'in' }));
+        const { graph, problems } = readTextureGraph({ nodes, links, parameters: [] });
+        expect(graph.nodes).toHaveLength(3000);
+        expect(graph.links).toHaveLength(2999);
+        expect(problems).toEqual([]);
+        const damaged = readTextureGraph({ nodes: [{ id: 'x', type: 'invert', params: {} }, { id: 'x', type: 'invert' }, { type: 'invert' }], links: [], parameters: [] });
+        expect(damaged.graph.nodes).toHaveLength(1);
+        expect(damaged.problems).toEqual(['2 damaged nodes were left out.']);
+        expect(MAX_NODES).toBeGreaterThanOrEqual(10000);
     });
 
     it('follows parameters and formulas in node settings, within each setting\'s limits', () => {
@@ -129,19 +200,155 @@ describe('texture graph helpers', () => {
         const height = 3;
         const mask = new Uint8Array(width * height);
         for (let y = 0; y < 2; y++) { mask[y * width] = 255; mask[y * width + 3] = 255; }
-        const lone = new Uint8Array(width * height);
-        lone.set(mask);
-        const islands = labelIslands(lone, width, height, 1);
+        const islands = labelIslands(packMask(mask, width, height), width, height);
         expect(islands.count).toBe(1);
         expect(Array.from(islands.boxes)).toEqual([3, 0, 2, 2]);
         const two = new Uint8Array(width * height);
         two[0] = 255;
         two[2 * width + 2] = 255;
-        expect(labelIslands(two, width, height, 1).count).toBe(2);
+        expect(labelIslands(packMask(two, width, height), width, height).count).toBe(2);
+    });
+
+    it('labels islands from runs, with boxes across both edges and labels a strip of rows at a time', () => {
+        // 40×6 (wider than one packed texel): a band all the way across, a block over the top and bottom
+        // edges, and a lone pixel.
+        const width = 40;
+        const height = 6;
+        const mask = new Uint8Array(width * height);
+        for (let x = 0; x < width; x++) mask[2 * width + x] = 255;
+        for (const y of [0, 5]) for (let x = 10; x < 14; x++) mask[y * width + x] = 255;
+        mask[4 * width + 30] = 255;
+        const islands = labelIslands(packMask(mask, width, height), width, height);
+        expect(islands.count).toBe(3);
+        const boxes = Array.from({ length: islands.count }, (_, i) => Array.from(islands.boxes.slice(i * 4, i * 4 + 4)));
+        expect(boxes).toEqual(expect.arrayContaining([[10, 5, 4, 2], [0, 2, 40, 1], [30, 4, 1, 1]]));
+        const rows = new Float32Array(2 * width);
+        islandLabelRows(islands, 4, 2, width, rows);
+        const lone = rows[30];
+        const block = rows[width + 10];
+        expect(lone).toBeGreaterThan(0);
+        expect(block).toBeGreaterThan(0);
+        expect(lone).not.toBe(block);
+        expect(rows[width + 13]).toBe(block);
+        expect(rows[width + 14]).toBe(0);
+        expect(rows[0]).toBe(0);
     });
 
     it('checks ZIP entries as the format says', () => {
         expect(crc32(new TextEncoder().encode('123456789'))).toBe(0xcbf43926);
+    });
+
+    it('gives hand-written pixels a cost that grows with their reads and loops', () => {
+        expect(pixelProcessorCost('vec4 v = c_a(uv);\noutColor = v;')).toBe(16);
+        const looped = pixelProcessorCost('vec4 s = vec4(0.0);\nfor (int i = 0; i < 64; i++) { s += c_a(uv + vec2(float(i)) * 0.001) + c_b(uv); }\noutColor = s;');
+        expect(looped).toBeGreaterThan(256);
+        expect(looped).toBeLessThanOrEqual(1024);
+    });
+});
+
+describe('texture graph seeds', () => {
+    it('hashes graph and node seeds so pairs that summed alike no longer meet', () => {
+        // 0 * 7919 + 7919 * 131 and 131 * 7919 + 0 * 131 were the same seed.
+        expect(shaderSeed(0, 7919)).not.toBe(shaderSeed(131, 0));
+        expect(shaderSeed(3, 4)).toBe(shaderSeed(3, 4));
+        const seeds = new Set<number>();
+        for (let graph = 0; graph < 40; graph++) for (let node = 0; node < 40; node++) seeds.add(shaderSeed(graph, node));
+        expect(seeds.size).toBeGreaterThan(1590);
+        for (const seed of seeds) {
+            expect(seed).toBeLessThan(2 ** 20 + 1);
+            expect(seed % 1).toBe(0.5);
+        }
+        expect(mixSeeds(1, 2)).not.toBe(mixSeeds(2, 1));
+    });
+
+    it('runs each copy of a sub-graph with its own seed unless it is set not to vary', () => {
+        const a = subgraphRunSeed(5, 'copy-a', 0, true, 0);
+        const b = subgraphRunSeed(5, 'copy-b', 0, true, 0);
+        expect(a).not.toBe(b);
+        expect(subgraphRunSeed(5, 'copy-a', 0, true, 0)).toBe(a);
+        // The outer graph's seed reaches the copies.
+        expect(subgraphRunSeed(6, 'copy-a', 0, true, 0)).not.toBe(a);
+        // Pinned: the seed alone sets the look.
+        expect(subgraphRunSeed(5, 'copy-a', 7, false, 0)).toBe(subgraphRunSeed(9, 'copy-b', 7, false, 0));
+        expect(subgraphRunSeed(5, 'copy-a', 7, false, 0)).not.toBe(subgraphRunSeed(5, 'copy-a', 8, false, 0));
+    });
+
+    it('gives sub-graph nodes a seed and a vary switch after the graph\'s own parameters', () => {
+        const inner = createFunctionGraph();
+        const definition = textureNodeDefinition({ id: 's', type: 'subgraph', x: 0, y: 0, params: { graph: 'g' } }, () => ({ id: 'g', name: 'Mask', graph: inner }))!;
+        expect(definition.params.map((param) => param.key)).toEqual(['graph', '$seed', '$vary']);
+        expect(definition.params.find((param) => param.key === '$vary')!.default).toBe(true);
+    });
+});
+
+describe('texture graph outputs', () => {
+    it('lets a named image be grey, and gives graphs using it a grey pin', () => {
+        expect(outputNodeKind({ channel: 'custom' })).toBe('color');
+        expect(outputNodeKind({ channel: 'custom', kind: 'gray' })).toBe('gray');
+        expect(outputNodeKind({ channel: 'roughness', kind: 'color' })).toBe('gray');
+        expect(outputNodeKind({ channel: 'baseColor' })).toBe('color');
+        const inner = createFunctionGraph();
+        const definition = textureNodeDefinition({ id: 's', type: 'subgraph', x: 0, y: 0, params: { graph: 'g' } }, () => ({ id: 'g', name: 'Mask', graph: inner }))!;
+        expect(definition.outputs.map((port) => port.kind)).toEqual(['gray']);
+        const colour: TextureGraph = { ...inner, nodes: inner.nodes.map((node) => (node.type === 'output' ? { ...node, params: { ...node.params, kind: 'color' } } : node)) };
+        const coloured = textureNodeDefinition({ id: 's', type: 'subgraph', x: 0, y: 0, params: { graph: 'g' } }, () => ({ id: 'g', name: 'Mask', graph: colour }))!;
+        expect(coloured.outputs.map((port) => port.kind)).toEqual(['color']);
+    });
+
+    it('knows when a graph reads mesh maps, through the graphs it uses', () => {
+        const plain = createTextureGraph();
+        expect(graphReadsMeshMaps(plain, () => undefined)).toBe(false);
+        const reads = normalizeTextureGraph({ nodes: [{ id: 't', type: 'triplanar', params: {} }], links: [], parameters: [] });
+        expect(graphReadsMeshMaps(reads, () => undefined)).toBe(true);
+        const user = normalizeTextureGraph({ nodes: [{ id: 's', type: 'subgraph', params: { graph: 'inner' } }], links: [], parameters: [] });
+        expect(graphReadsMeshMaps(user, (id) => (id === 'inner' ? { graph: reads } : undefined))).toBe(true);
+        expect(graphReadsMeshMaps(user, () => undefined)).toBe(false);
+    });
+});
+
+describe('texture graph undo', () => {
+    interface Snapshot { graph: string; values: Record<string, number>; bakeSize: number }
+
+    it('steps back and forth through whole states, values and picture settings included', () => {
+        const history = new GraphHistory<Snapshot>();
+        const first: Snapshot = { graph: 'a', values: { wear: 0.2 }, bakeSize: 11 };
+        const second: Snapshot = { graph: 'a', values: { wear: 0.7 }, bakeSize: 11 };
+        const third: Snapshot = { graph: 'a', values: { wear: 0.7 }, bakeSize: 12 };
+        history.record(first, undefined, 0);
+        history.record(second, undefined, 5000);
+        expect(history.undo(third)).toEqual(second);
+        expect(history.undo(second)).toEqual(first);
+        expect(history.canUndo).toBe(false);
+        expect(history.redo(first)).toEqual(second);
+        expect(history.redo(second)).toEqual(third);
+        expect(history.canRedo).toBe(false);
+    });
+
+    it('merges quick changes of one value into one step, and a new change ends redo', () => {
+        const history = new GraphHistory<number>();
+        history.record(1, 'value:wear', 0);
+        history.record(2, 'value:wear', 300);
+        history.record(3, 'value:wear', 600);
+        expect(history.undo(4)).toBe(1);
+        expect(history.canUndo).toBe(false);
+        history.record(1, 'value:wear', 700);
+        expect(history.canRedo).toBe(false);
+        // Another value, or the same one after a pause, is a step of its own.
+        history.record(5, 'value:scale', 800);
+        history.record(6, 'value:scale', 5000);
+        expect(history.undo(7)).toBe(6);
+        expect(history.undo(6)).toBe(5);
+    });
+
+    it('keeps each material\'s history while others are open, as long as it was touched lately', () => {
+        const bricks = materialHistory<number>('bricks-undo-test');
+        bricks.record(1, undefined, 0);
+        materialHistory<number>('tiles-undo-test').record(2, undefined, 0);
+        // Opening the material again (a new screen) finds its steps where they were.
+        expect(materialHistory<number>('bricks-undo-test')).toBe(bricks);
+        expect(materialHistory<number>('bricks-undo-test').canUndo).toBe(true);
+        for (let i = 0; i < 40; i++) materialHistory<number>(`other-${i}-undo-test`);
+        expect(materialHistory<number>('bricks-undo-test').canUndo).toBe(false);
     });
 });
 

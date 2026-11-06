@@ -51,9 +51,10 @@ import {
  * The material graph's canvas. Left-drag on empty space draws a selection box (Shift adds to the
  * selection); right- or middle-drag pans and the wheel zooms; right-click (or Space) opens the node
  * palette where the pointer is. Drag from a pin to wire it; dropping a wire on empty space offers
- * the nodes to end it on; dragging a wire off an input moves it. Alt-click a wire to cut it,
- * double-click it for a reroute. Ctrl+C/X/V/D copy, cut, paste and duplicate, Ctrl+Z/Y undo and
- * redo, C comments the selection, F frames it.
+ * the nodes to end it on; dragging a wire off an input moves it. Alt-click a wire, or right-click it
+ * without dragging, to cut it (a right-drag that starts on a wire pans, as anywhere); double-click it
+ * for a reroute. Ctrl+C/X/V/D copy, cut, paste and duplicate, Ctrl+Z/Y undo and redo, C comments the
+ * selection, F frames it. Tab moves keyboard focus on, as it does everywhere else.
  */
 
 const PIN_COLORS: Record<MaterialValueType, string> = { float: '#a3a3a3', vec2: '#4ade80', vec3: '#facc15', vec4: '#c084fc' };
@@ -71,7 +72,8 @@ let lastClipboard: MaterialClipboard | null = null;
 interface Viewport { x: number; y: number; scale: number }
 
 type Gesture =
-    | { kind: 'pan'; button: number; startX: number; startY: number; lastX: number; lastY: number; moved: boolean }
+    /** `cut`: a wire the right button went down on, cut when it comes up without having dragged. */
+    | { kind: 'pan'; button: number; startX: number; startY: number; lastX: number; lastY: number; moved: boolean; cut?: MaterialGraphLink }
     | { kind: 'move'; start: Point; base: MaterialGraph; ids: Set<string>; moved: boolean }
     | { kind: 'marquee'; start: Point; additive: boolean }
     | { kind: 'wire'; wire: PendingWire }
@@ -223,8 +225,14 @@ export const MaterialGraphCanvas: React.FC<MaterialGraphCanvasProps> = (props) =
             gesture.current = null;
             const { props: latestProps } = latest.current;
             if (current.kind === 'pan') {
-                // A right-click that did not drag opens the palette.
-                if (current.button === 2 && !current.moved) openPalette(event.clientX, event.clientY, null);
+                // A right-click that did not drag cuts the wire it was on, or else opens the palette.
+                if (current.button === 2 && !current.moved) {
+                    const cut = current.cut;
+                    if (cut) {
+                        const links = latestProps.graph.links.filter(other => !(other.fromNode === cut.fromNode && other.fromOutput === cut.fromOutput && other.toNode === cut.toNode && other.toInput === cut.toInput));
+                        if (links.length !== latestProps.graph.links.length) latestProps.onChange({ ...latestProps.graph, links }, true);
+                    } else openPalette(event.clientX, event.clientY, null);
+                }
             } else if (current.kind === 'move') {
                 if (current.moved) latestProps.onChange(latestProps.graph, true);
             } else if (current.kind === 'marquee') {
@@ -378,7 +386,8 @@ export const MaterialGraphCanvas: React.FC<MaterialGraphCanvasProps> = (props) =
         else if (mod && key === 'd') { event.preventDefault(); duplicate(); }
         else if (!mod && key === 'f') { event.preventDefault(); frame(boundsOf(allRects(selection.size ? selection : undefined))); }
         else if (!mod && key === 'c') { event.preventDefault(); addComment(); }
-        else if (!mod && (key === ' ' || key === 'tab')) {
+        // Space opens the palette; Tab is left to move keyboard focus on.
+        else if (!mod && key === ' ') {
             event.preventDefault();
             const rect = container.current!.getBoundingClientRect();
             const at = pointer.current ? { x: pointer.current.x * viewport.scale + viewport.x + rect.left, y: pointer.current.y * viewport.scale + viewport.y + rect.top } : { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
@@ -613,7 +622,12 @@ export const MaterialGraphCanvas: React.FC<MaterialGraphCanvasProps> = (props) =
                                     className="pointer-events-auto cursor-pointer"
                                     onMouseDown={(event) => {
                                         event.stopPropagation();
-                                        if (event.button === 2 || event.altKey) onChange({ ...graph, links: graph.links.filter(other => other !== link) }, true);
+                                        container.current?.focus();
+                                        setPalette(null);
+                                        if (event.button === 0 && event.altKey) { onChange({ ...graph, links: graph.links.filter(other => other !== link) }, true); return; }
+                                        // The right button pans as anywhere else; it cuts the wire only if it comes up without a drag.
+                                        if (event.button === 2) { gesture.current = { kind: 'pan', button: 2, startX: event.clientX, startY: event.clientY, lastX: event.clientX, lastY: event.clientY, moved: false, cut: link }; return; }
+                                        if (event.button === 1) startPan(event);
                                     }}
                                     onDoubleClick={(event) => {
                                         event.stopPropagation();
