@@ -6,7 +6,7 @@ import { describeProviderFailure, hostProviderService, type InferenceJob, type P
 import { estimateJobCost } from '../../../services/providerPricing';
 import { picksFor } from '../../../services/providerPicks';
 import { textureService } from '../../../services/TextureGenerationService';
-import { overrideTextureFlipY, tagOverrideTexture, type MaterialOverrides, type MaterialTextureSlot } from '../../../utils/materialOverrides';
+import { overrideTextureFlipY, rememberImportedLook, tagOverrideTexture, type MaterialOverride, type MaterialOverrides, type MaterialTextureSlot } from '../../../utils/materialOverrides';
 import { DEFAULT_KEEP, OriginalDetail, PaintedMap, ViewedDetail, type DetailMix, type Pixels } from './keepOriginal';
 import { bakeNormals, bakePainted, bakeViews, renderViewSheet, SHEET_MEGAPIXELS, type ViewSheet } from './viewSheet';
 import { limitMetal, limitSmoothness } from './surfaceLimits';
@@ -303,6 +303,8 @@ class RetextureSessions {
     if (existing?.object === object) return existing;
     if (existing) this.drop(existing);
     const parts = listModelParts(object).map((part): SessionPart => {
+      // Results tried on are saved through the material overrides: they must know what the part wore before.
+      rememberImportedLook(part.materials);
       const picture = part.texture ? texturePicture(part.texture, THUMBNAIL_EDGE, 'image/jpeg', overrideTextureFlipY(object)) : null;
       return {
         ...part,
@@ -827,8 +829,10 @@ class RetextureSessions {
   }
 
   /**
-   * Saves a take on the model, or with null what the part had when the session began. `persist` and `persistMaterials`
-   * record the model's documents as they should now stand.
+   * Saves a take on the model, or with null what the part had when the session began. The take's picture becomes each
+   * material's base map in its material override, drawn as a painted picture, beside the take's other maps. An older
+   * per-material texture override of the part (the model's `textureOverrides`) is taken into those overrides too, and let
+   * go of only once they are saved. `persist` and `persistMaterials` record the model's documents as they should now stand.
    */
   async saveOnModel(
     session: ModelSession,
@@ -838,19 +842,31 @@ class RetextureSessions {
     persist: (overrides: Record<string, string>) => Promise<void>,
     persistMaterials: (overrides: MaterialOverrides) => Promise<void>,
   ) {
-    const overrides = { ...(current.overrides ?? {}) };
     const textureId = take ? await this.keep(session, part, take) : null;
-    for (const name of part.materialNames) {
-      const value = textureId ?? part.baselineOverrides[name];
-      if (value) overrides[name] = value;
-      else delete overrides[name];
-    }
-    await persist(overrides);
-
+    const legacy = { ...(current.overrides ?? {}) };
+    let legacyChanged = false;
     const materials = { ...(current.materials ?? {}) };
     let materialsChanged = false;
     for (const name of part.materialNames) {
-      const entry = { ...(materials[name] ?? {}) };
+      const entry: MaterialOverride = { ...(materials[name] ?? {}) };
+      const baseline = part.baselineMaterialOverrides[name];
+      const olderMap = part.baselineOverrides[name];
+      const baseMap = textureId ?? baseline?.mapTextureId ?? olderMap;
+      const painted = textureId ? true : baseline?.paintedMap ?? (olderMap ? true : undefined);
+      if (entry.mapTextureId !== baseMap) {
+        materialsChanged = true;
+        if (baseMap) entry.mapTextureId = baseMap;
+        else delete entry.mapTextureId;
+      }
+      if (entry.paintedMap !== painted) {
+        materialsChanged = true;
+        if (painted !== undefined) entry.paintedMap = painted;
+        else delete entry.paintedMap;
+      }
+      if (name in legacy) {
+        delete legacy[name];
+        legacyChanged = true;
+      }
       for (const role of SURFACE_ROLES) {
         const field = OVERRIDE_FIELD_OF[role];
         const surface = take?.maps.find((item) => item.role === role);
@@ -866,12 +882,16 @@ class RetextureSessions {
     if (take) {
       // So that applying the overrides finds them already on the materials, rather than loading them again.
       const flipY = overrideTextureFlipY(session.object);
+      const picture = this.textures.get(take.id);
+      if (picture && textureId) tagOverrideTexture(picture, textureId, 'map', flipY);
       for (const surface of take.maps) {
         const texture = this.textures.get(`${take.id}:${surface.role}`);
         if (texture && surface.textureId) tagOverrideTexture(texture, surface.textureId, SLOT_OF[surface.role], flipY);
       }
     }
-    if (materialsChanged) await persistMaterials(materials);
+    // The overrides first: an older texture override is let go of only once the override holding its picture is saved.
+    if (materialsChanged || legacyChanged) await persistMaterials(materials);
+    if (legacyChanged) await persist(legacy);
     part.saved = take?.id ?? null;
     this.wear(session, part, part.saved);
   }

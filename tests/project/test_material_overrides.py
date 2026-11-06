@@ -31,7 +31,7 @@ class MaterialOverrideSchemaTests(unittest.TestCase):
     def test_accepts_every_override_field(self):
         override = {
             "color": "#FF8800", "roughness": 0, "metalness": 1, "emissive": "#00ff00",
-            "emissiveIntensity": 4.5, "opacity": 0.25, "mapTextureId": "tex-albedo", "normalTextureId": "tex-normal",
+            "emissiveIntensity": 4.5, "opacity": 0.25, "mapTextureId": "tex-albedo", "paintedMap": True, "normalTextureId": "tex-normal",
             "roughnessTextureId": "tex-rough", "metalnessTextureId": "tex-metal",
         }
         document = validate_domain("models", _models(_model({"Body": override})))
@@ -113,6 +113,7 @@ class MaterialOverrideSchemaTests(unittest.TestCase):
             {"mapTextureId": ""},
             {"normalTextureId": "n" * 129},
             {"metalness": "0.5"},
+            {"paintedMap": "yes"},
             {},
         ]
         for override in invalid:
