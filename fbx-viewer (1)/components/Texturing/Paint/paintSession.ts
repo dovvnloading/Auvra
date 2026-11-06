@@ -5,7 +5,7 @@ import { materialLibrary, MATERIALS_DOMAIN, materialAssetDocument, type Material
 import { createMaterialGraph } from '../../../runtime/materials/materialGraph';
 import { projectService } from '../../../utils/projectService';
 import { overrideTextureFlipY, type MaterialOverrides } from '../../../utils/materialOverrides';
-import { bakeMeshMaps, type BakeSettings } from '../../../texturing/bake/meshBaker';
+import { bakeMeshMaps, spaceOfBox, type BakeSettings, type PositionSpace } from '../../../texturing/bake/meshBaker';
 import { textureGpu, type TextureGpu } from '../../../texturing/gpu/textureGpu';
 import type { GraphEntry, GraphResolver } from '../../../texturing/graph/registry';
 import { readStoredGraph } from '../../../texturing/graph/stored';
@@ -15,7 +15,7 @@ import { DEEP_EXPORT, ROLE_LABELS, encodeChannels, materialGraphForTextures, til
 import { PaintStack, type StackHost } from '../../../texturing/paint/paintStack';
 import { BUILTIN_GRAPHS } from '../../../texturing/paint/smartLibrary';
 import { applyPixelHistory, type HistoryEntry } from '../../../texturing/paint/strokes';
-import { createPaintDocument, newFillLayer, paintId, readPaintDocument, type PaintChannel, type PaintDocument } from '../../../texturing/paint/paintTypes';
+import { castsFromThreeSides, createPaintDocument, newFillLayer, paintId, readPaintDocument, type PaintChannel, type PaintDocument } from '../../../texturing/paint/paintTypes';
 import { download, makeZip } from '../../../texturing/zip';
 import type { PartMaterial } from '../../Tools/Retexture/parts';
 
@@ -86,11 +86,12 @@ export class PaintSession {
     /** True when pictures changed since the model was last given them. */
     changedSinceApply = false;
 
-    private constructor(readonly target: PaintTarget, readonly host: PaintSessionHost, part: PartMesh, stack: PaintStack, asset: MaterialAsset) {
+    private constructor(readonly target: PaintTarget, readonly host: PaintSessionHost, part: PartMesh, stack: PaintStack, asset: MaterialAsset,
+        occluder: PaintSession['occluder'], readonly modelSpace: PositionSpace) {
         this.gpu = stack.host.gpu;
         this.part = part;
         this.picker = new SurfacePicker(part);
-        this.occluder = buildWholeMesh(target.object);
+        this.occluder = occluder;
         this.stack = stack;
         this.asset = asset;
         stack.subscribe(() => this.emit());
@@ -101,9 +102,13 @@ export class PaintSession {
         let document = asset ? readPaintDocument(asset.paint) : null;
         const part = buildPartMesh(target.object, new Set(target.materials), { udim: document ? document.udim : 'auto' });
         const material = target.materials[0] as THREE.MeshStandardMaterial;
+        // The whole model: what casts occlusion, and the cube every texture set of it measures 3D placement in.
+        const occluder = buildWholeMesh(target.object);
+        const modelSpace = spaceOfBox(new THREE.Box3().setFromBufferAttribute(new THREE.BufferAttribute(occluder.positions, 3)));
         if (!asset || !document) {
             document = createPaintDocument(target.modelId, target.materialNames, 11);
             document.udim = part.udim;
+            document.space = modelSpace;
             // Painting starts from what the surface wears now, never from nothing: its glow too, as the set
             // goes on the model in place of its material.
             const glows = Boolean(material?.emissiveMap) || Boolean(material?.emissive && material.emissive.getHex() !== 0 && material.emissiveIntensity > 0);
@@ -139,7 +144,7 @@ export class PaintSession {
             storePicture: (blob) => projectService.uploadAsset(new File([blob], 'painted.png', { type: 'image/png' })),
         };
         const stack = await PaintStack.open(stackHost, part, document);
-        return new PaintSession(target, host, part, stack, asset);
+        return new PaintSession(target, host, part, stack, asset, occluder, modelSpace);
     }
 
     subscribe = (listener: () => void): (() => void) => {
@@ -284,8 +289,13 @@ export class PaintSession {
         this.emit();
         try {
             const material = this.target.materials[0] as THREE.MeshStandardMaterial | undefined;
+            // A set made before spaces were kept moves into the model's own with this bake, unless a fill
+            // cast from three sides would shift with it: then the position map keeps to the set's box.
+            const adopt = !this.stack.document.space && !castsFromThreeSides(this.stack.document.layers);
+            const space = adopt ? this.modelSpace : this.stack.space();
             const result = await bakeMeshMaps(this.gpu, {
                 part: this.part,
+                space: { centre: space.centre, extent: space.extent },
                 occluder: this.occluder,
                 highPoly: highPoly ? buildWholeMesh(highPoly) : undefined,
                 normalMap: material ? ownMaps(material).normalMap : null,
@@ -297,7 +307,7 @@ export class PaintSession {
             this.stack.setBake(result);
             this.busy = 'Keeping the maps';
             this.emit();
-            const document = await this.stack.keepBake(settings);
+            const document = await this.stack.keepBake(settings, { centre: space.centre, extent: space.extent }, adopt);
             this.stack.setDocument(document);
             await this.save();
             this.status = 'Mesh maps baked. Smart masks and materials now follow this surface.';

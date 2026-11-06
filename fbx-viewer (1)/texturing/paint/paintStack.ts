@@ -6,7 +6,7 @@ import { TextureGraphEvaluator, type ExternalImage } from '../graph/evaluator';
 import { MESH_MAPS, OUTPUT_NODE_TYPE, meshMapKey, type MeshMapName } from '../graph/nodes/io';
 import { jumpFlood } from '../graph/nodes/distance';
 import type { GraphResolver } from '../graph/registry';
-import { padImage, releaseTileBake, type TileBake } from '../bake/meshBaker';
+import { BAKE_VERSION, padImage, releaseTileBake, spaceOfBox, type PositionSpace, type TileBake } from '../bake/meshBaker';
 import { UvRaster } from '../bake/uvRaster';
 import type { PartMesh } from '../mesh/partMesh';
 import { encodePng, encodePng16, pngBitDepth, readPicture, readPng16 } from '../png';
@@ -167,6 +167,7 @@ uniform int uNormalMap;
 uniform int uChannel;
 uniform vec3 uCentre;
 uniform float uExtent;
+uniform float uOffset;
 vec4 read(vec2 uv) {
     vec4 c = texture(uTexture, uv);
     if (uGray == 1) c.rgb = c.rrr;
@@ -192,7 +193,9 @@ void main() {
     vec3 n = normalize(vNormal);
     vec3 w = pow(abs(n), vec3(uSharpness));
     w /= max(w.x + w.y + w.z, 1e-5);
-    vec3 q = (vPos - uCentre) / uExtent * uScale;
+    // Where the position map puts this place (with an offset of 0.5), so a texture graph's triplanar
+    // projection reading that map lays a pattern exactly where this does.
+    vec3 q = ((vPos - uCentre) / uExtent + uOffset) * uScale;
     mat2 r = rotate2(radians(uRotation));
     vec2 ux = r * q.zy;
     vec2 uy = r * q.xz;
@@ -504,8 +507,21 @@ export class PaintStack {
         this.invalidate();
     }
 
-    /** Keeps the baked maps as assets and returns the document naming them. */
-    async keepBake(settings: NonNullable<PaintDocument['bake']>['settings']): Promise<PaintDocument> {
+    /**
+     * Where 3D placement is measured from: the document's space (a cube round the whole model), whose fills
+     * cast from three sides line up with a texture graph's triplanar projection (offset 0.5); a set made
+     * before spaces were kept uses its own box, with its fills' old placement (offset 0).
+     */
+    space(): PositionSpace & { offset: number } {
+        if (this.document.space) return { ...this.document.space, offset: 0.5 };
+        return { ...spaceOfBox(this.part.bounds), offset: 0 };
+    }
+
+    /**
+     * Keeps the baked maps as assets and returns the document naming them, marked with the bake's version
+     * and the space its position map was measured in (`adopt` makes that space the set's own).
+     */
+    async keepBake(settings: NonNullable<PaintDocument['bake']>['settings'], space: PositionSpace, adopt = false): Promise<PaintDocument> {
         if (!this.bake) return this.document;
         const maps: NonNullable<PaintDocument['bake']>['maps'] = {};
         for (const [tile, result] of this.bake) {
@@ -524,7 +540,7 @@ export class PaintStack {
                 maps[name as MeshMapName] = { ...(maps[name as MeshMapName] ?? {}), [String(tile)]: { assetId } };
             }
         }
-        this.document = { ...this.document, bake: { settings, maps, at: Date.now() } };
+        this.document = { ...this.document, ...(adopt ? { space } : {}), bake: { settings, maps, at: Date.now(), version: BAKE_VERSION, space } };
         return this.document;
     }
 
@@ -840,13 +856,13 @@ void main() {
     /** A picture laid onto this tile's texels along the UVs or from three sides, kept until its source or settings change. */
     private cast(key: string, source: unknown[], texture: THREE.Texture, channel: PaintChannel, tile: number, projection: FillProjection,
         read: { gray: boolean; srgb: boolean; rebuildNormal: boolean; channelRead: number }): GpuImage {
-        const signature = hashText(JSON.stringify([source, projection, read, channel, tile, this.size]));
+        const space = this.space();
+        const signature = hashText(JSON.stringify([source, projection, read, channel, tile, this.size, space]));
         const cached = this.fills.get(key);
         if (cached?.signature === signature) return cached.image;
         if (cached) this.gpu.release(cached.image);
         // Height and normals keep their smooth steps; other channels are fine at 8 bits.
         const image = this.gpu.image(this.size, this.size, 'color', channel === 'height' || channel === 'normal' ? 16 : 8);
-        const extent = this.part.bounds.getSize(new THREE.Vector3());
         this.raster.draw(image, tile, CAST, {
             uniforms: {
                 uTexture: texture,
@@ -859,8 +875,9 @@ void main() {
                 uRebuildNormal: read.rebuildNormal ? 1 : 0,
                 uNormalMap: channel === 'normal' ? 1 : 0,
                 uChannel: read.channelRead,
-                uCentre: this.part.bounds.getCenter(new THREE.Vector3()),
-                uExtent: Math.max(extent.x, extent.y, extent.z, 1e-6),
+                uCentre: new THREE.Vector3(...space.centre),
+                uExtent: space.extent,
+                uOffset: space.offset,
             },
             clear: [0, 0, 0, 1],
         });

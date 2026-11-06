@@ -10,7 +10,9 @@ import { UvRaster } from './uvRaster';
  * MESH MAP BAKING
  *
  * Maps of a texture set's surface, drawn texel by texel in UV space:
- *   - position (in the surface's box, 0..1), world normal, IDs (by mesh, UV island or vertex colour);
+ *   - position (in a cube round the whole model, centred and scaled evenly by its longest side, so 3D
+ *     noise keeps its shape on long or flat parts and lines up across the model's texture sets), world
+ *     normal, IDs (by mesh, UV island or vertex colour);
  *   - from a high-poly model when one is given (else the surface itself): the tangent-space normal in the
  *     very frame the renderer uses, and height (how far out or in the detail is);
  *   - ambient occlusion and thickness, by rays against the whole model, many per texel, gathered over
@@ -47,8 +49,30 @@ export const DEFAULT_BAKE_SETTINGS: BakeSettings = {
     idSource: 'island',
 };
 
+/**
+ * Where 3D placement is measured from: a centre and the length of the longest side of a box. The position
+ * map holds (place − centre) / extent + 0.5, and fills cast from three sides read the same.
+ */
+export interface PositionSpace { centre: [number, number, number]; extent: number }
+
+/** The space of a box: its middle, and its longest side. */
+export const spaceOfBox = (box: THREE.Box3): PositionSpace => {
+    if (box.isEmpty()) return { centre: [0, 0, 0], extent: 1 };
+    const centre = box.getCenter(new THREE.Vector3());
+    const size = box.getSize(new THREE.Vector3());
+    return { centre: [centre.x, centre.y, centre.z], extent: Math.max(size.x, size.y, size.z, 1e-6) };
+};
+
+/**
+ * Bakes are marked with the version they were made by. 2: position in an even space, normals,
+ * occlusion and thickness at 16 bits. Older bakes keep their look until baked again.
+ */
+export const BAKE_VERSION = 2;
+
 export interface BakeSources {
     part: PartMesh;
+    /** The space the position map is measured in (a cube round the whole model by default). */
+    space?: PositionSpace;
     /** What casts occlusion and blocks thickness: usually the whole model. */
     occluder: { positions: Float32Array; normals: Float32Array; indices: Uint32Array };
     /** A detailed model in the same place, whose surface details are carried onto this one. */
@@ -92,8 +116,8 @@ export const bakeMeshMaps = async (gpu: TextureGpu, sources: BakeSources, settin
     const raster = new UvRaster(gpu, part);
     const occluder = new MeshTracer(sources.occluder.positions, sources.occluder.normals, sources.occluder.indices);
     const high = sources.highPoly ? new MeshTracer(sources.highPoly.positions, sources.highPoly.normals, sources.highPoly.indices) : null;
-    const box = part.bounds.clone();
     const occluderBox = new THREE.Box3().setFromBufferAttribute(new THREE.BufferAttribute(sources.occluder.positions, 3));
+    const space = sources.space ?? spaceOfBox(occluderBox);
     const diagonal = Math.max(1e-6, occluderBox.getSize(new THREE.Vector3()).length());
     const bias = diagonal * 2e-4;
     const want = new Set(settings.maps);
@@ -339,11 +363,13 @@ export const bakeMeshMaps = async (gpu: TextureGpu, sources: BakeSources, settin
                 }
 
                 if (want.has('position')) {
+                    // Scaled evenly (by the space's longest side) and centred: scaling each axis on its own
+                    // would stretch noise read from it on long or flat parts.
                     const positionMap = take(gpu.image(size, size, 'color', 16));
                     gpu.passNow(positionMap, {
-                        fragment: 'uniform vec3 uMin;\nuniform vec3 uSize3;\nvoid main() { vec4 p = texelFetch(source, ivec2(gl_FragCoord.xy), 0); outColor = vec4((p.xyz - uMin) / max(uSize3, vec3(1e-9)), 1.0); }',
+                        fragment: 'uniform vec3 uCentre;\nuniform float uExtent;\nvoid main() { vec4 p = texelFetch(source, ivec2(gl_FragCoord.xy), 0); outColor = vec4((p.xyz - uCentre) / uExtent + 0.5, 1.0); }',
                         inputs: { source: position },
-                        uniforms: { uMin: box.min.clone(), uSize3: box.getSize(new THREE.Vector3()) },
+                        uniforms: { uCentre: new THREE.Vector3(...space.centre), uExtent: Math.max(space.extent, 1e-9) },
                     });
                     maps.position = positionMap;
                 }
