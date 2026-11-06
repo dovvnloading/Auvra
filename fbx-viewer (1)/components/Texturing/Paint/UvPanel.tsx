@@ -1,5 +1,5 @@
 import React, { useSyncExternalStore } from 'react';
-import { CheckIcon, CrossIcon, GridIcon, PackageIcon, RotateIcon, ScissorsIcon, WandIcon } from '../../UI/Icons';
+import { CheckIcon, CrossIcon, GridIcon, LockIcon, MinusIcon, PackageIcon, PlusIcon, RotateIcon, ScissorsIcon, UnlockIcon, WandIcon } from '../../UI/Icons';
 import { Button, Segmented, Spinner } from '../../UI/kit';
 import type { UvSession, UvStats } from './uvSession';
 
@@ -67,8 +67,29 @@ export const UvPanel: React.FC<{ uv: UvSession; onSeamTool: () => void; onApplie
                         onChange={(value) => { const [x, y] = value.split('x').map(Number); uv.packSettings = { ...pack, tilesX: x, tilesY: y }; touchVersion(uv); }} label="UDIM tiles" />
                 </div>
                 <Button size="sm" className="w-full justify-center" disabled={busy} icon={<PackageIcon size={12} />} onClick={touch}>{uv.proposal ? 'Pack again' : 'Pack the current islands'}</Button>
-                <p className="text-2xs leading-snug text-zinc-500">Every island gets the same texel density, follows its size on the model, and is turned to its tightest box. In the UV view, drag islands to move them, R turns the selected ones, + and − scale them.</p>
+                <p className="text-2xs leading-snug text-zinc-500">
+                    {!uv.proposal || uv.proposalKeepsShapes
+                        ? 'Packing the current islands keeps their shapes, seams and sizes against each other: they are only moved and turned to fit.'
+                        : 'After unwrapping, every island gets the same texel density, follows its size on the model, and is turned to its tightest box.'}
+                    {uv.proposal ? ' Packing again keeps islands you kept in place where they are, and islands you made bigger or smaller at that size.' : ''}
+                </p>
             </section>
+
+            {uv.proposal && (
+                <section className="space-y-2">
+                    <div className="text-2xs font-semibold text-zinc-300">Picked islands</div>
+                    {uv.selected.size ? (
+                        <div className="grid grid-cols-2 gap-1.5">
+                            <Button size="sm" disabled={busy} icon={<RotateIcon size={12} />} onClick={() => uv.transformSelected(Math.PI / 2, 1)}>Turn a quarter</Button>
+                            <Button size="sm" disabled={busy} icon={uv.selectionLocked ? <UnlockIcon size={12} /> : <LockIcon size={12} />} onClick={() => uv.toggleLockSelected()}>{uv.selectionLocked ? 'Let packing move' : 'Keep in place'}</Button>
+                            <Button size="sm" disabled={busy} icon={<PlusIcon size={12} />} onClick={() => uv.transformSelected(0, 1.05)}>Bigger</Button>
+                            <Button size="sm" disabled={busy} icon={<MinusIcon size={12} />} onClick={() => uv.transformSelected(0, 1 / 1.05)}>Smaller</Button>
+                        </div>
+                    ) : (
+                        <p className="text-2xs leading-snug text-zinc-500">Pick islands in the UV layout (2D) view to turn them, resize them or keep them in place. Drag to move them; Ctrl+Z undoes UV edits there.</p>
+                    )}
+                </section>
+            )}
 
             {uv.proposal && (
                 <section className="space-y-2">

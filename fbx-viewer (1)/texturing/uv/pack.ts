@@ -11,7 +11,8 @@
  *   - then the islands' real outlines are nested on a grid: largest first, each set into the lowest
  *     place it fits in any of its four quarter turns, so small islands fill the gaps between large ones
  *     (about a quarter more of the picture used than boxes on hard-surface models);
- *   - the common scale is searched for: the largest at which everything fits.
+ *   - the common scale is searched for: the largest at which everything fits;
+ *   - islands kept in place stay exactly where they are, and the others are fitted round them.
  */
 
 export interface Island {
@@ -21,10 +22,13 @@ export interface Island {
     triangles: ArrayLike<number>;
     /** Area on the model. */
     area3d: number;
-    /** A density multiplier of its own (1 keeps the common density). */
+    /** A density multiplier of its own (1 keeps the common density): 2 makes the island twice as wide. */
     densityScale?: number;
-    /** Keep where it is: not moved by packing. */
-    locked?: boolean;
+    /**
+     * Kept in place: the island's final coordinates (two per corner, in its UDIM tile's place). Packing
+     * leaves it exactly there and fits the other islands round it.
+     */
+    keepAt?: Float64Array;
 }
 
 export interface PackSettings {
@@ -143,13 +147,13 @@ const prepare = (islands: readonly Island[], rotate: boolean): Prepared[] => isl
     for (let i = 0; i < island.uv.length; i += 2) points.push([island.uv[i], island.uv[i + 1]]);
     // Flattened islands are already in model units; scale only by the island's own density.
     const scale = island.densityScale ?? 1;
-    let angle = rotate && !island.locked ? smallestBoxAngle(points) : 0;
+    let angle = rotate ? smallestBoxAngle(points) : 0;
     const c = Math.cos(angle), s = Math.sin(angle);
     let turned = points.map(([x, y]) => [(x * c - y * s) * scale, (x * s + y * c) * scale]);
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     for (const [x, y] of turned) { minX = Math.min(minX, x); maxX = Math.max(maxX, x); minY = Math.min(minY, y); maxY = Math.max(maxY, y); }
     // Upright: taller than wide becomes wide, so rows fill well.
-    if (rotate && !island.locked && maxY - minY > maxX - minX) {
+    if (rotate && maxY - minY > maxX - minX) {
         turned = turned.map(([x, y]) => [-y, x]);
         [minX, maxX, minY, maxY] = [-maxY, -minY, minX, maxX];
         angle += Math.PI / 2;
@@ -157,10 +161,46 @@ const prepare = (islands: readonly Island[], rotate: boolean): Prepared[] => isl
     return { island, index, points: turned.map(([x, y]) => [x - minX, y - minY]), width: maxX - minX, height: maxY - minY };
 });
 
+/** Islands kept in place, as what they take of the bins (boxes) and of the nesting grids (cells). */
+interface Obstacles {
+    boxes: Array<{ bin: number; x: number; y: number; w: number; h: number }>;
+    cells: Array<{ tile: number; mask: Mask; x: number; y: number }>;
+}
+
+const NO_OBSTACLES: Obstacles = { boxes: [], cells: [] };
+
+/** What islands kept in place take: each in the tile its middle lies in (those outside the tiles packed take nothing). */
+const obstaclesOf = (kept: readonly Island[], settings: PackSettings): Obstacles => {
+    const pad = settings.padding / settings.resolution;
+    const cellPad = gridPadding(settings);
+    const obstacles: Obstacles = { boxes: [], cells: [] };
+    for (const island of kept) {
+        const uv = island.keepAt!;
+        let minU = Infinity, minV = Infinity, maxU = -Infinity, maxV = -Infinity;
+        for (let i = 0; i < uv.length; i += 2) { minU = Math.min(minU, uv[i]); maxU = Math.max(maxU, uv[i]); minV = Math.min(minV, uv[i + 1]); maxV = Math.max(maxV, uv[i + 1]); }
+        if (!Number.isFinite(minU)) continue;
+        const tx = Math.floor((minU + maxU) / 2);
+        const ty = Math.floor((minV + maxV) / 2);
+        if (tx < 0 || ty < 0 || tx >= settings.tilesX || ty >= settings.tilesY) continue;
+        const bin = tx + ty * settings.tilesX;
+        // In a bin, as a placed island's box is: from where it starts to its end and a padding past it.
+        const x0 = Math.max(0, minU - tx - pad), y0 = Math.max(0, minV - ty - pad);
+        const x1 = Math.min(1 - pad, maxU - tx), y1 = Math.min(1 - pad, maxV - ty);
+        if (x1 > x0 && y1 > y0) obstacles.boxes.push({ bin, x: x0, y: y0, w: x1 - x0, h: y1 - y0 });
+        // On the grid, its outline grown by the padding, as a placed island's is.
+        const points: number[][] = [];
+        for (let i = 0; i < uv.length; i += 2) points.push([uv[i] - minU, uv[i + 1] - minV]);
+        const mask = maskOf({ island, index: -1, points, width: maxU - minU, height: maxV - minV }, GRID, 0, cellPad);
+        obstacles.cells.push({ tile: bin, mask, x: Math.floor((minU - tx) * GRID) - cellPad, y: Math.floor((minV - ty) * GRID) - cellPad });
+    }
+    return obstacles;
+};
+
 /** Tries to fit everything at `scale` (picture units per model unit); null when it does not. */
-const tryPack = (items: Prepared[], scale: number, settings: PackSettings): Array<{ x: number; y: number; turned: boolean; tile: number }> | null => {
+const tryPack = (items: Prepared[], scale: number, settings: PackSettings, obstacles: Obstacles = NO_OBSTACLES): Array<{ x: number; y: number; turned: boolean; tile: number }> | null => {
     const pad = settings.padding / settings.resolution;
     const bins = Array.from({ length: settings.tilesX * settings.tilesY }, () => new MaxRects(1 - pad, 1 - pad));
+    for (const box of obstacles.boxes) bins[box.bin].place(box.x, box.y, box.w, box.h);
     const result: Array<{ x: number; y: number; turned: boolean; tile: number }> = new Array(items.length);
     const order = items.map((_, i) => i).sort((a, b) => Math.max(items[b].width, items[b].height) * (items[b].width + items[b].height) - Math.max(items[a].width, items[a].height) * (items[a].width + items[a].height));
     for (const i of order) {
@@ -168,7 +208,7 @@ const tryPack = (items: Prepared[], scale: number, settings: PackSettings): Arra
         const h = items[i].height * scale + pad;
         let placed = false;
         for (let b = 0; b < bins.length && !placed; b++) {
-            const spot = bins[b].find(w, h, settings.rotate && !items[i].island.locked);
+            const spot = bins[b].find(w, h, settings.rotate);
             if (!spot) continue;
             bins[b].place(spot.x, spot.y, spot.turned ? h : w, spot.turned ? w : h);
             result[i] = { ...spot, tile: b };
@@ -359,13 +399,56 @@ class Occupancy {
         for (let y = 0; y < GRID; y++) if (this.room[y] > most) most = this.room[y];
         this.most = most;
     }
+
+    /**
+     * Takes the cells of an island kept in place, wherever it lies: cells off the grid are left out, and
+     * cells already taken (kept islands may overlap) are counted once.
+     */
+    block(mask: Mask, x: number, y: number): void {
+        let changed = false;
+        for (let r = 0; r < mask.height; r++) {
+            const gy = y + r;
+            if (gy < 0 || gy >= GRID) continue;
+            const row = gy * GRID;
+            const runs = mask.runs[r];
+            let touched = false;
+            for (let k = 0; k < runs.length; k += 2) {
+                const from = Math.max(0, x + runs[k]);
+                const to = Math.min(GRID - 1, x + runs[k + 1]);
+                for (let c = from; c <= to; c++) {
+                    if (this.taken[row + c]) continue;
+                    this.taken[row + c] = 1;
+                    this.free--;
+                    touched = true;
+                }
+            }
+            if (!touched) continue;
+            changed = true;
+            let first = GRID;
+            let firstFree = GRID;
+            let longest = 0;
+            for (let c = GRID - 1; c >= 0; c--) {
+                if (this.taken[row + c]) first = c;
+                else firstFree = c;
+                this.next[row + c] = first;
+                this.nextFree[row + c] = firstFree;
+                if (!this.taken[row + c]) longest = Math.max(longest, first - c);
+            }
+            this.room[gy] = longest;
+        }
+        if (!changed) return;
+        let most = 0;
+        for (let gy = 0; gy < GRID; gy++) if (this.room[gy] > most) most = this.room[gy];
+        this.most = most;
+    }
 }
 
 /** Sets every island, largest first, into the lowest place it fits on per-tile grids at `scale`; null when they do not all fit. */
-const tryNest = (items: Prepared[], scale: number, settings: PackSettings): Array<{ x: number; y: number; mask: Mask; tile: number }> | null => {
+const tryNest = (items: Prepared[], scale: number, settings: PackSettings, obstacles: Obstacles = NO_OBSTACLES): Array<{ x: number; y: number; mask: Mask; tile: number }> | null => {
     const tiles = Array.from({ length: settings.tilesX * settings.tilesY }, () => new Occupancy());
+    for (const cell of obstacles.cells) tiles[cell.tile].block(cell.mask, cell.x, cell.y);
     const pad = gridPadding(settings);
-    const masks = items.map((item) => (settings.rotate && !item.island.locked ? [0, 1, 2, 3] : [0]).map((turn) => maskOf(item, scale * GRID, turn, pad)));
+    const masks = items.map((item) => (settings.rotate ? [0, 1, 2, 3] : [0]).map((turn) => maskOf(item, scale * GRID, turn, pad)));
     const order = items.map((_, i) => i).sort((a, b) => masks[b][0].cells - masks[a][0].cells);
     const result: Array<{ x: number; y: number; mask: Mask; tile: number }> = new Array(items.length);
     let needed = 0;
@@ -392,7 +475,7 @@ const tryNest = (items: Prepared[], scale: number, settings: PackSettings): Arra
 };
 
 /** Nesting at the largest scale from `floor` up at which everything fits; null when it does no better than `floor`. */
-const packNested = (islands: readonly Island[], settings: PackSettings, floor: number): { placements: Placement[]; scale: number } | null => {
+const packNested = (islands: readonly Island[], settings: PackSettings, floor: number, obstacles: Obstacles = NO_OBSTACLES): { placements: Placement[]; scale: number } | null => {
     const items = prepare(islands, settings.rotate);
     let area = 0;
     for (const item of items) {
@@ -409,7 +492,7 @@ const packNested = (islands: readonly Island[], settings: PackSettings, floor: n
     let bestScale = 0;
     for (let step = 0; step < 10 && high - low > low * 0.005; step++) {
         const middle = (low + high) / 2;
-        const attempt = tryNest(items, middle, settings);
+        const attempt = tryNest(items, middle, settings, obstacles);
         if (attempt) { best = attempt; bestScale = middle; low = middle; } else high = middle;
     }
     if (!best) return null;
@@ -432,16 +515,47 @@ const packNested = (islands: readonly Island[], settings: PackSettings, floor: n
     return { placements, scale: bestScale };
 };
 
-/** Packs islands; returns each island's final coordinates (in its UDIM tile's place) and tile. */
+/**
+ * Packs islands; returns each island's final coordinates (in its UDIM tile's place) and tile. Islands with
+ * `keepAt` stay exactly there, and the rest are fitted round them.
+ */
 export const packIslands = (islands: readonly Island[], settings: PackSettings = DEFAULT_PACK): Placement[] => {
+    if (islands.some((island) => island.keepAt)) return packAround(islands, settings);
     const boxes = packBoxes(islands, settings);
     // Nesting starts from what boxes reach, and is kept when it lets the islands be larger.
     const nested = packNested(islands, settings, boxes.scale);
     return nested && nested.scale > boxes.scale ? nested.placements : boxes.placements;
 };
 
+/** The tile a set of coordinates lies in, by the middle of its box. */
+const tileOfCoordinates = (uv: Float64Array): number => {
+    let minU = Infinity, minV = Infinity, maxU = -Infinity, maxV = -Infinity;
+    for (let i = 0; i < uv.length; i += 2) { minU = Math.min(minU, uv[i]); maxU = Math.max(maxU, uv[i]); minV = Math.min(minV, uv[i + 1]); maxV = Math.max(maxV, uv[i + 1]); }
+    if (!Number.isFinite(minU)) return 1001;
+    return 1001 + Math.max(0, Math.min(9, Math.floor((minU + maxU) / 2))) + 10 * Math.max(0, Math.floor((minV + maxV) / 2));
+};
+
+/** Packs the islands not kept in place round those that are. */
+const packAround = (islands: readonly Island[], settings: PackSettings): Placement[] => {
+    const moving: Island[] = [];
+    const movingAt: number[] = [];
+    const kept: Island[] = [];
+    islands.forEach((island, i) => {
+        if (island.keepAt) kept.push(island);
+        else { moving.push(island); movingAt.push(i); }
+    });
+    const placements: Placement[] = islands.map((island) => (island.keepAt ? { uv: Float64Array.from(island.keepAt), tile: tileOfCoordinates(island.keepAt) } : { uv: new Float64Array(0), tile: 1001 }));
+    if (!moving.length) return placements;
+    const obstacles = obstaclesOf(kept, settings);
+    const boxes = packBoxes(moving, settings, obstacles);
+    const nested = packNested(moving, settings, boxes.scale, obstacles);
+    const chosen = nested && nested.scale > boxes.scale ? nested.placements : boxes.placements;
+    chosen.forEach((placement, k) => { placements[movingAt[k]] = placement; });
+    return placements;
+};
+
 /** Box packing (maximal rectangles): islands as their tightest boxes. */
-const packBoxes = (islands: readonly Island[], settings: PackSettings): { placements: Placement[]; scale: number } => {
+const packBoxes = (islands: readonly Island[], settings: PackSettings, obstacles: Obstacles = NO_OBSTACLES): { placements: Placement[]; scale: number } => {
     const items = prepare(islands, settings.rotate);
     let total = 0;
     for (const item of items) total += item.width * item.height;
@@ -451,13 +565,13 @@ const packBoxes = (islands: readonly Island[], settings: PackSettings): { placem
     let low = 0;
     let best: ReturnType<typeof tryPack> = null;
     let bestScale = 0;
-    while (tryPack(items, high, settings) && high < 1e9) { low = high; high *= 1.5; }
+    while (tryPack(items, high, settings, obstacles) && high < 1e9) { low = high; high *= 1.5; }
     for (let step = 0; step < 24; step++) {
         const middle = (low + high) / 2;
-        const attempt = tryPack(items, middle, settings);
+        const attempt = tryPack(items, middle, settings, obstacles);
         if (attempt) { best = attempt; bestScale = middle; low = middle; } else high = middle;
     }
-    if (!best) { best = tryPack(items, low || high * 0.01, settings) ?? items.map(() => ({ x: 0, y: 0, turned: false, tile: 0 })); bestScale = low || high * 0.01; }
+    if (!best) { best = tryPack(items, low || high * 0.01, settings, obstacles) ?? items.map(() => ({ x: 0, y: 0, turned: false, tile: 0 })); bestScale = low || high * 0.01; }
     const pad = settings.padding / settings.resolution;
     const placements = items.map((item, i) => {
         const spot = best![i];

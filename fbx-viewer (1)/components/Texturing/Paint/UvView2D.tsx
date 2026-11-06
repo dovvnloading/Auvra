@@ -4,7 +4,9 @@ import type { UvSession } from './uvSession';
 /**
  * The layout in 2D: islands of the proposed layout (or the current one), filled by their stretch,
  * over the set's base colour and the UDIM tiles. Click picks an island (Shift adds), drag moves the
- * picked ones, R turns them a quarter, + and − scale them, the wheel zooms and the middle button pans.
+ * picked ones, R turns them a quarter, + and − make them bigger or smaller (packing again keeps that),
+ * L keeps them in place when packing again (shown hatched), the wheel zooms and the middle button pans.
+ * Ctrl+Z and Ctrl+Y undo and redo UV edits while this view is shown.
  */
 
 export const UvView2D: React.FC<{ uv: UvSession }> = ({ uv }) => {
@@ -15,6 +17,7 @@ export const UvView2D: React.FC<{ uv: UvSession }> = ({ uv }) => {
     const [size, setSize] = useState({ width: 0, height: 0 });
     const background = useRef<HTMLCanvasElement | null>(null);
     const drag = useRef<{ kind: 'move' | 'pan'; x: number; y: number; moved: boolean } | null>(null);
+    const hatch = useRef<CanvasPattern | null>(null);
 
     useEffect(() => {
         const element = host.current;
@@ -83,7 +86,24 @@ export const UvView2D: React.FC<{ uv: UvSession }> = ({ uv }) => {
             return [part.uvs[v * 2], part.uvs[v * 2 + 1]];
         };
         const selectedFaces = new Set<number>();
-        if (proposal) for (const i of uv.selected) for (const f of proposal.charts[i].faces) selectedFaces.add(f);
+        const lockedFaces = new Set<number>();
+        if (proposal) {
+            for (const i of uv.selected) for (const f of proposal.charts[i].faces) selectedFaces.add(f);
+            for (const i of uv.locked) for (const f of proposal.charts[i]?.faces ?? []) lockedFaces.add(f);
+        }
+        if (!hatch.current) {
+            // Islands kept in place are hatched: fine white diagonals over their stretch colour.
+            const tileCanvas = document.createElement('canvas');
+            tileCanvas.width = tileCanvas.height = 8;
+            const t = tileCanvas.getContext('2d')!;
+            t.strokeStyle = 'rgba(255,255,255,0.45)';
+            t.lineWidth = 1;
+            t.beginPath();
+            t.moveTo(0, 8);
+            t.lineTo(8, 0);
+            t.stroke();
+            hatch.current = g.createPattern(tileCanvas, 'repeat');
+        }
         g.lineWidth = 0.5;
         for (let t = 0; t < triangles; t++) {
             const [a, b, c] = [corner(t, 0), corner(t, 1), corner(t, 2)].map(([u, v]) => toScreen(u, v));
@@ -96,6 +116,10 @@ export const UvView2D: React.FC<{ uv: UvSession }> = ({ uv }) => {
                 const stretch = proposal.triangleStretch[t];
                 g.fillStyle = selectedFaces.has(t) ? 'rgba(56,189,248,0.55)' : stretch < 0 ? 'rgba(220,40,160,0.6)' : `rgba(${Math.round(60 + 190 * stretch)},${Math.round(200 - 140 * stretch)},90,0.35)`;
                 g.fill();
+                if (lockedFaces.has(t) && hatch.current) {
+                    g.fillStyle = hatch.current;
+                    g.fill();
+                }
             }
             g.strokeStyle = selectedFaces.has(t) ? 'rgba(186,230,253,0.9)' : 'rgba(228,228,231,0.35)';
             g.stroke();
@@ -124,10 +148,11 @@ export const UvView2D: React.FC<{ uv: UvSession }> = ({ uv }) => {
         const onKey = (event: KeyboardEvent) => {
             const element = event.target as HTMLElement | null;
             if (element && (element.tagName === 'INPUT' || element.tagName === 'TEXTAREA')) return;
-            if (!host.current?.matches(':hover') || !uv.selected.size) return;
+            if (!host.current?.matches(':hover') || !uv.selected.size || event.ctrlKey || event.metaKey || event.altKey) return;
             if (event.key.toLowerCase() === 'r') uv.transformSelected(Math.PI / 2, 1);
             else if (event.key === '+' || event.key === '=') uv.transformSelected(0, 1.05);
             else if (event.key === '-') uv.transformSelected(0, 1 / 1.05);
+            else if (event.key.toLowerCase() === 'l') uv.toggleLockSelected();
         };
         window.addEventListener('keydown', onKey);
         return () => window.removeEventListener('keydown', onKey);
@@ -158,13 +183,25 @@ export const UvView2D: React.FC<{ uv: UvSession }> = ({ uv }) => {
                 current.x = event.clientX;
                 current.y = event.clientY;
                 if (current.kind === 'pan') setView((value) => ({ scale: value.scale || scale, x: value.x + dx, y: value.y + dy }));
-                else uv.moveSelected(dx / scale, -dy / scale);
+                else {
+                    // One undo step per drag, remembered as the islands first move.
+                    if (!current.moved && (dx || dy)) uv.remember('Move islands');
+                    current.moved ||= Boolean(dx || dy);
+                    uv.moveSelected(dx / scale, -dy / scale);
+                }
             }}
             onPointerUp={() => { drag.current = null; }}
             onContextMenu={(event) => event.preventDefault()}
         >
             <canvas ref={canvas} className="absolute inset-0 h-full w-full" />
             {!uv.proposal && <div className="pointer-events-none absolute bottom-3 left-3 rounded bg-zinc-900/90 px-2 py-1 text-2xs text-zinc-400">The current layout. Unwrap or pack in the UVs panel to edit a new one.</div>}
+            {uv.proposal && (
+                <div className="pointer-events-none absolute bottom-3 left-3 rounded bg-zinc-900/90 px-2 py-1 text-2xs text-zinc-400">
+                    {uv.selected.size
+                        ? `${uv.selected.size} island${uv.selected.size === 1 ? '' : 's'} picked: drag to move, R turns, + and − resize, L ${uv.selectionLocked ? 'lets packing move them again' : 'keeps them in place when packing'}. Ctrl+Z undoes.`
+                        : 'Click an island to pick it (Shift adds more). Hatched islands stay where they are when packing again. Ctrl+Z undoes.'}
+                </div>
+            )}
         </div>
     );
 };

@@ -149,14 +149,26 @@ export const PaintWorkspace: React.FC = () => {
 
     const maskImage = useCallback((tile: number) => (session && layer ? session.stack.cachedMask(layer.id, tile) : null), [layer, session]);
 
+    // UV edits have a history of their own: undo and redo reach it while the 2D UV view or the seam tool is in use.
+    const uvVersion = useSyncExternalStore(uv?.subscribe ?? (() => () => undefined), uv?.getVersion ?? (() => 0));
+    void uvVersion;
+    const history = uv && (view === 'uv2d' || tool === 'seam')
+        ? { undo: () => uv.undo(), redo: () => uv.redo(), canUndo: uv.canUndo, canRedo: uv.canRedo, undoLabel: uv.undoLabel, redoLabel: uv.redoLabel }
+        : session
+            ? { undo: () => session.undo(), redo: () => session.redo(), canUndo: session.canUndo, canRedo: session.canRedo, undoLabel: session.undoLabel, redoLabel: session.redoLabel }
+            : null;
+    const latestHistory = useRef(history);
+    latestHistory.current = history;
+
     useEffect(() => {
         const onKey = (event: KeyboardEvent) => {
             const element = event.target as HTMLElement | null;
             if (element && (element.tagName === 'INPUT' || element.tagName === 'TEXTAREA' || element.isContentEditable)) return;
             if (!session) return;
             const key = event.key.toLowerCase();
-            if ((event.ctrlKey || event.metaKey) && key === 'z') { event.preventDefault(); if (event.shiftKey) session.redo(); else session.undo(); return; }
-            if ((event.ctrlKey || event.metaKey) && key === 'y') { event.preventDefault(); session.redo(); return; }
+            const steps = latestHistory.current;
+            if ((event.ctrlKey || event.metaKey) && key === 'z') { event.preventDefault(); if (event.shiftKey) steps?.redo(); else steps?.undo(); return; }
+            if ((event.ctrlKey || event.metaKey) && key === 'y') { event.preventDefault(); steps?.redo(); return; }
             if ((event.ctrlKey || event.metaKey) && key === 's') { event.preventDefault(); void session.save(); return; }
             if (event.ctrlKey || event.metaKey || event.altKey) return;
             if (key === 'b') setTool('paint');
@@ -212,8 +224,8 @@ export const PaintWorkspace: React.FC = () => {
                     <IconButton label="Pick a colour" shortcut="P" active={tool === 'pick'} onClick={() => setTool('pick')}><EyedropperIcon size={14} /></IconButton>
                     <IconButton label="Mark or clear seams (Shift clears)" shortcut="S" active={tool === 'seam'} onClick={() => setTool('seam')}><ScissorsIcon size={14} /></IconButton>
                     <span className="mx-1 h-4 w-px bg-zinc-800" />
-                    <IconButton label={session?.undoLabel ? `Undo ${session.undoLabel.toLowerCase()}` : 'Undo'} shortcut="Ctrl+Z" disabled={!session?.canUndo} onClick={() => session?.undo()}><UndoIcon size={14} /></IconButton>
-                    <IconButton label="Redo" shortcut="Ctrl+Y" disabled={!session?.canRedo} onClick={() => session?.redo()}><RedoIcon size={14} /></IconButton>
+                    <IconButton label={history?.undoLabel ? `Undo ${history.undoLabel.toLowerCase()}` : 'Undo'} shortcut="Ctrl+Z" disabled={!history?.canUndo} onClick={() => history?.undo()}><UndoIcon size={14} /></IconButton>
+                    <IconButton label={history?.redoLabel ? `Redo ${history.redoLabel.toLowerCase()}` : 'Redo'} shortcut="Ctrl+Y" disabled={!history?.canRedo} onClick={() => history?.redo()}><RedoIcon size={14} /></IconButton>
                     <IconButton label="Frame the model" shortcut="F" onClick={() => setFrameSignal((value) => value + 1)}><FrameIcon size={14} /></IconButton>
                     <span className="mx-1 h-4 w-px bg-zinc-800" />
                     <span className="text-2xs text-zinc-500">Size</span>
