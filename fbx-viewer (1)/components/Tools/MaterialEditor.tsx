@@ -25,6 +25,9 @@ import {
   type MaterialParameterSetting,
 } from '../../utils/materialOverrides';
 import { ColourField } from '../UI/ColourPicker';
+import { projectService } from '../../utils/projectService';
+import { nativeDomainRecords } from '../../utils/projectRecords';
+import { texturePicture } from './Retexture/parts';
 
 export interface MaterialEditorProps {
   /** The model whose materials are edited; changes preview live on `model.object`. */
@@ -126,20 +129,49 @@ const SliderField: React.FC<{
   );
 };
 
+/**
+ * A texture an override names that the texture library list does not hold yet (the mask tool's pictures
+ * until the project opens again): its name in the project, or what it is, and a picture of it when the
+ * model wears it.
+ */
+interface TextureFound {
+  name: string;
+  thumbnail: string | null;
+}
+
+/** Pixels across a map's thumbnail. */
+const THUMBNAIL_EDGE = 48;
+const thumbnails = new WeakMap<THREE.Texture, string>();
+
+/** A small picture of a texture a model wears, drawn once. */
+const thumbnailOf = (texture: THREE.Texture, flipY: boolean): string | null => {
+  const known = thumbnails.get(texture);
+  if (known) return known;
+  const picture = texturePicture(texture, THUMBNAIL_EDGE, 'image/png', flipY)?.url ?? null;
+  if (picture) thumbnails.set(texture, picture);
+  return picture;
+};
+
 const TextureField: React.FC<{
   label: string;
   value: string | undefined;
   textures: TextureData[];
   status: string | null;
+  /** The value when the library list does not hold it; null when it cannot be found anywhere. */
+  found?: TextureFound | null;
   onChange: (textureId: string | undefined) => void;
-}> = ({ label, value, textures, status, onChange }) => {
+}> = ({ label, value, textures, status, found, onChange }) => {
+  const known = value ? textures.find((texture) => texture.id === value) : undefined;
+  const foundName = found?.name;
   const options = useMemo(() => {
     const list = [{ label: 'Imported', value: '' }, ...textures.map((texture) => ({ label: texture.name, value: texture.id }))];
-    if (value && !textures.some((texture) => texture.id === value)) list.push({ label: 'Missing texture', value });
+    if (value && !known) list.push({ label: foundName ?? 'Missing texture', value });
     return list;
-  }, [textures, value]);
+  }, [textures, value, known, foundName]);
+  const thumbnail = known?.url || found?.thumbnail || null;
   return (
     <FieldRow label={label} overridden={Boolean(value)} onReset={() => onChange(undefined)}>
+      {value && thumbnail && <img src={thumbnail} alt="" className="h-6 w-6 shrink-0 rounded border border-gray-700 object-cover" />}
       <div className="flex-1 min-w-0" aria-label={label}>
         <Select value={value ?? ''} options={options} onChange={(next: string) => onChange(next || undefined)} className="w-full" />
       </div>
@@ -341,6 +373,48 @@ const MaterialEditorSession: React.FC<MaterialEditorProps> = ({ model, textures,
 
   const textureUrls = useMemo(() => new Map(textures.map((texture) => [texture.id, texture.url])), [textures]);
 
+  // Names, from the project, of textures the overrides name that the library list does not hold yet.
+  const [projectNames, setProjectNames] = useState<Record<string, string>>({});
+  const askedNames = useRef(new Set<string>());
+  const unlisted = useMemo(() => {
+    const ids = new Set<string>();
+    for (const entry of Object.values(draft)) {
+      for (const id of [entry.mapTextureId, entry.normalTextureId, entry.roughnessTextureId, entry.metalnessTextureId]) if (id && !textureUrls.has(id)) ids.add(id);
+    }
+    return [...ids].sort().join('\n');
+  }, [draft, textureUrls]);
+  useEffect(() => {
+    const wanted = unlisted ? unlisted.split('\n').filter((id) => !askedNames.current.has(id)) : [];
+    if (!wanted.length || !projectService.getStatus().projectId) return;
+    for (const id of wanted) askedNames.current.add(id);
+    let current = true;
+    projectService.getSnapshotAll('textures').then((snapshot) => {
+      if (!current) return;
+      const names: Record<string, string> = {};
+      for (const record of nativeDomainRecords(snapshot, 'textures')) {
+        if (wanted.includes(record.id) && typeof record.name === 'string' && record.name) names[record.id] = record.name;
+      }
+      if (Object.keys(names).length) setProjectNames((previous) => ({ ...previous, ...names }));
+    }, () => undefined);
+    return () => { current = false; };
+  }, [unlisted]);
+
+  /**
+   * A texture an override names that the library list does not hold: found when the model wears it or the
+   * project keeps it, named as the project names it or by what it is; null when it is nowhere at all.
+   */
+  const foundTexture = (textureId: string | undefined, slot: MaterialTextureSlot, painted = false): TextureFound | null => {
+    if (!textureId || textureUrls.has(textureId)) return null;
+    const key = overrideTextureCacheKey(textureId, slot);
+    const worn = textureCache.current.get(key) ?? collectOverrideTextures(model.object).get(key);
+    const name = projectNames[textureId];
+    if (!worn && !name) return null;
+    return {
+      name: name ?? (painted ? 'Painted picture' : 'Picture on the model'),
+      thumbnail: worn ? thumbnailOf(worn, overrideTextureFlipY(model.object)) : null,
+    };
+  };
+
   const resolveTexture = useCallback((textureId: string, slot: MaterialTextureSlot) => {
     const key = overrideTextureCacheKey(textureId, slot);
     const cached = textureCache.current.get(key);
@@ -387,7 +461,7 @@ const MaterialEditorSession: React.FC<MaterialEditorProps> = ({ model, textures,
     if (textureCache.current.has(key)) return null;
     if (failedTextures.current.has(key)) return 'Failed';
     if (pendingTextures.current.has(key)) return 'Loading';
-    return textureUrls.has(textureId) ? null : 'Missing';
+    return textureUrls.has(textureId) || projectNames[textureId] ? null : 'Missing';
   };
 
   const handleSave = async () => {
@@ -452,22 +526,22 @@ const MaterialEditorSession: React.FC<MaterialEditorProps> = ({ model, textures,
           onChange={(value) => editField(material.name, 'opacity', value)} onReset={() => editField(material.name, 'opacity', undefined)} />
         {base.hasMapSlot && (
           <TextureField label="Base map" value={override.mapTextureId} textures={textures} status={textureStatus(override.mapTextureId, 'map')}
-            onChange={(value) => editBaseMap(material.name, value)} />
+            found={foundTexture(override.mapTextureId, 'map', override.paintedMap === true)} onChange={(value) => editBaseMap(material.name, value)} />
         )}
         {base.hasMapSlot && override.mapTextureId && override.paintedMap && (
           <p className="pl-[6.5rem] text-2xs leading-snug text-gray-500">A painted picture: it shows its own colours, is cut out where it is see-through, and draws from both sides.</p>
         )}
         {base.hasNormalSlot && (
           <TextureField label="Normal map" value={override.normalTextureId} textures={textures} status={textureStatus(override.normalTextureId, 'normal')}
-            onChange={(value) => editField(material.name, 'normalTextureId', value)} />
+            found={foundTexture(override.normalTextureId, 'normal')} onChange={(value) => editField(material.name, 'normalTextureId', value)} />
         )}
         {base.hasRoughnessSlot && (
           <TextureField label="Roughness map" value={override.roughnessTextureId} textures={textures} status={textureStatus(override.roughnessTextureId, 'roughness')}
-            onChange={(value) => editField(material.name, 'roughnessTextureId', value)} />
+            found={foundTexture(override.roughnessTextureId, 'roughness')} onChange={(value) => editField(material.name, 'roughnessTextureId', value)} />
         )}
         {base.hasMetalnessSlot && (
           <TextureField label="Metalness map" value={override.metalnessTextureId} textures={textures} status={textureStatus(override.metalnessTextureId, 'metalness')}
-            onChange={(value) => editField(material.name, 'metalnessTextureId', value)} />
+            found={foundTexture(override.metalnessTextureId, 'metalness')} onChange={(value) => editField(material.name, 'metalnessTextureId', value)} />
         )}
         {material.instanceCount > 1 && (
           <p className="text-2xs text-gray-600 pt-1">Applies to {material.instanceCount} materials named “{material.name}”.</p>

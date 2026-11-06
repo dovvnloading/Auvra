@@ -160,6 +160,23 @@ describe('Material Overrides', () => {
     expect(screen.getByText(/Not offered until they have pictures: Moss/)).toBeTruthy();
   });
 
+  it('names a painted picture the model wears that the library does not list, and keeps "Missing texture" for what is nowhere', () => {
+    const body = new THREE.MeshStandardMaterial({ name: 'Body', map: new THREE.Texture() });
+    // The mask tool's picture: stored in the project and worn, but not in the library list until the project opens again.
+    const picture = tagOverrideTexture(new THREE.Texture(), 'mask-picture', 'map');
+    applyMaterialOverrides(new THREE.Group().add(new THREE.Mesh(new THREE.BoxGeometry(), body)), { Body: { mapTextureId: 'mask-picture', paintedMap: true } }, () => picture);
+    open(body, { Body: { mapTextureId: 'mask-picture', paintedMap: true, normalTextureId: 'gone' } });
+    expect(within(screen.getByLabelText('Base map')).getByRole('combobox').textContent).toContain('Painted picture');
+    expect(screen.getByText(/A painted picture: it shows its own colours/)).toBeTruthy();
+    expect(within(screen.getByLabelText('Normal map')).getByRole('combobox').textContent).toContain('Missing texture');
+  });
+
+  it('names a Retexture result by its name in the library', () => {
+    open(new THREE.MeshStandardMaterial({ name: 'Body' }), { Body: { mapTextureId: 'rough', paintedMap: true } });
+    expect(within(screen.getByLabelText('Base map')).getByRole('combobox').textContent).toContain('Rough');
+    expect(screen.getByText(/A painted picture/)).toBeTruthy();
+  });
+
   it('says plainly when a material cannot take a material asset', () => {
     open(new THREE.MeshBasicMaterial({ name: 'Sign' }));
     expect(within(screen.getByLabelText('Material asset')).getByRole('combobox').hasAttribute('disabled')).toBe(true);
