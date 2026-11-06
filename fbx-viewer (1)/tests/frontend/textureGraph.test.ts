@@ -18,7 +18,7 @@ import {
     wouldCycle,
 } from '../../texturing/graph/document';
 import { sampleCurve } from '../../texturing/graph/nodeKit';
-import { labelIslands } from '../../texturing/graph/nodes/distance';
+import { islandLabelRows, labelIslands, packMask } from '../../texturing/graph/nodes/distance';
 import { TEXTURE_NODE_DEFINITIONS, placeholderDefinition, textureNodeDefinition, textureNodeDefinitionByType } from '../../texturing/graph/registry';
 import { outputNodeKind, type TextureGraph } from '../../texturing/graph/types';
 import { bakeSignature, readStoredGraph } from '../../texturing/graph/stored';
@@ -198,15 +198,38 @@ describe('texture graph helpers', () => {
         const height = 3;
         const mask = new Uint8Array(width * height);
         for (let y = 0; y < 2; y++) { mask[y * width] = 255; mask[y * width + 3] = 255; }
-        const lone = new Uint8Array(width * height);
-        lone.set(mask);
-        const islands = labelIslands(lone, width, height, 1);
+        const islands = labelIslands(packMask(mask, width, height), width, height);
         expect(islands.count).toBe(1);
         expect(Array.from(islands.boxes)).toEqual([3, 0, 2, 2]);
         const two = new Uint8Array(width * height);
         two[0] = 255;
         two[2 * width + 2] = 255;
-        expect(labelIslands(two, width, height, 1).count).toBe(2);
+        expect(labelIslands(packMask(two, width, height), width, height).count).toBe(2);
+    });
+
+    it('labels islands from runs, with boxes across both edges and labels a strip of rows at a time', () => {
+        // 40×6 (wider than one packed texel): a band all the way across, a block over the top and bottom
+        // edges, and a lone pixel.
+        const width = 40;
+        const height = 6;
+        const mask = new Uint8Array(width * height);
+        for (let x = 0; x < width; x++) mask[2 * width + x] = 255;
+        for (const y of [0, 5]) for (let x = 10; x < 14; x++) mask[y * width + x] = 255;
+        mask[4 * width + 30] = 255;
+        const islands = labelIslands(packMask(mask, width, height), width, height);
+        expect(islands.count).toBe(3);
+        const boxes = Array.from({ length: islands.count }, (_, i) => Array.from(islands.boxes.slice(i * 4, i * 4 + 4)));
+        expect(boxes).toEqual(expect.arrayContaining([[10, 5, 4, 2], [0, 2, 40, 1], [30, 4, 1, 1]]));
+        const rows = new Float32Array(2 * width);
+        islandLabelRows(islands, 4, 2, width, rows);
+        const lone = rows[30];
+        const block = rows[width + 10];
+        expect(lone).toBeGreaterThan(0);
+        expect(block).toBeGreaterThan(0);
+        expect(lone).not.toBe(block);
+        expect(rows[width + 13]).toBe(block);
+        expect(rows[width + 14]).toBe(0);
+        expect(rows[0]).toBe(0);
     });
 
     it('checks ZIP entries as the format says', () => {
