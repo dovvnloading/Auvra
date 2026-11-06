@@ -33,6 +33,38 @@ export interface GpuImage {
     refs: number;
 }
 
+/** How copies drawn by drawInstances combine where they overlap. */
+export type StackMode = 'higher' | 'max' | 'add' | 'over';
+
+/** Copies drawn in one instanced pass (a scatter's): each copy a square (or a single pixel), placed by the vertex body. */
+export interface InstanceOptions {
+    /** How many copies. */
+    count: number;
+    /** What the vertex body hands the fragment, as 'vec2 vLocal' or 'flat int vCopy'. */
+    varyings: readonly string[];
+    /**
+     * The vertex body: `void placeCopy(int copy, vec2 corner, vec2 shift)` setting gl_Position and the
+     * varyings. `corner` runs from -1 to 1 over a copy's square; `shift` is the whole-image shift of a
+     * wrapped repeat of it (0 when the image does not repeat that way).
+     */
+    vertex: string;
+    /** The fragment body: a `void main()` writing outColor, and gl_FragDepth (0 nearest) when the higher wins. */
+    fragment: string;
+    inputs?: Record<string, PassInput | null | undefined>;
+    uniforms?: Record<string, unknown>;
+    /**
+     * Where copies overlap: 'higher' keeps the one whose fragment wrote the smaller depth (the taller), 'max'
+     * the largest value of each channel, 'add' adds them up, 'over' keeps the last drawn.
+     */
+    stack: StackMode;
+    /** The axes (x, y) along which the image repeats: each copy is drawn again a whole image away, so copies over an edge come round. */
+    wrap?: [boolean, boolean];
+    /** One pixel a copy instead of a square. */
+    points?: boolean;
+    /** What the target holds before the copies are drawn (0 unless said). */
+    clear?: [number, number, number, number];
+}
+
 /** A texture a pass reads: an image, or any texture of this context (a baked map, a 1×1 default). */
 export type PassInput = GpuImage | THREE.Texture;
 
@@ -123,6 +155,12 @@ export class TextureGpu {
     private readonly quadScene = new THREE.Scene();
     private readonly quadCamera = new THREE.Camera();
     private readonly defaults = new Map<string, THREE.DataTexture>();
+    private readonly instancePrograms = new Map<string, THREE.RawShaderMaterial>();
+    private readonly instanceScene = new THREE.Scene();
+    private instanceMesh: THREE.Mesh | null = null;
+    private instancePoints: THREE.Points | null = null;
+    /** Targets with a depth buffer, for copies where the higher wins (by size and kind). */
+    private readonly depthTargets = new Map<string, THREE.WebGLRenderTarget>();
     private readonly lostListeners = new Set<() => void>();
     private liveBytes = 0;
     /** The last shader that failed to compile, as the driver explained it. */
@@ -143,6 +181,8 @@ export class TextureGpu {
         this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
         const gl = this.renderer.getContext();
         if (!gl.getExtension('EXT_color_buffer_float')) frontendDiagnostics.failure('texturing_float_targets_missing', new Error('EXT_color_buffer_float is not available'));
+        // Copies kept largest or added up in full-float images (scatters, flood fill boxes) blend in full float.
+        gl.getExtension('EXT_float_blend');
         gl.getExtension('OES_texture_float_linear');
         const geometry = new THREE.BufferGeometry();
         // One triangle over the whole target: no seam down the middle.
@@ -379,6 +419,151 @@ export class TextureGpu {
         draw();
         renderTarget.scissorTest = false;
         this.renderer.setRenderTarget(previous);
+    }
+
+    // -----------------------------------------------------------------------
+    // Instanced copies
+    // -----------------------------------------------------------------------
+
+    private instanceProgram(options: InstanceOptions, inputNames: readonly string[]): THREE.RawShaderMaterial {
+        const key = `${options.stack}|${options.points ? 'points' : 'squares'}|${inputNames.join(',')}|${options.varyings.join(';')}\n${options.vertex}\n${options.fragment}`;
+        let material = this.instancePrograms.get(key);
+        if (material) return material;
+        const samplers = inputNames.map((name) => `uniform highp sampler2D ${name};`).join('\n');
+        const varying = (direction: 'in' | 'out') => options.varyings
+            .map((entry) => (entry.startsWith('flat ') ? `flat ${direction} ${entry.slice(5)};` : `${direction} ${entry};`))
+            .join('\n');
+        material = new THREE.RawShaderMaterial({
+            glslVersion: THREE.GLSL3,
+            vertexShader: `precision highp float;
+precision highp int;
+in vec3 position;
+uniform vec2 uSize;
+uniform ivec2 uWrap;
+${samplers}
+${varying('out')}
+${GLSL_LIBRARY}
+${options.vertex}
+void main() {
+    int across = uWrap.x == 1 ? 3 : 1;
+    int wraps = across * (uWrap.y == 1 ? 3 : 1);
+    int copy = gl_InstanceID / wraps;
+    int w = gl_InstanceID - copy * wraps;
+    vec2 shift = vec2(uWrap.x == 1 ? float(w % across) - 1.0 : 0.0, uWrap.y == 1 ? float(w / across) - 1.0 : 0.0);
+    gl_PointSize = 1.0;
+    placeCopy(copy, position.xy, shift);
+}`,
+            fragmentShader: `precision highp float;\nprecision highp int;\nout vec4 outColor;\nuniform vec2 uSize;\n${samplers}\n${varying('in')}\n${GLSL_LIBRARY}\n${options.fragment}`,
+            uniforms: {},
+            depthTest: options.stack === 'higher',
+            depthWrite: options.stack === 'higher',
+            depthFunc: THREE.LessDepth,
+        });
+        if (options.stack === 'max' || options.stack === 'add') {
+            material.blending = THREE.CustomBlending;
+            material.blendEquation = options.stack === 'max' ? THREE.MaxEquation : THREE.AddEquation;
+            material.blendSrc = THREE.OneFactor;
+            material.blendDst = THREE.OneFactor;
+        } else {
+            material.blending = THREE.NoBlending;
+        }
+        this.instancePrograms.set(key, material);
+        if (this.instancePrograms.size > 120) {
+            const oldest = this.instancePrograms.keys().next().value as string;
+            this.instancePrograms.get(oldest)?.dispose();
+            this.instancePrograms.delete(oldest);
+        }
+        return material;
+    }
+
+    private instanceObject(points: boolean): THREE.Mesh | THREE.Points {
+        if (points) {
+            if (!this.instancePoints) {
+                const geometry = new THREE.InstancedBufferGeometry();
+                geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array([0, 0, 0]), 3));
+                this.instancePoints = new THREE.Points(geometry);
+                this.instancePoints.frustumCulled = false;
+            }
+            return this.instancePoints;
+        }
+        if (!this.instanceMesh) {
+            const geometry = new THREE.InstancedBufferGeometry();
+            geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array([-1, -1, 0, 1, -1, 0, 1, 1, 0, -1, 1, 0]), 3));
+            geometry.setIndex([0, 1, 2, 0, 2, 3]);
+            this.instanceMesh = new THREE.Mesh(geometry);
+            this.instanceMesh.frustumCulled = false;
+        }
+        return this.instanceMesh;
+    }
+
+    /** A target with a depth buffer of an image's size and kind, kept for the next copies drawn so. */
+    private depthTarget(image: GpuImage): THREE.WebGLRenderTarget {
+        const key = poolKey(image.width, image.height, image.kind, image.precision);
+        let target = this.depthTargets.get(key);
+        if (target) return target;
+        for (const [other, kept] of this.depthTargets) if (this.depthTargets.size >= 2) { kept.dispose(); this.depthTargets.delete(other); }
+        target = new THREE.WebGLRenderTarget(image.width, image.height, {
+            type: image.precision === 8 ? THREE.UnsignedByteType : image.precision === 16 ? THREE.HalfFloatType : THREE.FloatType,
+            format: image.kind === 'color' ? THREE.RGBAFormat : THREE.RedFormat,
+            minFilter: THREE.NearestFilter,
+            magFilter: THREE.NearestFilter,
+            depthBuffer: true,
+            stencilBuffer: false,
+            generateMipmaps: false,
+            colorSpace: THREE.NoColorSpace,
+        });
+        this.depthTargets.set(key, target);
+        return target;
+    }
+
+    /**
+     * Draws `count` copies over `target` in one instanced pass, combined as `stack` says: the cost follows
+     * the number of copies, not the image's size times a search round each pixel.
+     */
+    async drawInstances(target: GpuImage, options: InstanceOptions): Promise<void> {
+        const names = Object.keys(options.inputs ?? {});
+        const material = this.instanceProgram(options, names);
+        const wrap = options.points ? [false, false] : options.wrap ?? [false, false];
+        const uniforms: Record<string, unknown> = { uSize: new THREE.Vector2(target.width, target.height), uWrap: [wrap[0] ? 1 : 0, wrap[1] ? 1 : 0] };
+        for (const name of names) {
+            const input = options.inputs![name];
+            uniforms[name] = input ? (isImage(input) ? input.target.texture : input) : this.constant('black');
+        }
+        Object.assign(uniforms, options.uniforms ?? {});
+        const kept = material.uniforms;
+        for (const [name, value] of Object.entries(uniforms)) {
+            if (kept[name]) kept[name].value = value;
+            else kept[name] = { value };
+        }
+        material.uniformsNeedUpdate = true;
+        const object = this.instanceObject(Boolean(options.points));
+        object.material = material;
+        const copies = Math.max(0, Math.floor(options.count)) * (wrap[0] ? 3 : 1) * (wrap[1] ? 3 : 1);
+        (object.geometry as THREE.InstancedBufferGeometry).instanceCount = copies;
+        this.instanceScene.clear();
+        this.instanceScene.add(object);
+        const destination = options.stack === 'higher' ? this.depthTarget(target) : target.target;
+        const renderer = this.renderer;
+        const previous = renderer.getRenderTarget();
+        // The start value by clear (a pass where three's clear would spoil it), and the depth emptied.
+        this.clear(destination, options.clear ?? [0, 0, 0, 0]);
+        destination.viewport.set(0, 0, target.width, target.height);
+        renderer.setRenderTarget(destination);
+        if (options.stack === 'higher') renderer.clear(false, true, false);
+        this.shaderError = null;
+        if (copies > 0) renderer.render(this.instanceScene, this.quadCamera);
+        renderer.setRenderTarget(previous);
+        if (this.shaderError) {
+            const message = this.shaderError;
+            this.shaderError = null;
+            for (const [key, cached] of this.instancePrograms) if (cached === material) this.instancePrograms.delete(key);
+            material.dispose();
+            throw new ShaderError(message);
+        }
+        // The higher-wins copies were drawn where a depth buffer could sort them: into the image now.
+        if (options.stack === 'higher') this.passNow(target, { fragment: 'void main() { outColor = texelFetch(source, ivec2(gl_FragCoord.xy), 0); }', inputs: { source: destination.texture } });
+        this.budget.spend(copies * 256 + target.width * target.height);
+        await this.budget.pace();
     }
 
     /** Fills a target with one value. */
