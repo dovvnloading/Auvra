@@ -8,16 +8,12 @@ import type { PictureLayout } from '../../../texturing/materialOutput';
 import { Button, Segmented, Spinner } from '../../UI/kit';
 import { Select } from '../../UI/Select';
 import type { PaintSession } from './paintSession';
+import { SliderRow } from './PaintFields';
 
 /** The texture set itself: its size and channels, baking its mesh maps, and handing over its pictures. */
 
-const Row: React.FC<{ label: string; value: number; min: number; max: number; step?: number; onChange: (value: number) => void }> = ({ label, value, min, max, step = 0.01, onChange }) => (
-    <label className="flex items-center gap-2 text-2xs text-zinc-400">
-        <span className="w-28 shrink-0">{label}</span>
-        <input type="range" min={min} max={max} step={step} value={value} onChange={(event) => onChange(Number(event.target.value))} className="h-1 min-w-0 flex-1 accent-sky-500" aria-label={label} />
-        <span className="w-10 text-right tabular-nums text-zinc-300">{Number(value.toFixed(3))}</span>
-    </label>
-);
+/** A setting dragged or typed (typed values keep to the slider's ends). */
+const Row: React.FC<{ label: string; value: number; min: number; max: number; step?: number; onChange: (value: number) => void }> = (props) => <SliderRow labelWidth="w-28" {...props} />;
 
 const SIZES = [9, 10, 11, 12].map((log2) => ({ value: log2, label: `${2 ** log2} × ${2 ** log2}` }));
 
