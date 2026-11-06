@@ -5,7 +5,29 @@ import type { MeshMapName } from '../graph/nodes/io';
 import type { PartMesh } from '../mesh/partMesh';
 import { MeshTracer, TRACE_MESH_GLSL } from './meshTracer';
 import { UvRaster } from './uvRaster';
-import { TABLE_WIDTH, autoCage, averagedNormals, bakeGroups, supersampled, transferTables, type CageMode, type NamedBox, type Supersample, type TransferMaterial } from './bakeSetup';
+import { TABLE_WIDTH, autoCage, averagedNormals, bakeBytesPerTexel, bakeGroups, bandRanges, bandRows, supersampled, traceSteps, transferTables, type CageMode, type NamedBox, type Supersample, type TransferMaterial } from './bakeSetup';
+
+/** Work one banded draw may do (ray steps): well inside what a GPU does before a driver resets it. */
+const BAND_BUDGET = 24_000_000;
+
+/** The next frame (or, while the window is hidden and frames stop, the next turn of the event loop). */
+const nextFrame = (): Promise<void> => new Promise((resolve) => {
+    let done = false;
+    const finish = () => { if (!done) { done = true; resolve(); } };
+    if (typeof document !== 'undefined' && document.visibilityState !== 'hidden' && typeof requestAnimationFrame === 'function') requestAnimationFrame(finish);
+    setTimeout(finish, 34);
+});
+
+/** A bake the graphics card gave up on: said plainly. */
+export class BakeLostError extends Error {
+    constructor() {
+        super('The graphics card stopped responding while baking, so the bake was stopped and nothing was kept. Try a smaller bake size or less supersampling.');
+    }
+}
+
+const assertAlive = (gpu: TextureGpu): void => {
+    if (gpu.renderer.getContext().isContextLost()) throw new BakeLostError();
+};
 
 /** Maps a bake can make besides the mesh maps graphs read. */
 export const EXTRA_MAPS = ['cavity', 'bentNormal', 'color', 'opacity', 'material'] as const;
@@ -151,13 +173,22 @@ const throwIfAborted = (signal?: AbortSignal) => {
  * down by how much the surface covers it.
  */
 export const bakeMeshMaps = async (gpu: TextureGpu, sources: BakeSources, settings: BakeSettings, progress: BakeProgress = () => undefined, signal?: AbortSignal, outputSize = settings.size): Promise<Map<number, TileBake>> => {
-    const plan = supersampled(settings.size, settings.supersample ?? 1, gpu.maxSize);
-    if (plan.size === outputSize) return bakeAtSize(gpu, sources, { ...settings, size: plan.size }, progress, signal);
-    const baked = await bakeAtSize(gpu, sources, { ...settings, size: plan.size }, (fraction, step) => progress(fraction * 0.97, step), signal);
+    // Supersampled no larger than the graphics card's memory safely holds for these maps.
+    const plan = supersampled(settings.size, settings.supersample ?? 1, gpu.maxSize, bakeBytesPerTexel(settings.maps, settings.extras ?? [], Boolean(sources.highPoly)));
     try {
-        return await resampleBake(gpu, sources.part, baked, outputSize);
-    } finally {
-        for (const result of baked.values()) releaseTileBake(gpu, result);
+        if (plan.size === outputSize) return await bakeAtSize(gpu, sources, { ...settings, size: plan.size }, progress, signal, false);
+        // Baked larger (or smaller) and scaled to the set's size: padded only once scaled.
+        const baked = await bakeAtSize(gpu, sources, { ...settings, size: plan.size }, (fraction, step) => progress(fraction * 0.97, step), signal, true);
+        try {
+            assertAlive(gpu);
+            return await resampleBake(gpu, sources.part, baked, outputSize);
+        } finally {
+            for (const result of baked.values()) releaseTileBake(gpu, result);
+        }
+    } catch (error) {
+        // A lost context makes every later step fail ("did not compile"...): say what happened instead.
+        if (gpu.renderer.getContext().isContextLost()) throw new BakeLostError();
+        throw error;
     }
 };
 
@@ -219,7 +250,7 @@ const resampleBake = async (gpu: TextureGpu, part: PartMesh, baked: ReadonlyMap<
     }
 };
 
-const bakeAtSize = async (gpu: TextureGpu, sources: BakeSources, settings: BakeSettings, progress: BakeProgress, signal?: AbortSignal): Promise<Map<number, TileBake>> => {
+const bakeAtSize = async (gpu: TextureGpu, sources: BakeSources, settings: BakeSettings, progress: BakeProgress, signal?: AbortSignal, scaledAfter = false): Promise<Map<number, TileBake>> => {
     const { part } = sources;
     const size = 2 ** settings.size;
     const raster = new UvRaster(gpu, part);
@@ -321,7 +352,9 @@ const bakeAtSize = async (gpu: TextureGpu, sources: BakeSources, settings: BakeS
                 raster.draw(lowNormal, tile, 'void main() { outColor = vec4(normalize(vNormal), 1.0); }', { clear: [0, 0, 1, 0] });
                 const coverage = take(gpu.image(size, size, 'gray', 8));
                 gpu.passNow(coverage, { fragment: 'void main() { outColor = vec4(texelFetch(source, ivec2(gl_FragCoord.xy), 0).a); }', inputs: { source: position } });
-                const nearest = take(await jumpFlood(gpu, coverage, size, size, 'm.r >= 0.5'));
+                // Padding needs the nearest covered texel; a bake scaled afterwards is padded at the set's size instead.
+                const nearest = scaledAfter ? take(gpu.retain(coverage)) : take(await jumpFlood(gpu, coverage, size, size, 'm.r >= 0.5'));
+                const occluderSteps = traceSteps(sources.occluder.indices.length / 3);
                 step('Laying out the surface');
 
                 // Detail: the high-poly surface (or the surface's own normal map) as world and tangent normals, and height.
@@ -404,16 +437,24 @@ const bakeAtSize = async (gpu: TextureGpu, sources: BakeSources, settings: BakeS
                     if (transfers && extrasWanted.has('color')) targets.push({ image: extras.color = take(gpu.image(size, size, 'color', 8)), mode: 3, clear: [0.5, 0.5, 0.5, 1] });
                     if (transfers && extrasWanted.has('opacity')) targets.push({ image: extras.opacity = take(gpu.image(size, size, 'gray', 16)), mode: 4, clear: [1, 1, 1, 1] });
                     if (transfers && extrasWanted.has('material')) targets.push({ image: extras.material = take(gpu.image(size, size, 'color', 8)), mode: 5, clear: [0, 0, 0, 1] });
+                    // Each draw traces a ray per texel: drawn in bands of rows, a frame apart, so none runs long.
+                    const rows = bandRows(size, size, traceSteps((highPoly?.indices.length ?? 3) / 3) * groups.length, BAND_BUDGET);
                     for (const target of targets) {
-                        groups.forEach((group, g) => {
-                            raster.draw(target.image, tile, detail, {
-                                uniforms: {
-                                    tTris: group.tracer.triangles, tNodes: group.tracer.nodes, uFront: front, uRear: rear, uMode: target.mode, uCageRays: cageRays ? 1 : 0,
-                                    uOnlyMesh: group.lowMesh, ...frame, uSurfaceTable: group.surface ?? gpu.constant('white'), uMaterialTable: group.material ?? gpu.constant('black'),
-                                },
-                                clear: g === 0 ? target.clear : null,
+                        for (const [y0, y1] of bandRanges(size, rows)) {
+                            throwIfAborted(signal);
+                            groups.forEach((group, g) => {
+                                raster.draw(target.image, tile, detail, {
+                                    uniforms: {
+                                        tTris: group.tracer.triangles, tNodes: group.tracer.nodes, uFront: front, uRear: rear, uMode: target.mode, uCageRays: cageRays ? 1 : 0,
+                                        uOnlyMesh: group.lowMesh, ...frame, uSurfaceTable: group.surface ?? gpu.constant('white'), uMaterialTable: group.material ?? gpu.constant('black'),
+                                    },
+                                    clear: g === 0 ? target.clear : null,
+                                    scissor: { x0: 0, y0, x1: size, y1 },
+                                });
                             });
-                        });
+                            assertAlive(gpu);
+                            await nextFrame();
+                        }
                     }
                 } else {
                     const map = sources.normalMap ?? null;
@@ -440,7 +481,8 @@ const bakeAtSize = async (gpu: TextureGpu, sources: BakeSources, settings: BakeS
 
                 // Ambient occlusion: cosine-weighted rays round the detailed normal, from just off the surface.
                 if (want.has('ambientOcclusion')) {
-                    const sum = take(gpu.image(size, size, 'color', 32));
+                    // The share of each batch's rays that met something, added up batch by batch.
+                    const sum = take(gpu.image(size, size, 'gray', 32));
                     gpu.clear(sum, [0, 0, 0, 0]);
                     const batch = 16;
                     const batches = Math.max(1, Math.ceil(settings.samples / batch));
@@ -474,17 +516,18 @@ const bakeAtSize = async (gpu: TextureGpu, sources: BakeSources, settings: BakeS
             TraceHit hit;
             if (traceMesh(origin, d, uBias, uDistance, hit)) hits += 1.0;
         }
-        outColor = vec4(hits, float(uRays), 0.0, 0.0);
+        outColor = vec4(hits / float(uRays));
     }`,
                             inputs: { gPos: position, gLow: lowNormal, gWorld: worldNormal, tTris: occluder.triangles, tNodes: occluder.nodes },
                             uniforms: { uDistance: settings.occlusionDistance * diagonal, uBias: bias, uBatch: b, uRays: Math.min(batch, settings.samples - b * batch) },
                             blend: 'add',
-                            cost: 16 * 60,
+                            cost: 16 * occluderSteps,
                         });
+                        assertAlive(gpu);
                         if (b % Math.ceil(batches / 4) === 0) step('Gathering occlusion');
                     }
                     const ao = take(gpu.image(size, size, 'gray', 16));
-                    gpu.passNow(ao, { fragment: 'void main() { vec4 s = texelFetch(source, ivec2(gl_FragCoord.xy), 0); outColor = vec4(s.g > 0.0 ? 1.0 - s.r / s.g : 1.0); }', inputs: { source: sum } });
+                    gpu.passNow(ao, { fragment: 'uniform float uBatches;\nvoid main() { outColor = vec4(1.0 - texelFetch(source, ivec2(gl_FragCoord.xy), 0).r / uBatches); }', inputs: { source: sum }, uniforms: { uBatches: batches } });
                     gpu.release(sum);
                     maps.ambientOcclusion = ao;
                 }
@@ -520,15 +563,16 @@ const bakeAtSize = async (gpu: TextureGpu, sources: BakeSources, settings: BakeS
     }`,
                         inputs: { gPos: position, gLow: lowNormal, tTris: occluder.triangles, tNodes: occluder.nodes },
                         uniforms: { uDistance: settings.occlusionDistance * diagonal * 2, uBias: bias, uRays: Math.min(32, Math.max(8, settings.samples >> 2)) },
-                        cost: 32 * 60,
+                        cost: 32 * occluderSteps,
                     });
+                    assertAlive(gpu);
                     maps.thickness = thickness;
                     step('Measuring thickness');
                 }
 
                 // Bent normals: the average open direction of occlusion rays round each texel, in the model's space.
                 if (extrasWanted.has('bentNormal')) {
-                    const open = take(gpu.image(size, size, 'color', 32));
+                    const open = take(gpu.image(size, size, 'color', 16));
                     gpu.clear(open, [0, 0, 0, 0]);
                     const rays = Math.min(64, Math.max(16, settings.samples >> 1));
                     for (let b = 0; b < Math.ceil(rays / 16); b++) {
@@ -563,8 +607,9 @@ const bakeAtSize = async (gpu: TextureGpu, sources: BakeSources, settings: BakeS
                             inputs: { gPos: position, gLow: lowNormal, gWorld: worldNormal, tTris: occluder.triangles, tNodes: occluder.nodes },
                             uniforms: { uDistance: settings.occlusionDistance * diagonal, uBias: bias, uBatch: b },
                             blend: 'add',
-                            cost: 16 * 60,
+                            cost: 16 * occluderSteps,
                         });
+                        assertAlive(gpu);
                     }
                     const bent = take(gpu.image(size, size, 'color', 16));
                     gpu.passNow(bent, { fragment: 'void main() { ivec2 p = ivec2(gl_FragCoord.xy); vec3 s = texelFetch(source, p, 0).xyz; vec3 n = normalize(texelFetch(low, p, 0).xyz); outColor = vec4((dot(s, s) > 1e-12 ? normalize(s) : n) * 0.5 + 0.5, 1.0); }', inputs: { source: open, low: lowNormal } });
@@ -629,9 +674,9 @@ const bakeAtSize = async (gpu: TextureGpu, sources: BakeSources, settings: BakeS
                     });
                     gpu.release(curvature);
                     if (extrasWanted.has('cavity')) {
-                        // Cavity: only the hollows (curvature below its middle), opened up.
+                        // Cavity: mid-grey where the surface is even, darker in crevices, lighter on raised edges.
                         const cavity = take(gpu.image(size, size, 'gray', 16));
-                        gpu.passNow(cavity, { fragment: 'void main() { outColor = vec4(saturate((0.5 - texelFetch(source, ivec2(gl_FragCoord.xy), 0).r) * 2.0)); }', inputs: { source: smooth } });
+                        gpu.passNow(cavity, { fragment: 'void main() { outColor = vec4(saturate(0.5 + (texelFetch(source, ivec2(gl_FragCoord.xy), 0).r - 0.5) * 1.5)); }', inputs: { source: smooth } });
                         extras.cavity = cavity;
                     }
                     if (want.has('curvature')) maps.curvature = smooth;
@@ -670,13 +715,13 @@ const bakeAtSize = async (gpu: TextureGpu, sources: BakeSources, settings: BakeS
                 if (want.has('height')) maps.height = gpu.retain(height);
                 step('Finishing maps');
 
-                // Pad every map past its islands.
-                for (const key of Object.keys(maps) as MeshMapName[]) {
+                // Pad every map past its islands (a bake scaled afterwards is padded once scaled).
+                for (const key of scaledAfter ? [] : Object.keys(maps) as MeshMapName[]) {
                     const padded = take(padImage(gpu, maps[key]!, coverage, nearest));
                     gpu.release(maps[key]);
                     maps[key] = padded;
                 }
-                for (const key of Object.keys(extras) as ExtraBakeMap[]) {
+                for (const key of scaledAfter ? [] : Object.keys(extras) as ExtraBakeMap[]) {
                     const padded = take(padImage(gpu, extras[key]!, coverage, nearest));
                     gpu.release(extras[key]);
                     extras[key] = padded;
