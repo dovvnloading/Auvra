@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { CommentAddIcon, FlowIcon, GraphIcon, PlusIcon, TrashIcon, WarningIcon } from '../UI/Icons';
+import { ChevronDownIcon, ChevronRightIcon, CommentAddIcon, FlowIcon, GraphIcon, PlusIcon, TrashIcon, WarningIcon } from '../UI/Icons';
 import { useAssets } from '../../context/AssetContext';
 import { projectService } from '../../utils/projectService';
 import { frontendDiagnostics } from '../../diagnostics/runtime';
@@ -14,11 +14,14 @@ import {
     materialGraphLook,
     materialGraphSettings,
     materialGraphShape,
+    readParam,
     type MaterialGraph,
     type MaterialGraphNode,
+    type MaterialParamDef,
 } from '../../runtime/materials/materialGraph';
 import { MATERIALS_DOMAIN, materialAssetDocument, materialLibrary, type MaterialAsset } from '../../runtime/materials/materialLibrary';
 import { MaterialFromDescription } from './MaterialFromDescription';
+import { STARTER_MATERIALS } from '../../runtime/materials/starterMaterials';
 import { MaterialGraphCanvas } from './MaterialGraphCanvas';
 import { MaterialPreview, clearMaterialShaderError, useMaterialShaderError } from './MaterialPreview';
 import { ParamField } from './MaterialParamField';
@@ -73,34 +76,68 @@ const historyOf = (id: string): GraphHistory => {
     return found;
 };
 
+/** Groups of the Material Output open from the start; the rest open once they are used. */
+const OPEN_GROUPS = new Set(['Base', 'Emission', 'Opacity']);
+
 const NodeInspector: React.FC<{
     node: MaterialGraphNode;
     textures: { id: string; name: string }[];
     title?: string;
+    /** Inputs of the node that are wired: their values come from the wire. */
+    wired?: ReadonlySet<string>;
     onChangeNode: (node: MaterialGraphNode, coalesce?: string) => void;
-}> = ({ node, textures, title, onChangeNode }) => {
+}> = ({ node, textures, title, wired, onChangeNode }) => {
     const definition = getMaterialNodeDefinition(node.type)!;
-    // The Material Output's settings come first, then the values its unwired inputs take.
-    const params = node.type === OUTPUT_NODE_TYPE
-        ? [...definition.params.filter(param => ['blendMode', 'alphaClip', 'twoSided', 'shading'].includes(param.key)), ...definition.params.filter(param => !['blendMode', 'alphaClip', 'twoSided', 'shading'].includes(param.key))]
-        : definition.params;
+    const [toggled, setToggled] = useState<Record<string, boolean>>({});
     const blendMode = node.type === OUTPUT_NODE_TYPE ? materialGraphSettings({ nodes: [node], links: [] }).blendMode : null;
+    const field = (param: MaterialParamDef) => {
+        // The clip only matters to a masked material.
+        if (param.key === 'alphaClip' && blendMode !== 'masked') return null;
+        if (wired?.has(param.key)) {
+            return (
+                <div key={param.key} className="flex items-center justify-between text-2xs">
+                    <span className="text-gray-500">{param.label}</span>
+                    <span className="text-gray-400">Set by its wire</span>
+                </div>
+            );
+        }
+        return (
+            <ParamField
+                key={param.key}
+                param={param}
+                value={node.params[param.key]}
+                textures={textures}
+                onChange={(value) => onChangeNode({ ...node, params: { ...node.params, [param.key]: value } }, `${node.id}:${param.key}`)}
+            />
+        );
+    };
+    // Settings first, then the values of each group under a header of its own.
+    const loose = definition.params.filter(param => !param.group);
+    const groups = [...new Set(definition.params.flatMap(param => (param.group ? [param.group] : [])))];
+    const used = (group: string) => definition.params.some(param => param.group === group
+        && (wired?.has(param.key) || JSON.stringify(readParam(param, node.params[param.key])) !== JSON.stringify(param.default)));
     return (
         <div className="space-y-2 rounded border border-gray-800 bg-gray-900/60 p-2">
             <div className="text-2xs font-bold text-gray-200">{title ?? definition.label}</div>
             <p className="text-2xs leading-snug text-gray-500">{definition.description}</p>
-            {params.length === 0 && <p className="text-2xs text-gray-500">No settings.</p>}
-            {params.map(param => {
-                // The clip only matters to a masked material.
-                if (param.key === 'alphaClip' && blendMode !== 'masked') return null;
+            {definition.params.length === 0 && <p className="text-2xs text-gray-500">No settings.</p>}
+            {loose.map(field)}
+            {groups.map((group) => {
+                const open = toggled[group] ?? (OPEN_GROUPS.has(group) || used(group));
                 return (
-                    <ParamField
-                        key={param.key}
-                        param={param}
-                        value={node.params[param.key]}
-                        textures={textures}
-                        onChange={(value) => onChangeNode({ ...node, params: { ...node.params, [param.key]: value } }, `${node.id}:${param.key}`)}
-                    />
+                    <div key={group} className="border-t border-gray-800 pt-1.5">
+                        <button
+                            type="button"
+                            aria-expanded={open}
+                            onClick={() => setToggled((current) => ({ ...current, [group]: !open }))}
+                            className="flex w-full items-center gap-1 text-left text-2xs font-semibold text-gray-300 hover:text-white"
+                        >
+                            {open ? <ChevronDownIcon size={11} /> : <ChevronRightIcon size={11} />}
+                            {group}
+                            {!open && used(group) && <span className="ml-auto text-2xs font-normal text-gray-500">In use</span>}
+                        </button>
+                        {open && <div className="mt-1.5 space-y-2">{definition.params.filter(param => param.group === group).map(field)}</div>}
+                    </div>
                 );
             })}
             {PARAMETER_NODE_PARAMS[node.type] && (
@@ -218,6 +255,18 @@ export const MaterialGraphEditor: React.FC = () => {
     const newButton = useRef<HTMLButtonElement>(null);
     const [newMenu, setNewMenu] = useState(false);
 
+    /** A new shader graph from a starter: its own copy, named after it. */
+    const createFromStarter = (name: string, starter: MaterialGraph) => {
+        const taken = new Set(assets.map(candidate => candidate.name));
+        let unique = name;
+        for (let n = 2; taken.has(unique); n++) unique = `${name} ${n}`;
+        const next: MaterialAsset = { id: crypto.randomUUID(), name: unique, graph: starter };
+        materialLibrary.upsert(next);
+        save(next, true);
+        setSelectedId(next.id);
+        select([]);
+    };
+
     const createFromDescription = (name: string, painted: MaterialGraph) => {
         const next: MaterialAsset = { id: crypto.randomUUID(), name: name.slice(0, 128) || 'Material', graph: painted };
         materialLibrary.upsert(next);
@@ -291,6 +340,7 @@ export const MaterialGraphEditor: React.FC = () => {
     const comment = graph?.comments?.find(candidate => candidate.id === selectedComment) ?? null;
     const single = selected.size === 1 ? graph!.nodes.find(node => selected.has(node.id)) ?? null : null;
     const outputNode = graph?.nodes.find(node => node.type === OUTPUT_NODE_TYPE) ?? null;
+    const outputWired = new Set(graph && outputNode ? graph.links.filter(link => link.toNode === outputNode.id).map(link => link.toInput) : []);
     const steps = asset ? history(asset.id) : null;
 
     const changeNode = (node: MaterialGraphNode, coalesce?: string) => {
@@ -321,6 +371,13 @@ export const MaterialGraphEditor: React.FC = () => {
                                 <button key={item.key} onClick={() => { setNewMenu(false); item.run(); }} className="flex w-full gap-2 rounded px-2 py-1.5 text-left hover:bg-gray-800">
                                     <span className="mt-0.5 text-gray-400">{item.icon}</span>
                                     <span><span className="block text-xs text-gray-100">{item.title}</span><span className="block text-2xs leading-snug text-gray-500">{item.text}</span></span>
+                                </button>
+                            ))}
+                            <div className="mx-2 mb-1 mt-2 border-t border-gray-800 pt-2 text-2xs font-semibold text-gray-400">Start from a shader graph</div>
+                            {STARTER_MATERIALS.map((starter) => (
+                                <button key={starter.key} onClick={() => { setNewMenu(false); createFromStarter(starter.name, starter.graph()); }} className="flex w-full gap-2 rounded px-2 py-1 text-left hover:bg-gray-800">
+                                    <span className="mt-0.5 text-gray-400"><FlowIcon size={14} /></span>
+                                    <span><span className="block text-xs text-gray-100">{starter.name}</span><span className="block text-2xs leading-snug text-gray-500">{starter.description}</span></span>
                                 </button>
                             ))}
                         </div>
@@ -389,7 +446,7 @@ export const MaterialGraphEditor: React.FC = () => {
                         )}
 
                         {single ? (
-                            <NodeInspector key={single.id} node={single} textures={textures} onChangeNode={changeNode} />
+                            <NodeInspector key={single.id} node={single} textures={textures} wired={single.id === outputNode?.id ? outputWired : undefined} onChangeNode={changeNode} />
                         ) : selected.size > 1 ? (
                             <div className="space-y-2 rounded border border-gray-800 bg-gray-900/60 p-2">
                                 <div className="text-2xs font-bold text-gray-200">{selected.size} nodes selected</div>
@@ -419,7 +476,7 @@ export const MaterialGraphEditor: React.FC = () => {
                                 </div>
                             </div>
                         ) : outputNode ? (
-                            <NodeInspector key={outputNode.id} node={outputNode} textures={textures} title="Material" onChangeNode={changeNode} />
+                            <NodeInspector key={outputNode.id} node={outputNode} textures={textures} title="Material" wired={outputWired} onChangeNode={changeNode} />
                         ) : null}
                         <p className="text-2xs leading-snug text-gray-600">
                             Right-click the canvas (or press Space) to add a node where the pointer is. Drag from a pin to wire it, or drop a wire on empty space to pick a node for it. Select nothing to set the material itself.
