@@ -11,7 +11,7 @@ import { createNode, newNodeId } from '../../texturing/graph/document';
 import { mainInput, unknownNodeMessage } from '../../texturing/graph/evaluator';
 import { wireFits } from '../../texturing/graph/material';
 import { NAMED_RECEIVE_TYPE, NAMED_SEND_TYPE, linkName, namedLinks } from '../../texturing/graph/namedLinks';
-import { INPUT_NODE_TYPE, MESH_MAPS, MESH_MAP_LABELS, MESH_MAP_NODE_TYPE, OUTPUT_NODE_TYPE, REROUTE_NODE_TYPE, SUBGRAPH_NODE_TYPE } from '../../texturing/graph/nodes/io';
+import { INPUT_NODE_TYPE, MATERIAL_INPUT_NODE_TYPE, MATERIAL_OUTPUT_NODE_TYPE, MESH_MAPS, MESH_MAP_LABELS, MESH_MAP_NODE_TYPE, OUTPUT_NODE_TYPE, REROUTE_NODE_TYPE, SUBGRAPH_NODE_TYPE } from '../../texturing/graph/nodes/io';
 import { NODE_CATEGORY_ORDER, TEXTURE_NODE_DEFINITIONS, placeholderDefinition, textureNodeDefinition, type GraphResolver } from '../../texturing/graph/registry';
 import { OUTPUT_CHANNELS, OUTPUT_CHANNEL_LABELS, type OutputChannel, type PinKind, type TexGraphComment, type TexGraphLink, type TexGraphNode, type TexNodeDef, type TexPortDef, type TextureGraph } from '../../texturing/graph/types';
 import { copyNodes, outputKinds, readClipboard, unusedNodes, type Point } from './graphEditing';
@@ -173,7 +173,7 @@ const NODE_ENTRIES: readonly FinderEntry[] = (() => {
 /** Pictures the finder draws: every node that makes an image on its own (not outputs, inputs, pictures or reroute points). */
 const PICTURE_REQUESTS: readonly PictureRequest[] = NODE_ENTRIES.flatMap((entry): PictureRequest[] => {
     if (entry.id.startsWith('mesh:')) return [{ key: entry.id, type: MESH_MAP_NODE_TYPE, params: { map: entry.id.slice(5) } }];
-    if (entry.id.includes(':') || [INPUT_NODE_TYPE, REROUTE_NODE_TYPE, NAMED_SEND_TYPE, NAMED_RECEIVE_TYPE, 'bitmap'].includes(entry.id)) return [];
+    if (entry.id.includes(':') || [INPUT_NODE_TYPE, REROUTE_NODE_TYPE, NAMED_SEND_TYPE, NAMED_RECEIVE_TYPE, MATERIAL_INPUT_NODE_TYPE, MATERIAL_OUTPUT_NODE_TYPE, 'bitmap'].includes(entry.id)) return [];
     return [{ key: entry.id, type: entry.id }];
 });
 

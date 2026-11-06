@@ -1,11 +1,11 @@
 import type * as THREE from 'three';
 import type { GpuImage, ImagePrecision, TextureGpu } from '../gpu/textureGpu';
 import { formulaScope, graphContentKey, hashText, parameterValues, resolveNodeParams, subgraphRunSeed, MAX_SIZE_LOG2 } from './document';
-import { MATERIAL_CHANNELS, materialOf, materialResults, type MaterialImages } from './material';
+import { MATERIAL_CHANNELS, materialKey, materialOf, materialResults, type MaterialImages } from './material';
 import { withNamedLinks } from './namedLinks';
 import { resolvePrecision, resolveSeed, resolveSize, resolveTiling, tilingAxes } from './inherit';
 import { nodeBindings } from './nodeKit';
-import { INPUT_NODE_TYPE, MESH_MAP_NODE_TYPE, MESH_READING_NODE_TYPES, OUTPUT_NODE_TYPE, SUBGRAPH_NODE_TYPE, SUBGRAPH_SEED_KEY, SUBGRAPH_VARY_KEY } from './nodes/io';
+import { INPUT_NODE_TYPE, MATERIAL_INPUT_NODE_TYPE, MATERIAL_OUTPUT_NODE_TYPE, MESH_MAP_NODE_TYPE, MESH_READING_NODE_TYPES, OUTPUT_NODE_TYPE, SUBGRAPH_NODE_TYPE, SUBGRAPH_SEED_KEY, SUBGRAPH_VARY_KEY } from './nodes/io';
 import { textureNodeDefinition, type GraphResolver } from './registry';
 import { outputNodeKind, type NodeRunContext, type PortKind, type TexGraphLink, type TexGraphNode, type TexNodeDef, type TextureGraph, type TilingMode } from './types';
 
@@ -290,6 +290,7 @@ export class TextureGraphEvaluator {
             const extras: string[] = [];
             let innerSeed: number | undefined;
             if (node.type === INPUT_NODE_TYPE) extras.push(externalToken(String(params.name || 'input')));
+            if (node.type === MATERIAL_INPUT_NODE_TYPE) for (const channel of MATERIAL_CHANNELS) extras.push(externalToken(materialKey(String(params.name || 'material'), channel)));
             if (node.type === MESH_MAP_NODE_TYPE) extras.push(externalToken(`mesh:${String(params.map)}`));
             else if (MESH_READING_NODE_TYPES.has(node.type)) {
                 for (const key of ['mesh:position', 'mesh:worldNormal', 'mesh:normal']) extras.push(externalToken(key));
@@ -520,7 +521,7 @@ export class TextureGraphEvaluator {
                 for (const [key, value] of Object.entries(external)) if (key.startsWith('mesh:')) given[key] = value ?? null;
                 for (const [key, value] of Object.entries(inputs)) given[key] = value;
                 try {
-                    const outputs = entry.graph.nodes.filter((candidate) => candidate.type === OUTPUT_NODE_TYPE);
+                    const outputs = entry.graph.nodes.filter((candidate) => candidate.type === OUTPUT_NODE_TYPE || candidate.type === MATERIAL_OUTPUT_NODE_TYPE);
                     const states = await nested.evaluate({
                         graph: entry.graph,
                         parameters: params,
@@ -535,6 +536,17 @@ export class TextureGraphEvaluator {
                     for (const output of outputs) {
                         const state = states.get(output.id);
                         if (state?.error) throw new Error(`Inside "${entry.name}": ${state.error}`);
+                        if (output.type === MATERIAL_OUTPUT_NODE_TYPE) {
+                            // A whole material comes out as an image per channel under the output's pin.
+                            const material = state ? materialOf(state.outputs, 'out') : null;
+                            for (const channel of MATERIAL_CHANNELS) {
+                                const image = material?.[channel];
+                                if (!image) continue;
+                                result[materialKey(output.id, channel)] = gpu.retain(image);
+                                made.push(image);
+                            }
+                            continue;
+                        }
                         const image = state?.outputs.out;
                         if (image) {
                             result[output.id] = gpu.retain(image);

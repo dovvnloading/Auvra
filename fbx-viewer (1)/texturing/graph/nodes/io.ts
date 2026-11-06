@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { GpuImage } from '../../gpu/textureGpu';
-import { MATERIAL_DEFAULTS, outputChannelOf } from '../material';
+import { MATERIAL_CHANNELS, MATERIAL_DEFAULTS, materialKey, materialResults, outputChannelOf, type MaterialImages } from '../material';
 import { NAMED_RECEIVE_TYPE, NAMED_SEND_TYPE } from '../namedLinks';
 import { anyIn, color, colorIn, float, onePass, out, select, vec2 } from '../nodeKit';
 import { OUTPUT_CHANNELS, OUTPUT_CHANNEL_LABELS, outputNodeKind, type NodeRunContext, type OutputChannel, type PortKind, type TexNodeDef, type TexParamDef } from '../types';
@@ -13,6 +13,9 @@ export const SUBGRAPH_NODE_TYPE = 'subgraph';
 export const MESH_MAP_NODE_TYPE = 'meshMap';
 /** A point a wire passes through on the canvas; it changes nothing. */
 export const REROUTE_NODE_TYPE = 'reroute';
+/** A graph's input that takes a whole material, and its output that gives one: for graphs used as nodes. */
+export const MATERIAL_INPUT_NODE_TYPE = 'materialInput';
+export const MATERIAL_OUTPUT_NODE_TYPE = 'materialOutput';
 
 /**
  * A sub-graph node's own random seed and whether each copy varies, kept under names no graph
@@ -220,6 +223,43 @@ export const IO_NODES: TexNodeDef[] = [
             const image = context.image('color');
             await context.pass(image, 'void main() { vec4 c = p_texture_ok == 1 ? texture(p_texture, vUv) : vec4(0.0, 0.0, 0.0, 1.0); if (p_texture_srgb == 1) c.rgb = linearToSrgb(c.rgb); outColor = c; }');
             return { out: image };
+        },
+    },
+    {
+        type: MATERIAL_INPUT_NODE_TYPE,
+        label: 'Graph input: material',
+        category: 'Inputs and outputs',
+        description: 'A whole material the graph takes in when it is used inside another graph (a material wire into its node).',
+        keywords: ['input', 'material input', 'socket', 'sub-graph'],
+        inputs: [],
+        outputs: [{ key: 'out', label: 'Material', kind: 'material' }],
+        params: [{ key: 'name', label: 'Name', kind: 'string', default: 'material' }],
+        sizeFrom: 'graph',
+        async run(context) {
+            const name = String(context.params.name || 'material');
+            const given: MaterialImages = {};
+            for (const channel of MATERIAL_CHANNELS) {
+                const image = context.external(materialKey(name, channel));
+                if (image) given[channel] = await imageFrom(context, image, (image as GpuImage).kind ?? 'color');
+            }
+            return materialResults('out', given);
+        },
+    },
+    {
+        type: MATERIAL_OUTPUT_NODE_TYPE,
+        label: 'Output: whole material',
+        category: 'Inputs and outputs',
+        description: 'A whole material the graph gives when it is used inside another graph: its node gets a material pin.',
+        keywords: ['output', 'material output', 'sub-graph', 'result'],
+        inputs: [{ key: 'in', label: 'Material', kind: 'material' }],
+        outputs: [],
+        params: [{ key: 'name', label: 'Name', kind: 'string', default: '' }],
+        sizeFrom: 'input',
+        async run(context) {
+            const material = context.material('in');
+            const kept: MaterialImages = {};
+            for (const channel of MATERIAL_CHANNELS) { const image = material?.[channel]; if (image) kept[channel] = context.gpu.retain(image); }
+            return materialResults('out', kept);
         },
     },
     {

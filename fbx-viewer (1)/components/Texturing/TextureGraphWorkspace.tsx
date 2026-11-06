@@ -9,7 +9,7 @@ import { MAX_SIZE_LOG2, MIN_SIZE_LOG2, coerceParameter, formulaScope, parameterV
 import { OUTPUT_NODE_TYPE, SUBGRAPH_NODE_TYPE, SUBGRAPH_SEED_KEY, SUBGRAPH_VARY_KEY } from '../../texturing/graph/nodes/io';
 import { textureNodeDefinition, type GraphEntry, type GraphResolver } from '../../texturing/graph/registry';
 import { bakeSignature, readStoredGraph, type StoredTextureGraph } from '../../texturing/graph/stored';
-import { MATERIAL_CHANNELS, MATERIAL_CHANNEL_LABELS, materialKey } from '../../texturing/graph/material';
+import { MATERIAL_CHANNELS, MATERIAL_CHANNEL_LABELS, materialKey, materialOf } from '../../texturing/graph/material';
 import { TILING_MODES } from '../../texturing/graph/inherit';
 import { OUTPUT_CHANNELS, OUTPUT_CHANNEL_LABELS, type GraphParameter, type GraphParameterKind, type OutputChannel, type TexGraphNode, type TexNodeDef, type TexParamDef, type TextureGraph, type TilingMode } from '../../texturing/graph/types';
 import { DEEP_EXPORT, ROLE_LABELS, encodeChannels, materialGraphForTextures, type ChannelImages, type ChannelTextureIds, type MaterialChannel, type PictureLayout, materialReadsPicture } from '../../texturing/materialOutput';
@@ -199,7 +199,10 @@ const contextOf = (outerSession: TextureGraphSession, outer: StoredTextureGraph,
     const version: string[] = [];
     for (const link of outer.graph.links) {
         if (link.to !== via) continue;
-        inputs[link.toInput] = outerSession.imageOf(link.from, link.fromOutput);
+        // A material wire goes in as an image per channel, as the node gives it when it draws.
+        const material = materialOf(outerSession.state(link.from)?.outputs ?? {}, link.fromOutput);
+        if (material) for (const channel of MATERIAL_CHANNELS) inputs[materialKey(link.toInput, channel)] = material[channel] ?? null;
+        else inputs[link.toInput] = outerSession.imageOf(link.from, link.fromOutput);
         version.push(`${link.toInput}=${outerSession.state(link.from)?.signature ?? ''}`);
     }
     const state = outerSession.state(via);

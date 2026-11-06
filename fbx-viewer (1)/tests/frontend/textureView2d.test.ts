@@ -97,6 +97,14 @@ describe('2D view: handles', () => {
         expect(dragTile(settings, 'rotation', [2.5 / 4, 3.5 / 4])).toEqual({ rotation: 0 });
     });
 
+    it('puts a Tile sampler\'s handles on its copies where their random shifts put them', () => {
+        const settings = { columns: 4, rows: 4, size: 0.8, stretch: [1, 1] as Vec2, rotation: 0, offset: 0.25, jitterAt: (cell: Vec2): Vec2 => [cell[1] === 2 ? 0.1 : -0.2, 0.05] };
+        const frame = tileFrame(settings);
+        close(frame.outline[2], [(2.5 + 0.1 + 0.4) / 4, (2.5 + 0.05 + 0.4) / 4]);
+        close(point(frame, 'offset'), [(2.5 + 0.25 - 0.2) / 4, (3.5 + 0.05) / 4]);
+        expect(dragTile(settings, 'offset', [(2.5 + 0.5 - 0.2) / 4, 3.5 / 4])).toEqual({ offset: 0.5 });
+    });
+
     it('keeps angles from -180 to 180', () => {
         expect(wrapAngle(270)).toBe(-90);
         expect(wrapAngle(-190)).toBe(170);
