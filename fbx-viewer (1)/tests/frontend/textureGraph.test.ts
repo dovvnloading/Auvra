@@ -22,6 +22,7 @@ import { islandLabelRows, labelIslands, packMask } from '../../texturing/graph/n
 import { pixelProcessorCost } from '../../texturing/graph/nodes/io';
 import { TEXTURE_NODE_DEFINITIONS, placeholderDefinition, textureNodeDefinition, textureNodeDefinitionByType } from '../../texturing/graph/registry';
 import { outputNodeKind, type TextureGraph } from '../../texturing/graph/types';
+import { GraphHistory, materialHistory } from '../../components/Texturing/graphEditing';
 import { bakeSignature, readStoredGraph } from '../../texturing/graph/stored';
 import { crc32 } from '../../texturing/zip';
 import { materialAssetDocument, readMaterialAsset, withoutAssetTexture } from '../../runtime/materials/materialLibrary';
@@ -302,6 +303,52 @@ describe('texture graph outputs', () => {
         const user = normalizeTextureGraph({ nodes: [{ id: 's', type: 'subgraph', params: { graph: 'inner' } }], links: [], parameters: [] });
         expect(graphReadsMeshMaps(user, (id) => (id === 'inner' ? { graph: reads } : undefined))).toBe(true);
         expect(graphReadsMeshMaps(user, () => undefined)).toBe(false);
+    });
+});
+
+describe('texture graph undo', () => {
+    interface Snapshot { graph: string; values: Record<string, number>; bakeSize: number }
+
+    it('steps back and forth through whole states, values and picture settings included', () => {
+        const history = new GraphHistory<Snapshot>();
+        const first: Snapshot = { graph: 'a', values: { wear: 0.2 }, bakeSize: 11 };
+        const second: Snapshot = { graph: 'a', values: { wear: 0.7 }, bakeSize: 11 };
+        const third: Snapshot = { graph: 'a', values: { wear: 0.7 }, bakeSize: 12 };
+        history.record(first, undefined, 0);
+        history.record(second, undefined, 5000);
+        expect(history.undo(third)).toEqual(second);
+        expect(history.undo(second)).toEqual(first);
+        expect(history.canUndo).toBe(false);
+        expect(history.redo(first)).toEqual(second);
+        expect(history.redo(second)).toEqual(third);
+        expect(history.canRedo).toBe(false);
+    });
+
+    it('merges quick changes of one value into one step, and a new change ends redo', () => {
+        const history = new GraphHistory<number>();
+        history.record(1, 'value:wear', 0);
+        history.record(2, 'value:wear', 300);
+        history.record(3, 'value:wear', 600);
+        expect(history.undo(4)).toBe(1);
+        expect(history.canUndo).toBe(false);
+        history.record(1, 'value:wear', 700);
+        expect(history.canRedo).toBe(false);
+        // Another value, or the same one after a pause, is a step of its own.
+        history.record(5, 'value:scale', 800);
+        history.record(6, 'value:scale', 5000);
+        expect(history.undo(7)).toBe(6);
+        expect(history.undo(6)).toBe(5);
+    });
+
+    it('keeps each material\'s history while others are open, as long as it was touched lately', () => {
+        const bricks = materialHistory<number>('bricks-undo-test');
+        bricks.record(1, undefined, 0);
+        materialHistory<number>('tiles-undo-test').record(2, undefined, 0);
+        // Opening the material again (a new screen) finds its steps where they were.
+        expect(materialHistory<number>('bricks-undo-test')).toBe(bricks);
+        expect(materialHistory<number>('bricks-undo-test').canUndo).toBe(true);
+        for (let i = 0; i < 40; i++) materialHistory<number>(`other-${i}-undo-test`);
+        expect(materialHistory<number>('bricks-undo-test').canUndo).toBe(false);
     });
 });
 

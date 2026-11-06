@@ -9,8 +9,10 @@ import type { ChannelImages, MaterialChannel } from '../../texturing/materialOut
 
 /**
  * A texture graph open for editing: it redraws what an edit reaches as soon as the edit is made,
- * keeps a small picture of every node for the canvas, and keeps the images the 3D view lights
- * (base colour turned linear, the normal, occlusion/roughness/metallic packed, emissive, height).
+ * keeps a small picture of every node for the canvas (made again only for nodes whose result
+ * changed), and keeps the images the 3D view lights (base colour turned linear, the normal,
+ * occlusion/roughness/metallic packed, emissive, height). Mesh maps for the 3D view's shape or model
+ * come in through setExternal.
  */
 
 export const THUMBNAIL_SIZE = 96;
@@ -37,6 +39,9 @@ export class TextureGraphSession {
     readonly thumbnails = new Map<string, Thumbnail>();
     /** The latest thumbnail read asked for, per node: a slower, older read that lands later is let go. */
     private readonly thumbnailTickets = new Map<string, number>();
+    /** The signature each node's thumbnail is being made (or was made) for, so an unchanged node is not read again. */
+    private readonly thumbnailWanted = new Map<string, string>();
+    private readonly thumbnailListeners = new Map<string, Set<() => void>>();
     readonly preview: PreviewSet = { baseColor: null, normal: null, orm: null, emissive: null, height: null, opacity: null, version: 0 };
     graph: TextureGraph;
     parameters: Record<string, unknown> = {};
@@ -49,10 +54,13 @@ export class TextureGraphSession {
     private readonly listeners = new Set<() => void>();
     private controller: AbortController | null = null;
     private scheduled = false;
+    private emitQueued = false;
     private disposed = false;
     private previewSignature = '';
+    /** Draws the material's pictures at sizes other than the editing size; kept between uses. */
+    private output: TextureGraphEvaluator | null = null;
 
-    constructor(graph: TextureGraph, resolve: GraphResolver, texture: (id: string) => THREE.Texture | null) {
+    constructor(graph: TextureGraph, private readonly resolve: GraphResolver, private readonly texture: (id: string) => THREE.Texture | null) {
         this.gpu = textureGpu();
         this.evaluator = new TextureGraphEvaluator(this.gpu, resolve, texture);
         this.graph = graph;
@@ -66,9 +74,62 @@ export class TextureGraphSession {
 
     getVersion = (): number => this.version;
 
+    /** Listens for one node's thumbnail changing (the canvas paints each node's picture on its own). */
+    subscribeThumbnail = (nodeId: string, listener: () => void): (() => void) => {
+        let set = this.thumbnailListeners.get(nodeId);
+        if (!set) this.thumbnailListeners.set(nodeId, set = new Set());
+        set.add(listener);
+        return () => {
+            set!.delete(listener);
+            if (!set!.size) this.thumbnailListeners.delete(nodeId);
+        };
+    };
+
+    private thumbnailChanged(nodeId: string): void {
+        for (const listener of this.thumbnailListeners.get(nodeId) ?? []) listener();
+    }
+
     private emit(): void {
         this.version++;
         for (const listener of this.listeners) listener();
+    }
+
+    /** Tells listeners once for a burst of changes (every node a run draws), at the next frame. */
+    private emitSoon(): void {
+        if (this.emitQueued || this.disposed) return;
+        this.emitQueued = true;
+        let done = false;
+        const flush = () => {
+            if (done) return;
+            done = true;
+            this.emitQueued = false;
+            if (!this.disposed) this.emit();
+        };
+        // Frames stop while the window is hidden, so a timer stands in.
+        requestAnimationFrame(flush);
+        setTimeout(flush, 50);
+    }
+
+    /**
+     * Images for the graph's mesh map nodes ('mesh:position'...), and a version that changes when their
+     * pixels do; what reads them is drawn again.
+     */
+    setExternal(external: Record<string, ExternalImage | null>, version: string): void {
+        const same = version === this.externalVersion && Object.keys(external).length === Object.keys(this.external).length
+            && Object.entries(external).every(([key, value]) => this.external[key] === value);
+        if (same) return;
+        this.external = external;
+        this.externalVersion = version;
+        this.schedule();
+    }
+
+    /**
+     * The evaluator the material's pictures are drawn with when their size is not the editing size. It is
+     * kept, so making them again at the same size, with nothing changed, draws nothing new.
+     */
+    outputEvaluator(): TextureGraphEvaluator {
+        if (!this.output) this.output = new TextureGraphEvaluator(this.gpu, this.resolve, this.texture);
+        return this.output;
     }
 
     state(nodeId: string): NodeState | undefined {
@@ -113,8 +174,11 @@ export class TextureGraphSession {
         const started = performance.now();
         let drawn = 0;
         const graph = this.graph;
+        const types = new Map(graph.nodes.map((node) => [node.id, node.type]));
         try {
             this.evaluator.prune(graph);
+            // Every node is wanted, for its thumbnail; only those whose result changed are drawn, and only
+            // they get a new thumbnail.
             await this.evaluator.evaluate({
                 graph,
                 parameters: this.parameters,
@@ -124,11 +188,11 @@ export class TextureGraphSession {
                 signal: controller.signal,
                 onNode: (nodeId, state) => {
                     drawn++;
-                    this.makeThumbnail(nodeId, state);
-                    this.emit();
+                    this.makeThumbnail(nodeId, state, types.get(nodeId) ?? '');
+                    this.emitSoon();
                 },
             });
-            for (const id of [...this.thumbnails.keys()]) if (!graph.nodes.some((node) => node.id === id)) this.dropThumbnail(id);
+            for (const id of [...this.thumbnails.keys()]) if (!types.has(id)) this.dropThumbnail(id);
             this.updatePreview();
             this.lastRun = { nodes: drawn, milliseconds: performance.now() - started };
         } catch (error) {
@@ -152,17 +216,22 @@ export class TextureGraphSession {
 
     /** Forgets a node's thumbnail, and any read of it still on its way. */
     private dropThumbnail(nodeId: string): void {
-        this.thumbnails.delete(nodeId);
+        const had = this.thumbnails.delete(nodeId);
+        this.thumbnailWanted.delete(nodeId);
         this.thumbnailTickets.set(nodeId, (this.thumbnailTickets.get(nodeId) ?? 0) + 1);
+        if (had) this.thumbnailChanged(nodeId);
     }
 
-    private makeThumbnail(nodeId: string, state: NodeState): void {
+    private makeThumbnail(nodeId: string, state: NodeState, type: string): void {
         const image = Object.values(state.outputs)[0];
         if (!image) {
             this.dropThumbnail(nodeId);
             return;
         }
-        const node = this.graph.nodes.find((candidate) => candidate.id === nodeId);
+        // Drawn again with the same result (after its kept result was let go, say): the thumbnail stands.
+        const signature = state.signature + type;
+        if (this.thumbnailWanted.get(nodeId) === signature) return;
+        this.thumbnailWanted.set(nodeId, signature);
         const preview = this.gpu.image(THUMBNAIL_SIZE, THUMBNAIL_SIZE, 'color', 8);
         this.gpu.passNow(preview, {
             fragment: `uniform int gray;
@@ -180,17 +249,21 @@ void main() {
         // that lands after a newer one is let go.
         const ticket = (this.thumbnailTickets.get(nodeId) ?? 0) + 1;
         this.thumbnailTickets.set(nodeId, ticket);
-        const signature = state.signature + (node?.type ?? '');
         const reading = this.gpu.readRgba8Later(preview);
         this.gpu.release(preview);
         void reading.then((pixels) => {
-            if (!pixels || this.disposed || this.thumbnailTickets.get(nodeId) !== ticket) return;
+            if (this.disposed || this.thumbnailTickets.get(nodeId) !== ticket) return;
+            if (!pixels) {
+                // The read failed (a lost context): ask again next time the node draws.
+                this.thumbnailWanted.delete(nodeId);
+                return;
+            }
             // Bottom row first as read: top row first for the picture.
             const row = THUMBNAIL_SIZE * 4;
             const flipped = new Uint8ClampedArray(pixels.length);
             for (let y = 0; y < THUMBNAIL_SIZE; y++) flipped.set(pixels.subarray((THUMBNAIL_SIZE - 1 - y) * row, (THUMBNAIL_SIZE - y) * row), y * row);
             this.thumbnails.set(nodeId, { signature, image: new ImageData(flipped, THUMBNAIL_SIZE, THUMBNAIL_SIZE) });
-            this.emit();
+            this.thumbnailChanged(nodeId);
         });
     }
 
@@ -261,6 +334,9 @@ void main() { outColor = vec4(hasAo == 1 ? texture(ao, vUv).r : 1.0, hasRough ==
         this.disposed = true;
         this.controller?.abort();
         this.evaluator.dispose();
+        this.output?.dispose();
+        this.output = null;
+        this.thumbnailListeners.clear();
         for (const key of ['baseColor', 'normal', 'orm', 'emissive', 'height', 'opacity'] as const) {
             this.gpu.release(this.preview[key]);
             this.preview[key] = null;
