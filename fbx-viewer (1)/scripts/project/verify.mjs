@@ -116,7 +116,10 @@ if (/canonicalChange\(['"]levelObjects/.test(db)) failures.push('native project 
 if (!/v1\\\/get\\\//.test(service) || !/recoveryPoints/.test(service)) failures.push('project service: missing exact resolve/recovery handling');
 if (!/requestQueue/.test(service) || !/performCall/.test(service)) failures.push('project service: host calls must be serialized');
 if (/class\s+Sha256|hashBlob|readAsDataURL/.test(service)) failures.push('project service: browser-side asset hashing or encoding remains');
-if (!/addModelTextureOverride/.test(db) || !/textureOverrides\[materialName\]\s*=\s*textureId/.test(db)) failures.push('material overrides must reference native texture documents');
+// The mask tool's picture becomes a native texture document, and the material override points at its id.
+if (!/addModelTextureOverride/.test(db)
+  || !/domain:\s*'textures',\s*operation:\s*'upsert',\s*id:\s*textureId/.test(db)
+  || !/withPaintedBaseMap\([\s\S]*?textureId\)/.test(db)) failures.push('material overrides must reference native texture documents');
 if (/newOverrides\[m\.name\]\s*=\s*textureUrl|textureOverrides[^\n]*Base64/.test(modelManager)) failures.push('model manager still persists temporary texture URLs');
 if (!/textureAssetUrls/.test(projectHydration) || !/loadProjectAssetUrl/.test(projectHydration)) failures.push('native texture overrides are not hydrated through asset tickets');
 if (!/getSnapshotAll\(\)/.test(db) || !/record\.levelId === id/.test(db)) failures.push('referential delete cascades are missing');
