@@ -119,7 +119,7 @@ export const getMaterialNodeDefinition = (type: string): MaterialNodeDef | undef
 
 /** Material Output inputs each stage computes (the fragment stage's physical inputs too, where a graph uses them: physicalOutputs). */
 export const STAGE_OUTPUTS: Record<MaterialStage, readonly string[]> = {
-    fragment: ['baseColor', 'opacity', 'metalness', 'roughness', 'normal', 'emissive', 'emissiveStrength', 'occlusion'],
+    fragment: ['baseColor', 'opacity', 'metalness', 'roughness', 'normal', 'emissive', 'emissiveStrength', 'occlusion', 'selfShadow'],
     vertex: ['worldPositionOffset'],
     shadow: ['opacity'],
 };
@@ -260,7 +260,7 @@ export const textureSlot = (node: MaterialGraphNode): TextureSlot => {
  */
 export const PARAMETER_NODE_PARAMS: Readonly<Record<string, string>> = {
     float: 'value', color: 'value', vector: 'value', vector2: 'value',
-    texture: 'texture', normalMap: 'texture', triplanar: 'texture',
+    texture: 'texture', normalMap: 'texture', triplanar: 'texture', parallax: 'texture',
     switch: 'on',
 };
 export const MAX_PARAMETER_NAME_LENGTH = 64;

@@ -130,6 +130,7 @@ export const MATERIAL_NODE_DEFINITIONS: MaterialNodeDef[] = [
             { key: 'roughness', label: 'Roughness', type: 'float', fallback: fromParam('roughness'), group: 'Base' },
             { key: 'normal', label: 'Normal', type: 'vec3', fallback: 'vec3(0.0, 0.0, 1.0)', group: 'Base' },
             { key: 'occlusion', label: 'Ambient occlusion', type: 'float', fallback: '1.0', group: 'Base' },
+            { key: 'selfShadow', label: 'Self-shadow', type: 'float', fallback: '1.0', group: 'Base' },
             { key: 'specularWeight', label: 'Specular strength', type: 'float', fallback: fromParam('specularWeight'), group: 'Specular' },
             { key: 'specularColor', label: 'Specular colour', type: 'vec3', fallback: fromParam('specularColor'), group: 'Specular' },
             { key: 'ior', label: 'Index of refraction', type: 'float', fallback: fromParam('ior'), group: 'Specular' },
@@ -532,6 +533,55 @@ export const MATERIAL_NODE_DEFINITIONS: MaterialNodeDef[] = [
                 ],
                 outputs: { rgb: `${sample}.rgb`, a: `${sample}.a` },
             };
+        },
+    },
+    {
+        type: 'parallax',
+        label: 'Parallax',
+        category: 'Texture',
+        description: 'Makes a flat surface look deep: follows the view into a height map (white high, black low), so bricks, stones and tiles look raised as you move. Wire its UV into the textures it moves and its Shadow into the Material Output\'s Self-shadow, where the raised parts shade the low ones from the sun. Higher quality takes more steps.',
+        keywords: ['height', 'parallax occlusion', 'pom', 'depth', 'displacement', 'relief', 'bump'],
+        inputs: [
+            { key: 'uv', label: 'UV', type: 'vec2', fallback: builtin('uv') },
+            { key: 'depth', label: 'Depth', type: 'float', fallback: fromParam('depth') },
+        ],
+        outputs: [
+            { key: 'uv', label: 'UV', type: 'vec2' },
+            { key: 'shadow', label: 'Shadow', type: 'float' },
+        ],
+        params: [
+            { key: 'texture', label: 'Height map', kind: 'texture', default: '' },
+            float('depth', 'Depth', 0.03, { min: 0, max: 0.3, step: 0.005 }),
+            select('quality', 'Quality', [['low', 'Low (8 steps)'], ['medium', 'Medium (16 steps)'], ['high', 'High (32 steps)']], 'medium'),
+            { key: 'selfShadow', label: 'Self-shadow', kind: 'boolean', default: true },
+        ],
+        emit: (inputs, context) => {
+            // Only a pixel can march through the height map; elsewhere the UV passes through.
+            if (context.stage !== 'fragment' || !context.derivatives) return { outputs: { uv: inputs.uv, shadow: '1.0' } };
+            context.helper('mgParallaxUv');
+            context.helper('mgTangentFrame');
+            const quality = String(context.static('quality'));
+            const layers = quality === 'low' ? '8.0' : quality === 'high' ? '32.0' : '16.0';
+            const heightMap = context.param('texture');
+            const frame = context.local('frame');
+            const uv = context.local('uv');
+            const shadow = context.local('shadow');
+            const position = context.builtin('worldPosition');
+            const statements = [
+                `mat3 ${frame} = mgTangentFrame(${position}, ${context.builtin('worldNormal')}, ${inputs.uv});`,
+                `vec2 ${uv} = mgParallaxUv(${heightMap}, ${inputs.uv}, normalize(${context.builtin('cameraPosition')} - ${position}) * ${frame}, ${inputs.depth}, ${layers});`,
+                `float ${shadow} = 1.0;`,
+            ];
+            if (context.static('selfShadow') === true) {
+                context.helper('mgParallaxShadow');
+                // Toward the first sun, which three gives in view space.
+                statements.push(
+                    '#if NUM_DIR_LIGHTS > 0',
+                    `${shadow} = mgParallaxShadow(${heightMap}, ${uv}, normalize(inverseTransformDirection(directionalLights[0].direction, viewMatrix)) * ${frame}, ${inputs.depth}, ${layers});`,
+                    '#endif',
+                );
+            }
+            return { statements, outputs: { uv, shadow } };
         },
     },
     {

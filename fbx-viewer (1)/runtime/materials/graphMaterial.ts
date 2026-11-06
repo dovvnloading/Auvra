@@ -437,6 +437,12 @@ const patchShader = (binding: GraphBinding, shader: THREE.WebGLProgramParameters
     #endif
 }`);
     }
+    if (connected.has('selfShadow')) {
+        // Shades the direct light only (a height field's own shadow, from Parallax): the sky still reaches it.
+        source = replaceOnce(source, '#include <lights_fragment_end>', `#include <lights_fragment_end>
+reflectedLight.directDiffuse *= ${outputs.selfShadow};
+reflectedLight.directSpecular *= ${outputs.selfShadow};`);
+    }
     if (settings.unlit) source = replaceOnce(source, LIT_OUTPUT, 'vec3 outgoingLight = diffuseColor.rgb + totalEmissiveRadiance;');
     // Previews draw into a linear render target, but are read back as the image they show.
     if (preview) source = replaceOnce(source, '#include <colorspace_fragment>', 'gl_FragColor = sRGBTransferOETF( clamp( gl_FragColor, 0.0, 1.0 ) );');
