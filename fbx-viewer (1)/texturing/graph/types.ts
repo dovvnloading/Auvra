@@ -14,6 +14,9 @@ import type { MaterialImages } from './material';
 
 export type PortKind = 'color' | 'gray';
 
+/** Which ways an image repeats seamlessly: both, across only, down only, or not at all. */
+export type TilingMode = 'none' | 'horizontal' | 'vertical' | 'both';
+
 /** What an input nothing is wired to reads. */
 export type InputFallback = 'white' | 'black' | 'mid' | 'normal' | 'clear';
 
@@ -84,8 +87,12 @@ export interface TexGraphNode {
     y: number;
     params: Record<string, unknown>;
     size?: NodeSize;
-    /** Bits a channel the node's images keep; 'auto' takes its inputs' (8 for colour, 16 for grey when it makes them). */
-    precision?: 'auto' | 8 | 16 | 32;
+    /** Bits a channel the node's images keep; 'auto' takes its inputs' (8 for colour, 16 for grey when it makes them), 'graph' the graph's. */
+    precision?: 'auto' | 'graph' | 8 | 16 | 32;
+    /** Which ways it tiles: its input's, the graph's, or fixed (generators take the graph's unless set, filters their input's). */
+    tiling?: 'input' | 'graph' | TilingMode;
+    /** Where its seed comes from besides its own: the graph's (unless set), its input's, or nowhere (fixed). */
+    seedFrom?: 'input' | 'fixed';
     /** A name of the user's own, shown instead of the node's kind. */
     name?: string;
     /** Its header's colour (#rrggbb), instead of its category's. */
@@ -142,6 +149,12 @@ export interface TextureGraph {
     links: TexGraphLink[];
     comments?: TexGraphComment[];
     parameters: GraphParameter[];
+    /** Which ways the graph tiles (both unless set): nodes take it unless they say otherwise. */
+    tiling?: TilingMode;
+    /** Bits a channel for nodes set to take the graph's. */
+    precision?: 8 | 16 | 32;
+    /** The size the graph's picture stands for in the world, in metres, across and down (1 × 1 unless set). */
+    physicalSize?: { w: number; h: number };
 }
 
 /** Engine material channels an output can feed. */
@@ -172,6 +185,8 @@ export interface NodeRunContext {
     /** The graph's seed mixed with the node's own. */
     readonly seed: number;
     readonly precision: ImagePrecision;
+    /** Whether the node's image repeats across and down (its tiling). */
+    readonly tiling: [boolean, boolean];
     /** Settings with links to the graph's parameters worked out. */
     readonly params: Readonly<Record<string, unknown>>;
     readonly signal: AbortSignal;

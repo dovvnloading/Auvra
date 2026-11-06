@@ -63,7 +63,7 @@ export const GENERATOR_NODES: TexNodeDef[] = [
         params: [int('scale', 'Scale', 8, 1, 256, { softMax: 64 }), float('contrast', 'Contrast', 1, 0, 4), seed()],
         sizeFrom: 'graph',
         glsl: `void main() {
-    float n = perlin(vUv * float(p_scale), ivec2(p_scale), uSeed);
+    float n = perlin(vUv * float(p_scale), tilePeriod(ivec2(p_scale)), uSeed);
     outColor = vec4(saturate(0.5 + 0.5 * n * p_contrast));
 }`,
     }),
@@ -101,7 +101,7 @@ void main() {
         // Turbulent: each octave is pushed about by those before it, which swirls the pattern; the push
         // repeats with the picture, so it still tiles.
         vec2 at = p_style == 3 ? vUv + vec2(sum, -sum) * 0.04 : vUv;
-        float n = octave(at * float(scale), ivec2(scale), uSeed + float(o) * 13.17);
+        float n = octave(at * float(scale), tilePeriod(ivec2(scale)), uSeed + float(o) * 13.17);
         if (p_style == 1) n = 1.0 - 2.0 * abs(n);
         else if (p_style >= 2) n = 2.0 * abs(n) - 1.0;
         sum += n * amplitude;
@@ -133,7 +133,7 @@ void main() {
         sizeFrom: 'graph',
         cost: () => 25,
         glsl: `void main() {
-    vec3 w = worley(vUv * float(p_scale), ivec2(p_scale), p_jitter, p_metric, uSeed);
+    vec3 w = worley(vUv * float(p_scale), tilePeriod(ivec2(p_scale)), p_jitter, p_metric, uSeed);
     float v;
     if (p_mode == 0) v = w.x;
     else if (p_mode == 1) v = 1.0 - w.x;
@@ -171,7 +171,7 @@ void main() {
     float sum = 0.0;
     float total = 0.0;
     float amplitude = 1.0;
-    ivec2 period = ivec2(p_scaleX, p_scaleY);
+    ivec2 period = tilePeriod(ivec2(p_scaleX, p_scaleY));
     for (int o = 0; o < 8; o++) {
         if (o >= p_octaves) break;
         vec2 p = vUv * vec2(period);
@@ -470,77 +470,4 @@ void main() {
     outColor = vec4(value);
 }`,
     }),
-    {
-        ...onePass({
-            type: 'tileSampler',
-            label: 'Tile sampler',
-            category: 'Patterns',
-            description: 'Places a pattern (or a built-in shape) on a grid, each copy moved, turned, sized and brightened at random. Rivets, pebbles, leaves, debris.',
-            keywords: ['scatter', 'splatter', 'instances', 'stamp', 'rivets', 'pebbles', 'distribute'],
-            inputs: [anyIn('pattern', 'Pattern'), grayIn('scaleMap', 'Size map', 'white'), grayIn('maskMap', 'Mask map', 'white'), anyIn('colorMap', 'Colour map', 'white')],
-            outputs: [out('any')],
-            params: [
-                select('shape', 'Built-in shape', 'disc', [['square', 'Square'], ['disc', 'Disc'], ['bell', 'Soft bump'], ['paraboloid', 'Dome'], ['pyramid', 'Pyramid']], { hint: 'Used when no pattern is wired in.' }),
-                int('columns', 'Across', 8, 1, 128),
-                int('rows', 'Down', 8, 1, 128),
-                float('size', 'Size', 0.8, 0, 3),
-                vec2('stretch', 'Stretch', [1, 1], 0.05, 4),
-                float('sizeRandom', 'Size randomness', 0.2, 0, 1),
-                float('rotation', 'Turn (degrees)', 0, -360, 360, { step: 1 }),
-                float('rotationRandom', 'Turn randomness', 0, 0, 1),
-                float('positionRandom', 'Position randomness', 0.3, 0, 2),
-                float('offset', 'Row offset', 0, 0, 1),
-                float('brightnessRandom', 'Brightness randomness', 0, 0, 1),
-                float('dropRandom', 'Leave out at random', 0, 0, 1),
-                select('combine', 'Overlaps', 'max', [['max', 'Brightest wins'], ['add', 'Add up'], ['over', 'Each on top']]),
-                seed(),
-            ],
-            sizeFrom: 'graph',
-            kindFrom: ['pattern', 'colorMap'],
-            cost: () => 25,
-            glsl: `float builtIn(vec2 p) {
-    float r = length(p);
-    if (p_shape == 0) return step(max(abs(p.x), abs(p.y)), 1.0);
-    if (p_shape == 1) return 1.0 - smoothstep(0.96, 1.0, r);
-    if (p_shape == 2) return exp(-r * r * 4.0) * step(r, 1.0);
-    if (p_shape == 3) return saturate(1.0 - r * r);
-    return saturate(1.0 - max(abs(p.x), abs(p.y)));
-}
-void main() {
-    vec2 grid = vec2(p_columns, p_rows);
-    vec2 p = vUv * grid;
-    ivec2 base = ivec2(floor(p));
-    vec4 result = vec4(0.0);
-    float extent = p_size * (1.0 + p_sizeRandom) * max(p_stretch.x, p_stretch.y) * 0.75 + p_positionRandom * 0.5 + p_offset;
-    // Cells as far away as a copy can reach (big, stretched or far-moved copies span several).
-    int reach = int(clamp(ceil(extent), 1.0, 6.0));
-    float topOrder = -1.0;
-    for (int y = -reach; y <= reach; y++) {
-        for (int x = -reach; x <= reach; x++) {
-            ivec2 cell = base + ivec2(x, y);
-            ivec2 id = wrapCell(cell, ivec2(p_columns, p_rows));
-            if (hash1(id, uSeed + 11.0) < p_dropRandom) continue;
-            vec2 centre = vec2(cell) + 0.5 + (hash2(id, uSeed + 1.0) - 0.5) * p_positionRandom;
-            // By the wrapped row, so shapes over the top and bottom edges stay whole with an odd number of rows.
-            centre.x += mod(float(id.y), 2.0) * p_offset;
-            vec2 cellUv = centre / grid;
-            float scale = p_size * (1.0 - hash1(id, uSeed + 2.0) * p_sizeRandom) * g_scaleMap(fract(cellUv));
-            if (scale <= 0.0) continue;
-            if (g_maskMap(fract(cellUv)) < 0.5) continue;
-            float angle = radians(p_rotation) + (hash1(id, uSeed + 3.0) - 0.5) * TAU * p_rotationRandom;
-            vec2 local = rotate2(-angle) * (p - centre) / (scale * p_stretch * 0.5);
-            if (abs(local.x) > 1.0 || abs(local.y) > 1.0) continue;
-            vec4 v = w_pattern == 1 ? c_pattern(local * 0.5 + 0.5) : vec4(vec3(builtIn(local)), 1.0);
-            float brightness = 1.0 - hash1(id, uSeed + 4.0) * p_brightnessRandom;
-            v.rgb *= brightness * c_colorMap(fract(cellUv)).rgb;
-            float order = hash1(id, uSeed + 5.0);
-            if (p_combine == 0) result = max(result, v);
-            else if (p_combine == 1) result += v;
-            else if (order > topOrder && luma(v.rgb) > 0.0) { result = v; topOrder = order; }
-        }
-    }
-    outColor = result;
-}`,
-        }),
-    },
 ];

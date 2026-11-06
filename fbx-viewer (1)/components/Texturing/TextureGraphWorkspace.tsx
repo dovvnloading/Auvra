@@ -10,7 +10,8 @@ import { OUTPUT_NODE_TYPE, SUBGRAPH_NODE_TYPE, SUBGRAPH_SEED_KEY, SUBGRAPH_VARY_
 import { textureNodeDefinition, type GraphEntry, type GraphResolver } from '../../texturing/graph/registry';
 import { bakeSignature, readStoredGraph, type StoredTextureGraph } from '../../texturing/graph/stored';
 import { MATERIAL_CHANNELS, MATERIAL_CHANNEL_LABELS, materialKey } from '../../texturing/graph/material';
-import { OUTPUT_CHANNELS, OUTPUT_CHANNEL_LABELS, type GraphParameter, type GraphParameterKind, type OutputChannel, type TexGraphNode, type TexNodeDef, type TexParamDef, type TextureGraph } from '../../texturing/graph/types';
+import { TILING_MODES } from '../../texturing/graph/inherit';
+import { OUTPUT_CHANNELS, OUTPUT_CHANNEL_LABELS, type GraphParameter, type GraphParameterKind, type OutputChannel, type TexGraphNode, type TexNodeDef, type TexParamDef, type TextureGraph, type TilingMode } from '../../texturing/graph/types';
 import { DEEP_EXPORT, ROLE_LABELS, encodeChannels, materialGraphForTextures, type ChannelImages, type ChannelTextureIds, type MaterialChannel, type PictureLayout, materialReadsPicture } from '../../texturing/materialOutput';
 import { download, makeZip } from '../../texturing/zip';
 import { Button, IconButton, Segmented, Spinner } from '../UI/kit';
@@ -649,7 +650,7 @@ const Workspace: React.FC<{
                 ))}
                 {!isOutput && (
                     <div className="space-y-1.5 border-t border-line pt-2">
-                        <div className="text-2xs font-semibold text-ink-2">Size and precision</div>
+                        <div className="text-2xs font-semibold text-ink-2">Size, bit depth, tiling and seed</div>
                         <Select value={sizeMode} options={[{ value: 'input', label: 'Follow its input' }, { value: 'graph', label: 'Follow the graph' }, { value: 'absolute', label: 'Fixed size' }]}
                             onChange={(mode) => changeNode({ ...single, size: { mode, w: mode === 'absolute' ? graph.size.w : 0, h: mode === 'absolute' ? graph.size.h : 0 } })} className="w-full" />
                         <div className="grid grid-cols-[auto_1fr_auto_1fr] items-center gap-1.5">
@@ -658,9 +659,20 @@ const Workspace: React.FC<{
                             <span className="text-2xs text-ink-3">Height</span>
                             <Select value={sizeH} options={fixed ? FIXED_SIZES : RELATIVE_SIZES} placeholder="Height" onChange={(value) => changeNode({ ...single, size: { mode: sizeMode, w: sizeW, h: Number(value) } })} />
                         </div>
-                        <Segmented value={String(single.precision ?? 'auto')} options={[{ value: 'auto', label: 'Auto', hint: 'As its inputs keep it' }, { value: '8', label: '8-bit', hint: 'Steps of 1/255, as a picture keeps them' }, { value: '16', label: 'Half float', hint: '16-bit floating point: fine steps for heights and masks' }, { value: '32', label: 'Full float', hint: '32-bit floating point: exact, and four times the memory of 8-bit' }]}
-                            onChange={(value) => changeNode({ ...single, precision: value === 'auto' ? undefined : Number(value) as 8 | 16 | 32 })} label="Precision" />
-                        {state && <p className="text-2xs text-ink-3">{state.width} × {state.height}, drawn in {state.milliseconds < 1 ? 'under 1' : Math.round(state.milliseconds)} ms</p>}
+                        <Segmented value={String(single.precision ?? 'auto')} options={[{ value: 'auto', label: 'Input', hint: 'As its inputs keep it' }, { value: 'graph', label: 'Graph', hint: 'The graph\'s bit depth' }, { value: '8', label: '8-bit', hint: 'Steps of 1/255, as a picture keeps them' }, { value: '16', label: 'Half', hint: '16-bit floating point: fine steps for heights and masks' }, { value: '32', label: 'Full', hint: '32-bit floating point: exact, and four times the memory of 8-bit' }]}
+                            onChange={(value) => changeNode({ ...single, precision: value === 'auto' ? undefined : value === 'graph' ? 'graph' : Number(value) as 8 | 16 | 32 })} label="Bit depth" />
+                        <Select value={single.tiling ?? (definition.inputs.length ? 'input' : 'graph')}
+                            options={[
+                                ...(definition.inputs.length ? [{ value: 'input', label: 'Tiles as its input does' }] : []),
+                                { value: 'graph', label: 'Tiles as the graph does' },
+                                ...TILING_MODES.map(([mode, label]) => ({ value: mode, label: mode === 'none' ? 'Does not tile' : `Tiles ${label.toLowerCase()}` })),
+                            ]}
+                            onChange={(value) => { const { tiling: _old, ...rest } = single; changeNode(value === (definition.inputs.length ? 'input' : 'graph') ? rest : { ...rest, tiling: value as NonNullable<TexGraphNode['tiling']> }); }} className="w-full" />
+                        {definition.params.some((param) => param.key === 'seed') && (
+                            <Select value={single.seedFrom ?? 'graph'} options={[{ value: 'graph', label: 'Its seed mixed with the graph\'s' }, { value: 'input', label: 'Its seed mixed with its input\'s' }, { value: 'fixed', label: 'Its own seed alone' }]}
+                                onChange={(value) => { const { seedFrom: _old, ...rest } = single; changeNode(value === 'graph' ? rest : { ...rest, seedFrom: value as 'input' | 'fixed' }); }} className="w-full" />
+                        )}
+                        {state && <p className="text-2xs text-ink-3">{state.width} × {state.height}{state.tiling ? `, ${state.tiling === 'none' ? 'not tiling' : `tiling ${TILING_MODES.find(([mode]) => mode === state.tiling)?.[1].toLowerCase()}`}` : ''}, drawn in {state.milliseconds < 1 ? 'under 1' : Math.round(state.milliseconds)} ms</p>}
                     </div>
                 )}
                 {shownOptions(definition).length > 1 && (
@@ -687,6 +699,20 @@ const Workspace: React.FC<{
                 <div className="flex items-center gap-1">
                     <DraftNumber label="Graph random seed" value={graph.seed} integer limit={(seed) => Math.max(0, Math.min(999, seed))} onCommit={(seed) => update({ ...graph, seed }, true)} className="w-16" />
                     <button aria-label="Another seed" title="Another seed" onClick={() => update({ ...graph, seed: Math.floor(Math.random() * 1000) }, true)} className="rounded p-1 text-ink-2 hover:bg-white/5 hover:text-ink"><DiceIcon size={13} /></button>
+                </div>
+                <span className="text-2xs text-ink-2">Tiling</span>
+                <Select value={graph.tiling ?? 'both'} options={TILING_MODES.map(([value, label]) => ({ value, label }))}
+                    onChange={(value) => { const { tiling: _old, ...rest } = graph; update(value === 'both' ? rest : { ...rest, tiling: value as TilingMode }, true); }} className="w-[140px]" />
+                <span className="text-2xs text-ink-2">Bit depth (nodes set to the graph's)</span>
+                <Select value={graph.precision ?? 0} options={[{ value: 0, label: 'By kind' }, { value: 8, label: '8-bit' }, { value: 16, label: 'Half float' }, { value: 32, label: 'Full float' }]}
+                    onChange={(value) => { const { precision: _old, ...rest } = graph; update(value ? { ...rest, precision: Number(value) as 8 | 16 | 32 } : rest, true); }} className="w-[140px]" />
+                <span className="text-2xs text-ink-2" title="The size the picture stands for in the world, so normals can be worked out in world units">Size in the world (metres)</span>
+                <div className="flex items-center gap-1">
+                    <DraftNumber label="Width in metres" value={graph.physicalSize?.w ?? 1} limit={(value) => Math.max(0.001, Math.min(10000, value))}
+                        onCommit={(w) => update({ ...graph, physicalSize: { w, h: graph.physicalSize?.h ?? 1 } }, true)} className="w-14" />
+                    <span className="text-2xs text-ink-3">×</span>
+                    <DraftNumber label="Height in metres" value={graph.physicalSize?.h ?? 1} limit={(value) => Math.max(0.001, Math.min(10000, value))}
+                        onCommit={(h) => update({ ...graph, physicalSize: { w: graph.physicalSize?.w ?? 1, h } }, true)} className="w-14" />
                 </div>
             </div>
             {Math.max(graph.size.w, graph.size.h) >= 12 && <p className="text-2xs leading-snug text-ink-3">Large editing sizes redraw slowly; the material's pictures can be larger than the editing size.</p>}

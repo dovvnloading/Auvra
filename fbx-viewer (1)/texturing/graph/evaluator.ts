@@ -1,12 +1,13 @@
 import type * as THREE from 'three';
 import type { GpuImage, ImagePrecision, TextureGpu } from '../gpu/textureGpu';
-import { formulaScope, graphContentKey, hashText, parameterValues, resolveNodeParams, shaderSeed, subgraphRunSeed, MAX_SIZE_LOG2 } from './document';
+import { formulaScope, graphContentKey, hashText, parameterValues, resolveNodeParams, subgraphRunSeed, MAX_SIZE_LOG2 } from './document';
 import { MATERIAL_CHANNELS, materialOf, materialResults, type MaterialImages } from './material';
 import { withNamedLinks } from './namedLinks';
+import { resolvePrecision, resolveSeed, resolveSize, resolveTiling, tilingAxes } from './inherit';
 import { nodeBindings } from './nodeKit';
 import { INPUT_NODE_TYPE, MESH_MAP_NODE_TYPE, MESH_READING_NODE_TYPES, OUTPUT_NODE_TYPE, SUBGRAPH_NODE_TYPE, SUBGRAPH_SEED_KEY, SUBGRAPH_VARY_KEY } from './nodes/io';
 import { textureNodeDefinition, type GraphResolver } from './registry';
-import { outputNodeKind, type NodeRunContext, type PortKind, type TexGraphLink, type TexGraphNode, type TexNodeDef, type TextureGraph } from './types';
+import { outputNodeKind, type NodeRunContext, type PortKind, type TexGraphLink, type TexGraphNode, type TexNodeDef, type TextureGraph, type TilingMode } from './types';
 
 /**
  * TEXTURE GRAPH EVALUATION
@@ -56,6 +57,9 @@ export interface NodeState {
     milliseconds: number;
     /** When it was last asked for, for letting go of old results first. */
     used: number;
+    /** Which ways it tiled, and the seed its shaders saw (for the editor to show and place handles by). */
+    tiling?: TilingMode;
+    seed?: number;
 }
 
 /** GPU bytes of results kept before the oldest go. */
@@ -80,6 +84,8 @@ interface NodeDetails {
     height: number;
     kinds: Record<string, PortKind>;
     precision: ImagePrecision;
+    /** Which ways it tiles, as worked out from the node, its input or the graph. */
+    tiling: TilingMode;
     params: Record<string, unknown>;
     warnings: string[];
     /** The seed its shaders see. */
@@ -246,23 +252,10 @@ export class TextureGraphEvaluator {
             const warnings: string[] = [];
             const params = resolveNodeParams(definition, node, values, scope, warnings);
             const links = plan.incoming.get(node.id);
+            // What the node takes after when it takes after its input: the first one wired.
+            const first = definition.inputs.map((port) => info.get(links?.get(port.key)?.from ?? '')).find((details): details is NodeDetails => Boolean(details));
             // Size: from the first wired input or the graph, then the node's own change.
-            let width = graphWidth;
-            let height = graphHeight;
-            const mode = node.size?.mode ?? definition.sizeFrom;
-            if (mode === 'absolute') {
-                width = 2 ** (node.size?.w ?? 10);
-                height = 2 ** (node.size?.h ?? 10);
-            } else {
-                if (mode === 'input') {
-                    for (const port of definition.inputs) {
-                        const source = info.get(links?.get(port.key)?.from ?? '');
-                        if (source) { width = source.width; height = source.height; break; }
-                    }
-                }
-                width = width * 2 ** (node.size?.w ?? 0);
-                height = height * 2 ** (node.size?.h ?? 0);
-            }
+            let { width, height } = resolveSize(node.size?.mode ?? definition.sizeFrom, node.size, first, { width: graphWidth, height: graphHeight });
             // A bypassed node passes its main input through: it takes that input's size and kind.
             const main = bypassedInput(node, definition);
             const mainSource = main ? info.get(links?.get(main)?.from ?? '') : undefined;
@@ -284,19 +277,16 @@ export class TextureGraphEvaluator {
                 const passed = outputKind(links?.get(main)) ?? (definition.inputs.find((port) => port.key === main)?.kind === 'gray' ? 'gray' : null);
                 if (passed) for (const port of definition.outputs) if (port.kind !== 'material') kinds[port.key] = passed;
             }
-            // Precision: as asked, else the widest wired in, else by kind.
-            let precision: ImagePrecision = anyKind === 'color' ? 8 : 16;
-            if (node.precision && node.precision !== 'auto') precision = node.precision;
-            else {
-                const wired = definition.inputs.map((port) => info.get(links?.get(port.key)?.from ?? '')?.precision).filter((value): value is ImagePrecision => value !== undefined);
-                if (wired.length) precision = Math.max(...wired) as ImagePrecision;
-            }
+            // Precision: as asked, the graph's, else the widest wired in, else by kind.
+            const wired = definition.inputs.map((port) => info.get(links?.get(port.key)?.from ?? '')?.precision).filter((value): value is ImagePrecision => value !== undefined);
+            const precision = resolvePrecision(node.precision, wired, graph.precision, anyKind);
+            const tiling = resolveTiling(node.tiling, first?.tiling, graph.tiling ?? 'both', definition.inputs.length > 0);
             const inputSignatures = definition.inputs.map((port) => {
                 const link = links?.get(port.key);
                 const source = link ? info.get(link.from) : undefined;
                 return source ? `${source.signature}/${link!.fromOutput}` : '-';
             });
-            const seed = shaderSeed(graphSeed, Math.round(Number(params.seed) || 0));
+            const seed = resolveSeed(node.seedFrom, Math.round(Number(params.seed) || 0), graphSeed, first?.seed);
             const extras: string[] = [];
             let innerSeed: number | undefined;
             if (node.type === INPUT_NODE_TYPE) extras.push(externalToken(String(params.name || 'input')));
@@ -320,8 +310,8 @@ export class TextureGraphEvaluator {
                 extras.push(typeof id === 'string' && id && this.texture(id) ? `${id}:ready` : `${String(id)}:waiting`);
             }
             if (main) extras.push(`bypass:${main}`);
-            const signature = hashText(JSON.stringify([node.type, params, width, height, precision, seed, kinds, inputSignatures, extras]));
-            info.set(node.id, { signature, width, height, kinds, precision, params, warnings, seed, innerSeed });
+            const signature = hashText(JSON.stringify([node.type, params, width, height, precision, seed, kinds, inputSignatures, extras, tiling]));
+            info.set(node.id, { signature, width, height, kinds, precision, tiling, params, warnings, seed, innerSeed });
         }
         return { plan, info, targets, external, graphSeed };
     }
@@ -393,7 +383,7 @@ export class TextureGraphEvaluator {
                 continue;
             }
             const started = performance.now();
-            const state: NodeState = { signature: details.signature, outputs: {}, width: details.width, height: details.height, milliseconds: 0, used: ++this.clock };
+            const state: NodeState = { signature: details.signature, outputs: {}, width: details.width, height: details.height, milliseconds: 0, used: ++this.clock, tiling: details.tiling, seed: details.seed };
             if (details.warnings.length) state.warnings = details.warnings;
             // Every picture the node takes, so whatever it still holds when it fails (or is not kept) goes back.
             const made: GpuImage[] = [];
@@ -492,6 +482,7 @@ export class TextureGraphEvaluator {
             height: details.height,
             seed,
             precision: details.precision,
+            tiling: tilingAxes(details.tiling),
             params: details.params,
             signal: request.signal ?? new AbortController().signal,
             input,
@@ -502,7 +493,7 @@ export class TextureGraphEvaluator {
                 return image;
             },
             pass: async (target, fragment, extra = {}) => {
-                const bound = nodeBindings(definition, { input, params: details.params, seed, texture: this.texture }, (name) => gpu.constant(name));
+                const bound = nodeBindings(definition, { input, params: details.params, seed, texture: this.texture, tiling: tilingAxes(details.tiling) }, (name) => gpu.constant(name));
                 await gpu.pass(target, {
                     ...extra,
                     fragment: `${bound.declarations}\n${fragment}`,

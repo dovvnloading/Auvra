@@ -3,12 +3,13 @@ import { DISTANCE_NODES } from './nodes/distance';
 import { GENERATOR_NODES } from './nodes/generators';
 import { INPUT_NODE_TYPE, IO_NODES, OUTPUT_NODE_TYPE, SUBGRAPH_NODE_TYPE, SUBGRAPH_SEED_KEY, SUBGRAPH_VARY_KEY, subgraphParamDefs } from './nodes/io';
 import { MATERIAL_NODES } from './nodes/materials';
+import { SCATTER_NODES } from './nodes/scatter';
 import { TRANSFORM_NODES } from './nodes/transform';
 import { OUTPUT_CHANNEL_LABELS, outputNodeKind, type NodeCategory, type OutputChannel, type PortKind, type TexGraphLink, type TexGraphNode, type TexNodeDef, type TexParamDef, type TextureGraph } from './types';
 
 /** Every node a texture graph can hold, by type; sub-graph nodes are made from the graph they use. */
 
-export const TEXTURE_NODE_DEFINITIONS: readonly TexNodeDef[] = [...IO_NODES, ...GENERATOR_NODES, ...ADJUST_NODES, ...TRANSFORM_NODES, ...DISTANCE_NODES, ...MATERIAL_NODES];
+export const TEXTURE_NODE_DEFINITIONS: readonly TexNodeDef[] = [...IO_NODES, ...GENERATOR_NODES, ...SCATTER_NODES, ...ADJUST_NODES, ...TRANSFORM_NODES, ...DISTANCE_NODES, ...MATERIAL_NODES];
 
 const BY_TYPE = new Map(TEXTURE_NODE_DEFINITIONS.map((definition) => [definition.type, definition]));
 
