@@ -644,6 +644,36 @@ export const compileMaterialGraph = (graph: MaterialGraph, options: CompileOptio
     return { stage, statements, globals, helpers: [...helpers], outputs, connected, uniforms, builtins, key: shape.join('|'), unused, previews };
 };
 
+/**
+ * A graph's shape: its nodes' kinds, the settings written into the shader (choices, switches, code) and
+ * its wiring; not its values, where its nodes sit, their parameter names or its comments. Graphs of one
+ * shape compile to the same shaders, and differ only in their uniforms' values.
+ */
+export const materialGraphShape = (graph: MaterialGraph): string => JSON.stringify([
+    graph.nodes.map((node) => {
+        const definition = DEFINITIONS.get(node.type);
+        const statics = definition ? definition.params.filter(param => STATIC_PARAM_KINDS.has(param.kind)).map(param => node.params[param.key] ?? null) : [];
+        return [node.id, node.type, statics];
+    }),
+    graph.links.map(link => [link.fromNode, link.fromOutput, link.toNode, link.toInput]),
+]);
+
+const looks = new WeakMap<MaterialGraph, string>();
+
+/**
+ * What a graph draws with: everything but where its nodes sit and its comments. Two graphs alike here
+ * shade every material alike, so moving nodes changes nothing a material draws. Graphs are never changed
+ * in place, so each is read once.
+ */
+export const materialGraphLook = (graph: MaterialGraph): string => {
+    let look = looks.get(graph);
+    if (look === undefined) {
+        look = JSON.stringify([graph.nodes.map(({ x: _x, y: _y, ...rest }) => rest), graph.links]);
+        looks.set(graph, look);
+    }
+    return look;
+};
+
 // ---------------------------------------------------------------------------
 // Settings
 // ---------------------------------------------------------------------------

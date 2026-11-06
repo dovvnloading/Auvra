@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { ChevronDownIcon, ChevronRightIcon, MaterialIcon, ResetIcon, SaveIcon, SearchIcon, TrashIcon, UndoIcon, WarningIcon } from '../UI/Icons';
 import type { LoadedModelData, TextureData } from '../../types';
 import { Select } from '../UI/Select';
-import { materialLibrary } from '../../runtime/materials/materialLibrary';
+import { materialAssetUse, materialLibrary } from '../../runtime/materials/materialLibrary';
 import { materialGraphParameters, type MaterialParameter } from '../../runtime/materials/materialGraph';
 import {
   MAX_EMISSIVE_INTENSITY,
@@ -16,6 +16,7 @@ import {
   overrideTextureFlipY,
   setMaterialOverrideField,
   tagOverrideTexture,
+  withBaseMap,
   type MaterialOverride,
   type MaterialOverrideField,
   type MaterialOverrides,
@@ -28,7 +29,7 @@ import { ColourField } from '../UI/ColourPicker';
 export interface MaterialEditorProps {
   /** The model whose materials are edited; changes preview live on `model.object`. */
   model: LoadedModelData & { materialOverrides?: unknown };
-  /** Library textures offered for the base-colour and normal map slots. */
+  /** Library textures offered for the map slots. */
   textures: TextureData[];
   /** Persists the overrides on the model document. Without it the panel only previews. */
   onSave?: (modelId: string, overrides: MaterialOverrides) => Promise<void> | void;
@@ -148,24 +149,48 @@ const TextureField: React.FC<{
 };
 
 /**
- * Lists a model's materials and edits per-material overrides (colour, PBR
- * values, emissive, opacity and texture maps). Every edit previews live on the
- * model; unsaved edits are reverted when the panel closes or the model changes.
+ * A material asset (Materials tab) whose node graph shades this material instead of the fields below.
+ * Only assets that draw are offered: a texture graph whose pictures are not made yet, or a painting not
+ * yet put on a model, would shade it plain grey, and a graph made for other graphs is no material.
  */
-/** A material asset (Materials tab) whose node graph shades this material instead of the fields below. */
-const MaterialAssetField: React.FC<{ value: string | undefined; onChange: (value: string | undefined) => void }> = ({ value, onChange }) => {
-  const id = useId();
+const MaterialAssetField: React.FC<{
+  value: string | undefined;
+  /** Whether this kind of material can be shaded by a graph (standard materials only). */
+  takesAsset: boolean;
+  materialType: string;
+  onChange: (value: string | undefined) => void;
+}> = ({ value, takesAsset, materialType, onChange }) => {
   const version = useSyncExternalStore((listener) => materialLibrary.subscribe(listener), () => materialLibrary.version);
   const assets = useMemo(() => materialLibrary.list(), [version]);
+  const drawing = useMemo(() => assets.filter((asset) => materialAssetUse(asset) === 'material'), [assets]);
+  const waiting = useMemo(() => assets.filter((asset) => materialAssetUse(asset) === 'needsPictures'), [assets]);
+  const options = useMemo(() => {
+    const list = [{ label: 'Its own', value: '' }, ...drawing.map((asset) => ({ label: asset.name, value: asset.id }))];
+    if (value && !drawing.some((asset) => asset.id === value)) {
+      const chosen = assets.find((asset) => asset.id === value);
+      list.push({ label: chosen ? chosen.name + ' (has no pictures yet)' : 'Missing material', value });
+    }
+    return list;
+  }, [assets, drawing, value]);
+  const unlit = materialType === 'MeshBasicMaterial';
   return (
-    <FieldRow label="Material asset" htmlFor={id} overridden={Boolean(value)} onReset={() => onChange(undefined)}>
-      <select id={id} value={value ?? ''} onChange={(event) => onChange(event.target.value || undefined)}
-        className="flex-1 min-w-0 bg-gray-950 border border-gray-700 rounded px-1.5 py-1 text-2xs text-gray-200">
-        <option value="">(its own)</option>
-        {assets.map((asset) => <option key={asset.id} value={asset.id}>{asset.name}</option>)}
-        {value && !assets.some((asset) => asset.id === value) && <option value={value}>(missing material)</option>}
-      </select>
-    </FieldRow>
+    <>
+      <FieldRow label="Material asset" overridden={Boolean(value)} onReset={() => onChange(undefined)}>
+        <div className="flex-1 min-w-0" aria-label="Material asset">
+          <Select value={value ?? ''} options={options} onChange={(next: string) => onChange(next || undefined)} disabled={!takesAsset} className="w-full" />
+        </div>
+      </FieldRow>
+      {!takesAsset && (
+        <p className="text-2xs leading-snug text-amber-400/90">
+          A material asset can&apos;t shade this material: it is {unlit ? 'drawn without lighting' : 'an older kind of shaded material'}, and material assets need the standard lit material. Its own colour and maps below still apply.
+        </p>
+      )}
+      {takesAsset && waiting.length > 0 && (
+        <p className="text-2xs leading-snug text-gray-500">
+          Not offered until they have pictures: {waiting.map((asset) => asset.name).join(', ')}. Choose Update material on a texture graph in Materials, or Put on the model in Paint.
+        </p>
+      )}
+    </>
   );
 };
 
@@ -209,7 +234,7 @@ const ParameterField: React.FC<{ parameter: MaterialParameter; value: number | n
   return (
     <FieldRow label={name} overridden={overridden} onReset={reset}>
       {components.map((component, index) => (
-        <NumberInput key={index} label={`${name} ${'XYZ'[index]}`} value={component} step={0.05}
+        <NumberInput key={index} label={`${name} ${'XYZW'[index]}`} value={component} step={0.05}
           onChange={(next) => onChange(components.map((old, at) => (at === index ? next : old)))} />
       ))}
     </FieldRow>
@@ -250,6 +275,12 @@ export const MaterialEditor: React.FC<MaterialEditorProps> = (props) => (
   <MaterialEditorSession key={`${props.model.id}:${props.model.object.uuid}`} {...props} />
 );
 
+/**
+ * Lists a model's materials and edits per-material overrides (colour, PBR
+ * values, emissive, opacity, texture maps and a material asset). Every edit
+ * previews live on the model; unsaved edits are reverted when the panel closes
+ * or the model changes.
+ */
 const MaterialEditorSession: React.FC<MaterialEditorProps> = ({ model, textures, onSave, className = '' }) => {
   const stored = useMemo(() => normalizeMaterialOverrides(model.materialOverrides), [model.materialOverrides]);
   const [saved, setSaved] = useState<MaterialOverrides>(stored);
@@ -345,6 +376,11 @@ const MaterialEditorSession: React.FC<MaterialEditorProps> = ({ model, textures,
     setDraft((current) => setMaterialOverrideField(current, name, field, value));
   };
 
+  const editBaseMap = (name: string, textureId: string | undefined) => {
+    setError(null);
+    setDraft((current) => withBaseMap(current, name, textureId));
+  };
+
   const textureStatus = (textureId: string | undefined, slot: MaterialTextureSlot): string | null => {
     if (!textureId) return null;
     const key = overrideTextureCacheKey(textureId, slot);
@@ -385,7 +421,7 @@ const MaterialEditorSession: React.FC<MaterialEditorProps> = ({ model, textures,
     const { base } = material;
     return (
       <div className="px-3 pb-3 pt-1 space-y-1 border-t border-gray-800/80">
-        <MaterialAssetField value={override.materialId} onChange={(value) => editField(material.name, 'materialId', value)} />
+        <MaterialAssetField value={override.materialId} takesAsset={material.takesAsset} materialType={material.type} onChange={(value) => editField(material.name, 'materialId', value)} />
         {override.materialId && (
           <MaterialParameterFields materialId={override.materialId} values={override.parameters}
             onChange={(value) => editField(material.name, 'parameters', value)} />
@@ -416,11 +452,22 @@ const MaterialEditorSession: React.FC<MaterialEditorProps> = ({ model, textures,
           onChange={(value) => editField(material.name, 'opacity', value)} onReset={() => editField(material.name, 'opacity', undefined)} />
         {base.hasMapSlot && (
           <TextureField label="Base map" value={override.mapTextureId} textures={textures} status={textureStatus(override.mapTextureId, 'map')}
-            onChange={(value) => editField(material.name, 'mapTextureId', value)} />
+            onChange={(value) => editBaseMap(material.name, value)} />
+        )}
+        {base.hasMapSlot && override.mapTextureId && override.paintedMap && (
+          <p className="pl-[6.5rem] text-2xs leading-snug text-gray-500">A painted picture: it shows its own colours, is cut out where it is see-through, and draws from both sides.</p>
         )}
         {base.hasNormalSlot && (
           <TextureField label="Normal map" value={override.normalTextureId} textures={textures} status={textureStatus(override.normalTextureId, 'normal')}
             onChange={(value) => editField(material.name, 'normalTextureId', value)} />
+        )}
+        {base.hasRoughnessSlot && (
+          <TextureField label="Roughness map" value={override.roughnessTextureId} textures={textures} status={textureStatus(override.roughnessTextureId, 'roughness')}
+            onChange={(value) => editField(material.name, 'roughnessTextureId', value)} />
+        )}
+        {base.hasMetalnessSlot && (
+          <TextureField label="Metalness map" value={override.metalnessTextureId} textures={textures} status={textureStatus(override.metalnessTextureId, 'metalness')}
+            onChange={(value) => editField(material.name, 'metalnessTextureId', value)} />
         )}
         {material.instanceCount > 1 && (
           <p className="text-2xs text-gray-600 pt-1">Applies to {material.instanceCount} materials named “{material.name}”.</p>
@@ -461,7 +508,8 @@ const MaterialEditorSession: React.FC<MaterialEditorProps> = ({ model, textures,
           const editable = !unnamed && !reserved;
           const isOpen = editable && expanded === material.name;
           const override = draft[material.name];
-          const fieldCount = override ? Object.keys(override).length : 0;
+          // How a base map draws is part of the base map, not a field of its own.
+          const fieldCount = override ? Object.keys(override).filter((field) => field !== 'paintedMap').length : 0;
           const swatch = override?.color ?? material.base.color ?? '#000000';
           return (
             <div key={material.name || '(unnamed)'} className={`rounded-md border ${isOpen ? 'border-blue-500/30 bg-gray-950/60' : 'border-gray-800 bg-gray-950/30'}`}>
