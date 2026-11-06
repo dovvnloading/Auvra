@@ -19,6 +19,7 @@ import {
 } from '../../texturing/graph/document';
 import { sampleCurve } from '../../texturing/graph/nodeKit';
 import { islandLabelRows, labelIslands, packMask } from '../../texturing/graph/nodes/distance';
+import { pixelProcessorCost } from '../../texturing/graph/nodes/io';
 import { TEXTURE_NODE_DEFINITIONS, placeholderDefinition, textureNodeDefinition, textureNodeDefinitionByType } from '../../texturing/graph/registry';
 import { outputNodeKind, type TextureGraph } from '../../texturing/graph/types';
 import { bakeSignature, readStoredGraph } from '../../texturing/graph/stored';
@@ -234,6 +235,13 @@ describe('texture graph helpers', () => {
 
     it('checks ZIP entries as the format says', () => {
         expect(crc32(new TextEncoder().encode('123456789'))).toBe(0xcbf43926);
+    });
+
+    it('gives hand-written pixels a cost that grows with their reads and loops', () => {
+        expect(pixelProcessorCost('vec4 v = c_a(uv);\noutColor = v;')).toBe(16);
+        const looped = pixelProcessorCost('vec4 s = vec4(0.0);\nfor (int i = 0; i < 64; i++) { s += c_a(uv + vec2(float(i)) * 0.001) + c_b(uv); }\noutColor = s;');
+        expect(looped).toBeGreaterThan(256);
+        expect(looped).toBeLessThanOrEqual(1024);
     });
 });
 
