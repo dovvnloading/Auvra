@@ -133,8 +133,24 @@ export const EnvironmentMaskTool: React.FC<EnvironmentMaskToolProps> = ({ modelI
         }
 
         ctx.putImageData(imageData, 0, 0);
-        setPreviewUrl(canvas.toDataURL());
+        // A blob URL, not a data URL: the editor's security policy refuses to fetch data URLs,
+        // and Update Material fetches the preview to keep it with the project.
+        canvas.toBlob((blob) => {
+            if (!blob) return;
+            const url = URL.createObjectURL(blob);
+            setPreviewUrl((previous) => {
+                if (previous?.startsWith('blob:')) URL.revokeObjectURL(previous);
+                return url;
+            });
+        }, 'image/png');
     }, [activeTexture, keyColor, threshold, smoothness, inverted]);
+
+    // Let go of the last preview picture when the tool closes.
+    const previewUrlRef = useRef<string | null>(null);
+    previewUrlRef.current = previewUrl;
+    useEffect(() => () => {
+        if (previewUrlRef.current?.startsWith('blob:')) URL.revokeObjectURL(previewUrlRef.current);
+    }, []);
 
     // Auto-update preview
     useEffect(() => {
