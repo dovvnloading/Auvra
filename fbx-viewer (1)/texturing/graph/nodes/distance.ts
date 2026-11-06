@@ -255,7 +255,8 @@ void main() { float d = texture(distanceMap, vUv).r; outColor = vec4(${grow ? '1
             if (!input) return { out: emptyResult(context) };
             const edges = context.image('gray', context.width, context.height, 8);
             await context.pass(edges, `void main() {
-    vec2 texel = 1.0 / uSize;
+    // Borders between pixels of the input, not of this node.
+    vec2 texel = 1.0 / vec2(textureSize(t_in, 0));
     vec4 c = c_in(vUv);
     float d = max(max(distance(c, c_in(vUv + vec2(texel.x, 0.0))), distance(c, c_in(vUv - vec2(texel.x, 0.0)))), max(distance(c, c_in(vUv + vec2(0.0, texel.y))), distance(c, c_in(vUv - vec2(0.0, texel.y)))));
     outColor = vec4(step(p_tolerance + 1e-4, d));
@@ -409,13 +410,15 @@ void main() { float d = texture(distanceMap, vUv).r; outColor = vec4(1.0 - smoot
         preview: 'normal',
         cost: () => 8,
         glsl: `void main() {
-    vec2 t = 1.0 / uSize;
+    // Steps of one pixel of the height map, not of this node: a size change here only resamples the result.
+    vec2 inputSize = vec2(textureSize(t_in, 0));
+    vec2 t = 1.0 / inputSize;
     float tl = g_in(vUv + vec2(-t.x, t.y)), tc = g_in(vUv + vec2(0.0, t.y)), tr = g_in(vUv + t);
     float ml = g_in(vUv - vec2(t.x, 0.0)), mr = g_in(vUv + vec2(t.x, 0.0));
     float bl = g_in(vUv - t), bc = g_in(vUv - vec2(0.0, t.y)), br = g_in(vUv + vec2(t.x, -t.y));
     // Sobel, as slope per unit of the image so the strength reads the same at any size.
-    float dx = ((tr + 2.0 * mr + br) - (tl + 2.0 * ml + bl)) / 8.0 * uSize.x / 64.0;
-    float dy = ((tl + 2.0 * tc + tr) - (bl + 2.0 * bc + br)) / 8.0 * uSize.y / 64.0;
+    float dx = ((tr + 2.0 * mr + br) - (tl + 2.0 * ml + bl)) / 8.0 * inputSize.x / 64.0;
+    float dy = ((tl + 2.0 * tc + tr) - (bl + 2.0 * bc + br)) / 8.0 * inputSize.y / 64.0;
     vec3 n = normalize(vec3(-dx * p_intensity, -dy * p_intensity, 1.0));
     if (p_format == 1) n.y = -n.y;
     outColor = vec4(n * 0.5 + 0.5, 1.0);
