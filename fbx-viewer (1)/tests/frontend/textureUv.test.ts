@@ -7,7 +7,7 @@ import { flattenChart } from '../../texturing/uv/lscm';
 import { overlappingTriangles } from '../../texturing/uv/overlap';
 import { DEFAULT_UNWRAP, unwrap } from '../../texturing/uv/unwrap';
 import { applyLayout, buildLayout, decodeLayout, encodeLayout } from '../../texturing/uv/uvLayout';
-import { buildCharts, buildTopology, existingSeams } from '../../texturing/uv/uvTopology';
+import { buildCharts, buildTopology, chartCoordinates, existingSeams } from '../../texturing/uv/uvTopology';
 
 /** A gently rising ramp of two turns round a post: every turn nearly flat, so flattened whole it lies on itself. */
 const ramp = (): THREE.BufferGeometry => {
@@ -181,6 +181,61 @@ describe('packing', () => {
             const u = placement.uv[0];
             expect(Math.floor(u)).toBe(placement.tile - 1001);
         }
+    });
+
+    it('leaves islands kept in place exactly where they are and fits the rest round them', () => {
+        const { part } = meshOf(new THREE.SphereGeometry(1, 32, 16));
+        const islands = islandsOf(unwrap(buildTopology(part.positions, part.indices)));
+        const settings = { padding: 8, resolution: 1024, rotate: true, tilesX: 1, tilesY: 1 };
+        const first = packIslands(islands, settings);
+        // One island moved by hand into the middle of the picture, over others, and one left where it was.
+        const box = (uv: Float64Array) => {
+            let minU = Infinity, minV = Infinity, maxU = -Infinity, maxV = -Infinity;
+            for (let k = 0; k < uv.length; k += 2) { minU = Math.min(minU, uv[k]); maxU = Math.max(maxU, uv[k]); minV = Math.min(minV, uv[k + 1]); maxV = Math.max(maxV, uv[k + 1]); }
+            return { minU, minV, maxU, maxV };
+        };
+        const b = box(first[0].uv);
+        const middle = first[0].uv.map((value, k) => value + (k % 2 === 0 ? 0.5 - (b.minU + b.maxU) / 2 : 0.5 - (b.minV + b.maxV) / 2));
+        const keep = new Map<number, Float64Array>([[0, middle]]);
+        // Another kept where packing first put it, when it clears the moved one (kept islands are never moved apart).
+        const m = box(middle);
+        const clear = first.findIndex((placement, i) => {
+            const o = box(placement.uv);
+            return i > 0 && (o.maxU < m.minU || o.minU > m.maxU || o.maxV < m.minV || o.minV > m.maxV);
+        });
+        if (clear > 0) keep.set(clear, first[clear].uv);
+        const again = packIslands(islands.map((island, i) => (keep.has(i) ? { ...island, keepAt: keep.get(i) } : island)), settings);
+        for (const [i, uv] of keep) {
+            expect(Array.from(again[i].uv)).toEqual(Array.from(uv));
+            expect(again[i].tile).toBe(1001);
+        }
+        expect(overlaps(again, islands)).toBe(false);
+        for (const placement of again) for (const value of placement.uv) { expect(value).toBeGreaterThanOrEqual(0); expect(value).toBeLessThanOrEqual(1); }
+    });
+
+    it('packs a surface\'s current islands as they are: same shapes, same sizes against each other, no new seams', () => {
+        // Two separate quads whose coordinates are not their shapes on the model: a 2:1 strip and a 1:3 one.
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute('position', new THREE.Float32BufferAttribute([0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0, 2, 1, 0, 2, 1, 1, 2, 0, 1, 2], 3));
+        geometry.setAttribute('uv', new THREE.Float32BufferAttribute([0, 0, 0.5, 0, 0.5, 0.25, 0, 0.25, 0.6, 0.6, 0.7, 0.6, 0.7, 0.9, 0.6, 0.9], 2));
+        geometry.setIndex([0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7]);
+        geometry.computeVertexNormals();
+        const { part } = meshOf(geometry);
+        const topology = buildTopology(part.positions, part.indices);
+        const charts = buildCharts(topology, existingSeams(topology, part.indices, part.uvs));
+        expect(charts).toHaveLength(2);
+        const before = chartCoordinates(charts, part.indices, part.uvs);
+        const islands: Island[] = charts.map((chart, i) => ({ uv: before[i], triangles: chart.corners, area3d: 0 }));
+        const placements = packIslands(islands, { padding: 8, resolution: 1024, rotate: true, tilesX: 1, tilesY: 1 });
+        expect(overlaps(placements, islands)).toBe(false);
+        // Every distance between corners grows by one common factor: shapes and relative sizes are kept.
+        const distance = (uv: ArrayLike<number>, a: number, b: number) => Math.hypot(uv[a * 2] - uv[b * 2], uv[a * 2 + 1] - uv[b * 2 + 1]);
+        const factor = distance(placements[0].uv, 0, 1) / distance(before[0], 0, 1);
+        expect(factor).toBeGreaterThan(1);
+        islands.forEach((island, i) => {
+            const corners = island.uv.length / 2;
+            for (let a = 0; a < corners; a++) for (let c = a + 1; c < corners; c++) expect(distance(placements[i].uv, a, c)).toBeCloseTo(distance(before[i], a, c) * factor, 6);
+        });
     });
 
     it('finds the UDIM tile each triangle of a layout lands in, by its middle', () => {

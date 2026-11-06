@@ -9,8 +9,8 @@ import { DEFAULT_PACK, packIslands, type Island, type PackSettings, type Placeme
 import { newTriangleTiles, transferPicture } from '../../../texturing/uv/transfer';
 import { DEFAULT_UNWRAP, unwrap, type UnwrapSettings } from '../../../texturing/uv/unwrap';
 import { applyLayout, buildLayout, decodeLayout, encodeLayout, type UvLayoutFile } from '../../../texturing/uv/uvLayout';
-import { buildCharts, buildTopology, edgeKey, existingSeams, type Chart, type UvTopology } from '../../../texturing/uv/uvTopology';
-import { BEFORE, pictureKey } from '../../../texturing/paint/paintStack';
+import { buildCharts, buildTopology, chartCoordinates, edgeKey, existingSeams, type Chart, type UvTopology } from '../../../texturing/uv/uvTopology';
+import { BEFORE, GpuResetError, pictureKey, pictureOwner, pictureOwners, picturePrecision } from '../../../texturing/paint/paintStack';
 import { BLEND_FOR, type FillSource, type PaintChannel, type PaintDocument, type PaintLayer } from '../../../texturing/paint/paintTypes';
 import type { PaintSession } from './paintSession';
 
@@ -62,7 +62,20 @@ export interface UvSessionHost {
     layoutReference: () => { assetId: string } | undefined;
 }
 
-const islandsOf = (charts: Chart[], flat: Array<{ uv: Float64Array }>): Island[] => charts.map((chart, i) => ({ uv: flat[i].uv, triangles: chart.corners, area3d: 0 }));
+/** A UV editing state, kept for undo: seams, flattened islands, the proposal and its islands' settings. */
+interface UvStep {
+    label: string;
+    seams: Set<number>;
+    flat: Array<{ uv: Float64Array }>;
+    proposal: { charts: Chart[]; placements: Placement[] } | null;
+    keepsShapes: boolean;
+    locked: Set<number>;
+    density: Map<number, number>;
+    selected: Set<number>;
+}
+
+/** UV edits undo can go back over. */
+const UV_HISTORY_LIMIT = 60;
 
 export class UvSession {
     readonly topology: UvTopology;
@@ -71,6 +84,10 @@ export class UvSession {
     unwrapSettings: UnwrapSettings = { ...DEFAULT_UNWRAP };
     packSettings: PackSettings = { ...DEFAULT_PACK };
     selected = new Set<number>();
+    /** Islands of the proposal (by index) that packing again leaves where they are. */
+    locked = new Set<number>();
+    /** Islands of the proposal made bigger or smaller by hand: their size against the rest, kept by packing again. */
+    density = new Map<number, number>();
     /** Measures a dragged layout again for overlaps once the islands settle. */
     private settleTimer: ReturnType<typeof setTimeout> | null = null;
     busy: string | null = null;
@@ -83,17 +100,90 @@ export class UvSession {
     version = 0;
     private flat: Array<{ uv: Float64Array }> = [];
     private readonly listeners = new Set<() => void>();
+    private undoSteps: UvStep[] = [];
+    private redoSteps: UvStep[] = [];
     readonly current: UvStats;
+    /** The current layout's seams, where its coordinates are cut. */
+    private readonly currentSeams: Set<number>;
+    /** Stretch per triangle of the current layout (0 kept shape … 1 badly stretched; −1 folded or overlapping). */
+    readonly currentStretch: Float32Array;
+    /** Whether the proposal is the current islands packed as they are (else an unwrap). */
+    proposalKeepsShapes = false;
 
     constructor(readonly paint: PaintSession, readonly host: UvSessionHost) {
         const part = paint.part;
         this.topology = buildTopology(part.positions, part.indices);
         this.seams = existingSeams(this.topology, part.indices, part.uvs);
+        this.currentSeams = new Set(this.seams);
         this.packSettings.resolution = paint.stack.size;
         // Packing again keeps the grid of UDIM tiles the surface is laid over now.
         this.packSettings.tilesX = Math.max(...part.tiles.map((tile) => (tile - 1001) % 10)) + 1;
         this.packSettings.tilesY = Math.max(...part.tiles.map((tile) => Math.floor((tile - 1001) / 10))) + 1;
-        this.current = this.measure(Float32Array.from({ length: part.indices.length * 2 }, (_, i) => part.uvs[part.indices[i >> 1] * 2 + (i & 1)]), buildCharts(this.topology, this.seams), part.tiles.length).stats;
+        const measured = this.measure(Float32Array.from({ length: part.indices.length * 2 }, (_, i) => part.uvs[part.indices[i >> 1] * 2 + (i & 1)]), buildCharts(this.topology, this.seams), part.tiles.length);
+        this.current = measured.stats;
+        this.currentStretch = measured.triangleStretch;
+    }
+
+    // -----------------------------------------------------------------------
+    // Undo
+    // -----------------------------------------------------------------------
+
+    private snapshot(label: string): UvStep {
+        return {
+            label,
+            seams: new Set(this.seams),
+            flat: this.flat,
+            proposal: this.proposal ? { charts: this.proposal.charts, placements: this.proposal.placements.map((placement) => ({ uv: Float64Array.from(placement.uv), tile: placement.tile })) } : null,
+            keepsShapes: this.proposalKeepsShapes,
+            locked: new Set(this.locked),
+            density: new Map(this.density),
+            selected: new Set(this.selected),
+        };
+    }
+
+    /** Keeps the state as it is before an edit called `label`, for undo. */
+    remember(label: string): void {
+        this.keep(this.snapshot(label));
+    }
+
+    private keep(step: UvStep): void {
+        this.undoSteps.push(step);
+        if (this.undoSteps.length > UV_HISTORY_LIMIT) this.undoSteps.shift();
+        this.redoSteps = [];
+    }
+
+    private restore(step: UvStep): void {
+        this.seams = new Set(step.seams);
+        this.flat = step.flat;
+        this.proposalKeepsShapes = step.keepsShapes;
+        this.locked = new Set(step.locked);
+        this.density = new Map(step.density);
+        if (step.proposal) {
+            this.setProposal(step.proposal.charts, step.proposal.placements.map((placement) => ({ uv: Float64Array.from(placement.uv), tile: placement.tile })), { keepSelection: true });
+        } else {
+            this.proposal = null;
+        }
+        this.selected = new Set(step.selected);
+        this.emit();
+    }
+
+    get canUndo(): boolean { return this.undoSteps.length > 0 && !this.busy; }
+    get canRedo(): boolean { return this.redoSteps.length > 0 && !this.busy; }
+    get undoLabel(): string | null { return this.undoSteps[this.undoSteps.length - 1]?.label ?? null; }
+    get redoLabel(): string | null { return this.redoSteps[this.redoSteps.length - 1]?.label ?? null; }
+
+    undo(): void {
+        const step = this.undoSteps.pop();
+        if (!step || this.busy) { if (step) this.undoSteps.push(step); return; }
+        this.redoSteps.push(this.snapshot(step.label));
+        this.restore(step);
+    }
+
+    redo(): void {
+        const step = this.redoSteps.pop();
+        if (!step || this.busy) { if (step) this.redoSteps.push(step); return; }
+        this.undoSteps.push(this.snapshot(step.label));
+        this.restore(step);
     }
 
     subscribe = (listener: () => void): (() => void) => {
@@ -122,6 +212,8 @@ export class UvSession {
             if (distance < bestDistance) { bestDistance = distance; best = edgeKey(a, b, vertexCount); }
         }
         if (best < 0) return;
+        if (remove && !this.seams.has(best)) return;
+        this.remember(remove || this.seams.has(best) ? 'Clear seam' : 'Mark seam');
         if (remove) this.seams.delete(best);
         else if (this.seams.has(best)) this.seams.delete(best);
         else this.seams.add(best);
@@ -148,8 +240,9 @@ export class UvSession {
             const result = unwrap(this.topology, this.unwrapSettings, keepSeams ? this.seams : new Set());
             this.seams = result.seams;
             this.flat = result.flat;
+            this.startIslands(false);
             this.layOut(result.charts);
-        });
+        }, keepSeams ? 'Unwrap, keeping seams' : 'Unwrap afresh');
     }
 
     /** Flattens along exactly the seams there are now, and packs. */
@@ -158,30 +251,60 @@ export class UvSession {
             const result = unwrap(this.topology, this.unwrapSettings, new Set(), this.seams);
             this.seams = result.seams;
             this.flat = result.flat;
+            this.startIslands(false);
             this.layOut(result.charts);
-        });
+        }, 'Unwrap these seams');
     }
 
-    /** Packs the proposal (or the current layout's islands) again with the pack settings. */
+    /**
+     * Packs the proposal again with the pack settings (islands kept in place stay, islands made bigger or
+     * smaller keep their size against the rest), or, without one, the current layout's islands as they are.
+     */
     repack(): void {
         if (!this.proposal) {
-            this.unwrapWithSeams();
+            this.packCurrent();
             return;
         }
-        this.run('Packing', () => this.layOut(this.proposal!.charts));
+        this.run('Packing', () => this.layOut(this.proposal!.charts), 'Pack again');
     }
 
-    private run(label: string, work: () => void): void {
+    /**
+     * Packs the current layout's islands as they are: each keeps its shape, its seams and its size against
+     * the others, and is only moved and turned (no island is flattened again, and no seam is added).
+     */
+    packCurrent(): void {
+        this.run('Packing', () => {
+            const charts = buildCharts(this.topology, this.currentSeams);
+            this.seams = new Set(this.currentSeams);
+            this.flat = chartCoordinates(charts, this.paint.part.indices, this.paint.part.uvs).map((uv) => ({ uv }));
+            this.startIslands(true);
+            this.layOut(charts);
+        }, 'Pack the current islands');
+    }
+
+    /** New islands: none kept in place or resized yet. */
+    private startIslands(keepsShapes: boolean): void {
+        this.locked = new Set();
+        this.density = new Map();
+        this.proposalKeepsShapes = keepsShapes;
+    }
+
+    private run(label: string, work: () => void, step?: string): void {
         this.busy = label;
         this.emit();
         // Let the panel show what is happening before the work holds the page.
         setTimeout(() => {
+            // Kept for undo only once the work has changed something.
+            const before = step ? this.snapshot(step) : null;
             try {
                 work();
+                if (before) this.keep(before);
                 this.status = null;
             } catch (error) {
                 frontendDiagnostics.failure('uv_unwrap_failed', error);
                 this.status = error instanceof Error ? error.message : 'The surface could not be unwrapped.';
+                // Whatever the work changed before it failed is put back.
+                if (before) this.restore(before);
             } finally {
                 this.busy = null;
                 this.emit();
@@ -189,9 +312,21 @@ export class UvSession {
         }, 30);
     }
 
+    /**
+     * Packs `charts` into a new proposal. Packing the same islands again keeps those kept in place where
+     * they are, and gives islands made bigger or smaller their size against the rest.
+     */
     private layOut(charts: Chart[]): void {
-        const placements = packIslands(islandsOf(charts, this.flat), this.packSettings);
-        this.setProposal(charts, placements);
+        const kept = this.proposal?.charts === charts ? this.proposal.placements : null;
+        const islands: Island[] = charts.map((chart, i) => ({
+            uv: this.flat[i].uv,
+            triangles: chart.corners,
+            area3d: 0,
+            densityScale: this.density.get(i) ?? 1,
+            ...(kept && this.locked.has(i) ? { keepAt: kept[i].uv } : {}),
+        }));
+        const placements = packIslands(islands, this.packSettings);
+        this.setProposal(charts, placements, { keepSelection: Boolean(kept) });
     }
 
     /**
@@ -202,15 +337,19 @@ export class UvSession {
         const count = this.paint.part.indices.length;
         const cornerUv = new Float32Array(count * 2);
         const cornerKey = new Uint32Array(count);
-        charts.forEach((chart, c) => chart.faces.forEach((face, i) => {
-            for (let k = 0; k < 3; k++) {
-                const corner = chart.corners[i * 3 + k];
-                cornerUv[(face * 3 + k) * 2] = placements[c].uv[corner * 2];
-                cornerUv[(face * 3 + k) * 2 + 1] = placements[c].uv[corner * 2 + 1];
-                // Charts' corners never share a vertex across charts: key by chart and corner.
-                cornerKey[face * 3 + k] = (c * 65536 + corner) >>> 0;
-            }
-        }));
+        // Charts' corners never share a vertex across charts: each chart's corners get keys of their own.
+        let firstKey = 0;
+        charts.forEach((chart, c) => {
+            chart.faces.forEach((face, i) => {
+                for (let k = 0; k < 3; k++) {
+                    const corner = chart.corners[i * 3 + k];
+                    cornerUv[(face * 3 + k) * 2] = placements[c].uv[corner * 2];
+                    cornerUv[(face * 3 + k) * 2 + 1] = placements[c].uv[corner * 2 + 1];
+                    cornerKey[face * 3 + k] = firstKey + corner;
+                }
+            });
+            firstKey += chart.vertexWeld.length;
+        });
         const measured = this.measure(cornerUv, charts, new Set(newTriangleTiles(cornerUv)).size, !edit.quick);
         this.proposal = { charts, placements, cornerUv, cornerKey, triangleStretch: measured.triangleStretch, stats: measured.stats };
         if (!edit.keepSelection) this.selected.clear();
@@ -291,7 +430,7 @@ export class UvSession {
         };
     }
 
-    /** Moves selected islands by (du, dv). */
+    /** Moves selected islands by (du, dv). A drag remembers the layout once, as it starts (see remember). */
     moveSelected(du: number, dv: number): void {
         if (!this.proposal) return;
         for (const i of this.selected) {
@@ -302,10 +441,15 @@ export class UvSession {
         this.emit();
     }
 
-    /** Turns or scales selected islands about their own middles. */
+    /**
+     * Turns or scales selected islands about their own middles. A scale is kept as the island's size
+     * against the rest, so packing again keeps it.
+     */
     transformSelected(angle: number, scale: number): void {
-        if (!this.proposal) return;
+        if (!this.proposal || !this.selected.size) return;
+        this.remember(scale !== 1 ? (scale > 1 ? 'Make islands bigger' : 'Make islands smaller') : 'Turn islands');
         for (const i of this.selected) {
+            if (scale !== 1) this.density.set(i, (this.density.get(i) ?? 1) * scale);
             const uv = this.proposal.placements[i].uv;
             let cx = 0, cy = 0;
             for (let k = 0; k < uv.length; k += 2) { cx += uv[k]; cy += uv[k + 1]; }
@@ -318,6 +462,23 @@ export class UvSession {
             }
         }
         this.setProposal(this.proposal.charts, this.proposal.placements, { keepSelection: true });
+        this.emit();
+    }
+
+    /** Whether every selected island is kept in place. */
+    get selectionLocked(): boolean {
+        return this.selected.size > 0 && [...this.selected].every((i) => this.locked.has(i));
+    }
+
+    /** Keeps the selected islands in place when packing again, or lets packing move them again. */
+    toggleLockSelected(): void {
+        if (!this.proposal || !this.selected.size) return;
+        const lock = !this.selectionLocked;
+        this.remember(lock ? 'Keep islands in place' : 'Let islands move');
+        for (const i of this.selected) {
+            if (lock) this.locked.add(i);
+            else this.locked.delete(i);
+        }
         this.emit();
     }
 
@@ -344,6 +505,8 @@ export class UvSession {
     }
 
     discard(): void {
+        if (!this.proposal) return;
+        this.remember('Discard the new layout');
         this.proposal = null;
         this.selected.clear();
         this.emit();
@@ -357,6 +520,11 @@ export class UvSession {
         const proposal = this.proposal;
         if (!proposal || this.busy) return;
         const paint = this.paint;
+        if (!paint.usable) {
+            this.status = new GpuResetError().message;
+            this.emit();
+            return;
+        }
         const gpu = paint.gpu;
         const stack = paint.stack;
         const part = paint.part;
@@ -370,10 +538,15 @@ export class UvSession {
             const newTiles = [...new Set(newTriangleTiles(corner))].sort((a, b) => a - b);
             const spread = newTiles.length > 1;
             // 1. Every picture of the set (painted layers, masks, what it wore before once carried): each tile
-            // of the new layout drawn from the current tiles' pictures.
+            // of the new layout drawn from the current tiles' pictures. Pictures of layers deleted earlier
+            // are kept only for undo, which the set reopens without: they are not carried (nor kept again).
+            const used = pictureOwners([stack.document]);
             for (const [key, byTile] of [...stack.pictures]) {
+                if (!used.has(pictureOwner(key))) continue;
                 const moved: Array<[number, GpuImage]> = [];
-                for (const tile of newTiles) moved.push([tile, await transferPicture(gpu, part, corner, (from) => byTile.get(from) ?? null, size, key.endsWith(':normal'), tile)]);
+                for (const tile of newTiles) {
+                    moved.push([tile, await transferPicture(gpu, part, corner, (from) => byTile.get(from) ?? null, size, { normalMap: key.endsWith(':normal'), tile, precision: picturePrecision(key), coverage: true })]);
+                }
                 for (const [tile, image] of moved) {
                     gpu.copy(image, stack.picture(key, tile));
                     gpu.release(image);
@@ -411,7 +584,7 @@ export class UvSession {
                 // A picture of the model's own that an earlier layout here left in place no longer fits.
                 if (laidOutHere && !ownIds[channel]?.size) continue;
                 for (const tile of newTiles) {
-                    let image = await transferPicture(gpu, part, corner, texture, size, channel === 'normal', tile);
+                    let image = await transferPicture(gpu, part, corner, texture, size, { normalMap: channel === 'normal', tile, precision: picturePrecision(key) });
                     if (read >= 0) {
                         const single = gpu.image(size, size, 'color', 8);
                         gpu.passNow(single, { fragment: `void main() { float v = texelFetch(src, ivec2(gl_FragCoord.xy), 0)[${read}]; outColor = vec4(v, v, v, 1.0); }`, inputs: { src: image } });
@@ -465,6 +638,8 @@ export class UvSession {
                     previous = null;
                 }
             }
+            // Pictures carried across a GPU reset are blank: the model keeps its layout, and nothing is kept.
+            if (!paint.usable) throw new GpuResetError();
             const layout = buildLayout(object, part, corner, proposal.cornerKey, previous);
             applyLayout(object, layout);
             await this.host.saveLayout(paint.target.modelId, encodeLayout(layout), layout.meshes.length);

@@ -4,7 +4,7 @@ import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment
 import type { GpuImage, TextureGpu } from '../../../texturing/gpu/textureGpu';
 import { tileGeometry } from '../../../texturing/mesh/partMesh';
 import type { MeshMapName } from '../../../texturing/graph/nodes/io';
-import { renderDepth, Stroke, type BrushSettings, type StrokeTarget } from '../../../texturing/paint/strokes';
+import { MAX_BRUSH_SIZE, pictureAspect, renderDepth, stencilPlace, Stroke, type BrushSettings, type StrokeTarget } from '../../../texturing/paint/strokes';
 import type { PaintChannel } from '../../../texturing/paint/paintTypes';
 import type { PaintSession } from './paintSession';
 import type { UvSession } from './uvSession';
@@ -14,24 +14,66 @@ import type { UvSession } from './uvSession';
  * pictures and the rest of the model as it is. Left button paints (or fills an island, or picks a
  * colour), right button turns round the model, middle button (or Shift+right) pans, the wheel comes
  * closer. [ and ] change the brush size.
+ *
+ * The live pictures are copied into pictures with smaller versions of themselves (mipmaps), so the model
+ * does not shimmer when seen from afar, and the view is drawn with several samples per pixel and then
+ * smoothed onto the screen, so its edges are clean.
  */
 
 export type PaintTool = 'paint' | 'erase' | 'island' | 'pick' | 'seam';
 export type ViewMode = 'material' | PaintChannel | 'ambientOcclusion' | `mesh:${MeshMapName}` | 'mask' | 'uvChecker' | 'uvStretch';
 
-interface Preview { base: GpuImage | null; orm: GpuImage | null; emissive: GpuImage | null; single: GpuImage | null }
+/** A tile's live pictures as the view draws them, each with its smaller versions, made when first needed. */
+interface Preview { base: THREE.WebGLRenderTarget | null; orm: THREE.WebGLRenderTarget | null; emissive: THREE.WebGLRenderTarget | null; normal: THREE.WebGLRenderTarget | null; single: THREE.WebGLRenderTarget | null }
 
 const FIELD_OF_VIEW = 32;
 
-const environments = new WeakMap<TextureGpu, THREE.Texture>();
+/**
+ * A picture the view draws with, kept with its smaller versions (made again after every pass into it).
+ * Colour is kept as sRGB bytes (written in linear values, read back in them); data as bytes or half floats.
+ */
+const previewTarget = (size: number, kind: 'colour' | 'bytes' | 'half'): THREE.WebGLRenderTarget => new THREE.WebGLRenderTarget(size, size, {
+    type: kind === 'half' ? THREE.HalfFloatType : THREE.UnsignedByteType,
+    colorSpace: kind === 'colour' ? THREE.SRGBColorSpace : THREE.NoColorSpace,
+    minFilter: THREE.LinearMipmapLinearFilter,
+    magFilter: THREE.LinearFilter,
+    wrapS: THREE.RepeatWrapping,
+    wrapT: THREE.RepeatWrapping,
+    generateMipmaps: true,
+    anisotropy: 4,
+    depthBuffer: false,
+});
+
+/**
+ * Where the view is drawn before it reaches the screen: several samples per pixel, smoothed as it is
+ * read. It is marked as a target three draws into as onto the screen (tone mapped and turned to sRGB
+ * by each material, so materials that show raw values stay raw) and kept in plain bytes.
+ */
+const viewTarget = (gpu: TextureGpu, width: number, height: number): THREE.WebGLRenderTarget => {
+    const samples = Math.min(width * height > 4_000_000 ? 2 : 4, gpu.renderer.capabilities.maxSamples);
+    const target = new THREE.WebGLRenderTarget(width, height, {
+        samples,
+        type: THREE.UnsignedByteType,
+        colorSpace: THREE.SRGBColorSpace,
+        minFilter: THREE.LinearFilter,
+        magFilter: THREE.LinearFilter,
+        generateMipmaps: false,
+        depthBuffer: true,
+    });
+    target.texture.internalFormat = 'RGBA8';
+    (target as THREE.WebGLRenderTarget & { isXRRenderTarget?: boolean }).isXRRenderTarget = true;
+    return target;
+};
+
+/** The room light, drawn once per GPU context (a reset loses it with everything else drawn on the GPU). */
+const environments = new WeakMap<TextureGpu, { texture: THREE.Texture; generation: number }>();
 const environmentOf = (gpu: TextureGpu): THREE.Texture => {
-    let texture = environments.get(gpu);
-    if (!texture) {
-        const pmrem = new THREE.PMREMGenerator(gpu.renderer);
-        texture = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
-        pmrem.dispose();
-        environments.set(gpu, texture);
-    }
+    const kept = environments.get(gpu);
+    if (kept && kept.generation === gpu.generation) return kept.texture;
+    const pmrem = new THREE.PMREMGenerator(gpu.renderer);
+    const texture = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+    pmrem.dispose();
+    environments.set(gpu, { texture, generation: gpu.generation });
     return texture;
 };
 
@@ -74,6 +116,30 @@ const SINGLE_VIEW = new THREE.ShaderMaterial({
     fragmentShader: 'uniform sampler2D map; uniform int gray; varying vec2 vUv; void main() { vec4 c = texture2D(map, vUv); gl_FragColor = vec4(gray == 1 ? c.rrr : c.rgb, 1.0); }',
 });
 SINGLE_VIEW.toneMapped = false;
+
+/** The stencil drawn faintly over the view where it lies, so it can be seen and placed while painting. */
+const StencilOverlay: React.FC<{ texture: THREE.Texture; place: ReturnType<typeof stencilPlace> }> = ({ texture, place }) => {
+    const ref = useRef<HTMLCanvasElement>(null);
+    const version = texture.version;
+    useEffect(() => {
+        const canvas = ref.current;
+        const image = texture.image as (CanvasImageSource & { width?: number; height?: number }) | undefined;
+        if (!canvas || !image?.width || !image.height) return;
+        const scale = Math.min(1, 1024 / Math.max(image.width, image.height));
+        canvas.width = Math.max(1, Math.round(image.width * scale));
+        canvas.height = Math.max(1, Math.round(image.height * scale));
+        try {
+            canvas.getContext('2d')?.drawImage(image, 0, 0, canvas.width, canvas.height);
+        } catch {
+            // A picture kept as raw data cannot be drawn here; painting through it still works.
+        }
+    }, [texture, version]);
+    return (
+        <canvas ref={ref} className="pointer-events-none absolute opacity-40" style={{
+            left: place.x - place.width / 2, top: place.y - place.height / 2, width: place.width, height: place.height, transform: `rotate(${place.angle}deg)`,
+        }} />
+    );
+};
 
 export const PaintViewport: React.FC<{
     session: PaintSession;
@@ -132,7 +198,7 @@ export const PaintViewport: React.FC<{
             single.toneMapped = false;
             const mesh = new THREE.Mesh(tileGeometry(session.part, tile), lit);
             root.add(mesh);
-            tiles.set(tile, { mesh, lit, single, preview: { base: null, orm: null, emissive: null, single: null } });
+            tiles.set(tile, { mesh, lit, single, preview: { base: null, orm: null, emissive: null, normal: null, single: null } });
         }
         const layoutMesh = new THREE.Mesh(new THREE.BufferGeometry(), LAYOUT_VIEW);
         layoutMesh.visible = false;
@@ -159,7 +225,7 @@ export const PaintViewport: React.FC<{
             entry.mesh.geometry.dispose();
             entry.lit.dispose();
             entry.single.dispose();
-            for (const image of Object.values(entry.preview)) gpu.release(image);
+            for (const target of Object.values(entry.preview)) target?.dispose();
         }
         world.hidden.dispose();
         world.seamLines.geometry.dispose();
@@ -203,42 +269,52 @@ export const PaintViewport: React.FC<{
 
     // Keep the tiles' materials in step with the set's pictures and the view chosen.
     const updateMaterials = useCallback(() => {
+        // Copies a live picture into the tile's view picture of that name (made the first time), whose smaller
+        // versions are made again as it is drawn.
+        const copyInto = (preview: Preview, name: keyof Preview, kind: 'colour' | 'bytes' | 'half', fragment: string, inputs: Record<string, GpuImage | THREE.Texture | null>, uniforms?: Record<string, unknown>): THREE.WebGLRenderTarget => {
+            let target = preview[name];
+            if (!target || target.width !== stack.size) {
+                target?.dispose();
+                target = preview[name] = previewTarget(stack.size, kind);
+            }
+            gpu.passNow(target, { fragment, inputs, uniforms });
+            return target;
+        };
+        const COPY = 'void main() { outColor = texture(source, vUv); }';
+        // Colour pictures hold sRGB values: written to the view's sRGB pictures in linear ones.
+        const LINEAR = 'void main() { outColor = vec4(srgbToLinear(texture(source, vUv).rgb), 1.0); }';
         for (const [tile, entry] of world.tiles) {
             const outputs = stack.outputs.get(tile) ?? {};
             const preview = entry.preview;
-            for (const key of Object.keys(preview) as Array<keyof Preview>) { gpu.release(preview[key]); preview[key] = null; }
             if (view === 'material') {
-                if (outputs.baseColor) {
-                    preview.base = gpu.image(stack.size, stack.size, 'color', 16);
-                    gpu.passNow(preview.base, { fragment: 'void main() { vec4 c = texture(source, vUv); outColor = vec4(srgbToLinear(c.rgb), 1.0); }', inputs: { source: outputs.baseColor } });
-                }
-                if (outputs.emissive) {
-                    preview.emissive = gpu.image(stack.size, stack.size, 'color', 16);
-                    gpu.passNow(preview.emissive, { fragment: 'void main() { outColor = vec4(srgbToLinear(texture(source, vUv).rgb), 1.0); }', inputs: { source: outputs.emissive } });
-                }
-                preview.orm = gpu.image(stack.size, stack.size, 'color', 8);
-                gpu.passNow(preview.orm, {
-                    fragment: 'uniform int hasR; uniform int hasM;\nvoid main() { outColor = vec4(texture(ao, vUv).r, hasR == 1 ? texture(rough, vUv).r : 0.6, hasM == 1 ? texture(metal, vUv).r : 0.0, 1.0); }',
-                    inputs: { ao: outputs.ambientOcclusion ?? gpu.constant('white'), rough: outputs.roughness ?? null, metal: outputs.metallic ?? null },
-                    uniforms: { hasR: outputs.roughness ? 1 : 0, hasM: outputs.metallic ? 1 : 0 },
-                });
+                const base = outputs.baseColor ? copyInto(preview, 'base', 'colour', LINEAR, { source: outputs.baseColor }) : null;
+                const emissive = outputs.emissive ? copyInto(preview, 'emissive', 'colour', LINEAR, { source: outputs.emissive }) : null;
+                const normal = outputs.normal ? copyInto(preview, 'normal', 'half', COPY, { source: outputs.normal }) : null;
+                const orm = copyInto(preview, 'orm', 'bytes',
+                    'uniform int hasR; uniform int hasM;\nvoid main() { outColor = vec4(texture(ao, vUv).r, hasR == 1 ? texture(rough, vUv).r : 0.6, hasM == 1 ? texture(metal, vUv).r : 0.0, 1.0); }',
+                    { ao: outputs.ambientOcclusion ?? gpu.constant('white'), rough: outputs.roughness ?? null, metal: outputs.metallic ?? null },
+                    { hasR: outputs.roughness ? 1 : 0, hasM: outputs.metallic ? 1 : 0 });
                 const lit = entry.lit;
-                lit.map = preview.base?.target.texture ?? null;
-                lit.color.set(preview.base ? 0xffffff : 0x808080);
-                lit.normalMap = outputs.normal?.target.texture ?? null;
-                lit.roughnessMap = preview.orm.target.texture;
-                lit.metalnessMap = preview.orm.target.texture;
-                lit.aoMap = preview.orm.target.texture;
-                lit.emissiveMap = preview.emissive?.target.texture ?? null;
-                lit.emissive.setScalar(preview.emissive ? 1 : 0);
-                lit.needsUpdate = true;
+                const maps = [base, normal, orm, emissive].map((target) => target?.texture ?? null);
+                // Only a change of which pictures it draws with makes three build the material again.
+                const changed = lit.map !== maps[0] || lit.normalMap !== maps[1] || lit.roughnessMap !== maps[2] || lit.emissiveMap !== maps[3];
+                lit.map = maps[0];
+                lit.color.set(base ? 0xffffff : 0x808080);
+                lit.normalMap = maps[1];
+                lit.roughnessMap = maps[2];
+                lit.metalnessMap = maps[2];
+                lit.aoMap = maps[2];
+                lit.emissiveMap = maps[3];
+                lit.emissive.setScalar(emissive ? 1 : 0);
+                if (changed) lit.needsUpdate = true;
                 entry.mesh.material = lit;
             } else {
                 let image: GpuImage | null | undefined = null;
                 if (view === 'mask') image = maskImage(tile);
                 else if (view.startsWith('mesh:')) image = stack.meshMaps(tile)[view.slice(5) as MeshMapName];
                 else image = outputs[view as PaintChannel | 'ambientOcclusion'];
-                entry.single.uniforms.map.value = image?.target.texture ?? gpu.constant('black');
+                const single = image ? copyInto(preview, 'single', 'half', COPY, { source: image }) : null;
+                entry.single.uniforms.map.value = single?.texture ?? gpu.constant('black');
                 entry.single.uniforms.gray.value = image?.kind === 'gray' ? 1 : 0;
                 entry.mesh.material = entry.single;
             }
@@ -260,7 +336,8 @@ export const PaintViewport: React.FC<{
                 normal.set(part.normals.subarray(v * 3, v * 3 + 3), i * 3);
                 if (uv?.proposal) uvs.set(uv.proposal.cornerUv.subarray(i * 2, i * 2 + 2), i * 2);
                 else uvs.set([part.uvs[v * 2], part.uvs[v * 2 + 1]], i * 2);
-                stretch[i] = uv?.proposal ? uv.proposal.triangleStretch[Math.floor(i / 3)] : 0;
+                // The proposal's stretch, or the current layout's.
+                stretch[i] = (uv?.proposal ? uv.proposal.triangleStretch : uv?.currentStretch)?.[Math.floor(i / 3)] ?? 0;
             }
             const geometry = world.layoutMesh.geometry;
             geometry.setAttribute('position', new THREE.BufferAttribute(position, 3));
@@ -274,6 +351,10 @@ export const PaintViewport: React.FC<{
         world.seamLines.geometry.computeBoundingSphere();
     }, [gpu, maskImage, session.part, stack, tool, uv, view, world]); // eslint-disable-line react-hooks/exhaustive-deps
 
+    // Where the view is drawn with several samples per pixel, sized to it.
+    const smooth = useRef<THREE.WebGLRenderTarget | null>(null);
+    useEffect(() => () => { smooth.current?.dispose(); smooth.current = null; }, []);
+
     const draw = useCallback(() => {
         const element = canvas.current;
         if (!element || !size.width) return;
@@ -281,7 +362,19 @@ export const PaintViewport: React.FC<{
         element.height = size.height;
         world.scene.environment = environmentOf(gpu);
         placeCamera();
-        gpu.present(element, () => gpu.renderer.render(world.scene, world.camera));
+        gpu.present(element, (width, height) => {
+            let target = smooth.current;
+            if (!target || target.width !== width || target.height !== height) {
+                target?.dispose();
+                target = smooth.current = viewTarget(gpu, width, height);
+            }
+            const renderer = gpu.renderer;
+            renderer.setRenderTarget(target);
+            renderer.render(world.scene, world.camera);
+            // Back onto the screen's corner the view takes, the samples smoothed into each pixel.
+            renderer.setRenderTarget(null);
+            gpu.drawToScreen({ fragment: 'void main() { outColor = texture(source, vUv); }', inputs: { source: target.texture } });
+        });
     }, [gpu, placeCamera, size, world]);
 
     useEffect(() => {
@@ -306,6 +399,10 @@ export const PaintViewport: React.FC<{
     }, [placeCamera, session.picker, size, world.camera]);
 
     const startStroke = (x: number, y: number, pressure: number) => {
+        if (!session.usable) {
+            onMessage('The graphics card was reset: painting waits until the set has opened again from its saved pictures.');
+            return;
+        }
         if (!target) {
             onMessage(tool === 'island' ? 'Pick a paint layer or a painted mask to fill.' : 'Pick a paint layer, or a painted mask effect, to paint on. Fill layers take their values from their settings.');
             return;
@@ -341,11 +438,15 @@ export const PaintViewport: React.FC<{
     const pickColour = (x: number, y: number) => {
         const hit = hitAt(x, y);
         if (!hit) return;
-        const tile = 1001 + Math.floor(hit.uv.x) + 10 * Math.floor(hit.uv.y);
+        // The picture and place the triangle is drawn with: coordinates past 0..1 on a set that is not laid
+        // out in UDIM tiles wrap onto its one picture, as they do on the model.
+        const part = session.part;
+        const tile = part.triangleTile[hit.triangle];
         const image = stack.outputs.get(tile)?.baseColor;
         if (!image) return;
+        const at = new THREE.Vector2(hit.uv.x - part.triangleShift[hit.triangle * 2], hit.uv.y - part.triangleShift[hit.triangle * 2 + 1]);
         const probe = gpu.image(1, 1, 'color', 32);
-        gpu.passNow(probe, { fragment: 'uniform vec2 uAt;\nvoid main() { outColor = texture(source, uAt); }', inputs: { source: image }, uniforms: { uAt: new THREE.Vector2(hit.uv.x - Math.floor(hit.uv.x), hit.uv.y - Math.floor(hit.uv.y)) } });
+        gpu.passNow(probe, { fragment: 'uniform vec2 uAt;\nvoid main() { outColor = texture(source, fract(uAt)); }', inputs: { source: image }, uniforms: { uAt: at } });
         const value = gpu.readFloat(probe);
         gpu.release(probe);
         onPick([value[0], value[1], value[2]]);
@@ -428,7 +529,7 @@ export const PaintViewport: React.FC<{
             if (element && (element.tagName === 'INPUT' || element.tagName === 'TEXTAREA' || element.isContentEditable)) return;
             if (!host.current?.matches(':hover')) return;
             if (event.key === '[') onBrushSize(Math.max(1, Math.round(brush.size / 1.15)));
-            else if (event.key === ']') onBrushSize(Math.min(600, Math.round(brush.size * 1.15) + 1));
+            else if (event.key === ']') onBrushSize(Math.min(MAX_BRUSH_SIZE, Math.round(brush.size * 1.15) + 1));
             else if (event.key.toLowerCase() === 'f' && !event.ctrlKey) frame();
         };
         window.addEventListener('keydown', onKey);
@@ -436,6 +537,7 @@ export const PaintViewport: React.FC<{
     }, [brush.size, frame, onBrushSize]);
 
     const showCursor = cursor && (tool === 'paint' || tool === 'erase');
+    const stencilTexture = brush.stencil.enabled && brush.stencil.textureId && (tool === 'paint' || tool === 'erase') ? session.host.texture(brush.stencil.textureId) : null;
     return (
         <div
             ref={host}
@@ -448,6 +550,7 @@ export const PaintViewport: React.FC<{
             onContextMenu={(event) => event.preventDefault()}
         >
             <canvas ref={canvas} className="absolute inset-0 h-full w-full" />
+            {stencilTexture && <StencilOverlay texture={stencilTexture} place={stencilPlace(brush.stencil, pictureAspect(stencilTexture), size.width / size.ratio, size.height / size.ratio)} />}
             {showCursor && (
                 <div className="pointer-events-none absolute rounded-full border border-white/80 mix-blend-difference" style={{
                     left: cursor.x - brush.size / size.ratio, top: cursor.y - brush.size / size.ratio, width: (brush.size * 2) / size.ratio, height: (brush.size * 2) / size.ratio,

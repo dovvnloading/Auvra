@@ -1,6 +1,6 @@
 import type { BlendMode } from '../gpu/glslLibrary';
 import type { MeshMapName } from '../graph/nodes/io';
-import type { BakeSettings } from '../bake/meshBaker';
+import type { BakeSettings, PositionSpace } from '../bake/meshBaker';
 import type { ChannelTextureIds } from '../materialOutput';
 
 /**
@@ -115,7 +115,14 @@ export interface PaintDocument {
     layers: PaintLayer[];
     /** How far the height channel pushes the normal. */
     heightStrength: number;
-    bake: { settings: BakeSettings; maps: Partial<Record<MeshMapName, TilePictures>>; at: number } | null;
+    /**
+     * Where 3D placement is measured from: a cube round the whole model, shared by its texture sets, which
+     * the position map and fills cast from three sides both use. Sets made before it was kept use their
+     * own box (and fills cast from three sides keep their old placement).
+     */
+    space?: PositionSpace;
+    /** The baked maps; `version` (BAKE_VERSION) and `space` are missing on bakes made before they were kept. */
+    bake: { settings: BakeSettings; maps: Partial<Record<MeshMapName, TilePictures>>; at: number; version?: number; space?: PositionSpace } | null;
     /** The pictures the model last got from this set. */
     applied?: { textures: ChannelTextureIds; at: number };
     /**
@@ -227,6 +234,20 @@ export const createPaintDocument = (modelId: string, materialNames: string[], si
 
 const finite = (value: unknown, fallback: number): number => (typeof value === 'number' && Number.isFinite(value) ? value : fallback);
 
+/** A stored space, or undefined when it is not one. */
+export const readSpace = (value: unknown): PositionSpace | undefined => {
+    const raw = value as Partial<PositionSpace> | null;
+    if (!raw || typeof raw !== 'object' || !Array.isArray(raw.centre) || raw.centre.length !== 3) return undefined;
+    const centre = raw.centre.map((part) => finite(part, NaN));
+    const extent = finite(raw.extent, NaN);
+    if (centre.some((part) => !Number.isFinite(part)) || !(extent > 0)) return undefined;
+    return { centre: centre as [number, number, number], extent };
+};
+
+/** Whether any fill of the layers is cast from three sides (its placement follows the set's space). */
+export const castsFromThreeSides = (layers: readonly PaintLayer[]): boolean =>
+    allLayers(layers).some((layer) => Object.values(layer.fill ?? {}).some((source) => (source?.kind === 'texture' || source?.kind === 'graph') && source.projection === 'triplanar'));
+
 /** A stored document made safe to use. */
 export const readPaintDocument = (value: unknown): PaintDocument | null => {
     const raw = value as Partial<PaintDocument> | null;
@@ -256,6 +277,7 @@ export const readPaintDocument = (value: unknown): PaintDocument | null => {
         }
         return [result];
     });
+    const space = readSpace(raw.space);
     return {
         version: 1,
         modelId: raw.modelId,
@@ -265,6 +287,7 @@ export const readPaintDocument = (value: unknown): PaintDocument | null => {
         channels: channels.length ? channels : ['baseColor', 'roughness', 'metallic', 'height', 'normal'],
         layers: readLayers(raw.layers, 0),
         heightStrength: finite(raw.heightStrength, 1),
+        ...(space ? { space } : {}),
         bake: raw.bake && typeof raw.bake === 'object' ? raw.bake as PaintDocument['bake'] : null,
         ...(raw.applied ? { applied: raw.applied } : {}),
         ...(raw.before && typeof raw.before === 'object' ? { before: raw.before } : {}),

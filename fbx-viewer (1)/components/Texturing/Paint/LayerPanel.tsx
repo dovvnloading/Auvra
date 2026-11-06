@@ -337,9 +337,19 @@ const LayerSettings: React.FC<{
         );
     };
 
+    /** Moves a mask effect one place up (worked out sooner) or down (later). */
+    const moveEffect = (index: number, direction: -1 | 1) => {
+        const list = [...(layer.mask ?? [])];
+        const to = index + direction;
+        if (to < 0 || to >= list.length) return;
+        [list[index], list[to]] = [list[to], list[index]];
+        update({ mask: list }, 'Move mask effect');
+    };
+
     const maskEditor = (effect: MaskEffect, index: number) => {
         const setEffect = (patch: Partial<MaskEffect>, label: string) => update({ mask: (layer.mask ?? []).map((candidate, i) => (i === index ? { ...candidate, ...patch } : candidate)) }, label);
         const active = selection.effectId === effect.id;
+        const count = layer.mask?.length ?? 0;
         return (
             <div key={effect.id} onClick={() => onSelect({ layerId: layer.id, effectId: effect.id })}
                 className={`space-y-1.5 rounded border p-2 ${active ? 'border-sky-600 bg-sky-950/30' : 'border-zinc-800 bg-zinc-900/60'}`}>
@@ -347,6 +357,12 @@ const LayerSettings: React.FC<{
                     <input type="checkbox" checked={effect.enabled} onChange={(event) => setEffect({ enabled: event.target.checked }, 'Turn mask effect on or off')} className="accent-sky-500" aria-label="On" />
                     <span className="flex-1 text-2xs font-semibold text-zinc-200">{effect.kind === 'generator' ? (resolve(effect.graphId ?? '')?.name ?? 'Smart mask') : MASK_KIND_LABELS[effect.kind]}</span>
                     {effect.kind === 'paint' && <span className={`text-[10px] ${active ? 'text-sky-300' : 'text-zinc-500'}`}>{active ? 'Painting here' : 'Click to paint'}</span>}
+                    {count > 1 && (
+                        <>
+                            <IconButton label="Move up (worked out sooner)" disabled={index === 0} onClick={(event) => { event.stopPropagation(); moveEffect(index, -1); }}><ArrowUpIcon size={11} /></IconButton>
+                            <IconButton label="Move down (worked out later)" disabled={index === count - 1} onClick={(event) => { event.stopPropagation(); moveEffect(index, 1); }}><ArrowDownIcon size={11} /></IconButton>
+                        </>
+                    )}
                     <button aria-label="Remove effect" onClick={(event) => { event.stopPropagation(); update({ mask: (layer.mask ?? []).filter((_, i) => i !== index) }, 'Remove mask effect'); }} className="rounded p-0.5 text-zinc-500 hover:text-red-400"><TrashIcon size={11} /></button>
                 </div>
                 {effect.kind !== 'levels' && effect.kind !== 'invert' && effect.kind !== 'blur' && (

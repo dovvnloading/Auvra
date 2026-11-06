@@ -5,17 +5,17 @@ import { materialLibrary, MATERIALS_DOMAIN, materialAssetDocument, type Material
 import { createMaterialGraph } from '../../../runtime/materials/materialGraph';
 import { projectService } from '../../../utils/projectService';
 import { overrideTextureFlipY, type MaterialOverrides } from '../../../utils/materialOverrides';
-import { bakeMeshMaps, type BakeSettings } from '../../../texturing/bake/meshBaker';
+import { bakeMeshMaps, spaceOfBox, type BakeSettings, type PositionSpace } from '../../../texturing/bake/meshBaker';
 import { textureGpu, type TextureGpu } from '../../../texturing/gpu/textureGpu';
 import type { GraphEntry, GraphResolver } from '../../../texturing/graph/registry';
 import { readStoredGraph } from '../../../texturing/graph/stored';
 import { buildPartMesh, buildWholeMesh, type PartMesh } from '../../../texturing/mesh/partMesh';
 import { SurfacePicker } from '../../../texturing/mesh/picker';
 import { DEEP_EXPORT, ROLE_LABELS, encodeChannels, materialGraphForTextures, tileAtlas, type ChannelTextureIds, type PictureLayout } from '../../../texturing/materialOutput';
-import { PaintStack, type StackHost } from '../../../texturing/paint/paintStack';
+import { GpuResetError, PaintStack, pictureOwners, type StackHost } from '../../../texturing/paint/paintStack';
 import { BUILTIN_GRAPHS } from '../../../texturing/paint/smartLibrary';
-import { applyPixelHistory, type HistoryEntry } from '../../../texturing/paint/strokes';
-import { createPaintDocument, newFillLayer, paintId, readPaintDocument, type PaintChannel, type PaintDocument } from '../../../texturing/paint/paintTypes';
+import { applyPixelHistory, trimmedHistory, type HistoryEntry } from '../../../texturing/paint/strokes';
+import { castsFromThreeSides, createPaintDocument, newFillLayer, paintId, readPaintDocument, type PaintChannel, type PaintDocument } from '../../../texturing/paint/paintTypes';
 import { download, makeZip } from '../../../texturing/zip';
 import type { PartMaterial } from '../../Tools/Retexture/parts';
 
@@ -46,6 +46,11 @@ export interface PaintSessionHost {
 }
 
 const HISTORY_LIMIT = 80;
+/**
+ * Pixels the undo history may hold, in bytes (strokes keep the blocks they touched). Past it, the oldest
+ * steps go first; the newest step is always kept.
+ */
+export const HISTORY_BYTES = 256 * 1024 * 1024;
 const SAVE_DELAY_MS = 2500;
 /** Changes to one thing this close together make one undo step. */
 const COALESCE_MS = 1000;
@@ -85,15 +90,66 @@ export class PaintSession {
     progress = 0;
     /** True when pictures changed since the model was last given them. */
     changedSinceApply = false;
+    /** Called once the GPU context comes back after being lost: the set must be opened again. */
+    private readonly restoredListeners = new Set<() => void>();
+    private readonly stopListening: () => void;
 
-    private constructor(readonly target: PaintTarget, readonly host: PaintSessionHost, part: PartMesh, stack: PaintStack, asset: MaterialAsset) {
+    private constructor(readonly target: PaintTarget, readonly host: PaintSessionHost, part: PartMesh, stack: PaintStack, asset: MaterialAsset,
+        occluder: PaintSession['occluder'], readonly modelSpace: PositionSpace) {
         this.gpu = stack.host.gpu;
         this.part = part;
         this.picker = new SurfacePicker(part);
-        this.occluder = buildWholeMesh(target.object);
+        this.occluder = occluder;
         this.stack = stack;
         this.asset = asset;
         stack.subscribe(() => this.emit());
+        // A lost GPU context takes every picture with it. Painting and saving stop at once (pictures read back
+        // now would be blank), and once the context returns the set is opened again from its kept pictures.
+        const onLost = () => this.contextLost();
+        this.gpu.canvas.addEventListener('webglcontextlost', onLost);
+        const stopRestored = this.gpu.onRestored(() => { void this.contextRestored(); });
+        this.stopListening = () => {
+            this.gpu.canvas.removeEventListener('webglcontextlost', onLost);
+            stopRestored();
+        };
+    }
+
+    /** False while the GPU context is lost (or after it came back, until the set opens again). */
+    get usable(): boolean {
+        return this.stack.usable;
+    }
+
+    /** Calls `listener` when the set must be opened again after the GPU context came back. */
+    whenRestored(listener: () => void): () => void {
+        this.restoredListeners.add(listener);
+        return () => this.restoredListeners.delete(listener);
+    }
+
+    private contextLost(): void {
+        if (this.saveTimer) { clearTimeout(this.saveTimer); this.saveTimer = null; }
+        frontendDiagnostics.failure('paint_context_lost', new Error('The texturing GPU context was lost while a set was open'));
+        this.status = 'The graphics card stopped responding, so painting is paused. Nothing is saved until it is back; the set then opens again from its saved pictures.';
+        this.emit();
+    }
+
+    /**
+     * The context is back, but every picture made on the old one is blank: the set lets go of them, keeps
+     * its layers (never its pictures), and asks to be opened again from the pictures it kept.
+     */
+    private async contextRestored(): Promise<void> {
+        if (this.saveTimer) { clearTimeout(this.saveTimer); this.saveTimer = null; }
+        if (this.saving) await this.saving.catch(() => undefined);
+        this.stack.abandon();
+        this.past = [];
+        this.future = [];
+        try {
+            await this.keepDocument();
+        } catch (error) {
+            frontendDiagnostics.failure('paint_save_failed', error);
+        }
+        this.status = 'The graphics card was reset. The set was opened again from its saved pictures: strokes made in the last few seconds before the reset may be missing.';
+        this.emit();
+        for (const listener of [...this.restoredListeners]) listener();
     }
 
     static async open(target: PaintTarget, host: PaintSessionHost): Promise<PaintSession> {
@@ -101,9 +157,13 @@ export class PaintSession {
         let document = asset ? readPaintDocument(asset.paint) : null;
         const part = buildPartMesh(target.object, new Set(target.materials), { udim: document ? document.udim : 'auto' });
         const material = target.materials[0] as THREE.MeshStandardMaterial;
+        // The whole model: what casts occlusion, and the cube every texture set of it measures 3D placement in.
+        const occluder = buildWholeMesh(target.object);
+        const modelSpace = spaceOfBox(new THREE.Box3().setFromBufferAttribute(new THREE.BufferAttribute(occluder.positions, 3)));
         if (!asset || !document) {
             document = createPaintDocument(target.modelId, target.materialNames, 11);
             document.udim = part.udim;
+            document.space = modelSpace;
             // Painting starts from what the surface wears now, never from nothing: its glow too, as the set
             // goes on the model in place of its material.
             const glows = Boolean(material?.emissiveMap) || Boolean(material?.emissive && material.emissive.getHex() !== 0 && material.emissiveIntensity > 0);
@@ -139,7 +199,7 @@ export class PaintSession {
             storePicture: (blob) => projectService.uploadAsset(new File([blob], 'painted.png', { type: 'image/png' })),
         };
         const stack = await PaintStack.open(stackHost, part, document);
-        return new PaintSession(target, host, part, stack, asset);
+        return new PaintSession(target, host, part, stack, asset, occluder, modelSpace);
     }
 
     subscribe = (listener: () => void): (() => void) => {
@@ -179,34 +239,59 @@ export class PaintSession {
         this.coalesceKey = coalesce ?? null;
         this.coalesceAt = now;
         this.stack.setDocument(next);
+        this.dropUnusedPictures();
         this.dirty();
     }
 
     /** A step already made (a brush stroke) goes into the history. */
     record(entry: HistoryEntry): void {
         this.past.push(entry);
-        if (this.past.length > HISTORY_LIMIT) this.past.shift();
         this.future = [];
+        this.trimHistory();
+        this.dropUnusedPictures();
         if (entry.pixels) this.dirty();
         this.emit();
     }
 
-    get canUndo(): boolean { return this.past.length > 0; }
-    get canRedo(): boolean { return this.future.length > 0; }
+    /** Keeps the history within its step count and its memory (oldest first, never the newest step). */
+    private trimHistory(): void {
+        this.past = trimmedHistory(this.past, this.future, HISTORY_LIMIT, HISTORY_BYTES);
+    }
+
+    /**
+     * Lets go of the pictures of layers and mask effects that neither the set as it is nor any step of
+     * its history uses (deleted, and out of reach of undo).
+     */
+    private dropUnusedPictures(): void {
+        const documents: PaintDocument[] = [this.stack.document];
+        for (const entry of [...this.past, ...this.future]) if (entry.document) documents.push(entry.document.before, entry.document.after);
+        this.stack.dropPicturesExcept(pictureOwners(documents));
+    }
+
+    get canUndo(): boolean { return this.past.length > 0 && this.usable; }
+    get canRedo(): boolean { return this.future.length > 0 && this.usable; }
     get undoLabel(): string | null { return this.past[this.past.length - 1]?.label ?? null; }
+    get redoLabel(): string | null { return this.future[this.future.length - 1]?.label ?? null; }
 
     undo(): void {
+        if (!this.usable) return;
         const entry = this.past.pop();
         if (!entry) return;
         this.coalesceKey = null;
         if (entry.pixels) applyPixelHistory(this.stack, entry.pixels, 'undo');
         if (entry.document) this.stack.setDocument(entry.document.before);
         this.future.push(entry);
+        // Undoing a stroke keeps the pixels it undid, for redo: the history may now hold too much.
+        if (entry.pixels) {
+            this.trimHistory();
+            this.dropUnusedPictures();
+        }
         this.dirty();
         this.emit();
     }
 
     redo(): void {
+        if (!this.usable) return;
         const entry = this.future.pop();
         if (!entry) return;
         this.coalesceKey = null;
@@ -224,24 +309,36 @@ export class PaintSession {
     private dirty(): void {
         this.changedSinceApply = true;
         if (this.saveTimer) clearTimeout(this.saveTimer);
+        // Never saved from a lost GPU context: what it reads back is blank.
+        if (!this.usable) { this.saveTimer = null; return; }
         this.saveTimer = setTimeout(() => { void this.save(); }, SAVE_DELAY_MS);
     }
 
-    /** Keeps changed pictures and the document in the project. */
+    /** Keeps the document (its layers and the pictures it names) in the project, without keeping any picture. */
+    private async keepDocument(): Promise<void> {
+        const current = materialLibrary.get(this.asset.id) ?? this.asset;
+        this.asset = { ...current, paint: this.stack.document as unknown as Record<string, unknown> };
+        materialLibrary.upsert(this.asset);
+        await projectService.applyChanges([{ domain: MATERIALS_DOMAIN, operation: 'upsert', id: this.asset.id, value: materialAssetDocument(this.asset) }]);
+    }
+
+    /** Keeps changed pictures and the document in the project (never from a lost GPU context). */
     async save(): Promise<void> {
         if (this.saveTimer) { clearTimeout(this.saveTimer); this.saveTimer = null; }
         if (this.saving) { await this.saving; }
+        if (!this.usable) return;
         this.saving = (async () => {
             try {
-                const document = await this.stack.keepPictures();
-                const current = materialLibrary.get(this.asset.id) ?? this.asset;
-                this.asset = { ...current, paint: document as unknown as Record<string, unknown> };
-                materialLibrary.upsert(this.asset);
-                await projectService.applyChanges([{ domain: MATERIALS_DOMAIN, operation: 'upsert', id: this.asset.id, value: materialAssetDocument(this.asset) }]);
+                await this.stack.keepPictures();
+                await this.keepDocument();
                 this.status = null;
             } catch (error) {
-                frontendDiagnostics.failure('paint_save_failed', error);
-                this.status = 'The painting could not be saved: is a project open?';
+                if (error instanceof GpuResetError) {
+                    this.status = error.message;
+                } else {
+                    frontendDiagnostics.failure('paint_save_failed', error);
+                    this.status = 'The painting could not be saved: is a project open?';
+                }
             } finally {
                 this.saving = null;
                 this.emit();
@@ -255,7 +352,7 @@ export class PaintSession {
      * opened again, which scales painted pictures and baked maps to the new size.
      */
     async resize(size: number): Promise<boolean> {
-        if (this.busy || size === this.stack.document.size) return false;
+        if (this.busy || size === this.stack.document.size || !this.usable) return false;
         this.busy = 'Changing the picture size';
         this.emit();
         try {
@@ -278,14 +375,19 @@ export class PaintSession {
     // -----------------------------------------------------------------------
 
     async bake(settings: BakeSettings, highPoly: THREE.Object3D | null, signal?: AbortSignal): Promise<void> {
-        if (this.busy) return;
+        if (this.busy || !this.usable) return;
         this.busy = 'Baking mesh maps';
         this.progress = 0;
         this.emit();
         try {
             const material = this.target.materials[0] as THREE.MeshStandardMaterial | undefined;
+            // A set made before spaces were kept moves into the model's own with this bake, unless a fill
+            // cast from three sides would shift with it: then the position map keeps to the set's box.
+            const adopt = !this.stack.document.space && !castsFromThreeSides(this.stack.document.layers);
+            const space = adopt ? this.modelSpace : this.stack.space();
             const result = await bakeMeshMaps(this.gpu, {
                 part: this.part,
+                space: { centre: space.centre, extent: space.extent },
                 occluder: this.occluder,
                 highPoly: highPoly ? buildWholeMesh(highPoly) : undefined,
                 normalMap: material ? ownMaps(material).normalMap : null,
@@ -294,15 +396,18 @@ export class PaintSession {
                 this.busy = step;
                 this.emit();
             }, signal);
+            // Maps baked across a GPU reset are blank: they are neither used nor kept.
+            if (!this.usable) throw new GpuResetError();
             this.stack.setBake(result);
             this.busy = 'Keeping the maps';
             this.emit();
-            const document = await this.stack.keepBake(settings);
+            const document = await this.stack.keepBake(settings, { centre: space.centre, extent: space.extent }, adopt);
             this.stack.setDocument(document);
             await this.save();
             this.status = 'Mesh maps baked. Smart masks and materials now follow this surface.';
         } catch (error) {
-            if ((error as Error)?.name !== 'AbortError') {
+            if (error instanceof GpuResetError) this.status = error.message;
+            else if ((error as Error)?.name !== 'AbortError') {
                 frontendDiagnostics.failure('paint_bake_failed', error);
                 this.status = error instanceof Error ? error.message : 'The maps could not be baked.';
             }
@@ -319,12 +424,13 @@ export class PaintSession {
 
     /** Makes the finished pictures, keeps them, and points the surface's materials at a material drawing with them. */
     async apply(): Promise<void> {
-        if (this.busy) return;
+        if (this.busy || !this.usable) return;
         this.busy = 'Making the pictures';
         this.emit();
         try {
             await this.stack.compose();
             await this.save();
+            if (!this.usable) throw new GpuResetError();
             const tiles = this.stack.tiles;
             const size = this.stack.size;
             const flipRows = overrideTextureFlipY(this.target.object);
@@ -346,6 +452,8 @@ export class PaintSession {
                     this.gpu.trimPool(idleBefore);
                 }
             }
+            // Pictures read back across a GPU reset are blank: the model keeps what it wears.
+            if (!this.usable) throw new GpuResetError();
             const ids: ChannelTextureIds = {};
             const folder = `Painted/${this.target.modelName.replace(/\.[^.]+$/, '')}`;
             for (const picture of pictures) {
@@ -375,7 +483,7 @@ export class PaintSession {
                     ? `The model now wears all ${tiles.length} UDIM tiles of this set, each at ${atlas.cell} × ${atlas.cell} so they fit one picture this machine can hold.`
                     : `The model now wears all ${tiles.length} UDIM tiles of this set.`;
         } catch (error) {
-            frontendDiagnostics.failure('paint_apply_failed', error);
+            if (!(error instanceof GpuResetError)) frontendDiagnostics.failure('paint_apply_failed', error);
             this.status = error instanceof Error ? error.message : 'The pictures could not be given to the model.';
         } finally {
             this.busy = null;
@@ -385,7 +493,7 @@ export class PaintSession {
 
     /** A ZIP of every channel of every tile, named as texture sets usually are. */
     async exportPictures(layout: PictureLayout, flipRows: boolean): Promise<void> {
-        if (this.busy) return;
+        if (this.busy || !this.usable) return;
         this.busy = 'Making the pictures';
         this.emit();
         try {
@@ -397,6 +505,7 @@ export class PaintSession {
                 const suffix = this.stack.tiles.length > 1 ? `.${tile}` : '';
                 for (const picture of pictures) files.push({ name: `${base}_${picture.role}${suffix}.png`, data: picture.blob });
             }
+            if (!this.usable) throw new GpuResetError();
             download(await makeZip(files), `${base}_${this.stack.size}.zip`);
         } catch (error) {
             this.status = error instanceof Error ? error.message : 'The pictures could not be made.';
@@ -407,6 +516,9 @@ export class PaintSession {
     }
 
     dispose(): void {
+        this.stopListening();
+        this.restoredListeners.clear();
+        // Saved on closing (save itself refuses to keep anything from a lost GPU context).
         if (this.saveTimer) {
             clearTimeout(this.saveTimer);
             void this.save().finally(() => this.stack.dispose());

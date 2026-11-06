@@ -8,7 +8,7 @@ import { overrideTextureFlipY } from '../../../utils/materialOverrides';
 import { MESH_MAP_LABELS, MESH_MAPS } from '../../../texturing/graph/nodes/io';
 import { readStoredGraph } from '../../../texturing/graph/stored';
 import { CHANNEL_LABELS, allLayers, readPaintDocument } from '../../../texturing/paint/paintTypes';
-import { DEFAULT_BRUSH, type BrushSettings, type StrokeTarget } from '../../../texturing/paint/strokes';
+import { DEFAULT_BRUSH, MAX_BRUSH_SIZE, type BrushSettings, type StrokeTarget } from '../../../texturing/paint/strokes';
 import { listModelParts, type ModelPart } from '../../Tools/Retexture/parts';
 import { IconButton, Segmented, Spinner } from '../../UI/kit';
 import { Select } from '../../UI/Select';
@@ -62,6 +62,8 @@ export const PaintWorkspace: React.FC = () => {
     const [reopen, setReopen] = useState(0);
     // A new layout is put on the model once the set reopens on it.
     const putOnAfterOpen = useRef(false);
+    // Why the set was opened again after the GPU context came back, shown once it has.
+    const restoredNote = useRef<string | null>(null);
     const [opening, setOpening] = useState(false);
     const [message, setMessage] = useState<string | null>(null);
     const latest = useRef({ models, updateModelMaterialOverrides, textureStore, saveModelUvLayout, model, part, textures });
@@ -75,6 +77,7 @@ export const PaintWorkspace: React.FC = () => {
         if (!model || !part) { setSession(null); setOpening(false); return undefined; }
         let disposed = false;
         let made: PaintSession | null = null;
+        let stopRestored: (() => void) | null = null;
         setOpening(true);
         setMessage(null);
         const target: PaintTarget = { modelId: model.id, modelName: model.name, object: model.object, partName: part.name, materials: part.materials, materialNames: part.materialNames.length ? part.materialNames : [part.rawName || part.name] };
@@ -93,6 +96,16 @@ export const PaintWorkspace: React.FC = () => {
             if (disposed) { opened.dispose(); return; }
             made = opened;
             setSession(opened);
+            // The GPU context lost and back: the set opens again from its kept pictures, saying why.
+            stopRestored = opened.whenRestored(() => {
+                restoredNote.current = opened.status;
+                setReopen((value) => value + 1);
+            });
+            if (restoredNote.current) {
+                opened.status = restoredNote.current;
+                restoredNote.current = null;
+                opened.emit();
+            }
             if (putOnAfterOpen.current) {
                 putOnAfterOpen.current = false;
                 void opened.apply();
@@ -107,6 +120,7 @@ export const PaintWorkspace: React.FC = () => {
         }).finally(() => { if (!disposed) setOpening(false); });
         return () => {
             disposed = true;
+            stopRestored?.();
             made?.dispose();
             // Spare pictures kept for reuse are given back to the GPU once the set is closed.
             made?.gpu.trimPool(0);
@@ -149,14 +163,26 @@ export const PaintWorkspace: React.FC = () => {
 
     const maskImage = useCallback((tile: number) => (session && layer ? session.stack.cachedMask(layer.id, tile) : null), [layer, session]);
 
+    // UV edits have a history of their own: undo and redo reach it while the 2D UV view or the seam tool is in use.
+    const uvVersion = useSyncExternalStore(uv?.subscribe ?? (() => () => undefined), uv?.getVersion ?? (() => 0));
+    void uvVersion;
+    const history = uv && (view === 'uv2d' || tool === 'seam')
+        ? { undo: () => uv.undo(), redo: () => uv.redo(), canUndo: uv.canUndo, canRedo: uv.canRedo, undoLabel: uv.undoLabel, redoLabel: uv.redoLabel }
+        : session
+            ? { undo: () => session.undo(), redo: () => session.redo(), canUndo: session.canUndo, canRedo: session.canRedo, undoLabel: session.undoLabel, redoLabel: session.redoLabel }
+            : null;
+    const latestHistory = useRef(history);
+    latestHistory.current = history;
+
     useEffect(() => {
         const onKey = (event: KeyboardEvent) => {
             const element = event.target as HTMLElement | null;
             if (element && (element.tagName === 'INPUT' || element.tagName === 'TEXTAREA' || element.isContentEditable)) return;
             if (!session) return;
             const key = event.key.toLowerCase();
-            if ((event.ctrlKey || event.metaKey) && key === 'z') { event.preventDefault(); if (event.shiftKey) session.redo(); else session.undo(); return; }
-            if ((event.ctrlKey || event.metaKey) && key === 'y') { event.preventDefault(); session.redo(); return; }
+            const steps = latestHistory.current;
+            if ((event.ctrlKey || event.metaKey) && key === 'z') { event.preventDefault(); if (event.shiftKey) steps?.redo(); else steps?.undo(); return; }
+            if ((event.ctrlKey || event.metaKey) && key === 'y') { event.preventDefault(); steps?.redo(); return; }
             if ((event.ctrlKey || event.metaKey) && key === 's') { event.preventDefault(); void session.save(); return; }
             if (event.ctrlKey || event.metaKey || event.altKey) return;
             if (key === 'b') setTool('paint');
@@ -212,12 +238,12 @@ export const PaintWorkspace: React.FC = () => {
                     <IconButton label="Pick a colour" shortcut="P" active={tool === 'pick'} onClick={() => setTool('pick')}><EyedropperIcon size={14} /></IconButton>
                     <IconButton label="Mark or clear seams (Shift clears)" shortcut="S" active={tool === 'seam'} onClick={() => setTool('seam')}><ScissorsIcon size={14} /></IconButton>
                     <span className="mx-1 h-4 w-px bg-zinc-800" />
-                    <IconButton label={session?.undoLabel ? `Undo ${session.undoLabel.toLowerCase()}` : 'Undo'} shortcut="Ctrl+Z" disabled={!session?.canUndo} onClick={() => session?.undo()}><UndoIcon size={14} /></IconButton>
-                    <IconButton label="Redo" shortcut="Ctrl+Y" disabled={!session?.canRedo} onClick={() => session?.redo()}><RedoIcon size={14} /></IconButton>
+                    <IconButton label={history?.undoLabel ? `Undo ${history.undoLabel.toLowerCase()}` : 'Undo'} shortcut="Ctrl+Z" disabled={!history?.canUndo} onClick={() => history?.undo()}><UndoIcon size={14} /></IconButton>
+                    <IconButton label={history?.redoLabel ? `Redo ${history.redoLabel.toLowerCase()}` : 'Redo'} shortcut="Ctrl+Y" disabled={!history?.canRedo} onClick={() => history?.redo()}><RedoIcon size={14} /></IconButton>
                     <IconButton label="Frame the model" shortcut="F" onClick={() => setFrameSignal((value) => value + 1)}><FrameIcon size={14} /></IconButton>
                     <span className="mx-1 h-4 w-px bg-zinc-800" />
                     <span className="text-2xs text-zinc-500">Size</span>
-                    <input type="range" min={1} max={400} value={brush.size} onChange={(event) => setBrush({ ...brush, size: Number(event.target.value) })} className="h-1 w-24 accent-sky-500" aria-label="Brush size" />
+                    <input type="range" min={1} max={MAX_BRUSH_SIZE} value={brush.size} onChange={(event) => setBrush({ ...brush, size: Number(event.target.value) })} className="h-1 w-24 accent-sky-500" aria-label="Brush size" />
                     <span className="w-8 text-2xs tabular-nums text-zinc-400">{brush.size}</span>
                     <Segmented value={brush.projection} options={[{ value: 'screen', label: 'Screen' }, { value: 'surface', label: 'Surface' }]} onChange={(projection) => setBrush({ ...brush, projection })} label="Brush projection" />
                     <span className="flex-1" />
