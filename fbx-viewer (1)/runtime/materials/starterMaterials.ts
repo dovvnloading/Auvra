@@ -10,9 +10,9 @@ import { OUTPUT_NODE_TYPE, defaultParams, normalizeMaterialGraph, type MaterialG
  *   refraction, which the coat uses; the base's flakes show as a broader, half-metal highlight.
  * - Frosted glass: clear soda-lime glass (index 1.52) seen through, its surface roughened so what is
  *   behind blurs.
- * - Velvet: a deep wine base under a bright pink sheen, as its standing fibres catch light at grazing
- *   angles. The sheen is broad (roughness 0.65), so the edges glow over a wide band rather than a thin
- *   rim, and at full strength, since the base alone is dark.
+ * - Velvet: a rich wine-red base under a bright pink sheen, as its standing fibres catch light at
+ *   grazing angles. The base is light enough to read as red seen head-on, where the sheen gives little;
+ *   the sheen is broad (roughness 0.65) and at full strength, so the edges glow over a wide band.
  * - Lacquered wood: grain drawn from stretched noise, under a satin lacquer coat.
  * - Rubber: a near-black, rough, plain surface: the standard material draws it.
  */
@@ -57,7 +57,7 @@ export const STARTER_MATERIALS: readonly StarterMaterial[] = [
         name: 'Velvet',
         description: 'A deep wine colour with a soft, bright sheen at the edges.',
         graph: () => normalizeMaterialGraph({
-            nodes: [output({ baseColor: [0.4, 0.04, 0.11], metalness: 0, roughness: 0.9, sheenColor: [1, 0.55, 0.7], sheenRoughness: 0.65 })],
+            nodes: [output({ baseColor: [0.58, 0.07, 0.16], metalness: 0, roughness: 0.9, sheenColor: [1, 0.55, 0.7], sheenRoughness: 0.65 })],
             links: [],
         }),
     },

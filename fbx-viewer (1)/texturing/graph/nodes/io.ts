@@ -1,5 +1,7 @@
 import * as THREE from 'three';
 import type { GpuImage } from '../../gpu/textureGpu';
+import { MATERIAL_DEFAULTS, outputChannelOf } from '../material';
+import { NAMED_RECEIVE_TYPE, NAMED_SEND_TYPE } from '../namedLinks';
 import { anyIn, color, colorIn, float, onePass, out, select, vec2 } from '../nodeKit';
 import { OUTPUT_CHANNELS, OUTPUT_CHANNEL_LABELS, outputNodeKind, type NodeRunContext, type OutputChannel, type PortKind, type TexNodeDef, type TexParamDef } from '../types';
 
@@ -109,6 +111,15 @@ void main() {
 
 const DEFAULT_LOOKS: ReadonlyArray<[string, string]> = [['black', 'Black'], ['white', 'White'], ['mid', 'Mid grey'], ['normal', 'Flat normal']];
 
+/** A named link's end: what comes in goes out as it is (black when nothing does). */
+const passOn = async (context: NodeRunContext): Promise<Record<string, GpuImage>> => {
+    const input = context.input('in');
+    if (input) return { out: context.gpu.retain(input) };
+    const image = context.image(context.outputKind('out'));
+    context.gpu.clear(image, [0, 0, 0, 1]);
+    return { out: image };
+};
+
 export const IO_NODES: TexNodeDef[] = [
     {
         type: INPUT_NODE_TYPE,
@@ -140,9 +151,9 @@ export const IO_NODES: TexNodeDef[] = [
         type: OUTPUT_NODE_TYPE,
         label: 'Output',
         category: 'Inputs and outputs',
-        description: 'One of the images the graph gives: a channel of the material (base colour, normal, roughness...) or a named image for another graph.',
+        description: 'One of the images the graph gives: a channel of the material (base colour, normal, roughness...) or a named image for another graph. Wire a whole material into it and it keeps its own channel of it.',
         keywords: ['output', 'result', 'channel', 'base colour', 'roughness', 'metallic', 'normal'],
-        inputs: [anyIn('in', 'Image')],
+        inputs: [{ ...anyIn('in', 'Image or material'), material: true }],
         outputs: [],
         params: [
             select('channel', 'Channel', 'baseColor', OUTPUT_CHANNELS.map((channel) => [channel, OUTPUT_CHANNEL_LABELS[channel]] as [string, string])),
@@ -156,7 +167,15 @@ export const IO_NODES: TexNodeDef[] = [
         async run(context) {
             const channel = (OUTPUT_CHANNELS as readonly string[]).includes(String(context.params.channel)) ? context.params.channel as OutputChannel : 'custom';
             const kind = outputNodeKind(context.params);
-            const input = context.input('in');
+            // A material wired in: its channel for this output (a named image takes its base colour, or height when grey).
+            const material = context.material('in');
+            const kept = material ? outputChannelOf(channel, kind) : null;
+            const input = kept ? material?.[kept] ?? null : context.input('in');
+            if (!input && kept) {
+                const image = context.image(kind);
+                context.gpu.clear(image, MATERIAL_DEFAULTS[kept]);
+                return { out: image };
+            }
             if (!input) {
                 const image = context.image(kind);
                 const value = channel === 'normal' ? [0.5, 0.5, 1, 1] : channel === 'roughness' ? [0.5, 0.5, 0.5, 1] : channel === 'ambientOcclusion' || channel === 'opacity' ? [1, 1, 1, 1] : channel === 'height' ? [0.5, 0.5, 0.5, 1] : [0, 0, 0, 1];
@@ -202,6 +221,34 @@ export const IO_NODES: TexNodeDef[] = [
             await context.pass(image, 'void main() { vec4 c = p_texture_ok == 1 ? texture(p_texture, vUv) : vec4(0.0, 0.0, 0.0, 1.0); if (p_texture_srgb == 1) c.rgb = linearToSrgb(c.rgb); outColor = c; }');
             return { out: image };
         },
+    },
+    {
+        type: NAMED_SEND_TYPE,
+        label: 'Named link: send',
+        category: 'Utility',
+        description: 'Sends what is wired into it under a name: every Named link: receive of that name gives it out, however far away, with no wire across the graph.',
+        keywords: ['send', 'named link', 'portal', 'wireless', 'jump', 'teleport', 'pass'],
+        inputs: [anyIn('in', 'In')],
+        outputs: [{ ...out('any'), hidden: true }],
+        params: [{ key: 'name', label: 'Name', kind: 'string', default: 'link' }],
+        sizeFrom: 'input',
+        kindFrom: 'in',
+        bypass: false,
+        run: passOn,
+    },
+    {
+        type: NAMED_RECEIVE_TYPE,
+        label: 'Named link: receive',
+        category: 'Utility',
+        description: 'Gives out what the Named link: send of the same name takes in.',
+        keywords: ['receive', 'named link', 'portal', 'wireless', 'jump', 'teleport', 'get'],
+        inputs: [{ ...anyIn('in', 'In'), hidden: true }],
+        outputs: [out('any')],
+        params: [{ key: 'name', label: 'Name', kind: 'string', default: 'link' }],
+        sizeFrom: 'input',
+        kindFrom: 'in',
+        bypass: false,
+        run: passOn,
     },
     {
         type: REROUTE_NODE_TYPE,
@@ -268,7 +315,8 @@ export const IO_NODES: TexNodeDef[] = [
         async run(context) {
             const image = context.image(context.outputKind('out'));
             const code = String(context.params.code ?? '').slice(0, 8000);
-            await context.pass(image, `void main() {\nvec2 uv = vUv;\n${code}\n}`, { cost: pixelProcessorCost(code) });
+            // #line 1: the compiler counts the typed code's lines from 1, so its errors point at them.
+            await context.pass(image, `void main() {\nvec2 uv = vUv;\n#line 1\n${code}\n}`, { cost: pixelProcessorCost(code) });
             return { out: image };
         },
     },

@@ -1,7 +1,8 @@
 import { createNode, newNodeId, wouldCycle } from '../../texturing/graph/document';
+import { withNamedLinks } from '../../texturing/graph/namedLinks';
 import { OUTPUT_NODE_TYPE, SUBGRAPH_NODE_TYPE } from '../../texturing/graph/nodes/io';
 import { textureNodeDefinition, type GraphResolver } from '../../texturing/graph/registry';
-import type { PortKind, TexGraphComment, TexGraphLink, TexGraphNode, TexNodeDef, TextureGraph } from '../../texturing/graph/types';
+import type { PinKind, PortKind, TexGraphComment, TexGraphLink, TexGraphNode, TexNodeDef, TextureGraph } from '../../texturing/graph/types';
 
 /** Layout and edits of a texture graph on its canvas. */
 
@@ -48,7 +49,7 @@ export const boundsOf = (rects: readonly Rect[]): Rect | null => {
 };
 
 /** The kind a wire carries: what the output it leaves from resolves to. */
-export const portKind = (graph: TextureGraph, nodeId: string, side: 'in' | 'out', key: string, resolve: GraphResolver): PortKind | 'any' => {
+export const portKind = (graph: TextureGraph, nodeId: string, side: 'in' | 'out', key: string, resolve: GraphResolver): PinKind => {
     const node = graph.nodes.find((candidate) => candidate.id === nodeId);
     const definition = node ? textureNodeDefinition(node, resolve) : null;
     const port = (side === 'in' ? definition?.inputs : definition?.outputs)?.find((candidate) => candidate.key === key);
@@ -157,10 +158,10 @@ export const createComment = (around: readonly Rect[], fallback: Point): TexGrap
     };
 };
 
-/** Nodes nothing reaches an Output from: drawn dimmed. */
+/** Nodes nothing reaches an Output from: drawn dimmed. A named link counts as a wire. */
 export const unusedNodes = (graph: TextureGraph): Set<string> => {
     const feeding = new Map<string, string[]>();
-    for (const link of graph.links) {
+    for (const link of withNamedLinks(graph).links) {
         const list = feeding.get(link.to);
         if (list) list.push(link.from);
         else feeding.set(link.to, [link.from]);
@@ -180,20 +181,20 @@ export const unusedNodes = (graph: TextureGraph): Set<string> => {
  * The kind every output pin carries, worked out once for the whole graph: wires look up their colour
  * here instead of searching the graph for each one.
  */
-export const outputKinds = (graph: TextureGraph, definitionOf: (node: TexGraphNode) => TexNodeDef | null): (nodeId: string, key: string) => PortKind | 'any' => {
+export const outputKinds = (graph: TextureGraph, definitionOf: (node: TexGraphNode) => TexNodeDef | null): (nodeId: string, key: string) => PinKind => {
     const nodes = new Map(graph.nodes.map((node) => [node.id, node]));
     const incoming = new Map<string, TexGraphLink>();
-    for (const link of graph.links) incoming.set(`${link.to}:${link.toInput}`, link);
-    const known = new Map<string, PortKind | 'any'>();
+    for (const link of withNamedLinks(graph).links) incoming.set(`${link.to}:${link.toInput}`, link);
+    const known = new Map<string, PinKind>();
     const resolving = new Set<string>();
-    const kindOf = (nodeId: string, key: string): PortKind | 'any' => {
+    const kindOf = (nodeId: string, key: string): PinKind => {
         const id = `${nodeId}:${key}`;
         const found = known.get(id);
         if (found) return found;
         const node = nodes.get(nodeId);
         const definition = node ? definitionOf(node) : null;
         const port = definition?.outputs.find((candidate) => candidate.key === key);
-        let kind: PortKind | 'any' = 'any';
+        let kind: PinKind = 'any';
         if (port && node && definition) {
             if (port.kind !== 'any') kind = port.kind;
             else if (definition.kindOf) kind = definition.kindOf(node.params);

@@ -17,7 +17,7 @@ import type { PrefabObject } from './prefabs';
  */
 
 /** Object fields a prefab change carries over; everything else (ids, level, parent links) is the instance's own. */
-export const SYNCED_FIELDS = ['name', 'type', 'modelId', 'position', 'rotation', 'scale', 'components', 'spawnConfig', 'audioConfig', 'skyConfig'] as const;
+export const SYNCED_FIELDS = ['name', 'type', 'modelId', 'position', 'rotation', 'scale', 'components', 'materialOverrides', 'spawnConfig', 'audioConfig', 'skyConfig'] as const;
 type SyncedField = typeof SYNCED_FIELDS[number];
 
 /** The root's placement in its level is never taken from the prefab. */

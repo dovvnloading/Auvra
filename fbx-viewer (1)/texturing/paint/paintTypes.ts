@@ -2,6 +2,9 @@ import { BLEND_MODES, type BlendMode } from '../gpu/glslLibrary';
 import type { MeshMapName } from '../graph/nodes/io';
 import type { BakeSettings, PositionSpace } from '../bake/meshBaker';
 import type { ChannelTextureIds } from '../materialOutput';
+import type { PickMode } from './selection';
+import type { ProjectionAxis, ProjectionMode } from './projections';
+import { readPaths, type SurfacePath } from './paths';
 
 /**
  * PAINTED TEXTURE SETS: THE DOCUMENT
@@ -43,7 +46,16 @@ export interface ChannelBlend {
  * and blended by how the surface faces, so it runs on across UV seams). Scale is repeats across the
  * model's longest side when cast from three sides, repeats per UV square along the UVs.
  */
-export interface FillProjection { projection: 'uv' | 'triplanar'; scale: number; rotation: number; sharpness: number }
+export interface FillProjection {
+    projection: ProjectionMode;
+    scale: number;
+    rotation: number;
+    sharpness: number;
+    /** Flat, ball and tube projections: the axis they are laid along (Y unless given). */
+    axis?: ProjectionAxis;
+    /** Symmetry: both halves of the model across this axis's middle read alike. */
+    mirror?: ProjectionAxis;
+}
 
 export type FillSource =
     | { kind: 'value'; value: [number, number, number] }
@@ -58,7 +70,7 @@ export type FillSource =
     /** What the layers below this one make of a channel (its brightness, when a colour fills a grey channel). */
     | { kind: 'below'; channel: PaintChannel };
 
-export type MaskEffectKind = 'paint' | 'fill' | 'generator' | 'levels' | 'blur' | 'invert' | 'below';
+export type MaskEffectKind = 'paint' | 'fill' | 'generator' | 'levels' | 'blur' | 'invert' | 'below' | 'polygon' | 'id';
 export type MaskBlend = 'multiply' | 'add' | 'subtract' | 'replace' | 'max' | 'min';
 
 export interface MaskEffect {
@@ -82,6 +94,12 @@ export interface MaskEffect {
     /** Below: the channel of the layers below read (its brightness), or where it changes fastest (`edges`). */
     channel?: PaintChannel;
     edges?: boolean;
+    /** Polygon: the triangles it covers, as sorted runs (start, count, ...), and how they are picked on the model. */
+    triangles?: number[];
+    pick?: PickMode;
+    /** ID colour: the colours of the baked ID map it covers (0..1), and how near a colour must be to count. */
+    colors?: Array<[number, number, number]>;
+    tolerance?: number;
 }
 
 export type LayerKind = 'paint' | 'fill' | 'folder' | 'filter';
@@ -172,6 +190,8 @@ export interface PaintDocument {
      * which only fit the layout it came with.
      */
     before?: Partial<Record<PaintChannel, TilePictures>>;
+    /** Paths drawn on the surface, kept to be changed and laid on again. */
+    paths?: SurfacePath[];
 }
 
 export const BLEND_FOR: Record<PaintChannel, ChannelBlend['mode']> = {
@@ -305,7 +325,7 @@ export const readSpace = (value: unknown): PositionSpace | undefined => {
 
 /** Whether any fill of the layers is cast from three sides (its placement follows the set's space). */
 export const castsFromThreeSides = (layers: readonly PaintLayer[]): boolean =>
-    allLayers(layers).some((layer) => Object.values(layer.fill ?? {}).some((source) => (source?.kind === 'texture' || source?.kind === 'graph') && source.projection === 'triplanar'));
+    allLayers(layers).some((layer) => Object.values(layer.fill ?? {}).some((source) => (source?.kind === 'texture' || source?.kind === 'graph') && Boolean(source.projection) && source.projection !== 'uv'));
 
 const unit = (value: unknown, fallback: number): number => Math.min(1, Math.max(0, finite(value, fallback)));
 
@@ -376,5 +396,6 @@ export const readPaintDocument = (value: unknown): PaintDocument | null => {
         bake: raw.bake && typeof raw.bake === 'object' ? raw.bake as PaintDocument['bake'] : null,
         ...(raw.applied ? { applied: raw.applied } : {}),
         ...(raw.before && typeof raw.before === 'object' ? { before: raw.before } : {}),
+        ...(Array.isArray(raw.paths) ? { paths: readPaths(raw.paths) } : {}),
     };
 };

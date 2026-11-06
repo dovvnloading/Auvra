@@ -24,6 +24,7 @@ const WORLD_PALETTE_GROUPS: { label: string, types: WorldNodeType[] }[] = [
     { label: 'Actors', types: ['SpawnPrefab', 'GetActorTransform', 'SetActorTransform', 'ApplyImpulse', 'Raycast'] },
     { label: 'Audio & Input', types: ['PlaySound', 'MakeNoise', 'InputActionPressed'] },
     { label: 'Animation', types: ['PlayPlayerAnimation', 'SetMorphTarget'] },
+    { label: 'Materials', types: ['SetMaterialNumber', 'SetMaterialColour'] },
     { label: 'Player', types: ['DamagePlayer', 'HealPlayer', 'GetPlayerHealth', 'AddAmmo', 'GiveWeapon'] },
     { label: 'Splines', types: ['GetSplineLength', 'GetSplinePoint', 'FindClosestOnSpline'] },
     { label: 'Vehicles', types: ['EnterVehicle', 'ExitVehicle', 'GetVehicleState', 'GetPlayerVehicle', 'SetVehicleInput', 'ReleaseVehicleInput'] },

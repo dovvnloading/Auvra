@@ -1,11 +1,12 @@
 
-import React, { useMemo, forwardRef, useState, useRef, useImperativeHandle } from 'react';
+import React, { useMemo, forwardRef, useState, useRef, useImperativeHandle, useLayoutEffect } from 'react';
 import * as THREE from 'three';
 import { Billboard, Html } from '@react-three/drei';
 import { MusicIcon, SkullIcon, SunIcon } from '../UI/Icons';
 import { LoadedModelData, LevelObject } from '../../types';
 import { getComponentDefinition } from '../../runtime/components/registry';
 import { cloneCharacterModel } from '../../utils/mountedParts';
+import { applyMaterialInstances } from '../../utils/materialInstances';
 
 /**
  * Mounts the Render of every enabled component on `object`. Place it inside the object's
@@ -85,6 +86,12 @@ export const LevelObjectRenderer = forwardRef<THREE.Group, LevelObjectRendererPr
         });
         return c;
     }, [isGizmo, model, data.id, castShadow, receiveShadow]);
+
+    // The object's own material values: its copy wears instances of the model's materials carrying them
+    // (materialInstances.ts), made again when the model's own overrides change.
+    const materialValues = data.materialOverrides;
+    const modelOverrides = model?.materialOverrides;
+    useLayoutEffect(() => (clone ? applyMaterialInstances(clone, materialValues) : undefined), [clone, materialValues, modelOverrides]);
 
     // --- SHARED GIZMO RENDERER ---
     const renderGizmo = (color: string, icon: React.ReactNode, label: string) => (

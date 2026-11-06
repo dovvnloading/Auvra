@@ -35,6 +35,9 @@ export const colorIn = (key: string, label: string, fallback: TexPortDef['fallba
 export const grayIn = (key: string, label: string, fallback: TexPortDef['fallback'] = 'black'): TexPortDef => ({ key, label, kind: 'gray', fallback });
 export const anyIn = (key: string, label: string, fallback: TexPortDef['fallback'] = 'black'): TexPortDef => ({ key, label, kind: 'any', fallback });
 export const out = (kind: PortKind | 'any', key = 'out', label = 'Output'): TexPortDef => ({ key, label, kind });
+/** A pin carrying a whole material (every surface channel on one wire). */
+export const materialIn = (key: string, label: string): TexPortDef => ({ key, label, kind: 'material' });
+export const materialOut = (key = 'out', label = 'Material'): TexPortDef => ({ key, label, kind: 'material' });
 
 export const defaultCurves = (): CurveSet => {
     const line = (): CurvePoint[] => [{ x: 0, y: 0 }, { x: 1, y: 1 }];
@@ -163,6 +166,8 @@ export const nodeBindings = (
     const inputs: Record<string, GpuImage | THREE.Texture> = {};
     const uniforms: Record<string, unknown> = { uSeed: context.seed };
     for (const port of definition.inputs) {
+        // A material input carries a picture per channel: the node binds the ones it reads itself.
+        if (port.kind === 'material') continue;
         const image = context.input(port.key);
         const gray = image ? image.kind === 'gray' : false;
         inputs[`t_${port.key}`] = image ?? gpuConstant(port.fallback ?? 'black');

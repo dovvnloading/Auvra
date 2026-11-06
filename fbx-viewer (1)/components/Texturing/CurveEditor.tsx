@@ -2,10 +2,12 @@ import React, { useRef, useState } from 'react';
 import { readCurves, sampleCurve } from '../../texturing/graph/nodeKit';
 import type { CurvePoint, CurveSet } from '../../texturing/graph/types';
 import { Segmented } from '../UI/kit';
+import type { Histogram } from './view2d';
 
 /**
  * A tone curve per channel: drag points, click empty space to add one, double-click a point to take it
- * away. The master curve applies to every channel first.
+ * away. The master curve applies to every channel first. The histogram of the node's input shows
+ * behind the curve, for the channel being edited.
  */
 
 const SIZE = 220;
@@ -17,7 +19,7 @@ const CHANNELS: ReadonlyArray<{ value: keyof CurveSet; label: string; color: str
     { value: 'a', label: 'A', color: '#a1a1aa' },
 ];
 
-export const CurveEditor: React.FC<{ value: unknown; onChange: (curves: CurveSet) => void }> = ({ value, onChange }) => {
+export const CurveEditor: React.FC<{ value: unknown; onChange: (curves: CurveSet) => void; histogram?: Histogram | null }> = ({ value, onChange, histogram }) => {
     const curves = readCurves(value);
     const [channel, setChannel] = useState<keyof CurveSet>('all');
     const svg = useRef<SVGSVGElement>(null);
@@ -31,6 +33,8 @@ export const CurveEditor: React.FC<{ value: unknown; onChange: (curves: CurveSet
     };
     const set = (next: CurvePoint[]) => onChange({ ...curves, [channel]: next.map((p) => ({ x: Number(p.x.toFixed(4)), y: Number(p.y.toFixed(4)) })) });
 
+    const bins = histogram ? (channel === 'r' ? histogram.red : channel === 'g' ? histogram.green : channel === 'b' ? histogram.blue : channel === 'all' ? histogram.luma : null) : null;
+    const peak = bins ? Math.max(1, ...bins) : 1;
     const path = Array.from({ length: 65 }, (_, i) => {
         const x = i / 64;
         return `${i ? 'L' : 'M'} ${x * SIZE} ${(1 - sampleCurve(points, x)) * SIZE}`;
@@ -67,6 +71,10 @@ export const CurveEditor: React.FC<{ value: unknown; onChange: (curves: CurveSet
                     if (hit >= 0 && points.length > 2) set(points.filter((_, i) => i !== hit));
                 }}
             >
+                {bins && bins.map((count, index) => {
+                    const height = Math.sqrt(count / peak) * SIZE * 0.9;
+                    return <rect key={`bin:${index}`} x={(index / bins.length) * SIZE} y={SIZE - height} width={SIZE / bins.length + 0.4} height={height} fill={color} opacity={0.14} />;
+                })}
                 {[0.25, 0.5, 0.75].map((t) => (
                     <g key={t} stroke="#27272a">
                         <line x1={t * SIZE} y1={0} x2={t * SIZE} y2={SIZE} />

@@ -1,5 +1,6 @@
 import type * as THREE from 'three';
 import type { GpuImage, ImagePrecision, PassOptions, TextureGpu } from '../gpu/textureGpu';
+import type { MaterialImages } from './material';
 
 /**
  * TEXTURE GRAPHS: TYPES
@@ -16,11 +17,21 @@ export type PortKind = 'color' | 'gray';
 /** What an input nothing is wired to reads. */
 export type InputFallback = 'white' | 'black' | 'mid' | 'normal' | 'clear';
 
+/**
+ * What a pin carries: one image (colour or grey; 'any' either), or a whole material, one wire carrying
+ * every surface channel (base colour, normal, roughness...).
+ */
+export type PinKind = PortKind | 'any' | 'material';
+
 export interface TexPortDef {
     key: string;
     label: string;
     /** 'any' takes either kind; an 'any' output is the kind of the node's `kindFrom` input. */
-    kind: PortKind | 'any';
+    kind: PinKind;
+    /** An image input that also takes a material wire, keeping one channel of it (an Output's). */
+    material?: boolean;
+    /** Not shown on the canvas: a named link's wire runs to it instead. */
+    hidden?: boolean;
     fallback?: InputFallback;
     /** A heading the canvas lists the port under, for nodes with many ports. */
     group?: string;
@@ -177,6 +188,8 @@ export interface NodeRunContext {
     subgraph(graphId: string, params: Readonly<Record<string, unknown>>, inputs: Readonly<Record<string, GpuImage | null>>): Promise<Record<string, GpuImage>>;
     /** An image the caller supplied for one of the graph's Input nodes. */
     external(name: string): GpuImage | THREE.Texture | null;
+    /** The channels of the material wired into a material input (null when none is). */
+    material(key: string): MaterialImages | null;
 }
 
 export type NodeCategory =
@@ -192,6 +205,7 @@ export type NodeCategory =
     | 'Edges and distance'
     | 'Height and normals'
     | 'Mesh maps'
+    | 'Materials'
     | 'Utility';
 
 export interface TexNodeDef {
@@ -213,6 +227,8 @@ export interface TexNodeDef {
     kindOf?: (params: Readonly<Record<string, unknown>>) => PortKind;
     /** The input a bypassed node passes through (its first unless said: a blend's background). */
     main?: string;
+    /** False for a node that cannot be bypassed: what goes in is not what comes out (images into a material). */
+    bypass?: false;
     /** How the editor shows its images. */
     preview?: 'normal';
     /** The node's own drawing. */

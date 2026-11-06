@@ -3,7 +3,7 @@ import { materialLibrary } from '../runtime/materials/materialLibrary';
 import { canBindMaterialGraph } from '../runtime/materials/graphMaterial';
 import { isGraphUpgraded } from '../runtime/materials/physicalSurface';
 import { CARD_FRINGE_KEY } from './processing/ModelMaterials';
-import { MAX_PARAMETER_NAME_LENGTH, type MaterialParameterValues } from '../runtime/materials/materialGraph';
+import { MAX_PARAMETER_NAME_LENGTH, type MaterialParameterValue, type MaterialParameterValues } from '../runtime/materials/materialGraph';
 
 /**
  * Per-model material overrides, keyed by material name. Every field is
@@ -94,7 +94,8 @@ const PHYSICAL_OVERRIDE_COLORS: readonly PhysicalOverrideColor[] = ['sheenColor'
 
 export interface MaterialParameterSetting {
   name: string;
-  value: number | number[];
+  /** A number, a colour or vector, a texture's id, or a switch's choice. */
+  value: MaterialParameterValue;
 }
 
 export type MaterialOverrides = Record<string, MaterialOverride>;
@@ -136,7 +137,10 @@ const parameterNumber = (value: unknown): number | undefined =>
 const MIN_PARAMETER_COMPONENTS = 2;
 const MAX_PARAMETER_COMPONENTS = 4;
 
-const normalizeParameterValue = (value: unknown): number | number[] | undefined => {
+const normalizeParameterValue = (value: unknown): MaterialParameterValue | undefined => {
+  if (typeof value === 'boolean') return value;
+  // A texture parameter names a texture by its id.
+  if (typeof value === 'string') return normalizeTextureId(value);
   const single = parameterNumber(value);
   if (single !== undefined) return single;
   if (!Array.isArray(value) || value.length < MIN_PARAMETER_COMPONENTS || value.length > MAX_PARAMETER_COMPONENTS) return undefined;

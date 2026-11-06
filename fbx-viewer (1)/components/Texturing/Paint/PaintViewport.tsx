@@ -4,8 +4,12 @@ import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment
 import type { GpuImage, TextureGpu } from '../../../texturing/gpu/textureGpu';
 import { tileGeometry } from '../../../texturing/mesh/partMesh';
 import type { MeshMapName } from '../../../texturing/graph/nodes/io';
-import { MAX_BRUSH_SIZE, pictureAspect, renderDepth, stencilPlace, Stroke, type BrushSettings, type StrokeTarget } from '../../../texturing/paint/strokes';
+import { MAX_BRUSH_SIZE, lazyFollow, pictureAspect, renderDepth, stencilPlace, Stroke, type BrushSettings, type Dab, type StrokeTarget } from '../../../texturing/paint/strokes';
+import { builtInAlphaTexture } from '../../../texturing/paint/brushLibrary';
+import { layoutAlong, pathLength, sampleAt, samplePath, type SurfacePath, type Vec3 } from '../../../texturing/paint/paths';
+
 import type { PaintChannel } from '../../../texturing/paint/paintTypes';
+import { PICK_LABELS, type PickMode } from '../../../texturing/paint/selection';
 import type { PaintSession } from './paintSession';
 import type { UvSession } from './uvSession';
 
@@ -20,7 +24,46 @@ import type { UvSession } from './uvSession';
  * smoothed onto the screen, so its edges are clean.
  */
 
-export type PaintTool = 'paint' | 'erase' | 'island' | 'pick' | 'seam';
+export type PaintTool = 'paint' | 'erase' | 'island' | 'polygon' | 'path' | 'pick' | 'seam';
+
+/** The path tool: the path being drawn, its selected point, and what clicks do to it. */
+export interface PathEdit {
+    path: SurfacePath | null;
+    point: number | null;
+    /** A click on the surface away from the path's points: a new point there, sized from the brush. */
+    onAdd: (position: Vec3, normal: Vec3, size: number) => void;
+    onSelect: (index: number | null) => void;
+    onMove: (index: number, position: Vec3, normal: Vec3) => void;
+}
+
+/** What the workspace asks of the view. */
+export interface ViewportCommands {
+    /** Lays a path on the selected paint layer or painted mask: along it, or filling inside it (seen from here). */
+    paintPath: (path: SurfacePath, how: 'along' | 'fill') => Promise<void>;
+}
+
+/** Fonts the browser has, for text along a path. */
+export const PATH_FONTS = ['sans-serif', 'serif', 'monospace', 'cursive', 'Arial', 'Georgia', 'Times New Roman', 'Courier New', 'Verdana', 'Trebuchet MS', 'Impact'];
+
+/** One letter, white on black, as an alpha for a dab. */
+const glyphTexture = (character: string, font: string): { texture: THREE.CanvasTexture; advance: number } => {
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = 128;
+    const context = canvas.getContext('2d')!;
+    context.fillStyle = 'black';
+    context.fillRect(0, 0, 128, 128);
+    context.fillStyle = 'white';
+    context.font = `96px ${font}`;
+    context.textAlign = 'center';
+    context.textBaseline = 'middle';
+    context.fillText(character, 64, 70);
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.colorSpace = THREE.NoColorSpace;
+    return { texture, advance: context.measureText(character).width / 128 };
+};
+
+/** Where a click met the surface: its triangle, the place on the model and its texture coordinates. */
+export interface SurfaceHit { triangle: number; point: THREE.Vector3; uv: THREE.Vector2 }
 export type ViewMode = 'material' | PaintChannel | 'ambientOcclusion' | `mesh:${MeshMapName}` | 'mask' | 'uvChecker' | 'uvStretch';
 
 /** A tile's live pictures as the view draws them, each with its smaller versions, made when first needed. */
@@ -154,7 +197,16 @@ export const PaintViewport: React.FC<{
     frameSignal: number;
     /** The UV editing session, for seams and the layout views. */
     uv: UvSession | null;
-}> = ({ session, tool, brush, target, view, maskImage, onBrushSize, onPick, onMessage, frameSignal, uv }) => {
+    /** What a polygon fill takes in: a triangle, a quad, a mesh part, a UV piece or an edge loop. */
+    pickMode: PickMode;
+    /**
+     * A click on the surface with the polygon or pick tool, offered first to whatever is being picked for
+     * (a polygon or ID colour mask): true when it took the click. Shift takes away instead of adding.
+     */
+    onSurfacePick?: (hit: SurfaceHit, remove: boolean) => boolean;
+    pathEdit?: PathEdit | null;
+    commands?: React.MutableRefObject<ViewportCommands | null>;
+}> = ({ session, tool, brush, target, view, maskImage, onBrushSize, onPick, onMessage, frameSignal, uv, pickMode, onSurfacePick, pathEdit, commands }) => {
     const uvVersion = useSyncExternalStore(uv?.subscribe ?? NO_SUBSCRIBE, uv?.getVersion ?? ZERO);
     const host = useRef<HTMLDivElement>(null);
     const canvas = useRef<HTMLCanvasElement>(null);
@@ -355,6 +407,47 @@ export const PaintViewport: React.FC<{
     const smooth = useRef<THREE.WebGLRenderTarget | null>(null);
     useEffect(() => () => { smooth.current?.dispose(); smooth.current = null; }, []);
 
+    const pathRef = useRef(pathEdit);
+    pathRef.current = pathEdit;
+
+    /** The path being drawn, over the view: its curve and its points (the selected one larger). */
+    const drawPath = useCallback((element: HTMLCanvasElement) => {
+        const edit = pathRef.current;
+        const path = edit?.path;
+        const context = element.getContext('2d');
+        if (!path?.points.length || !context) return;
+        const matrix = new THREE.Matrix4().multiplyMatrices(world.camera.projectionMatrix, world.camera.matrixWorldInverse);
+        const screen = (p: Vec3) => {
+            const v = new THREE.Vector3(p[0], p[1], p[2]).applyMatrix4(matrix);
+            return v.z > 1 || v.z < -1 ? null : { x: (v.x * 0.5 + 0.5) * element.width, y: (0.5 - v.y * 0.5) * element.height };
+        };
+        const samples = samplePath(path.points, Math.max(pathLength(path.points, path.closed) / 300, 1e-6), path.closed);
+        context.save();
+        context.lineWidth = 2 * size.ratio;
+        context.strokeStyle = 'rgba(56, 189, 248, 0.9)';
+        context.beginPath();
+        let drawing = false;
+        for (const sample of samples) {
+            const q = screen(sample.position);
+            if (!q) { drawing = false; continue; }
+            if (drawing) context.lineTo(q.x, q.y);
+            else { context.moveTo(q.x, q.y); drawing = true; }
+        }
+        context.stroke();
+        path.points.forEach((point, i) => {
+            const q = screen(point.position);
+            if (!q) return;
+            context.beginPath();
+            context.arc(q.x, q.y, (i === edit?.point ? 5 : 3.5) * size.ratio, 0, Math.PI * 2);
+            context.fillStyle = i === edit?.point ? '#38bdf8' : '#f4f4f5';
+            context.fill();
+            context.lineWidth = size.ratio;
+            context.strokeStyle = '#09090b';
+            context.stroke();
+        });
+        context.restore();
+    }, [size.ratio, world.camera]);
+
     const draw = useCallback(() => {
         const element = canvas.current;
         if (!element || !size.width) return;
@@ -375,7 +468,10 @@ export const PaintViewport: React.FC<{
             renderer.setRenderTarget(null);
             gpu.drawToScreen({ fragment: 'void main() { outColor = texture(source, vUv); }', inputs: { source: target.texture } });
         });
-    }, [gpu, placeCamera, size, world]);
+        drawPath(element);
+    }, [drawPath, gpu, placeCamera, size, world]);
+
+    useEffect(() => { draw(); }, [draw, pathEdit?.path, pathEdit?.point]);
 
     useEffect(() => {
         updateMaterials();
@@ -383,7 +479,9 @@ export const PaintViewport: React.FC<{
     }, [draw, updateMaterials, version, uvVersion]);
 
     // ---- pointer ----
-    const gesture = useRef<{ kind: 'orbit' | 'pan'; x: number; y: number } | { kind: 'stroke'; stroke: Stroke; depth: GpuImage } | null>(null);
+    const gesture = useRef<{ kind: 'orbit' | 'pan'; x: number; y: number } | { kind: 'stroke'; stroke: Stroke; depth: GpuImage; anchor: { x: number; y: number } } | { kind: 'pathPoint'; index: number } | null>(null);
+    /** Clone: where strokes copy from (Ctrl-click sets it). */
+    const cloneSource = useRef<{ triangle: number; uv: THREE.Vector2 } | null>(null);
 
     const toPixels = (event: { clientX: number; clientY: number }) => {
         const box = host.current!.getBoundingClientRect();
@@ -398,7 +496,7 @@ export const PaintViewport: React.FC<{
         return session.picker.cast(ray.ray.origin, ray.ray.direction);
     }, [placeCamera, session.picker, size, world.camera]);
 
-    const startStroke = (x: number, y: number, pressure: number) => {
+    const startStroke = (x: number, y: number, pressure: number, tilt?: { x: number; y: number }) => {
         if (!session.usable) {
             onMessage('The graphics card was reset: painting waits until the set has opened again from its saved pictures.');
             return;
@@ -408,14 +506,18 @@ export const PaintViewport: React.FC<{
             return;
         }
         if (!target) {
-            onMessage(tool === 'island' ? 'Pick a paint layer or a painted mask to fill.' : 'Pick a paint layer, or a painted mask effect, to paint on. Fill layers take their values from their settings.');
+            onMessage(tool === 'island' || tool === 'polygon' ? 'Pick a paint layer or a painted mask to fill, or a polygon or ID colour mask effect to pick for.' : 'Pick a paint layer, or a painted mask effect, to paint on. Fill layers take their values from their settings.');
+            return;
+        }
+        if (brush.mode === 'clone' && !cloneSource.current && tool !== 'island' && tool !== 'polygon') {
+            onMessage('Ctrl-click where to copy from first, then paint where the copy goes.');
             return;
         }
         onMessage(null);
         placeCamera();
         const depth = renderDepth(gpu, world.root, world.camera, size.width, size.height);
         const perspective = (size.height / 2) / Math.tan(THREE.MathUtils.degToRad(world.camera.fov / 2));
-        const alpha = brush.shape === 'picture' && brush.alphaTexture ? session.host.texture(brush.alphaTexture) : null;
+        const alpha = brush.shape === 'picture' && brush.alphaTexture ? builtInAlphaTexture(brush.alphaTexture) ?? session.host.texture(brush.alphaTexture) : null;
         const stencil = brush.stencil.enabled && brush.stencil.textureId ? session.host.texture(brush.stencil.textureId) : null;
         const stroke = new Stroke(stack, target, tool === 'erase' ? 'erase' : 'paint', brush, {
             viewProjection: new THREE.Matrix4().multiplyMatrices(world.camera.projectionMatrix, world.camera.matrixWorldInverse),
@@ -427,16 +529,18 @@ export const PaintViewport: React.FC<{
             depth,
             perspective,
         }, alpha, stencil);
-        if (tool === 'island') {
+        if (tool === 'island' || tool === 'polygon') {
             const hit = hitAt(x, y);
-            if (hit) stroke.fillIsland(session.part.triangleIsland[hit.triangle]);
-            const entry = stroke.finish('Fill island');
+            const mode: PickMode = tool === 'island' ? 'island' : pickMode;
+            if (hit) stroke.fillTriangles(session.selector.pick(mode, hit.triangle, [hit.point.x, hit.point.y, hit.point.z]));
+            const entry = stroke.finish(tool === 'island' ? 'Fill island' : `Fill ${PICK_LABELS[mode].toLowerCase()}`);
             gpu.release(depth);
             if (hit) session.record(entry);
             return;
         }
-        gesture.current = { kind: 'stroke', stroke, depth };
-        stroke.moveTo(x, y, pressure, (px, py) => hitAt(px, py));
+        if (brush.mode === 'clone' && cloneSource.current) stroke.cloneSource(cloneSource.current.triangle, cloneSource.current.uv);
+        gesture.current = { kind: 'stroke', stroke, depth, anchor: { x, y } };
+        stroke.moveTo(x, y, pressure, (px, py) => hitAt(px, py), tilt);
     };
 
     const pickColour = (x: number, y: number) => {
@@ -464,6 +568,37 @@ export const PaintViewport: React.FC<{
             return;
         }
         if (event.button !== 0) return;
+        if (tool === 'path' && pathEdit) {
+            // A point near the pointer is picked (and can be dragged); elsewhere a new point goes on the surface.
+            placeCamera();
+            const matrix = new THREE.Matrix4().multiplyMatrices(world.camera.projectionMatrix, world.camera.matrixWorldInverse);
+            const near = (pathEdit.path?.points ?? []).findIndex((point) => {
+                const v = new THREE.Vector3(...point.position).applyMatrix4(matrix);
+                return Math.hypot((v.x * 0.5 + 0.5) * size.width - x, (0.5 - v.y * 0.5) * size.height - y) < 9 * size.ratio;
+            });
+            if (near >= 0) {
+                pathEdit.onSelect(near);
+                gesture.current = { kind: 'pathPoint', index: near };
+                return;
+            }
+            const hit = hitAt(x, y);
+            if (!hit) return;
+            const perspective = (size.height / 2) / Math.tan(THREE.MathUtils.degToRad(world.camera.fov / 2));
+            pathEdit.onAdd([hit.point.x, hit.point.y, hit.point.z], [hit.normal.x, hit.normal.y, hit.normal.z], (brush.size * hit.distance) / perspective);
+            return;
+        }
+        if (brush.mode === 'clone' && (event.ctrlKey || event.metaKey) && (tool === 'paint' || tool === 'erase')) {
+            const hit = hitAt(x, y);
+            if (hit) {
+                cloneSource.current = { triangle: hit.triangle, uv: hit.uv.clone() };
+                onMessage('Copying from there: paint where the copy goes. The copy keeps its distance on the picture.');
+            }
+            return;
+        }
+        if (tool === 'polygon' || tool === 'pick') {
+            const hit = hitAt(x, y);
+            if (hit && onSurfacePick?.(hit, event.shiftKey)) return;
+        }
         if (tool === 'pick') { pickColour(x, y); return; }
         if (tool === 'seam') {
             const hit = hitAt(x, y);
@@ -471,7 +606,7 @@ export const PaintViewport: React.FC<{
             else if (!uv) onMessage('Open the UVs panel to edit seams.');
             return;
         }
-        startStroke(x, y, event.pointerType === 'pen' ? event.pressure : 1);
+        startStroke(x, y, event.pointerType === 'pen' ? event.pressure : 1, event.pointerType === 'pen' ? { x: event.tiltX, y: event.tiltY } : undefined);
     };
 
     const onPointerMove = (event: React.PointerEvent) => {
@@ -479,12 +614,20 @@ export const PaintViewport: React.FC<{
         setCursor({ x: x / size.ratio, y: y / size.ratio });
         const current = gesture.current;
         if (!current) return;
+        if (current.kind === 'pathPoint') {
+            const hit = hitAt(x, y);
+            if (hit && pathEdit) pathEdit.onMove(current.index, [hit.point.x, hit.point.y, hit.point.z], [hit.normal.x, hit.normal.y, hit.normal.z]);
+            return;
+        }
         if (current.kind === 'stroke') {
             const coalesced = (event.nativeEvent as PointerEvent).getCoalescedEvents?.() ?? [];
             const events = coalesced.length ? coalesced : [event.nativeEvent];
             for (const each of events) {
-                const point = toPixels(each);
-                current.stroke.moveTo(point.x, point.y, each.pointerType === 'pen' ? each.pressure : 1, (px, py) => hitAt(px, py));
+                // Lazy mouse: the stroke trails the pointer on a string.
+                const point = lazyFollow(current.anchor, toPixels(each), brush.lazy * size.ratio);
+                if (point.x === current.anchor.x && point.y === current.anchor.y) continue;
+                current.anchor = point;
+                current.stroke.moveTo(point.x, point.y, each.pointerType === 'pen' ? each.pressure : 1, (px, py) => hitAt(px, py), each.pointerType === 'pen' ? { x: each.tiltX, y: each.tiltY } : undefined);
             }
             return;
         }
@@ -514,6 +657,116 @@ export const PaintViewport: React.FC<{
             session.record(entry);
         }
     };
+
+    // Laying a path on: dabs along it (the brush, a ribbon, stitches from a texture graph, letters), or
+    // the brush through its outline as seen from here.
+    const paintPath = async (path: SurfacePath, how: 'along' | 'fill') => {
+        if (!session.usable || session.locked) { onMessage(session.locked ?? 'The graphics card was reset: wait until the set has opened again.'); return; }
+        if (!target) { onMessage('Pick a paint layer or a painted mask to lay the path on.'); return; }
+        if (path.points.length < (how === 'fill' ? 3 : 1)) { onMessage(how === 'fill' ? 'A path needs three points or more to fill inside it.' : 'Click the model to give the path points first.'); return; }
+        placeCamera();
+        const depth = renderDepth(gpu, world.root, world.camera, size.width, size.height);
+        const perspective = (size.height / 2) / Math.tan(THREE.MathUtils.degToRad(world.camera.fov / 2));
+        const view = {
+            viewProjection: new THREE.Matrix4().multiplyMatrices(world.camera.projectionMatrix, world.camera.matrixWorldInverse),
+            cameraPosition: world.camera.position.clone(),
+            cameraRight: new THREE.Vector3().setFromMatrixColumn(world.camera.matrixWorld, 0).normalize(),
+            cameraUp: new THREE.Vector3().setFromMatrixColumn(world.camera.matrixWorld, 1).normalize(),
+            width: size.width,
+            height: size.height,
+            depth,
+            perspective,
+        };
+        const plain: BrushSettings = { ...brush, mode: 'paint', buildUp: false, symmetry: { x: false, y: false, z: false }, radial: { count: 1, axis: 'y' } };
+        const disposables: THREE.Texture[] = [];
+        try {
+            if (how === 'fill') {
+                const outline = document.createElement('canvas');
+                outline.width = size.width;
+                outline.height = size.height;
+                const context = outline.getContext('2d')!;
+                context.fillStyle = 'black';
+                context.fillRect(0, 0, size.width, size.height);
+                context.fillStyle = 'white';
+                context.beginPath();
+                const samples = samplePath(path.points, Math.max(pathLength(path.points, true) / 400, 1e-6), true);
+                samples.forEach((sample, i) => {
+                    const v = new THREE.Vector3(...sample.position).applyMatrix4(view.viewProjection);
+                    const px = (v.x * 0.5 + 0.5) * size.width, py = (0.5 - v.y * 0.5) * size.height;
+                    if (i === 0) context.moveTo(px, py);
+                    else context.lineTo(px, py);
+                });
+                context.closePath();
+                context.fill();
+                const stencil = new THREE.CanvasTexture(outline);
+                stencil.colorSpace = THREE.NoColorSpace;
+                disposables.push(stencil);
+                const fill: BrushSettings = { ...plain, projection: 'screen', shape: 'square', hardness: 1, stencil: { enabled: true, textureId: 'path', scale: 1, rotation: 0, offsetX: 0, offsetY: 0, opacity: 1 } };
+                const stroke = new Stroke(stack, target, 'paint', fill, view, null, stencil);
+                stroke.stamp([{ x: size.width / 2, y: size.height / 2, radius: Math.hypot(size.width, size.height) / 2 + 2, angle: 0, flow: 1 }], null);
+                session.record(stroke.finish(`Fill inside ${path.name}`));
+                return;
+            }
+            const style = path.style;
+            const sizes = path.points.map((point) => point.size);
+            const smallest = Math.max(1e-6, Math.min(...sizes));
+            const gap = path.gap ?? 0.2;
+            const surface: BrushSettings = style === 'ribbon' ? { ...plain, projection: 'surface', shape: 'square', hardness: 1 } : { ...plain, projection: 'surface' };
+            const alpha = style === 'brush' && brush.shape === 'picture' && brush.alphaTexture ? builtInAlphaTexture(brush.alphaTexture) ?? session.host.texture(brush.alphaTexture) : null;
+            const stroke = new Stroke(stack, target, 'paint', surface, view, alpha, null);
+            const dabOf = (sample: { position: Vec3; normal: Vec3; size: number; opacity: number; tangent: Vec3 }, scale = 1, follow = true): Dab => {
+                const point = new THREE.Vector3(...sample.position);
+                const worldRadius = sample.size * scale;
+                return {
+                    x: 0, y: 0, angle: 0,
+                    radius: (worldRadius * perspective) / Math.max(1e-6, world.camera.position.distanceTo(point)),
+                    flow: brush.flow * sample.opacity,
+                    point, normal: new THREE.Vector3(...sample.normal), worldRadius,
+                    ...(follow ? { across: new THREE.Vector3(...sample.tangent) } : {}),
+                };
+            };
+            if (style === 'text') {
+                const text = (path.text ?? '').trim() ? path.text! : 'Text';
+                const font = path.font ?? 'sans-serif';
+                const height = smallest * 2;
+                const glyphs = [...text].map((character) => ({ character, ...glyphTexture(character, font) }));
+                for (const glyph of glyphs) disposables.push(glyph.texture);
+                const samples = samplePath(path.points, Math.max(smallest / 20, 1e-6), path.closed);
+                const total = samples.length ? samples[samples.length - 1].distance : 0;
+                const places = layoutAlong(glyphs.map((glyph) => Math.max(glyph.advance, 0.25) * height), total, gap * height * 0.25);
+                glyphs.forEach((glyph, i) => {
+                    const at = places[i];
+                    const sample = at === null ? null : sampleAt(samples, at);
+                    if (sample && glyph.character.trim()) stroke.stamp([dabOf(sample)], glyph.texture);
+                });
+                if (places.some((place) => place === null)) onMessage('The path is too short for all of the text: the rest was left off.');
+            } else if (style === 'stitches') {
+                const entry = path.graphId ? session.stack.host.resolveGraph(path.graphId) : undefined;
+                const output = entry?.graph.nodes.find((node) => node.type === 'output');
+                if (!entry || !output) { onMessage('Pick a texture graph to make the stitches from: each stitch is its first output.'); return; }
+                const image = await stack.graphOutput(path.graphId!, output.params.channel === 'custom' ? output.id : String(output.params.channel), {}, stack.tiles[0], `path:${path.id}`);
+                if (!image) { onMessage('The stitch graph could not be drawn.'); return; }
+                const samples = samplePath(path.points, smallest * 2 * (1 + gap), path.closed);
+                stroke.stamp(samples.map((sample) => dabOf(sample)), image.target.texture);
+            } else {
+                const step = style === 'ribbon' ? smallest * 0.2 : Math.max(smallest * 2 * brush.spacing, smallest * 0.05);
+                const samples = samplePath(path.points, step, path.closed);
+                const dabs = samples.map((sample) => dabOf(sample, 1, style === 'ribbon' || brush.followStroke));
+                for (let i = 0; i < dabs.length; i += 64) stroke.stamp(dabs.slice(i, i + 64), alpha);
+            }
+            session.record(stroke.finish(`Paint ${path.name}`));
+        } finally {
+            gpu.release(depth);
+            for (const texture of disposables) texture.dispose();
+        }
+    };
+    const paintPathRef = useRef(paintPath);
+    paintPathRef.current = paintPath;
+    useEffect(() => {
+        if (!commands) return undefined;
+        commands.current = { paintPath: (path, how) => paintPathRef.current(path, how) };
+        return () => { commands.current = null; };
+    }, [commands]);
 
     useEffect(() => {
         const element = host.current;
@@ -546,7 +799,7 @@ export const PaintViewport: React.FC<{
         <div
             ref={host}
             className="relative min-h-0 min-w-0 flex-1 overflow-hidden"
-            style={{ cursor: tool === 'pick' ? 'crosshair' : showCursor ? 'none' : 'default' }}
+            style={{ cursor: tool === 'pick' || tool === 'polygon' ? 'crosshair' : showCursor ? 'none' : 'default' }}
             onPointerDown={onPointerDown}
             onPointerMove={onPointerMove}
             onPointerUp={onPointerUp}

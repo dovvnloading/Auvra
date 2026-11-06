@@ -64,7 +64,7 @@ Objects can carry components that add behaviour. Select an object and use **Add 
 | Reverb Zone | Adds room, hall, cave or outdoor reverb to sound effects while the camera is inside it |
 | Music | Plays a playlist of audio assets on the music bus, with shuffle, loop and crossfades |
 | Physics Joint | Connects the object's rigid body to another object or to the world: fixed, ball, hinge or slider, with limits and a break force |
-| Decal | Projects a texture onto the object or onto any surface under it |
+| Decal | Projects a texture onto the object or onto any surface under it, with a normal map, roughness, metalness and glow of its own, or a whole material asset instead |
 | Water | An animated water surface with waves, reflections and foam; dynamic rigid bodies float in it and are slowed by it |
 | Reflection Probe | Captures its surroundings into a reflection map for shiny materials within its radius; the nearest probe wins where probes overlap. Updates once at start, at an interval, or every frame |
 | Light Bake Volume | A box (centred on the object, drawn in the editor) where [baked lighting](#baked-lighting) puts its light probes |

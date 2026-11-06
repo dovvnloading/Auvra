@@ -36,7 +36,7 @@ import { BloodSystem, BloodSystemHandle } from '../components/Sandbox/BloodSyste
 import { applyMeleeHit, resolveBlueprintDamage } from '../components/Sandbox/combat';
 import { GraphRuntimeAPI } from '../components/AnimationGraph/GraphRuntime';
 import { useLevelBlueprintRuntime, UseLevelBlueprintRuntimeProps } from '../hooks/useLevelBlueprintRuntime';
-import { withWorldPose } from '../hooks/levelBlueprintNodes/world';
+import { materialValueTargets, withWorldPose } from '../hooks/levelBlueprintNodes/world';
 import { useRuntimeLevelWorld } from '../hooks/useRuntimeLevelWorld';
 import { frontendDiagnostics } from '../diagnostics/runtime';
 import { aimCameraOffset, AttachmentData, Blueprint, LevelComponent, LevelObject, LoadedModelData, SocketData } from '../types';
@@ -72,6 +72,7 @@ import { MeshLodContext } from '../components/Scene/useMeshLod';
 import { OcclusionCullingLayer } from './OcclusionCullingLayer';
 import type { InputState } from './input';
 import { collectTimelineTargets } from './timeline/evaluate';
+import { applyMaterialInstances, hasObjectMaterialValues } from '../utils/materialInstances';
 import { CinematicOverlay } from './CinematicOverlay';
 import { cinematics, PlayerClipsContext, useCinematicState } from './cinematics';
 import { TouchControls } from './TouchControls';
@@ -329,7 +330,7 @@ const toWorldObject = (obj: LevelObject, world: THREE.Matrix4): LevelObject => {
  * may move it); static leaves keep instancing at their world transform. World matrices are composed
  * top-down in one pass, matching sceneGraph.getWorldMatrix without its per-object walk.
  */
-const planLevelRender = (objects: LevelObject[]): LevelRenderPlan => {
+const planLevelRender = (objects: LevelObject[], materialTargets: ReadonlySet<string> = new Set()): LevelRenderPlan => {
     const index = new Map(objects.map(obj => [obj.id, obj]));
     const childMap = new Map<string | null, LevelObject[]>();
     objects.forEach(obj => {
@@ -360,7 +361,9 @@ const planLevelRender = (objects: LevelObject[]): LevelRenderPlan => {
             treeParent.set(obj.id, parentId);
             if (timelineTargets.has(obj.id) || (parentId && (underBody.has(parentId) || (index.get(parentId)?.components ?? [])
                 .some(c => c.enabled !== false && ['collider', 'rigidBody', 'mover', 'rotator', 'vehicle'].includes(c.type))))) underBody.add(obj.id);
-            if (mountedComponents(obj).length || timelineTargets.has(obj.id) || (parentId && dynamic.has(parentId))) dynamic.add(obj.id);
+            // Material values of its own, saved or set by the blueprint while playing, need materials (and so a group) of its own.
+            const ownMaterials = hasObjectMaterialValues(obj) || materialTargets.has(obj.id);
+            if (mountedComponents(obj).length || timelineTargets.has(obj.id) || ownMaterials || (parentId && dynamic.has(parentId))) dynamic.add(obj.id);
             const children = childMap.get(obj.id);
             if (children) for (let i = children.length - 1; i >= 0; i--) stack.push([children[i], obj.id]);
         }
@@ -417,6 +420,9 @@ const LevelObjectNode: React.FC<{ object: LevelObject; plan: LevelRenderPlan; mo
             return null;
         }
     }, [model]);
+    // The object's own material values, worn by instances of its model's materials (materialInstances.ts).
+    const materialValues = object.materialOverrides;
+    useLayoutEffect(() => (meshes ? applyMaterialInstances(meshes, materialValues) : undefined), [meshes, materialValues]);
     const components = useMemo(() => mountedComponents(object), [object]);
     const children = plan.groupChildren.get(object.id);
 
@@ -721,7 +727,10 @@ const LevelSession: React.FC<LevelSessionProps> = ({ level, navigation, content,
     ), [content]);
 
     // Hierarchy and components render as transform groups; gameplay systems read world-space copies.
-    const renderPlan = useMemo(() => planLevelRender(runtimeLevelObjects), [runtimeLevelObjects]);
+    // Objects the blueprint sets material values on need materials of their own, and so are drawn on their own.
+    const blueprintNodes = level.blueprint?.nodes;
+    const materialTargets = useMemo(() => materialValueTargets(blueprintNodes), [blueprintNodes]);
+    const renderPlan = useMemo(() => planLevelRender(runtimeLevelObjects, materialTargets), [runtimeLevelObjects, materialTargets]);
     const worldLevelObjects = renderPlan.worldObjects;
     const worldGrid = useMemo(() => worldGridSettingsOf(runtimeLevelObjects), [runtimeLevelObjects]);
     // Enemies walk the level's navmesh; the hierarchy stays intact so moving parents are detected.

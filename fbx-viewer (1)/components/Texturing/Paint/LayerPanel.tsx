@@ -1,6 +1,9 @@
 import React, { useMemo, useRef, useState } from 'react';
 import { ArrowDownIcon, ArrowUpIcon, BrushIcon, BucketIcon, CopyIcon, EyeIcon, EyeOffIcon, FilterIcon, FolderIcon, FolderMoveIcon, GraphIcon, LayersIcon, PackagePlusIcon, PlusIcon, TrashIcon, WandIcon } from '../../UI/Icons';
 import { BLEND_MODES, BLEND_MODE_LABELS, type BlendMode } from '../../../texturing/gpu/glslLibrary';
+import { PICK_LABELS, PICK_MODES, countTriangles, type PickMode } from '../../../texturing/paint/selection';
+import { PROJECTION_LABELS, type ProjectionAxis, type ProjectionMode } from '../../../texturing/paint/projections';
+import type { PaintTool } from './PaintViewport';
 import { OUTPUT_NODE_TYPE } from '../../../texturing/graph/nodes/io';
 import { OUTPUT_CHANNEL_LABELS, type GraphParameter, type OutputChannel, type TexParamDef } from '../../../texturing/graph/types';
 import type { GraphResolver } from '../../../texturing/graph/registry';
@@ -51,7 +54,14 @@ const MASK_BLENDS: ReadonlyArray<{ value: MaskBlend; label: string }> = [
     { value: 'replace', label: 'Replace' }, { value: 'multiply', label: 'Multiply' }, { value: 'add', label: 'Add' },
     { value: 'subtract', label: 'Subtract' }, { value: 'max', label: 'Lighten' }, { value: 'min', label: 'Darken' },
 ];
-const MASK_KIND_LABELS: Record<MaskEffect['kind'], string> = { paint: 'Painted', fill: 'Fill', generator: 'Smart mask', levels: 'Levels', blur: 'Blur', invert: 'Invert', below: 'From the layers below' };
+const MASK_KIND_LABELS: Record<MaskEffect['kind'], string> = { paint: 'Painted', fill: 'Fill', generator: 'Smart mask', levels: 'Levels', blur: 'Blur', invert: 'Invert', below: 'From the layers below', polygon: 'Picked parts', id: 'ID colours' };
+/** Masks by parts of the model, picked by clicking it. */
+const PART_MASKS: ReadonlyArray<{ label: string; hint: string; pick: PickMode }> = [
+    { label: 'Mesh parts', hint: 'Whole parts of the model, as it was made.', pick: 'mesh' },
+    { label: 'UV pieces', hint: 'Whole pieces of the UV layout.', pick: 'island' },
+    { label: 'Polygons', hint: 'Triangles, quads or edge loops you click.', pick: 'quad' },
+];
+const css = ([r, g, b]: readonly number[]): string => `rgb(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)})`;
 const FILTER_KINDS = Object.keys(FILTER_LABELS) as FilterKind[];
 /** Short names for the Add menu's buttons. */
 const FILTER_BUTTONS: Record<FilterKind, string> = { blur: 'Blur', sharpen: 'Sharpen', hsl: 'Hue and saturation', levels: 'Levels', warp: 'Warp', invert: 'Invert' };
@@ -76,11 +86,24 @@ const ValueField: React.FC<{ channel: PaintChannel; value: [number, number, numb
 /** How a fill's picture is laid on: along the UVs or from three sides, its repeats, turn and side blending. */
 const ProjectionFields: React.FC<{ value: FillProjection; onChange: (value: FillProjection) => void }> = ({ value, onChange }) => (
     <>
-        <Select value={value.projection} options={[{ value: 'triplanar', label: 'From three sides (no seams)' }, { value: 'uv', label: 'Along the UVs' }]}
-            onChange={(projection) => onChange({ ...value, projection: projection as FillProjection['projection'], scale: projection === 'triplanar' ? 4 : 1 })} className="w-full" />
-        <Slider label={value.projection === 'triplanar' ? 'Repeats' : 'Scale'} value={value.scale} min={0.1} max={40} step={0.1} limits={[0.01, 400]} onChange={(scale) => onChange({ ...value, scale })} />
+        <Select value={value.projection} options={(Object.keys(PROJECTION_LABELS) as ProjectionMode[]).map((mode) => ({ value: mode, label: PROJECTION_LABELS[mode] }))}
+            onChange={(projection) => onChange({ ...value, projection: projection as ProjectionMode, scale: projection === 'uv' ? 1 : 4 })} className="w-full" />
+        {(value.projection === 'planar' || value.projection === 'spherical' || value.projection === 'cylindrical') && (
+            <div className="flex items-center gap-2 text-2xs text-zinc-400">
+                <span className="w-20 shrink-0">{value.projection === 'planar' ? 'Laid along' : 'Round the axis'}</span>
+                <Segmented value={value.axis ?? 'y'} options={[{ value: 'x', label: 'X' }, { value: 'y', label: 'Y' }, { value: 'z', label: 'Z' }]} onChange={(axis) => onChange({ ...value, axis: axis as ProjectionAxis })} label="Projection axis" />
+            </div>
+        )}
+        <Slider label={value.projection === 'uv' ? 'Scale' : 'Repeats'} value={value.scale} min={0.1} max={40} step={0.1} limits={[0.01, 400]} onChange={(scale) => onChange({ ...value, scale })} />
         <Slider label="Turn" value={value.rotation} min={-180} max={180} step={1} onChange={(rotation) => onChange({ ...value, rotation })} />
         {value.projection === 'triplanar' && <Slider label="Sharpness" value={value.sharpness} min={1} max={16} step={0.5} limits={[1, 64]} onChange={(sharpness) => onChange({ ...value, sharpness })} />}
+        {value.projection !== 'uv' && (
+            <div className="flex items-center gap-2 text-2xs text-zinc-400">
+                <span className="w-20 shrink-0">Mirrored</span>
+                <Segmented value={value.mirror ?? 'none'} options={[{ value: 'none', label: 'No' }, { value: 'x', label: 'X' }, { value: 'y', label: 'Y' }, { value: 'z', label: 'Z' }]}
+                    onChange={(mirror) => onChange({ ...value, mirror: mirror === 'none' ? undefined : mirror as ProjectionAxis })} label="Mirror the fill across" />
+            </div>
+        )}
     </>
 );
 
@@ -117,6 +140,7 @@ const leftOutNote = (leftOut: LeftOut): string => {
     const parts = [
         leftOut.paintLayers ? `${leftOut.paintLayers} paint layer${leftOut.paintLayers === 1 ? '' : 's'}` : '',
         leftOut.paintedMasks ? `${leftOut.paintedMasks} painted mask${leftOut.paintedMasks === 1 ? '' : 's'}` : '',
+        leftOut.pickedMasks ? `${leftOut.pickedMasks} mask${leftOut.pickedMasks === 1 ? '' : 's'} of picked parts or ID colours` : '',
         leftOut.ownPictures ? `${leftOut.ownPictures} "what it wore before" fill${leftOut.ownPictures === 1 ? '' : 's'}` : '',
     ].filter(Boolean);
     return parts.length ? ` Left out, as they belong to this texture set: ${parts.join(', ')}.` : '';
@@ -138,7 +162,9 @@ export const LayerPanel: React.FC<{
     /** Sets a material up to be painted on (a fill layer under a black painted mask), ready for strokes. */
     onPaintWith: (choice: MaterialChoice) => void;
     onMessage: (message: string) => void;
-}> = ({ session, selection, onSelect, resolve, graphs, textures, onPaintWith, onMessage }) => {
+    /** Switches the viewport's tool (the polygon tool, to pick parts for a new mask). */
+    onUseTool: (tool: PaintTool) => void;
+}> = ({ session, selection, onSelect, resolve, graphs, textures, onPaintWith, onMessage, onUseTool }) => {
     const document = session.document;
     const addButton = useRef<HTMLButtonElement>(null);
     const maskButton = useRef<HTMLButtonElement>(null);
@@ -171,7 +197,8 @@ export const LayerPanel: React.FC<{
         if (!layer) return;
         for (const effect of effects) if (effect.kind === 'paint') session.stack.startMaskPicture(effect.id, effect.value === 1);
         changeLayer(layer.id, (current) => ({ ...current, mask: [...(current.mask ?? []), ...effects] }), label);
-        const paintable = effects.find((effect) => effect.kind === 'paint');
+        // A mask painted or picked on the model is selected, ready for it.
+        const paintable = effects.find((effect) => effect.kind === 'paint' || effect.kind === 'polygon' || effect.kind === 'id');
         onSelect({ layerId: layer.id, effectId: paintable?.id ?? null });
         setMaskMenu(false);
     };
@@ -269,7 +296,7 @@ export const LayerPanel: React.FC<{
             <div className="grid grid-cols-3 gap-1">
                 {FILTER_KINDS.map((kind) => (
                     <button key={kind} title={FILTER_LABELS[kind]} onClick={() => add(newFilterLayer(document, kind), `Add ${FILTER_LABELS[kind].toLowerCase()} filter`)}
-                        className="flex items-center gap-1 rounded border border-zinc-800 px-1.5 py-1 text-left text-2xs text-zinc-200 hover:bg-zinc-800"><FilterIcon size={11} className="shrink-0 text-zinc-500" /><span className="truncate">{FILTER_BUTTONS[kind]}</span></button>
+                        className="flex items-center gap-1 rounded border border-zinc-800 px-1.5 py-1 text-left text-2xs text-zinc-200 hover:bg-zinc-800"><FilterIcon size={11} className="shrink-0 text-zinc-500" /><span className="leading-tight">{FILTER_BUTTONS[kind]}</span></button>
                 ))}
             </div>
             <div className="px-1 pt-1 text-2xs leading-snug text-zinc-500">Or cover the whole surface with one of these:</div>
@@ -334,6 +361,19 @@ export const LayerPanel: React.FC<{
                                 <button onClick={() => addMask([{ id: paintId('m'), kind: 'below', enabled: true, blend: 'replace', opacity: 1, channel: 'height', edges: true, low: 0.02, high: 0.35 }], 'Add edges of the height below')}
                                     className="block w-full rounded px-2 py-1 text-left hover:bg-zinc-800"><span className="block text-zinc-100">Edges of the height below</span><span className="block text-2xs text-zinc-500">Where painted height rises or falls: wear along painted edges.</span></button>
                             )}
+                            <div className={`${sectionTitle} px-2 pt-1`}>Parts of the model</div>
+                            {PART_MASKS.map(({ label, hint, pick }) => (
+                                <button key={pick} onClick={() => {
+                                    addMask([{ id: paintId('m'), kind: 'polygon', enabled: true, blend: 'multiply', opacity: 1, triangles: [], pick }], `Add mask by ${label.toLowerCase()}`);
+                                    onUseTool('polygon');
+                                    onMessage(`Click the model to add ${label.toLowerCase()} to the mask; Shift-click takes them away.`);
+                                }} className="block w-full rounded px-2 py-1 text-left hover:bg-zinc-800"><span className="block text-zinc-100">{label}</span><span className="block text-2xs text-zinc-500">{hint}</span></button>
+                            ))}
+                            <button onClick={() => {
+                                addMask([{ id: paintId('m'), kind: 'id', enabled: true, blend: 'multiply', opacity: 1, colors: [], tolerance: 0.02 }], 'Add mask by ID colours');
+                                onUseTool('polygon');
+                                onMessage(document.bake?.maps?.id ? 'Click the model to pick colours from the baked ID map; Shift-click takes one away.' : 'Bake the mesh maps in the Texture set panel first: the ID map they make is what this mask picks colours from.');
+                            }} className="block w-full rounded px-2 py-1 text-left hover:bg-zinc-800"><span className="block text-zinc-100">ID colours</span><span className="block text-2xs text-zinc-500">Colours you click on the baked ID map.</span></button>
                             <div className={`${sectionTitle} px-2 pt-1`}>Effects</div>
                             {(['fill', 'levels', 'blur', 'invert'] as const).map((kind) => (
                                 <button key={kind} onClick={() => addMask([{ id: paintId('m'), kind, enabled: true, blend: kind === 'fill' ? 'multiply' : 'replace', opacity: 1, value: 0.5, low: 0, high: 1, mid: 0.5, radius: 0.004 }], `Add ${MASK_KIND_LABELS[kind]}`)}
@@ -451,7 +491,7 @@ const LayerSettings: React.FC<{
                         <Select value={source.output} options={graphOutputs(resolve, source.graphId)} onChange={(output) => set({ ...source, output: String(output) })} className="w-full" />
                         {/* A material's channels move together: its settings and how it is laid on change every channel drawn from the same graph. */}
                         <GraphValues resolve={resolve} graphId={source.graphId} values={source.values} textures={textures} onChange={(values) => setSameGraph(source.graphId, { values }, 'Change graph settings')} />
-                        <ProjectionFields value={{ projection: source.projection ?? 'uv', scale: source.scale ?? 1, rotation: source.rotation ?? 0, sharpness: source.sharpness ?? 4 }}
+                        <ProjectionFields value={{ projection: source.projection ?? 'uv', scale: source.scale ?? 1, rotation: source.rotation ?? 0, sharpness: source.sharpness ?? 4, axis: source.axis, mirror: source.mirror }}
                             onChange={(projection) => setSameGraph(source.graphId, projection, 'Change how the graph is laid on')} />
                     </>
                 )}
@@ -493,8 +533,8 @@ const LayerSettings: React.FC<{
                     {effect.kind === 'generator' && effect.graphId && <IconButton label="Edit a copy as a texture graph" onClick={(event) => { event.stopPropagation(); editCopy(); }}><GraphIcon size={11} /></IconButton>}
                     {count > 1 && (
                         <>
-                            <IconButton label="Move up (worked out sooner)" disabled={index === 0} onClick={(event) => { event.stopPropagation(); moveEffect(index, -1); }}><ArrowUpIcon size={11} /></IconButton>
-                            <IconButton label="Move down (worked out later)" disabled={index === count - 1} onClick={(event) => { event.stopPropagation(); moveEffect(index, 1); }}><ArrowDownIcon size={11} /></IconButton>
+                            <IconButton label="Apply earlier" disabled={index === 0} onClick={(event) => { event.stopPropagation(); moveEffect(index, -1); }}><ArrowUpIcon size={11} /></IconButton>
+                            <IconButton label="Apply later" disabled={index === count - 1} onClick={(event) => { event.stopPropagation(); moveEffect(index, 1); }}><ArrowDownIcon size={11} /></IconButton>
                         </>
                     )}
                     <button aria-label="Remove effect" onClick={(event) => { event.stopPropagation(); update({ mask: (layer.mask ?? []).filter((_, i) => i !== index) }, 'Remove mask effect'); }} className="rounded p-0.5 text-zinc-500 hover:text-red-400"><TrashIcon size={11} /></button>
@@ -519,6 +559,30 @@ const LayerSettings: React.FC<{
                             onChange={(read) => setEffect({ edges: read === 'edges' }, 'Change mask source')} label="Read" />
                         <Slider label="Black at" value={effect.low ?? 0} onChange={(low) => setEffect({ low }, 'Change mask levels')} />
                         <Slider label="White at" value={effect.high ?? 1} onChange={(high) => setEffect({ high }, 'Change mask levels')} />
+                    </>
+                )}
+                {effect.kind === 'polygon' && (
+                    <>
+                        <Select value={effect.pick ?? 'mesh'} options={PICK_MODES.map((mode) => ({ value: mode, label: PICK_LABELS[mode] }))} onChange={(pick) => setEffect({ pick: pick as PickMode }, 'Change how parts are picked')} className="w-full" />
+                        <div className="flex items-center gap-2 text-2xs text-zinc-400">
+                            <span className="flex-1">{countTriangles(effect.triangles)} triangle{countTriangles(effect.triangles) === 1 ? '' : 's'} picked</span>
+                            {countTriangles(effect.triangles) > 0 && <Button size="sm" variant="ghost" onClick={(event) => { event.stopPropagation(); setEffect({ triangles: [] }, 'Clear picked parts'); }}>Clear</Button>}
+                        </div>
+                        <p className="text-2xs leading-snug text-zinc-500">{active ? 'Click the model with the polygon tool (Q) to add; Shift-click takes away.' : 'Click this effect, then click the model with the polygon tool (Q).'}</p>
+                    </>
+                )}
+                {effect.kind === 'id' && (
+                    <>
+                        {!document.bake?.maps?.id && <p className="text-2xs leading-snug text-amber-300">Bake the mesh maps in the Texture set panel: this mask picks colours from the ID map they make.</p>}
+                        <div className="flex flex-wrap items-center gap-1">
+                            {(effect.colors ?? []).map((colour, i) => (
+                                <button key={i} aria-label="Take this colour away" title="Take this colour away" onClick={(event) => { event.stopPropagation(); setEffect({ colors: (effect.colors ?? []).filter((_, j) => j !== i) }, 'Take away an ID colour'); }}
+                                    className="h-5 w-5 rounded-sm border border-zinc-600 hover:border-red-400" style={{ background: css(colour) }} />
+                            ))}
+                            {!effect.colors?.length && <span className="text-2xs text-zinc-500">No colours picked yet.</span>}
+                        </div>
+                        <Slider label="Tolerance" value={effect.tolerance ?? 0.02} max={0.25} step={0.005} hint="How near a colour of the ID map must be to a picked one to count." onChange={(tolerance) => setEffect({ tolerance }, 'Change ID colour tolerance')} />
+                        <p className="text-2xs leading-snug text-zinc-500">{active ? 'Click the model with the polygon (Q) or pick (P) tool to take colours from the ID map; Shift-click takes one away.' : 'Click this effect, then click the model with the polygon tool (Q).'}</p>
                     </>
                 )}
                 {effect.kind === 'generator' && (
@@ -581,7 +645,7 @@ const LayerSettings: React.FC<{
                         <div className="space-y-1.5 rounded border border-zinc-800 bg-zinc-900/40 p-1.5">
                             <div className="truncate text-xs text-zinc-200">Material: <span className="font-semibold">{resolve(materialSource.graphId)?.name ?? 'A texture graph'}</span></div>
                             <GraphValues resolve={resolve} graphId={materialSource.graphId} values={materialSource.values} textures={textures} onChange={(values) => setSameGraph(materialSource.graphId, { values }, 'Change graph settings')} />
-                            <ProjectionFields value={{ projection: materialSource.projection ?? 'uv', scale: materialSource.scale ?? 1, rotation: materialSource.rotation ?? 0, sharpness: materialSource.sharpness ?? 4 }}
+                            <ProjectionFields value={{ projection: materialSource.projection ?? 'uv', scale: materialSource.scale ?? 1, rotation: materialSource.rotation ?? 0, sharpness: materialSource.sharpness ?? 4, axis: materialSource.axis, mirror: materialSource.mirror }}
                                 onChange={(projection) => setSameGraph(materialSource.graphId, projection, 'Change how the graph is laid on')} />
                         </div>
                     )}
@@ -608,7 +672,7 @@ const LayerSettings: React.FC<{
             )}
             {(layer.mask?.length ?? 0) > 0 && (
                 <div className="space-y-1.5">
-                    <div className="text-2xs font-semibold text-zinc-400">Mask (worked out top to bottom)</div>
+                    <div className="text-2xs font-semibold text-zinc-400">Mask effects, applied top to bottom</div>
                     {(layer.mask ?? []).map(maskEditor)}
                 </div>
             )}

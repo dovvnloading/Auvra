@@ -1,4 +1,5 @@
 import type { LevelComponent, LevelObject } from '../types';
+import { hasObjectMaterialValues } from '../utils/materialInstances';
 
 /**
  * WORLD GRID
@@ -110,6 +111,8 @@ export const objectsLeftToTheGrid = (objects: readonly LevelObject[], timelineTa
     for (const object of objects) {
         if (object.type !== 'prop' && object.type !== 'foliage') continue;
         if (object.components?.length || object.parentId || parents.has(object.id) || timelineTargets.has(object.id)) continue;
+        // An object with material values of its own is drawn on its own, wearing materials of its own.
+        if (hasObjectMaterialValues(object)) continue;
         left.add(object);
     }
     return left;

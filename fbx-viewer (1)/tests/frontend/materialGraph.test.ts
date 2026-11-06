@@ -185,10 +185,10 @@ describe('material parameters', () => {
         { name: 'Quad', value: [1, 2, 3, 4] },
         { name: 'One', value: [1] },
         { name: 'Five', value: [1, 2, 3, 4, 5] },
-        { name: 'Word', value: 'x' },
+        { name: 'Word', value: { text: 'x' } },
       ],
     });
-    // A number, or 2, 3 or 4 numbers (a Vector 2, a colour or Vector).
+    // A number, or 2, 3 or 4 numbers (a Vector 2, a colour or Vector); texture ids and switches are kept too (materialInstances.test.ts).
     expect(override?.parameters).toEqual([
       { name: 'Pair', value: [1, 2] }, { name: 'Quad', value: [1, 2, 3, 4] }, { name: 'Strength', value: 3 }, { name: 'Tint', value: [1, 0, 0] },
     ]);
@@ -353,7 +353,7 @@ describe('material graph v2', () => {
     expect(materialGraphSettings(stored({ opacity: 0.5 })).blendMode).toBe('translucent');
     expect(materialGraphSettings(stored({}, [link('k', 'out', 'out', 'opacity')])).blendMode).toBe('translucent');
     expect(materialGraphSettings(stored({ blendMode: 'masked', alphaClip: 0.3, twoSided: true, shading: 'unlit' }))).toEqual({
-      blendMode: 'masked', alphaClip: 0.3, twoSided: true, unlit: true,
+      blendMode: 'masked', alphaClip: 0.3, twoSided: true, unlit: true, normalSpace: 'tangent',
     });
   });
 
@@ -464,7 +464,8 @@ describe('material graph v2', () => {
       links: [link('code', 'out', 'out', 'roughness')],
     });
     const compiled = compileMaterialGraph(graph);
-    expect(compiled.globals).toEqual(['float mg_code_fn(vec4 a, vec4 b, vec4 c, vec4 d) {\nreturn float(a.x * 2.0);\n}']);
+    // Marked as the node's code, so a mistake in it is shown on the node (shaderErrors.ts).
+    expect(compiled.globals).toEqual(['// mg-node:code\nfloat mg_code_fn(vec4 a, vec4 b, vec4 c, vec4 d) {\nreturn float(a.x * 2.0);\n}\n// mg-end']);
     expect(compiled.outputs.roughness).toMatch(/^mg_code_out_out_\d+$/);
   });
 });

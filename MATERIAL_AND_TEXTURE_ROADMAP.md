@@ -73,7 +73,16 @@
 - Web-first output: glTF with its material extensions plus KTX2. The leading painting tool has no glTF template.
 - A path-traced reference beside the live view.
 
-**Where the work stands:** round 1 fixed most of §8's defects. Round 2 brought both graphs onto one canvas, the physical surface model in WebGL2, and painting with whole materials. Round 3 continues with the graph views and widgets, material wires, the brush engine, and instances with parallax. See §6.
+**Where the work stands:**
+- **Round 1** fixed most of §8's defects.
+- **Round 2** brought both graphs onto one canvas, the physical surface model in WebGL2, and painting with whole materials.
+- **Round 3** brought:
+  - wires that carry a whole material;
+  - the 2D and 3D views and widgets;
+  - material instances, parallax and material decals;
+  - part masks, the brush engine and paths.
+
+See §6.
 
 ## 1. What "rival, then lead" means
 
@@ -373,6 +382,13 @@ Fix the defects in §8 that lose work, give wrong results or mislead, before bui
 ### Stage 1 — Professional graph editing
 
 **Landed in round 2:** both graphs on one canvas, with frames, reroute points, align, snap, bypass, folding, rename and colour, menus, find, an overview map, sub-graphs opened in place, pin groups, and a node finder with pictures, favourites and recent nodes. Undo works anywhere in the workspace. Still to come: the 2D and 3D views, widgets, a cost heat map, named links, and shader errors marked on their node.
+
+**Landed in round 3:**
+- **2D view:** a histogram with range selection, colour pins, an A/B wipe, exposure, a lit normal view, and drag handles for transforms, the tile sampler, gradients and shapes.
+- **3D view:** it draws through the engine's material path, with lighting choices, shadows, channel views, and wireframe and UV views.
+- **Widgets:** an angle dial, a position pad, eyedroppers from the views, a gradient eyedropper along a line, curves over a histogram, and code fields that mark errors.
+- **Canvas:** a cost map, named links, tidy layout, and shader errors marked on the node that caused them.
+
 - **One canvas.** A single canvas, node finder and editing module for both the texture and the shader graph, fast with 1,000 nodes.
 - **The canvas tools in §5.** Pictures in the finder, insertion onto wires, named links, frames, align, bypass, collapse, find, minimap, editing sub-graphs in place, a cost heat map, and errors marked on the right node.
 - **2D view:** pixel values, histogram with range selection, colour pins, compare wipe, exposure, and handles for transforms, the tile sampler, gradients and shapes.
@@ -392,6 +408,13 @@ Fix the defects in §8 that lose work, give wrong results or mislead, before bui
 ### Stage 2 — One material, one physical surface
 
 **Landed in round 2:** the physical surface on the shader graph's output (specular, coat, sheen, thin film, transmission and emission strength), drawn in WebGL2 and only when used. It also brought starter graphs, preview lighting, and physical values in Material Overrides. Still to come: WebGPU, one material asset, instances, parallax, triplanar normals and full decals.
+
+**Landed in round 3:**
+- **Instances:** per-object material values, texture and switch parameters, a shader version count, and blueprint nodes that set values during play.
+- **Height:** a Parallax node with self-shadowing; generated materials wire their height through it.
+- **Mapping and decals:** a triplanar node for normal maps, and decals that carry a whole material.
+- **Still to come:** WebGPU, one material asset, and script-API access to material values.
+
 - **One material asset.** It holds the surface model, plus optional texture graphs, a paint stack and parameters. The Materials tab, Paint, Retexture and Material Overrides all edit that asset rather than writing side channels.
 - **A physical surface model** with an OpenPBR vocabulary, implemented in both renderers on one shader path that works alongside weather, wind and compressed normals:
   - base colour, metalness and diffuse roughness;
@@ -412,6 +435,9 @@ Fix the defects in §8 that lose work, give wrong results or mislead, before bui
 - identical looks in the 3D preview, the level view and a built game, on both renderers.
 
 ### Stage 3 — The graph engine grows up
+
+**Landed in round 3:** wires that carry a whole material, with make, split, blend, height blend, multi-blend, switch, transform and adjust nodes. Still to come: the scatter pass, inheritance and tiling modes, function graphs, loops and GPU flood fill.
+
 - **Material wires:** one wire carries a whole surface, with material blend, height blend, multi-blend, switch, transform and adjust nodes. Smart materials become material graphs.
 - **A scatter pass:** a placement pass, then instanced drawing with height-aware stacking. It gives the tile sampler at full strength (6 pattern inputs, maps for every property, per-copy ID, random value and UV), shape scatter (Poisson, density and custom placement; 3D and SDF shapes), a tile generator, atlas scatter and grid atlas.
 - **Inheritance and tiling:**
@@ -466,6 +492,13 @@ One family per pull request, each with picture tooltips and the wrap-edge tiling
 ### Stage 6 — Painting at full depth
 
 **Landed in round 2:** painting with whole materials; filter layers; fills and masks that read the layers below; layer opacity and folder blends; saved smart materials, opened as texture graph copies, with rendered previews; recombining only changed areas; sparse pictures; and unwrapping in a worker. Still to come: new mask kinds, the brush engine (alphas, paths, clone, smudge, particles), projections, the 2D painting view and 8K.
+
+**Landed in round 3:**
+- **Masks and fills:** masks and fills by mesh part, UV piece, polygon, edge loop or ID colour, with a polygon fill tool.
+- **Brushes:** a brush and alpha library with presets, pressure curves and tilt, lazy mouse, mirror planes and turned copies, and blur, sharpen, smudge and clone brushes.
+- **Paths and fills:** editable paths with ribbons, stitches and text along them, and fills cast along an axis, round a ball or tube, or mirrored.
+- **Still to come:** projections for brushes, warp grids, decals wrapped onto the mesh, the 2D painting view, and particle brushes.
+
 - **Paint with anything:** materials, textures and smart materials in every channel. Extended channels follow Stage 2.
 - **Layers:**
   - layers that read the stack below (anchors);
@@ -613,6 +646,11 @@ File references are relative to `fbx-viewer (1)/`.
 - A stroke recombines only the area it touched.
 - "Use this layout" is all-or-nothing.
 
+### Fixed in round 3
+- Graphs made from smart materials can be tidied into columns.
+- Long names wrap in the Add menu and the material picker.
+- The material preview balls render; since round 2 they had fallen back to flat swatches.
+
 ### Still open
 **Texture graph**
 1. Graph and painted height are kept at 16 bits, but nothing draws with height yet (Stage 2).
@@ -622,20 +660,23 @@ File references are relative to `fbx-viewer (1)/`.
 5. Choice parameters have no option editor, and step, group and description have no UI (Stage 4).
 6. Make it tile is a single cross-fade, so ghosting shows (Stage 5, photo tools).
 7. Update material draws mesh-reading nodes with stand-ins, because a material can go on any model. Per-model results come with Stage 9.
-8. Graphs made from smart materials are laid out in a cramped column. They need a tidy layout.
+
+8. Material wires don't cross into sub-graphs, and named links work in texture graphs only.
 
 **Painting, baking and UVs**
+9. A part mask's own pick mode and the toolbar's polygon mode are separate, and picks only count with the polygon tool. Picking should work whenever the mask effect is selected.
+10. Laying a path on again adds a second copy instead of replacing the first.
 
-9. The paint view's smoothing draws into a render target marked as an XR target. Recheck this when three.js is upgraded (`components/Texturing/Paint/PaintViewport.tsx`).
-10. A triangle that crosses a UDIM tile edge can pick a too-coarse mip at that edge.
-11. Long names are cut off in the layer Add menu and the material picker ("Hue and sat…", "Black rubb…").
+11. The paint view's smoothing draws into a render target marked as an XR target. Recheck this when three.js is upgraded (`components/Texturing/Paint/PaintViewport.tsx`).
+12. A triangle that crosses a UDIM tile edge can pick a too-coarse mip at that edge.
 
 **Material graph and engine materials**
+13. When a shader fails to compile, the preview panel shows the raw compiler line under its plain message.
 
-12. Material textures are never compressed (`runtime/materials/materialLibrary.ts`, Stage 8).
-13. Unlit and Phong materials can't take a material asset (a message says so). Converting them is a later step.
-14. The surface has no coat tint, and car paint has no metal flakes.
-15. For the WebGPU renderer (#154):
+14. Material textures are never compressed (`runtime/materials/materialLibrary.ts`, Stage 8).
+15. Unlit and Phong materials can't take a material asset (a message says so). Converting them is a later step.
+16. The surface has no coat tint, and car paint has no metal flakes.
+17. For the WebGPU renderer (#154):
     - its graph surface ignores weather and wind;
     - it caches translated shaders per graph object, so every value edit translates again; it should key by graph shape;
     - it should skip the vertex-colour multiply when a graph reads Vertex Color;

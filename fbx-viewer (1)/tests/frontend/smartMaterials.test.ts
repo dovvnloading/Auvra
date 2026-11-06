@@ -45,7 +45,7 @@ describe('saving smart materials', () => {
     it('keeps what travels and counts what belongs to the texture set', () => {
         const folder = mixedFolder();
         const { layer, leftOut } = smartMaterialFrom(folder);
-        expect(leftOut).toEqual({ paintLayers: 1, paintedMasks: 1, ownPictures: 1 });
+        expect(leftOut).toEqual({ paintLayers: 1, paintedMasks: 1, pickedMasks: 0, ownPictures: 1 });
         expect(layer?.kind).toBe('folder');
         const inner = layer!.layers!;
         expect(inner.map((item) => item.kind)).toEqual(['fill', 'fill', 'filter']);
