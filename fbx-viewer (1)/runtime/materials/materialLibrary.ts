@@ -161,7 +161,8 @@ export const materialAssetUse = (asset: Pick<MaterialAsset, 'textureGraph' | 'pa
 /** Where a texture id's image is, for loading it. */
 export type TextureUrlResolver = (textureId: string) => string | undefined;
 
-interface Binding {
+/** How a material is shaded by an asset here. */
+export interface MaterialBinding {
     materialId: string;
     /** Texture coordinates with the glTF top-left origin (flipY false), else the FBX/OBJ bottom-left. */
     flipY: boolean;
@@ -178,7 +179,7 @@ class MaterialLibrary {
     texturesLoaded = 0;
     private readonly assets = new Map<string, MaterialAsset>();
     private readonly listeners = new Set<() => void>();
-    private readonly bound = new Map<THREE.MeshStandardMaterial, Binding>();
+    private readonly bound = new Map<THREE.MeshStandardMaterial, MaterialBinding>();
     private readonly textures = new Map<string, THREE.Texture | null>();
     private resolveUrl: TextureUrlResolver = () => undefined;
     private readonly addedUrls = new Map<string, string>();
@@ -278,12 +279,17 @@ class MaterialLibrary {
         return this.bindNow(material, binding);
     }
 
+    /** How a material is shaded by an asset here (its asset, UV origin and own values); undefined when it is not. */
+    bindingOf(material: THREE.Material): Readonly<MaterialBinding> | undefined {
+        return this.bound.get(material as THREE.MeshStandardMaterial);
+    }
+
     /** The library's textures for graphs bound outside it (the editor's node previews); each loads when first asked for. */
     textureLookup(flipY = true): MaterialTextureLookup {
         return (textureId, slot) => this.texture(textureId, slot ?? 'map', flipY);
     }
 
-    private bindNow(material: THREE.MeshStandardMaterial, binding: Binding): boolean {
+    private bindNow(material: THREE.MeshStandardMaterial, binding: MaterialBinding): boolean {
         const asset = this.assets.get(binding.materialId);
         if (!asset) {
             unbindMaterialGraph(material);

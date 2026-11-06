@@ -185,10 +185,10 @@ describe('material parameters', () => {
         { name: 'Quad', value: [1, 2, 3, 4] },
         { name: 'One', value: [1] },
         { name: 'Five', value: [1, 2, 3, 4, 5] },
-        { name: 'Word', value: 'x' },
+        { name: 'Word', value: { text: 'x' } },
       ],
     });
-    // A number, or 2, 3 or 4 numbers (a Vector 2, a colour or Vector).
+    // A number, or 2, 3 or 4 numbers (a Vector 2, a colour or Vector); texture ids and switches are kept too (materialInstances.test.ts).
     expect(override?.parameters).toEqual([
       { name: 'Pair', value: [1, 2] }, { name: 'Quad', value: [1, 2, 3, 4] }, { name: 'Strength', value: 3 }, { name: 'Tint', value: [1, 0, 0] },
     ]);

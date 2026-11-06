@@ -41,6 +41,8 @@ export type WorldNodeType =
     | 'Print'
     | 'PlayPlayerAnimation'
     | 'SetMorphTarget'
+    | 'SetMaterialNumber'
+    | 'SetMaterialColour'
     | 'DamagePlayer'
     | 'HealPlayer'
     | 'AddAmmo'
@@ -165,6 +167,11 @@ export interface WorldNodeServices {
     playPlayerAnimation?(clipName: string, options: PlayAnimationOptions): boolean;
     /** Sets the weight of a named morph target on an actor's meshes; returns how many meshes have it. Absent: nothing changes. */
     setMorphTarget?(objectId: string, morph: string, weight: number): number;
+    /**
+     * Sets a value an object's material assets leave to each use (a parameter named in their graphs) on that
+     * object alone; returns how many of its materials took it. Absent: nothing changes.
+     */
+    setMaterialValue?(objectId: string, name: string, value: number | number[]): number;
     /** Hurts the player; false when there is no live player. Absent: nothing happens. */
     damagePlayer?(amount: number): boolean;
     /** Restores the player's health; false when full, dead or absent. */
@@ -725,7 +732,34 @@ export const WORLD_NODE_DEFINITIONS: readonly WorldNodeDefinition[] = [
         outputs: [exec('Out', 'Output'), output('Meshes Changed', 'Integer')],
         data: { default_Actor: '', default_Morph: '', default_Weight: 1 },
     },
+    {
+        type: 'SetMaterialNumber',
+        title: 'Set Material Number',
+        description: 'Sets a number its materials let each use choose (a value named in the material\'s graph) on this object alone, while the game plays; its other copies keep theirs. A switch is on for any number but 0. Materials Changed is 0 when none of its materials has a value by that name.',
+        inputs: [exec('Exec', 'Input'), input('Actor', 'Object'), input('Value Name', 'String'), input('Number', 'Float')],
+        outputs: [exec('Out', 'Output'), output('Materials Changed', 'Integer')],
+        data: { default_Actor: '', 'default_Value Name': '', default_Number: 1 },
+    },
+    {
+        type: 'SetMaterialColour',
+        title: 'Set Material Colour',
+        description: 'Sets a colour its materials let each use choose (a value named in the material\'s graph) on this object alone, while the game plays: red, green and blue from 0 to 1. Its other copies keep theirs. Materials Changed is 0 when none of its materials has a value by that name.',
+        inputs: [exec('Exec', 'Input'), input('Actor', 'Object'), input('Value Name', 'String'), input('Red', 'Float'), input('Green', 'Float'), input('Blue', 'Float')],
+        outputs: [exec('Out', 'Output'), output('Materials Changed', 'Integer')],
+        data: { default_Actor: '', 'default_Value Name': '', default_Red: 1, default_Green: 1, default_Blue: 1 },
+    },
 ];
+
+/** Objects the level's blueprint sets material values on by name (its Actor pins' own values): drawn on their own in play. */
+export const materialValueTargets = (nodes: ReadonlyArray<{ type: string; data?: Record<string, unknown> }> | undefined): Set<string> => {
+    const targets = new Set<string>();
+    for (const node of nodes ?? []) {
+        if (node.type !== 'SetMaterialNumber' && node.type !== 'SetMaterialColour') continue;
+        const id = toActorId(node.data?.default_Actor);
+        if (id) targets.add(id);
+    }
+    return targets;
+};
 
 export const isWorldNodeType = (type: string): type is WorldNodeType =>
     WORLD_NODE_DEFINITIONS.some(definition => definition.type === type);
@@ -1000,6 +1034,24 @@ const runSetMorphTarget: WorldNodeExecutor = (_node, ctx) => {
     finish(ctx, { 'Meshes Changed': changed });
 };
 
+// A blank name or value changes nothing; colours keep each channel within 0..1.
+const runSetMaterialNumber: WorldNodeExecutor = (_node, ctx) => {
+    const id = toActorId(ctx.evaluate('Actor'));
+    const name = toText(ctx.evaluate('Value Name'));
+    const value = toNumber(ctx.evaluate('Number'), null);
+    const changed = id && name && value !== null && ctx.services.setMaterialValue ? ctx.services.setMaterialValue(id, name, value) : 0;
+    finish(ctx, { 'Materials Changed': changed });
+};
+
+const runSetMaterialColour: WorldNodeExecutor = (_node, ctx) => {
+    const id = toActorId(ctx.evaluate('Actor'));
+    const name = toText(ctx.evaluate('Value Name'));
+    const channels = ['Red', 'Green', 'Blue'].map(pin => toNumber(ctx.evaluate(pin), null));
+    const colour = channels.every((channel): channel is number => channel !== null) ? channels.map(channel => THREE.MathUtils.clamp(channel, 0, 1)) : null;
+    const changed = id && name && colour && ctx.services.setMaterialValue ? ctx.services.setMaterialValue(id, name, colour) : 0;
+    finish(ctx, { 'Materials Changed': changed });
+};
+
 // Player actions: a blank or non-positive amount does nothing.
 const runDamagePlayer: WorldNodeExecutor = (_node, ctx) => {
     const amount = toNumber(ctx.evaluate('Amount'), 0);
@@ -1263,6 +1315,8 @@ const executors = {
     Print: runPrint,
     PlayPlayerAnimation: runPlayPlayerAnimation,
     SetMorphTarget: runSetMorphTarget,
+    SetMaterialNumber: runSetMaterialNumber,
+    SetMaterialColour: runSetMaterialColour,
     DamagePlayer: runDamagePlayer,
     HealPlayer: runHealPlayer,
     AddAmmo: runAddAmmo,

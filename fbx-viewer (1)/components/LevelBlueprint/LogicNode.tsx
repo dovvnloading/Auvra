@@ -1,7 +1,7 @@
 
 
 import React, { useState, useEffect, useMemo } from 'react';
-import { ArrowRightIcon, ArrowsLeftRightIcon, AxesIcon, BoltIcon, BombIcon, BranchIcon, CarIcon, ChatIcon, CheckboxIcon, ChevronLeftIcon, ChevronRightIcon, ClockIcon, CrossIcon, CrosshairIcon, CrownIcon, DamageIcon, DatabaseIcon, DiceIcon, DivideIcon, DoorIcon, EqualIcon, FaceIcon, FilmIcon, GamepadIcon, HashIcon, HealthIcon, LoopIcon, LoopOnceIcon, MegaphoneIcon, MergeIcon, MinusIcon, PackageIcon, PackagePlusIcon, PlayIcon, PlusIcon, PulseIcon, RainIcon, RefreshIcon, RouteIcon, SendIcon, SequenceIcon, ShieldIcon, SkullIcon, SparklesIcon, SunIcon, TextIcon, ToggleIcon, TrashIcon, VariableIcon, VideoIcon, VolumeIcon, WarningIcon } from '../UI/Icons';
+import { ArrowRightIcon, ArrowsLeftRightIcon, AxesIcon, BoltIcon, BombIcon, BranchIcon, CarIcon, ChatIcon, CheckboxIcon, ChevronLeftIcon, ChevronRightIcon, ClockIcon, CrossIcon, CrosshairIcon, CrownIcon, DamageIcon, DatabaseIcon, DiceIcon, DivideIcon, DoorIcon, EqualIcon, FaceIcon, FilmIcon, GamepadIcon, HashIcon, HealthIcon, LoopIcon, LoopOnceIcon, MegaphoneIcon, MergeIcon, MinusIcon, PackageIcon, PackagePlusIcon, PaletteIcon, PlayIcon, PlusIcon, PulseIcon, RainIcon, RefreshIcon, RouteIcon, SendIcon, SequenceIcon, ShieldIcon, SkullIcon, SparklesIcon, SunIcon, TextIcon, ToggleIcon, TrashIcon, VariableIcon, VideoIcon, VolumeIcon, WarningIcon } from '../UI/Icons';
 import { LogicNode, LogicPin, PinDataType, LevelObject } from '../../types';
 import { describeActor, isOverlapEvent, overlapEventName, overlapTargetWarning, resolveOverlapTarget, selectedOverlapActorId } from './overlapTargets';
 import { FLOW_NODE_DEFINITIONS, FlowNodeDefinition } from '../../hooks/levelBlueprintNodes/flow';
@@ -94,6 +94,8 @@ const NODE_STYLES: Record<string, { border: string, bg: string, icon: React.Reac
     'PlaySound': { border: 'border-amber-800', bg: 'bg-amber-950/70', icon: <VolumeIcon size={14} className="text-amber-400" /> },
     'PlayPlayerAnimation': { border: 'border-fuchsia-800', bg: 'bg-fuchsia-950/70', icon: <FilmIcon size={14} className="text-fuchsia-400" /> },
     'SetMorphTarget': { border: 'border-fuchsia-800', bg: 'bg-fuchsia-950/70', icon: <FaceIcon size={14} className="text-fuchsia-400" /> },
+    'SetMaterialNumber': { border: 'border-teal-800', bg: 'bg-teal-950/70', icon: <PaletteIcon size={14} className="text-teal-400" /> },
+    'SetMaterialColour': { border: 'border-teal-800', bg: 'bg-teal-950/70', icon: <PaletteIcon size={14} className="text-teal-400" /> },
     // Player
     'DamagePlayer': { border: 'border-red-800', bg: 'bg-red-950/70', icon: <DamageIcon size={14} className="text-red-400" /> },
     'HealPlayer': { border: 'border-green-800', bg: 'bg-green-950/70', icon: <HealthIcon size={14} className="text-green-400" /> },

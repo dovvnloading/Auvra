@@ -1169,6 +1169,19 @@ export const MATERIAL_NODE_DEFINITIONS: MaterialNodeDef[] = [
         },
     },
 
+    {
+        type: 'switch',
+        label: 'Switch',
+        category: 'Logic',
+        description: 'Picks On or Off when the material is built, so only the side picked is drawn and costs anything. Each choice builds a shader version of its own: give it a parameter name to let each use of the material choose.',
+        keywords: ['static switch', 'toggle', 'option', 'feature', 'variant'],
+        inputs: [auto('whenOn', 'On', value(1)), auto('whenOff', 'Off', value(0))],
+        outputs: [{ key: 'out', label: 'Result', type: 'auto' }],
+        params: [{ key: 'on', label: 'On', kind: 'boolean', default: true }],
+        reads: (statics) => [statics.on === false ? 'whenOff' : 'whenOn'],
+        emit: (inputs, context) => ({ outputs: { out: context.static('on') === false ? inputs.whenOff : inputs.whenOn } }),
+    },
+
     // ------------------------------------------------------------------ Custom
     {
         type: 'customGlsl',

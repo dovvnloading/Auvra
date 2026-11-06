@@ -253,8 +253,16 @@ export const textureSlot = (node: MaterialGraphNode): TextureSlot => {
 // Parameters
 // ---------------------------------------------------------------------------
 
-/** Node types whose value can be a material parameter, and the param holding it. */
-export const PARAMETER_NODE_PARAMS: Readonly<Record<string, string>> = { float: 'value', color: 'value', vector: 'value', vector2: 'value' };
+/**
+ * Node types whose value can be a material parameter, and the param holding it: numbers, colours and
+ * vectors, the textures sampled, and switches. Values and textures change only what the shader is
+ * given; each choice of a switch is a shader version of its own.
+ */
+export const PARAMETER_NODE_PARAMS: Readonly<Record<string, string>> = {
+    float: 'value', color: 'value', vector: 'value', vector2: 'value',
+    texture: 'texture', normalMap: 'texture', triplanar: 'texture',
+    switch: 'on',
+};
 export const MAX_PARAMETER_NAME_LENGTH = 64;
 
 /** A parameter name trimmed and within its length, or undefined (not exposed). */
@@ -270,11 +278,14 @@ export interface MaterialParameter {
     /** The value's param definition (kind, range) on the first node exposing the name. */
     param: MaterialParamDef;
     /** The value set in the graph, used where a material sets none. */
-    value: number | number[];
+    value: MaterialParameterValue;
 }
 
-/** Parameter values by name, as a model material sets them. */
-export type MaterialParameterValues = Record<string, number | number[]>;
+/** A parameter's value: a number, a colour or vector, a texture's id, or a switch's choice. */
+export type MaterialParameterValue = number | number[] | string | boolean;
+
+/** Parameter values by name, as a model material (or a placed object) sets them. */
+export type MaterialParameterValues = Record<string, MaterialParameterValue>;
 
 const parameterParam = (node: MaterialGraphNode): MaterialParamDef | undefined => {
     const key = PARAMETER_NODE_PARAMS[node.type];
@@ -288,15 +299,15 @@ export const materialGraphParameters = (graph: MaterialGraph): MaterialParameter
         const param = parameterParam(node);
         const name = normalizeParameterName(node.parameter);
         if (!param || !name || found.has(name)) continue;
-        found.set(name, { name, param, value: readParam(param, node.params[param.key]) as number | number[] });
+        found.set(name, { name, param, value: readParam(param, node.params[param.key]) as MaterialParameterValue });
     }
     return [...found.values()].sort((a, b) => a.name.localeCompare(b.name));
 };
 
 /**
  * The graph with its parameters set to `values` (missing or malformed ones keep the graph's
- * own); the same graph when nothing changes. Only constants change, so the material keeps its
- * shader and only its uniforms differ.
+ * own); the same graph when nothing changes. Values and textures change only the shader's uniforms;
+ * a switch set another way makes another shader version (materialShaderVersions).
  */
 export const withMaterialParameters = (graph: MaterialGraph, values: MaterialParameterValues | null | undefined): MaterialGraph => {
     if (!values || !Object.keys(values).length) return graph;
@@ -309,6 +320,16 @@ export const withMaterialParameters = (graph: MaterialGraph, values: MaterialPar
         return { ...node, params: { ...node.params, [param.key]: readParam(param, values[name]) } };
     });
     return changed ? { ...graph, nodes } : graph;
+};
+
+/**
+ * How many shader versions a graph builds for the parameter values it is used with: one for each
+ * different choice of its switches. Values and textures never add one.
+ */
+export const materialShaderVersions = (graph: MaterialGraph, uses: Iterable<MaterialParameterValues | null | undefined>): number => {
+    const shapes = new Set<string>();
+    for (const values of uses) shapes.add(materialGraphShape(withMaterialParameters(graph, values)));
+    return Math.max(1, shapes.size);
 };
 
 // ---------------------------------------------------------------------------
@@ -709,7 +730,13 @@ export const compileMaterialGraph = (graph: MaterialGraph, options: CompileOptio
             return outputs;
         }
         const inputs: Record<string, string> = {};
-        for (const input of definition.inputs) inputs[input.key] = inputValue(node, input);
+        // A node reading only some inputs (a Switch) leaves the others, and what feeds only them, unbuilt.
+        const reading = definition.reads?.(staticParams(node, definition));
+        for (const input of definition.inputs) {
+            inputs[input.key] = !reading || reading.includes(input.key)
+                ? inputValue(node, input)
+                : convertValue('0.0', 'float', resolvedPortType(input.type, node.id, autoTypes));
+        }
         const context = contextFor(node);
         const emitted = definition.emit(inputs, context);
         // Each output is stored in a local of its own, so a value read by several nodes is computed once.

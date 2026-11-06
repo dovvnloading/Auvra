@@ -37,6 +37,24 @@ class MaterialOverrideSchemaTests(unittest.TestCase):
         document = validate_domain("models", _models(_model({"Body": override})))
         self.assertEqual(document["documents"][0]["materialOverrides"], {"Body": override})
 
+    def test_parameters_may_name_a_texture_or_choose_a_switch(self):
+        override = {"materialId": "mat-glow", "parameters": [{"name": "Picture", "value": "tex-dirty"}, {"name": "Worn", "value": True}]}
+        document = validate_domain("models", _models(_model({"Body": override})))
+        self.assertEqual(document["documents"][0]["materialOverrides"]["Body"], override)
+        with self.assertRaises(ValueError):
+            validate_domain("models", _models(_model({"Body": {"materialId": "mat-glow", "parameters": [{"name": "Picture", "value": ""}]}})))
+
+    def test_a_placed_object_keeps_its_own_parameter_values_only(self):
+        def placed(overrides):
+            return {"id": "crate-1", "levelId": "level", "modelId": "model", "name": "Crate", "type": "prop",
+                    "position": [0, 0, 0], "rotation": [0, 0, 0], "scale": [1, 1, 1], "materialOverrides": overrides}
+        values = {"Body": {"parameters": [{"name": "Tint", "value": [0, 1, 0]}, {"name": "Worn", "value": False}]}}
+        document = validate_domain("objects", domain_document("objects", [placed(values)]))
+        self.assertEqual(document["documents"][0]["materialOverrides"], values)
+        for bad in ({"Body": {"color": "#ff0000"}}, {"Body": {}}, {"token": {"parameters": [{"name": "Tint", "value": 1}]}}):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                validate_domain("objects", domain_document("objects", [placed(bad)]))
+
     def test_accepts_a_physical_materials_values(self):
         override = {
             "coat": 1, "coatRoughness": 0.05, "sheenColor": "#cc6688", "sheenRoughness": 0.4, "thinFilm": 0.5,
@@ -85,13 +103,15 @@ class MaterialOverrideSchemaTests(unittest.TestCase):
         ]}
         document = validate_domain("models", _models(_model({"Body": override})))
         self.assertEqual(document["documents"][0]["materialOverrides"]["Body"], override)
-        # A parameter is a name and a number or 2, 3 or 4 numbers (a Vector 2, a colour or Vector), nothing more.
+        # A parameter is a name and a number or 2, 3 or 4 numbers (a Vector 2, a colour or Vector), a texture's id
+        # or a switch's choice, nothing more.
         for bad in (
             [{"name": "Tint"}],
             [{"name": "Tint", "value": [1]}],
             [{"name": "Tint", "value": [1, 2, 3, 4, 5]}],
             [{"name": "Tint", "value": [1, "2"]}],
-            [{"name": "Tint", "value": "red"}],
+            [{"name": "Tint", "value": "x" * 129}],
+            [{"name": "Tint", "value": {"r": 1}}],
             [{"name": "", "value": 1}],
             [{"name": "Tint", "value": 1, "unit": "m"}],
             {"Tint": 1},

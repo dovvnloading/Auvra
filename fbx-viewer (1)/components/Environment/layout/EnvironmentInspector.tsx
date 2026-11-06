@@ -4,6 +4,7 @@ import * as THREE from 'three';
 import { BranchIcon, CrossIcon, CubeIcon, CubesIcon, FogIcon, HashIcon, LayersIcon, LoopIcon, MountainIcon, MoveIcon, MusicIcon, MuteIcon, PersonIcon, PlusIcon, PuzzleIcon, RadioIcon, ResetIcon, RotateIcon, RouteIcon, ScaleIcon, SkullIcon, SunIcon, TimerIcon, TrashIcon, UserPlusIcon, UsersIcon, VolumeIcon, WarningIcon, WindIcon } from '../../UI/Icons';
 import { EditorState } from '../types';
 import { useAssets } from '../../../context/AssetContext';
+import { ObjectMaterialValues } from './ObjectMaterialValues';
 import { useGameContent } from '../../../runtime/GameContentContext';
 import { textureService } from '../../../services/TextureGenerationService';
 import { DescribeWithAI, nameFromWords } from '../../Tools/DescribeWithAI';
@@ -1093,6 +1094,14 @@ export const EnvironmentInspector: React.FC<EnvironmentInspectorProps> = ({ stat
                                     </div>
                                 </div>
                             </div>
+                        )}
+
+                        {selectedObject.modelId && (selectedObject.type === 'prop' || selectedObject.type === 'foliage') && (
+                            <ObjectMaterialValues
+                                key={`materials:${objectId}`}
+                                object={selectedObject}
+                                onCommit={(materialOverrides) => commitUpdate({ materialOverrides })}
+                            />
                         )}
 
                         <ComponentsSection
