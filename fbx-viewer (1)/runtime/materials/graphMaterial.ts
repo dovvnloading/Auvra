@@ -3,6 +3,7 @@ import {
     MAX_RAMP_STOPS,
     OUTPUT_NODE_TYPE,
     STATIC_PARAM_KINDS,
+    bypassInput,
     compileMaterialGraph,
     getMaterialNodeDefinition,
     STAGE_OUTPUTS,
@@ -700,6 +701,12 @@ const estimateColour = (binding: GraphBinding, nodeId: string, depth: number): C
     if (!definition) return null;
     const param = (key: string) => readParam(definition.params.find(candidate => candidate.key === key)!, node.params[key]);
     const fed = (input: string) => binding.graph.links.find(link => link.toNode === node.id && link.toInput === input);
+    const passed = node.bypass ? bypassInput(definition) : null;
+    if (passed) {
+        // Bypassed: what its main input carries, when that is wired; its own value is worked out by drawing.
+        const link = fed(passed.key);
+        return link ? estimateColour(binding, link.fromNode, depth + 1) : null;
+    }
     switch (node.type) {
         case 'color':
             return { colour: srgbToLinear(param('value') as number[]) };
