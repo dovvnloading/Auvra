@@ -1,5 +1,5 @@
 import type { ChannelTextureIds, PictureLayout } from '../materialOutput';
-import { MAX_SIZE_LOG2, MIN_SIZE_LOG2, coerceParameter, createTextureGraph, graphDependencies, hashText, normalizeTextureGraph } from './document';
+import { MAX_SIZE_LOG2, MIN_SIZE_LOG2, coerceParameter, createTextureGraph, drawnPart, graphDependencies, hashText, normalizeTextureGraph } from './document';
 import type { GraphResolver } from './registry';
 import type { TextureGraph } from './types';
 
@@ -49,7 +49,7 @@ export const readStoredGraph = (value: unknown): StoredTextureGraph => {
 
 /** What the made pictures depend on: the graph (not where its nodes sit), its values, the graphs it uses and how they are made. */
 export const bakeSignature = (stored: StoredTextureGraph, resolve: GraphResolver): string => {
-    const shape = (graph: TextureGraph) => [graph.size, graph.seed, graph.parameters, graph.nodes.map(({ x: _x, y: _y, ...rest }) => rest), graph.links];
+    const shape = (graph: TextureGraph) => [graph.size, graph.seed, graph.parameters, graph.nodes.map(drawnPart), graph.links];
     const used: unknown[] = [];
     const seen = new Set<string>();
     const visit = (graph: TextureGraph) => {

@@ -15,7 +15,7 @@ import { ColourFieldRgb } from '../UI/ColourPicker';
  * as a new parameter of the graph.
  */
 
-const field = 'rounded border border-zinc-700 bg-zinc-950 px-1.5 py-0.5 text-xs text-zinc-100 outline-none focus:border-sky-600';
+const field = 'rounded border border-line bg-panel px-1.5 py-0.5 text-xs text-ink outline-none focus:border-accent';
 
 /** The graph parameter kinds a setting can follow. */
 const FOLLOWS: Partial<Record<TexParamDef['kind'], GraphParameterKind[]>> = {
@@ -95,7 +95,7 @@ const NumberRow: React.FC<{ param: TexParamDef; value: number; onChange: (value:
         <div className="flex items-center gap-2">
             {param.min !== undefined && max !== undefined && (
                 <input type="range" aria-label={`${param.label} slider`} min={param.min} max={max} step={step} value={Math.min(max, value)}
-                    onChange={(event) => onChange(Number(event.target.value))} className="h-1 min-w-0 flex-1 accent-sky-500" />
+                    onChange={(event) => onChange(Number(event.target.value))} className="h-1 min-w-0 flex-1 accent-accent" />
             )}
             <DraftNumber label={param.label} value={value} integer={param.kind === 'int'} className="w-16" limit={(next) => clampToParam(param, next)} onCommit={onChange} />
         </div>
@@ -115,7 +115,7 @@ export const ParamControl: React.FC<{
         case 'bool':
             return (
                 <button role="switch" aria-checked={Boolean(value)} aria-label={param.label} onClick={() => onChange(!value)}
-                    className={`relative h-4 w-7 rounded-full transition-colors ${value ? 'bg-sky-600' : 'bg-zinc-700'}`}>
+                    className={`relative h-4 w-7 rounded-full transition-colors ${value ? 'bg-accent' : 'bg-gray-700'}`}>
                     <span className={`absolute top-0.5 h-3 w-3 rounded-full bg-white transition-all ${value ? 'left-3.5' : 'left-0.5'}`} />
                 </button>
             );
@@ -183,12 +183,12 @@ export const TextureParamField: React.FC<{
 
     const label = param.kind === 'float' || param.kind === 'int'
         ? <ScrubLabel label={param.label} value={Number(linked ? param.default : value ?? param.default) || 0} step={param.step ?? 0.01} onChange={(next) => !linked && onChange(clampToParam(param, next))} />
-        : <span className="text-2xs text-zinc-400">{param.label}</span>;
+        : <span className="text-2xs text-ink-2">{param.label}</span>;
 
     const linkButton = canLink && (
         <button ref={anchor} aria-label={`Link ${param.label} to a parameter`} title="Follow a parameter or formula, or expose as a parameter"
             onClick={() => { setFormula(linked && '$expr' in linked ? linked.$expr : ''); setMenu(true); }}
-            className={`rounded p-0.5 ${linked ? 'text-sky-400 hover:text-sky-300' : 'text-zinc-600 hover:text-zinc-300'}`}>
+            className={`rounded p-0.5 ${linked ? 'text-accent hover:text-accent-hover' : 'text-ink-3 hover:text-ink-2'}`}>
             {linked && '$expr' in linked ? <SigmaIcon size={12} /> : <LinkIcon size={12} />}
         </button>
     );
@@ -201,36 +201,36 @@ export const TextureParamField: React.FC<{
                 {linkButton}
             </div>
             {linked ? (
-                <div className="flex items-center gap-1.5 rounded border border-sky-900 bg-sky-950/40 px-1.5 py-1 text-2xs text-sky-200">
+                <div className="flex items-center gap-1.5 rounded border border-accent/40 bg-accent/10 px-1.5 py-1 text-2xs text-accent">
                     {'$bind' in linked ? <span className="flex-1 truncate">Follows <b>{parameters.find((p) => p.name === linked.$bind)?.label ?? linked.$bind}</b></span>
                         : <span className="flex-1 truncate font-mono">{linked.$expr}</span>}
-                    <button aria-label="Stop following" title="Stop following" onClick={() => onChange(structuredClone(param.default))} className="text-sky-400 hover:text-white"><UnlinkIcon size={12} /></button>
+                    <button aria-label="Stop following" title="Stop following" onClick={() => onChange(structuredClone(param.default))} className="text-accent hover:text-ink"><UnlinkIcon size={12} /></button>
                 </div>
             ) : !inline(param) && <ParamControl param={param} value={value} textures={textures} onChange={onChange} />}
-            {(problem || formulaProblem) && <p className="text-2xs text-amber-400">{formulaProblem ?? problem}</p>}
+            {(problem || formulaProblem) && <p className="text-2xs text-warn">{formulaProblem ?? problem}</p>}
             <Popover anchor={anchor} open={menu} onClose={() => setMenu(false)} width={260} label={`Link ${param.label}`}>
                 <div className="space-y-2 p-2 text-xs">
-                    <button onClick={() => { onExpose(); setMenu(false); }} className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-zinc-100 hover:bg-zinc-800">
+                    <button onClick={() => { onExpose(); setMenu(false); }} className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-ink hover:bg-white/5">
                         <UploadIcon size={12} /> Expose as a new parameter
                     </button>
                     {choices.length > 0 && (
                         <div>
-                            <div className="px-2 pb-1 text-2xs text-zinc-500">Follow a parameter</div>
+                            <div className="px-2 pb-1 text-2xs text-ink-3">Follow a parameter</div>
                             {choices.map((parameter) => (
                                 <button key={parameter.name} onClick={() => { onChange({ $bind: parameter.name }); setMenu(false); }}
-                                    className="block w-full truncate rounded px-2 py-1 text-left text-zinc-200 hover:bg-zinc-800">{parameter.label}</button>
+                                    className="block w-full truncate rounded px-2 py-1 text-left text-ink hover:bg-white/5">{parameter.label}</button>
                             ))}
                         </div>
                     )}
-                    <div className="space-y-1 border-t border-zinc-800 pt-2">
-                        <div className="px-2 text-2xs text-zinc-500">Or a formula of parameters ({names.length ? names.join(', ') : 'none yet'}, $size, $seed)</div>
+                    <div className="space-y-1 border-t border-line pt-2">
+                        <div className="px-2 text-2xs text-ink-3">Or a formula of parameters ({names.length ? names.join(', ') : 'none yet'}, $size, $seed)</div>
                         <input aria-label="Formula" value={formula} placeholder="wear * 0.5 + 0.1" onChange={(event) => setFormula(event.target.value)}
                             onKeyDown={(event) => { if (event.key === 'Enter' && formula.trim() && !expressionError(formula, names)) { onChange({ $expr: formula.trim() }); setMenu(false); } }}
                             className={`w-full font-mono ${field}`} />
-                        {formula.trim() && expressionError(formula, names) && <p className="px-1 text-2xs text-amber-400">{expressionError(formula, names)}</p>}
+                        {formula.trim() && expressionError(formula, names) && <p className="px-1 text-2xs text-warn">{expressionError(formula, names)}</p>}
                         <div className="flex justify-end">
                             <button disabled={!formula.trim() || Boolean(expressionError(formula, names))} onClick={() => { onChange({ $expr: formula.trim() }); setMenu(false); }}
-                                className="rounded bg-sky-600 px-2 py-0.5 text-2xs font-semibold text-white hover:bg-sky-500 disabled:opacity-40">Use formula</button>
+                                className="rounded bg-accent px-2 py-0.5 text-2xs font-semibold text-accent-ink hover:bg-accent-hover disabled:opacity-40">Use formula</button>
                         </div>
                     </div>
                 </div>

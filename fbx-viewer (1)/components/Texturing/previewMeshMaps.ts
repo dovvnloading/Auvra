@@ -13,7 +13,7 @@ import type { GraphResolver } from '../../texturing/graph/registry';
 import type { TextureGraph } from '../../texturing/graph/types';
 import { buildPartMesh, buildWholeMesh } from '../../texturing/mesh/partMesh';
 import { readPaintDocument, type TilePictures } from '../../texturing/paint/paintTypes';
-import { pngBitDepth, readPicture, readPng16 } from '../../texturing/png';
+import { pngBitDepth, readPicture, readPng16Half } from '../../texturing/png';
 import type { TextureGraphSession } from './textureGraphSession';
 
 /**
@@ -212,8 +212,9 @@ const readMap = async (gpu: TextureGpu, name: MeshMapName, assetId: string, sign
     const precision = gray || name === 'position' ? 16 : 8;
     // Kept bottom row first, as the Paint tab drew them: read as they are, not turned over.
     if (await pngBitDepth(blob) === 16) {
-        const fine = await readPng16(blob);
-        const texture = new THREE.DataTexture(fine.data, fine.width, fine.height, THREE.RGBAFormat, THREE.FloatType);
+        // Read into half floats, as the image keeps them: half the memory of full floats.
+        const fine = await readPng16Half(blob);
+        const texture = new THREE.DataTexture(fine.data, fine.width, fine.height, fine.channels === 1 ? THREE.RedFormat : THREE.RGBAFormat, THREE.HalfFloatType);
         texture.colorSpace = THREE.NoColorSpace;
         texture.minFilter = texture.magFilter = THREE.NearestFilter;
         texture.needsUpdate = true;

@@ -42,7 +42,7 @@ export const CurveEditor: React.FC<{ value: unknown; onChange: (curves: CurveSet
             <svg
                 ref={svg}
                 viewBox={`0 0 ${SIZE} ${SIZE}`}
-                className="block w-full touch-none rounded border border-zinc-700 bg-zinc-950"
+                className="block w-full touch-none rounded border border-line bg-panel"
                 onPointerDown={(event) => {
                     const at = toPoint(event.clientX, event.clientY);
                     const hit = points.findIndex((p) => Math.hypot((p.x - at.x) * SIZE, (p.y - at.y) * SIZE) < 9);
@@ -77,9 +77,9 @@ export const CurveEditor: React.FC<{ value: unknown; onChange: (curves: CurveSet
                 <path d={path} stroke={color} strokeWidth={2} fill="none" />
                 {points.map((p, i) => <circle key={i} cx={p.x * SIZE} cy={(1 - p.y) * SIZE} r={5} fill="#18181b" stroke={color} strokeWidth={2} />)}
             </svg>
-            <div className="flex justify-between text-2xs text-zinc-500">
+            <div className="flex justify-between text-2xs text-ink-3">
                 <span>Click to add a point, double-click to remove</span>
-                <button className="hover:text-zinc-300" onClick={() => set([{ x: 0, y: 0 }, { x: 1, y: 1 }])}>Reset</button>
+                <button className="hover:text-ink-2" onClick={() => set([{ x: 0, y: 0 }, { x: 1, y: 1 }])}>Reset</button>
             </div>
         </div>
     );

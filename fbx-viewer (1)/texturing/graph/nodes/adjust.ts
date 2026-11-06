@@ -322,6 +322,7 @@ void main() { vec4 a = c_a(vUv); vec4 b = c_b(vUv); outColor = vec4(pick(p_r, a,
         params: [select('mode', 'Blend mode', 'normal', BLEND_OPTIONS), float('opacity', 'Opacity', 1, 0, 1), bool('useAlpha', 'Foreground alpha counts', true), bool('clampResult', 'Keep within 0 to 1', true)],
         sizeFrom: 'input',
         kindFrom: ['foreground', 'background'],
+        main: 'background',
         glsl: `void main() {
     vec4 fg = c_foreground(vUv);
     vec4 bg = c_background(vUv);
@@ -341,6 +342,7 @@ void main() { vec4 a = c_a(vUv); vec4 b = c_b(vUv); outColor = vec4(pick(p_r, a,
         outputs: [out('gray', 'out', 'Height'), out('gray', 'mask', 'Mask')],
         params: [float('offset', 'Height offset', 0.5, 0, 1), float('contrast', 'Contrast', 0.9, 0, 1)],
         sizeFrom: 'input',
+        main: 'bottom',
         async run(context) {
             const shared = `float topWins() { float top = g_top(vUv) * g_mask(vUv) + (p_offset - 0.5) * 2.0; float bottom = g_bottom(vUv); float soft = max(1.0 - p_contrast, 0.002); return saturate((top - bottom) / soft + 0.5); }`;
             const height = context.image('gray');
