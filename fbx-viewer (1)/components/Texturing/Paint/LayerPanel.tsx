@@ -3,7 +3,6 @@ import { ArrowDownIcon, ArrowUpIcon, BrushIcon, BucketIcon, CopyIcon, EyeIcon, E
 import { BLEND_MODES, BLEND_MODE_LABELS, type BlendMode } from '../../../texturing/gpu/glslLibrary';
 import { PICK_LABELS, PICK_MODES, countTriangles, type PickMode } from '../../../texturing/paint/selection';
 import { PROJECTION_LABELS, type ProjectionAxis, type ProjectionMode } from '../../../texturing/paint/projections';
-import type { PaintTool } from './PaintViewport';
 import { OUTPUT_NODE_TYPE } from '../../../texturing/graph/nodes/io';
 import { OUTPUT_CHANNEL_LABELS, type GraphParameter, type OutputChannel, type TexParamDef } from '../../../texturing/graph/types';
 import type { GraphResolver } from '../../../texturing/graph/registry';
@@ -162,9 +161,7 @@ export const LayerPanel: React.FC<{
     /** Sets a material up to be painted on (a fill layer under a black painted mask), ready for strokes. */
     onPaintWith: (choice: MaterialChoice) => void;
     onMessage: (message: string) => void;
-    /** Switches the viewport's tool (the polygon tool, to pick parts for a new mask). */
-    onUseTool: (tool: PaintTool) => void;
-}> = ({ session, selection, onSelect, resolve, graphs, textures, onPaintWith, onMessage, onUseTool }) => {
+}> = ({ session, selection, onSelect, resolve, graphs, textures, onPaintWith, onMessage }) => {
     const document = session.document;
     const addButton = useRef<HTMLButtonElement>(null);
     const maskButton = useRef<HTMLButtonElement>(null);
@@ -365,13 +362,11 @@ export const LayerPanel: React.FC<{
                             {PART_MASKS.map(({ label, hint, pick }) => (
                                 <button key={pick} onClick={() => {
                                     addMask([{ id: paintId('m'), kind: 'polygon', enabled: true, blend: 'multiply', opacity: 1, triangles: [], pick }], `Add mask by ${label.toLowerCase()}`);
-                                    onUseTool('polygon');
                                     onMessage(`Click the model to add ${label.toLowerCase()} to the mask; Shift-click takes them away.`);
                                 }} className="block w-full rounded px-2 py-1 text-left hover:bg-zinc-800"><span className="block text-zinc-100">{label}</span><span className="block text-2xs text-zinc-500">{hint}</span></button>
                             ))}
                             <button onClick={() => {
                                 addMask([{ id: paintId('m'), kind: 'id', enabled: true, blend: 'multiply', opacity: 1, colors: [], tolerance: 0.02 }], 'Add mask by ID colours');
-                                onUseTool('polygon');
                                 onMessage(document.bake?.maps?.id ? 'Click the model to pick colours from the baked ID map; Shift-click takes one away.' : 'Bake the mesh maps in the Texture set panel first: the ID map they make is what this mask picks colours from.');
                             }} className="block w-full rounded px-2 py-1 text-left hover:bg-zinc-800"><span className="block text-zinc-100">ID colours</span><span className="block text-2xs text-zinc-500">Colours you click on the baked ID map.</span></button>
                             <div className={`${sectionTitle} px-2 pt-1`}>Effects</div>
@@ -563,12 +558,12 @@ const LayerSettings: React.FC<{
                 )}
                 {effect.kind === 'polygon' && (
                     <>
-                        <Select value={effect.pick ?? 'mesh'} options={PICK_MODES.map((mode) => ({ value: mode, label: PICK_LABELS[mode] }))} onChange={(pick) => setEffect({ pick: pick as PickMode }, 'Change how parts are picked')} className="w-full" />
+                        <label className="flex items-center gap-2 text-2xs text-zinc-400"><span className="w-20 shrink-0">A click picks</span><Select value={effect.pick ?? 'mesh'} options={PICK_MODES.map((mode) => ({ value: mode, label: PICK_LABELS[mode] }))} onChange={(pick) => setEffect({ pick: pick as PickMode }, 'Change how parts are picked')} className="min-w-0 flex-1" /></label>
                         <div className="flex items-center gap-2 text-2xs text-zinc-400">
                             <span className="flex-1">{countTriangles(effect.triangles)} triangle{countTriangles(effect.triangles) === 1 ? '' : 's'} picked</span>
                             {countTriangles(effect.triangles) > 0 && <Button size="sm" variant="ghost" onClick={(event) => { event.stopPropagation(); setEffect({ triangles: [] }, 'Clear picked parts'); }}>Clear</Button>}
                         </div>
-                        <p className="text-2xs leading-snug text-zinc-500">{active ? 'Click the model with the polygon tool (Q) to add; Shift-click takes away.' : 'Click this effect, then click the model with the polygon tool (Q).'}</p>
+                        <p className="text-2xs leading-snug text-zinc-500">{active ? `While this effect is selected, clicking the model adds the ${PICK_LABELS[effect.pick ?? 'mesh'].toLowerCase()} under the pointer; Shift-click takes it away.` : 'Click this effect, then click the model to pick.'}</p>
                     </>
                 )}
                 {effect.kind === 'id' && (
@@ -582,7 +577,7 @@ const LayerSettings: React.FC<{
                             {!effect.colors?.length && <span className="text-2xs text-zinc-500">No colours picked yet.</span>}
                         </div>
                         <Slider label="Tolerance" value={effect.tolerance ?? 0.02} max={0.25} step={0.005} hint="How near a colour of the ID map must be to a picked one to count." onChange={(tolerance) => setEffect({ tolerance }, 'Change ID colour tolerance')} />
-                        <p className="text-2xs leading-snug text-zinc-500">{active ? 'Click the model with the polygon (Q) or pick (P) tool to take colours from the ID map; Shift-click takes one away.' : 'Click this effect, then click the model with the polygon tool (Q).'}</p>
+                        <p className="text-2xs leading-snug text-zinc-500">{active ? 'While this effect is selected, clicking the model takes the ID map\'s colour there; Shift-click takes one away.' : 'Click this effect, then click the model to pick colours.'}</p>
                     </>
                 )}
                 {effect.kind === 'generator' && (

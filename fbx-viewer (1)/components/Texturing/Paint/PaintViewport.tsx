@@ -205,8 +205,10 @@ export const PaintViewport: React.FC<{
      */
     onSurfacePick?: (hit: SurfaceHit, remove: boolean) => boolean;
     pathEdit?: PathEdit | null;
+    /** A part or ID colour mask is selected: clicks on the model pick for it, whatever the tool. */
+    picking?: boolean;
     commands?: React.MutableRefObject<ViewportCommands | null>;
-}> = ({ session, tool, brush, target, view, maskImage, onBrushSize, onPick, onMessage, frameSignal, uv, pickMode, onSurfacePick, pathEdit, commands }) => {
+}> = ({ session, tool, brush, target, view, maskImage, onBrushSize, onPick, onMessage, frameSignal, uv, pickMode, onSurfacePick, pathEdit, commands, picking = false }) => {
     const uvVersion = useSyncExternalStore(uv?.subscribe ?? NO_SUBSCRIBE, uv?.getVersion ?? ZERO);
     const host = useRef<HTMLDivElement>(null);
     const canvas = useRef<HTMLCanvasElement>(null);
@@ -595,9 +597,11 @@ export const PaintViewport: React.FC<{
             }
             return;
         }
-        if (tool === 'polygon' || tool === 'pick') {
+        // A part or ID colour mask selected takes the click, with any tool but the seam and path tools.
+        if (picking && tool !== 'seam' && tool !== 'path') {
             const hit = hitAt(x, y);
             if (hit && onSurfacePick?.(hit, event.shiftKey)) return;
+            if (!hit) return;
         }
         if (tool === 'pick') { pickColour(x, y); return; }
         if (tool === 'seam') {
@@ -793,13 +797,13 @@ export const PaintViewport: React.FC<{
         return () => window.removeEventListener('keydown', onKey);
     }, [brush.size, frame, onBrushSize]);
 
-    const showCursor = cursor && (tool === 'paint' || tool === 'erase');
+    const showCursor = cursor && !picking && (tool === 'paint' || tool === 'erase');
     const stencilTexture = brush.stencil.enabled && brush.stencil.textureId && (tool === 'paint' || tool === 'erase') ? session.host.texture(brush.stencil.textureId) : null;
     return (
         <div
             ref={host}
             className="relative min-h-0 min-w-0 flex-1 overflow-hidden"
-            style={{ cursor: tool === 'pick' || tool === 'polygon' ? 'crosshair' : showCursor ? 'none' : 'default' }}
+            style={{ cursor: picking || tool === 'pick' || tool === 'polygon' ? 'crosshair' : showCursor ? 'none' : 'default' }}
             onPointerDown={onPointerDown}
             onPointerMove={onPointerMove}
             onPointerUp={onPointerUp}
