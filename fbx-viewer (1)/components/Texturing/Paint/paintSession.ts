@@ -10,7 +10,7 @@ import { textureGpu, type TextureGpu } from '../../../texturing/gpu/textureGpu';
 import type { GraphEntry, GraphResolver } from '../../../texturing/graph/registry';
 import { readStoredGraph } from '../../../texturing/graph/stored';
 import { buildPartMesh, buildWholeMesh, type PartMesh } from '../../../texturing/mesh/partMesh';
-import { SurfacePicker } from '../../../texturing/mesh/picker';
+import type { SurfacePicker } from '../../../texturing/mesh/picker';
 import { DEEP_EXPORT, ROLE_LABELS, encodeChannels, materialGraphForTextures, tileAtlas, type ChannelTextureIds, type PictureLayout } from '../../../texturing/materialOutput';
 import { GpuResetError, PaintStack, pictureOwners, type StackHost } from '../../../texturing/paint/paintStack';
 import { BUILTIN_GRAPHS } from '../../../texturing/paint/smartLibrary';
@@ -98,7 +98,7 @@ export class PaintSession {
         occluder: PaintSession['occluder'], readonly modelSpace: PositionSpace) {
         this.gpu = stack.host.gpu;
         this.part = part;
-        this.picker = new SurfacePicker(part);
+        this.picker = stack.picker;
         this.occluder = occluder;
         this.stack = stack;
         this.asset = asset;
@@ -117,6 +117,50 @@ export class PaintSession {
     /** False while the GPU context is lost (or after it came back, until the set opens again). */
     get usable(): boolean {
         return this.stack.usable;
+    }
+
+    /** Why painting waits (a new UV layout being put on), or null. */
+    get locked(): string | null {
+        return this.lockReason;
+    }
+
+    private lockReason: string | null = null;
+    /** Set once the set has handed over to another (a new layout's): it keeps nothing more. */
+    private retired = false;
+
+    /** Stops painting, undo and saving (with the reason to show) until unlocked. */
+    lock(reason: string): void {
+        this.lockReason = reason;
+        if (this.saveTimer) { clearTimeout(this.saveTimer); this.saveTimer = null; }
+        this.emit();
+    }
+
+    unlock(): void {
+        this.lockReason = null;
+        this.emit();
+    }
+
+    /** The set has been replaced (its document now names another layout's pictures): it never saves again. */
+    retire(): void {
+        this.retired = true;
+        if (this.saveTimer) { clearTimeout(this.saveTimer); this.saveTimer = null; }
+    }
+
+    /**
+     * Keeps `document` as the set's in the project, without keeping any picture or changing what is open:
+     * the material library goes back to what it held when the project would not take it.
+     */
+    async keepDocumentAs(document: PaintDocument): Promise<void> {
+        const current = materialLibrary.get(this.asset.id) ?? this.asset;
+        const next = { ...current, paint: document as unknown as Record<string, unknown> };
+        materialLibrary.upsert(next);
+        try {
+            await projectService.applyChanges([{ domain: MATERIALS_DOMAIN, operation: 'upsert', id: next.id, value: materialAssetDocument(next) }]);
+        } catch (error) {
+            materialLibrary.upsert(current);
+            throw error;
+        }
+        this.asset = next;
     }
 
     /** Calls `listener` when the set must be opened again after the GPU context came back. */
@@ -143,7 +187,7 @@ export class PaintSession {
         this.past = [];
         this.future = [];
         try {
-            await this.keepDocument();
+            if (!this.retired) await this.keepDocument();
         } catch (error) {
             frontendDiagnostics.failure('paint_save_failed', error);
         }
@@ -268,13 +312,13 @@ export class PaintSession {
         this.stack.dropPicturesExcept(pictureOwners(documents));
     }
 
-    get canUndo(): boolean { return this.past.length > 0 && this.usable; }
-    get canRedo(): boolean { return this.future.length > 0 && this.usable; }
+    get canUndo(): boolean { return this.past.length > 0 && this.usable && !this.lockReason; }
+    get canRedo(): boolean { return this.future.length > 0 && this.usable && !this.lockReason; }
     get undoLabel(): string | null { return this.past[this.past.length - 1]?.label ?? null; }
     get redoLabel(): string | null { return this.future[this.future.length - 1]?.label ?? null; }
 
     undo(): void {
-        if (!this.usable) return;
+        if (!this.usable || this.lockReason) return;
         const entry = this.past.pop();
         if (!entry) return;
         this.coalesceKey = null;
@@ -291,7 +335,7 @@ export class PaintSession {
     }
 
     redo(): void {
-        if (!this.usable) return;
+        if (!this.usable || this.lockReason) return;
         const entry = this.future.pop();
         if (!entry) return;
         this.coalesceKey = null;
@@ -309,8 +353,8 @@ export class PaintSession {
     private dirty(): void {
         this.changedSinceApply = true;
         if (this.saveTimer) clearTimeout(this.saveTimer);
-        // Never saved from a lost GPU context: what it reads back is blank.
-        if (!this.usable) { this.saveTimer = null; return; }
+        // Never saved from a lost GPU context (what it reads back is blank), while locked, or once replaced.
+        if (!this.usable || this.lockReason || this.retired) { this.saveTimer = null; return; }
         this.saveTimer = setTimeout(() => { void this.save(); }, SAVE_DELAY_MS);
     }
 
@@ -326,7 +370,7 @@ export class PaintSession {
     async save(): Promise<void> {
         if (this.saveTimer) { clearTimeout(this.saveTimer); this.saveTimer = null; }
         if (this.saving) { await this.saving; }
-        if (!this.usable) return;
+        if (!this.usable || this.lockReason || this.retired) return;
         this.saving = (async () => {
             try {
                 await this.stack.keepPictures();
