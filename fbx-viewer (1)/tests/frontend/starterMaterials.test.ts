@@ -36,6 +36,14 @@ describe('starter materials', () => {
         expect(params.sheenRoughness).toBeGreaterThanOrEqual(0.5);
     });
 
+    it('give velvet a wine-red body that reads as red head-on', () => {
+        const [red, green, blue] = starter('velvet').graph().nodes[0].params.baseColor as number[];
+        const linear = new THREE.Color().setRGB(red, green, blue, THREE.SRGBColorSpace);
+        // Bright enough to read as red under the preview's light, and still a deep, saturated wine.
+        expect(linear.r).toBeGreaterThan(0.25);
+        expect(linear.r).toBeGreaterThan(10 * Math.max(linear.g, linear.b));
+    });
+
     it('make a fresh graph each time, so editing one leaves the starter as it was', () => {
         const first = starter('velvet').graph();
         first.nodes[0].params.roughness = 0.1;
