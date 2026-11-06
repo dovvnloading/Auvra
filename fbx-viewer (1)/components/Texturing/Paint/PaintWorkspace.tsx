@@ -348,7 +348,7 @@ export const PaintWorkspace: React.FC = () => {
                 {session ? (
                     panel === 'layers' ? <LayerPanel session={session} selection={selection} onSelect={setSelection} resolve={resolve} graphs={graphs} textures={textures} onPaintWith={paintWith} onMessage={setMessage} onUseTool={setTool} />
                         : panel === 'brush' ? <div className="min-h-0 flex-1 overflow-y-auto"><BrushPanel brush={brush} onChange={setBrush} channels={session.document.channels} paintingMask={target?.kind === 'mask'} textures={textures} onPick={() => setTool('pick')}
-                            paintWith={previewHost ? { sections: brushSections, host: previewHost, onPick: paintWith, onMessage: setMessage } : undefined} /></div>
+                            paintWith={previewHost ? { sections: brushSections, host: previewHost, onPick: paintWith, onMessage: setMessage } : undefined} onMessage={setMessage} /></div>
                             : panel === 'uvs' && uv ? <div className="min-h-0 flex-1 overflow-y-auto"><UvPanel uv={uv} onSeamTool={() => setTool('seam')} onApplied={() => { if (!uv.proposal) { putOnAfterOpen.current = uv.putOnWhenOpen; setReopen((value) => value + 1); } }} /></div>
                                 : <div className="min-h-0 flex-1 overflow-y-auto"><SetPanel session={session} models={paintable} onReopen={() => setReopen((value) => value + 1)} /></div>
                 ) : (

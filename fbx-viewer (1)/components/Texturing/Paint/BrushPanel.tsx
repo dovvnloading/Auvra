@@ -1,9 +1,10 @@
 import React, { useRef, useState } from 'react';
-import { BrushIcon } from '../../UI/Icons';
+import { BrushIcon, TrashIcon } from '../../UI/Icons';
+import { BUILT_IN_ALPHAS, BUILT_IN_BRUSHES, PRESSURE_CURVES, applyPreset, loadPresets, presetFrom, savePresets, type BrushPreset } from '../../../texturing/paint/brushLibrary';
 import { CHANNEL_IS_COLOR, CHANNEL_LABELS, type PaintChannel } from '../../../texturing/paint/paintTypes';
 import type { PreviewHost } from '../../../texturing/paint/previews';
-import { MAX_BRUSH_SIZE, type BrushSettings } from '../../../texturing/paint/strokes';
-import { Popover, Segmented } from '../../UI/kit';
+import { MAX_BRUSH_SIZE, type BrushMode, type BrushSettings, type SymmetryAxis } from '../../../texturing/paint/strokes';
+import { Button, Popover, Segmented } from '../../UI/kit';
 import { Select } from '../../UI/Select';
 import { ColourFieldRgb } from '../../UI/ColourPicker';
 import { MaterialPicker, type MaterialChoice, type MaterialSection } from './MaterialPicker';
@@ -30,12 +31,63 @@ export const BrushPanel: React.FC<{
     onPick?: () => void;
     /** Materials to paint on whole, and what picking one does. */
     paintWith?: { sections: readonly MaterialSection[]; host: PreviewHost; onPick: (choice: MaterialChoice) => void; onMessage: (message: string) => void };
-}> = ({ brush, onChange, channels, paintingMask, textures, onPick, paintWith }) => {
+    onMessage?: (message: string) => void;
+}> = ({ brush, onChange, channels, paintingMask, textures, onPick, paintWith, onMessage }) => {
     const set = (patch: Partial<BrushSettings>) => onChange({ ...brush, ...patch });
     const pickButton = useRef<HTMLButtonElement>(null);
     const [picking, setPicking] = useState(false);
+    const saveButton = useRef<HTMLButtonElement>(null);
+    const [saving, setSaving] = useState(false);
+    const [saveName, setSaveName] = useState('');
+    const [saved, setSaved] = useState<BrushPreset[]>(() => loadPresets());
+    const [armed, setArmed] = useState<string | null>(null);
+    const keep = (next: BrushPreset[]) => {
+        if (savePresets(next)) setSaved(next);
+        else onMessage?.('The brush could not be kept: this browser is not keeping settings.');
+    };
+    const offset = brush.symmetry.offset ?? [0, 0, 0];
+    const curve = PRESSURE_CURVES.find((each) => each.curve.every((value, i) => Math.abs(value - (brush.pressureCurve?.[i] ?? 0)) < 1e-6))?.id ?? 'custom';
+    const modeHints: Record<BrushMode, string> = {
+        paint: 'Lays the brush\'s values on.',
+        blur: 'Softens what is painted, more with each pass.',
+        sharpen: 'Brings out the detail of what is painted.',
+        smudge: 'Pushes what is painted along with the stroke.',
+        clone: 'Copies what is painted from another place: Ctrl-click where to copy from, then paint.',
+    };
     return (
         <div className="space-y-4 p-3">
+            <section className="space-y-2">
+                <div className="flex items-center justify-between">
+                    <span className="text-2xs font-semibold text-zinc-300">Brushes</span>
+                    <button ref={saveButton} onClick={() => { setSaveName(''); setSaving(true); }} className="text-2xs text-sky-400 hover:text-sky-300">Save this brush</button>
+                </div>
+                <div className="grid grid-cols-2 gap-1">
+                    {[...BUILT_IN_BRUSHES, ...saved].map((preset) => (
+                        <div key={preset.id} className="group relative">
+                            <button onClick={() => onChange(applyPreset(brush, preset))} title={preset.builtIn ? preset.name : `${preset.name} (saved)`}
+                                className="w-full rounded border border-zinc-800 px-2 py-1 text-left text-2xs leading-tight text-zinc-200 hover:bg-zinc-800">{preset.name}</button>
+                            {!preset.builtIn && (
+                                <button aria-label={armed === preset.id ? `Click again to remove ${preset.name}` : `Remove ${preset.name}`} title={armed === preset.id ? 'Click again to remove it' : 'Remove'}
+                                    onMouseLeave={() => setArmed((current) => (current === preset.id ? null : current))}
+                                    onClick={() => { if (armed !== preset.id) { setArmed(preset.id); return; } setArmed(null); keep(saved.filter((each) => each.id !== preset.id)); }}
+                                    className={`absolute right-0.5 top-0.5 hidden rounded bg-zinc-900/90 p-0.5 group-hover:block ${armed === preset.id ? 'text-red-400' : 'text-zinc-400 hover:text-white'}`}><TrashIcon size={10} /></button>
+                            )}
+                        </div>
+                    ))}
+                </div>
+                <Popover anchor={saveButton} open={saving} onClose={() => setSaving(false)} width={260} label="Save this brush">
+                    <form className="space-y-2 p-2.5" onSubmit={(event) => { event.preventDefault(); keep([...saved, presetFrom(brush, saveName)]); setSaving(false); }}>
+                        <div className="text-xs font-semibold text-zinc-200">Save this brush</div>
+                        <p className="text-2xs leading-snug text-zinc-500">Keeps how it feels (size, softness, spacing, jitter, pressure, its shape), not what it paints. Kept in this browser.</p>
+                        <input aria-label="Brush name" value={saveName} maxLength={48} placeholder="Name" autoFocus onChange={(event) => setSaveName(event.target.value)}
+                            className="w-full rounded border border-zinc-700 bg-zinc-950 px-1.5 py-0.5 text-xs text-zinc-100 outline-none focus:border-sky-600" />
+                        <div className="flex justify-end gap-1.5">
+                            <Button size="sm" variant="ghost" onClick={() => setSaving(false)}>Cancel</Button>
+                            <Button size="sm" variant="primary" type="submit">Save</Button>
+                        </div>
+                    </form>
+                </Popover>
+            </section>
             {paintWith && (
                 <section>
                     <button ref={pickButton} onClick={() => setPicking(true)} className="flex w-full items-center gap-2 rounded border border-sky-800/70 bg-sky-950/40 px-2 py-1.5 text-left hover:bg-sky-900/40">
@@ -74,6 +126,12 @@ export const BrushPanel: React.FC<{
             </section>
             <section className="space-y-2">
                 <div className="text-2xs font-semibold text-zinc-300">Brush</div>
+                <div className="flex items-center gap-2">
+                    <span className="w-24 shrink-0 text-2xs text-zinc-400">What it does</span>
+                    <Select value={brush.mode ?? 'paint'} options={[{ value: 'paint', label: 'Paint' }, { value: 'blur', label: 'Blur' }, { value: 'sharpen', label: 'Sharpen' }, { value: 'smudge', label: 'Smudge' }, { value: 'clone', label: 'Clone' }]}
+                        onChange={(mode) => set({ mode: mode as BrushMode })} className="min-w-0 flex-1" />
+                </div>
+                <p className="text-2xs leading-snug text-zinc-500">{modeHints[brush.mode ?? 'paint']}</p>
                 <Row label="Size" value={brush.size} min={1} max={MAX_BRUSH_SIZE} step={1} suffix="px" onChange={(size) => set({ size })} />
                 <Row label="Hardness" value={brush.hardness} min={0} max={1} onChange={(hardness) => set({ hardness })} />
                 <Row label="Flow" value={brush.flow} min={0.01} max={1} onChange={(flow) => set({ flow })} />
@@ -84,12 +142,23 @@ export const BrushPanel: React.FC<{
                     <span className="w-24 text-2xs text-zinc-400">Shape</span>
                     <Segmented value={brush.shape} options={[{ value: 'round', label: 'Round' }, { value: 'square', label: 'Square' }, { value: 'picture', label: 'Picture' }]} onChange={(shape) => set({ shape })} label="Brush shape" />
                 </div>
-                {brush.shape === 'picture' && <Select value={brush.alphaTexture} placeholder="Pick a picture (its brightness)" options={textures.map((texture) => ({ value: texture.id, label: texture.name }))} onChange={(alphaTexture) => set({ alphaTexture: String(alphaTexture) })} className="w-full" />}
+                {brush.shape === 'picture' && <Select value={brush.alphaTexture} placeholder="Pick an alpha (its brightness)" options={[...BUILT_IN_ALPHAS.map((alpha) => ({ value: alpha.id, label: alpha.name })), ...textures.map((texture) => ({ value: texture.id, label: texture.name }))]} onChange={(alphaTexture) => set({ alphaTexture: String(alphaTexture) })} className="w-full" />}
                 <div className="flex flex-wrap gap-x-3 gap-y-1">
                     <Toggle label="Pressure sets size" checked={brush.pressureSize} onChange={(pressureSize) => set({ pressureSize })} />
                     <Toggle label="Pressure sets flow" checked={brush.pressureFlow} onChange={(pressureFlow) => set({ pressureFlow })} />
                     <Toggle label="Turn with the stroke" checked={brush.followStroke} onChange={(followStroke) => set({ followStroke })} />
+                    <Toggle label="Turn with the pen's tilt" checked={Boolean(brush.tiltAngle)} onChange={(tiltAngle) => set({ tiltAngle })} />
+                    <Toggle label="Build up within a stroke" checked={Boolean(brush.buildUp)} onChange={(buildUp) => set({ buildUp })} />
                 </div>
+                <div className="flex items-center gap-2">
+                    <span className="w-24 shrink-0 text-2xs text-zinc-400">Pressure curve</span>
+                    <Select value={curve} options={[...PRESSURE_CURVES.map((each) => ({ value: each.id, label: each.name })), ...(curve === 'custom' ? [{ value: 'custom', label: 'Its own' }] : [])]}
+                        onChange={(id) => { const picked = PRESSURE_CURVES.find((each) => each.id === id); if (picked) set({ pressureCurve: [...picked.curve] as BrushSettings['pressureCurve'] }); }} className="min-w-0 flex-1" />
+                    <svg viewBox="0 0 1 1" className="h-5 w-5 shrink-0 rounded-sm border border-zinc-700 bg-zinc-950" aria-hidden>
+                        <path d={`M0 1 C${brush.pressureCurve?.[0] ?? 0.25} ${1 - (brush.pressureCurve?.[1] ?? 0.25)} ${brush.pressureCurve?.[2] ?? 0.75} ${1 - (brush.pressureCurve?.[3] ?? 0.75)} 1 0`} fill="none" stroke="currentColor" strokeWidth={0.08} className="text-sky-400" />
+                    </svg>
+                </div>
+                <Row label="Lazy mouse" value={brush.lazy ?? 0} min={0} max={200} step={1} suffix="px" onChange={(lazy) => set({ lazy })} />
             </section>
             <section className="space-y-2">
                 <div className="text-2xs font-semibold text-zinc-300">Jitter</div>
@@ -107,6 +176,18 @@ export const BrushPanel: React.FC<{
                     <span className="w-24 text-2xs text-zinc-400">Mirror across</span>
                     {(['x', 'y', 'z'] as const).map((axis) => <Toggle key={axis} label={axis.toUpperCase()} checked={brush.symmetry[axis]} onChange={(on) => set({ symmetry: { ...brush.symmetry, [axis]: on } })} />)}
                 </div>
+                {(['x', 'y', 'z'] as const).map((axis, i) => brush.symmetry[axis] && (
+                    <Row key={axis} label={`${axis.toUpperCase()} mirror at`} value={offset[i]} min={-0.5} max={0.5}
+                        onChange={(value) => set({ symmetry: { ...brush.symmetry, offset: offset.map((each, j) => (j === i ? value : each)) as [number, number, number] } })} />
+                ))}
+                <Row label="Turned copies" value={brush.radial?.count ?? 1} min={1} max={16} step={1} onChange={(count) => set({ radial: { axis: brush.radial?.axis ?? 'y', count } })} />
+                {(brush.radial?.count ?? 1) > 1 && (
+                    <div className="flex items-center gap-2">
+                        <span className="w-24 text-2xs text-zinc-400">Round the axis</span>
+                        <Segmented value={brush.radial?.axis ?? 'y'} options={[{ value: 'x', label: 'X' }, { value: 'y', label: 'Y' }, { value: 'z', label: 'Z' }]} onChange={(axis) => set({ radial: { count: brush.radial?.count ?? 1, axis: axis as SymmetryAxis } })} label="Radial axis" />
+                    </div>
+                )}
+                <p className="text-2xs leading-snug text-zinc-500">Mirrors sit at the model's middle, moved by a share of its size; turned copies go round the axis through the same point. Up to 16 copies in all.</p>
             </section>
             <section className="space-y-2">
                 <div className="flex items-center justify-between">

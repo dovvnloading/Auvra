@@ -4,7 +4,8 @@ import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment
 import type { GpuImage, TextureGpu } from '../../../texturing/gpu/textureGpu';
 import { tileGeometry } from '../../../texturing/mesh/partMesh';
 import type { MeshMapName } from '../../../texturing/graph/nodes/io';
-import { MAX_BRUSH_SIZE, pictureAspect, renderDepth, stencilPlace, Stroke, type BrushSettings, type StrokeTarget } from '../../../texturing/paint/strokes';
+import { MAX_BRUSH_SIZE, lazyFollow, pictureAspect, renderDepth, stencilPlace, Stroke, type BrushSettings, type StrokeTarget } from '../../../texturing/paint/strokes';
+import { builtInAlphaTexture } from '../../../texturing/paint/brushLibrary';
 import type { PaintChannel } from '../../../texturing/paint/paintTypes';
 import { PICK_LABELS, type PickMode } from '../../../texturing/paint/selection';
 import type { PaintSession } from './paintSession';
@@ -394,7 +395,9 @@ export const PaintViewport: React.FC<{
     }, [draw, updateMaterials, version, uvVersion]);
 
     // ---- pointer ----
-    const gesture = useRef<{ kind: 'orbit' | 'pan'; x: number; y: number } | { kind: 'stroke'; stroke: Stroke; depth: GpuImage } | null>(null);
+    const gesture = useRef<{ kind: 'orbit' | 'pan'; x: number; y: number } | { kind: 'stroke'; stroke: Stroke; depth: GpuImage; anchor: { x: number; y: number } } | null>(null);
+    /** Clone: where strokes copy from (Ctrl-click sets it). */
+    const cloneSource = useRef<{ triangle: number; uv: THREE.Vector2 } | null>(null);
 
     const toPixels = (event: { clientX: number; clientY: number }) => {
         const box = host.current!.getBoundingClientRect();
@@ -409,7 +412,7 @@ export const PaintViewport: React.FC<{
         return session.picker.cast(ray.ray.origin, ray.ray.direction);
     }, [placeCamera, session.picker, size, world.camera]);
 
-    const startStroke = (x: number, y: number, pressure: number) => {
+    const startStroke = (x: number, y: number, pressure: number, tilt?: { x: number; y: number }) => {
         if (!session.usable) {
             onMessage('The graphics card was reset: painting waits until the set has opened again from its saved pictures.');
             return;
@@ -422,11 +425,15 @@ export const PaintViewport: React.FC<{
             onMessage(tool === 'island' || tool === 'polygon' ? 'Pick a paint layer or a painted mask to fill, or a polygon or ID colour mask effect to pick for.' : 'Pick a paint layer, or a painted mask effect, to paint on. Fill layers take their values from their settings.');
             return;
         }
+        if (brush.mode === 'clone' && !cloneSource.current && tool !== 'island' && tool !== 'polygon') {
+            onMessage('Ctrl-click where to copy from first, then paint where the copy goes.');
+            return;
+        }
         onMessage(null);
         placeCamera();
         const depth = renderDepth(gpu, world.root, world.camera, size.width, size.height);
         const perspective = (size.height / 2) / Math.tan(THREE.MathUtils.degToRad(world.camera.fov / 2));
-        const alpha = brush.shape === 'picture' && brush.alphaTexture ? session.host.texture(brush.alphaTexture) : null;
+        const alpha = brush.shape === 'picture' && brush.alphaTexture ? builtInAlphaTexture(brush.alphaTexture) ?? session.host.texture(brush.alphaTexture) : null;
         const stencil = brush.stencil.enabled && brush.stencil.textureId ? session.host.texture(brush.stencil.textureId) : null;
         const stroke = new Stroke(stack, target, tool === 'erase' ? 'erase' : 'paint', brush, {
             viewProjection: new THREE.Matrix4().multiplyMatrices(world.camera.projectionMatrix, world.camera.matrixWorldInverse),
@@ -447,8 +454,9 @@ export const PaintViewport: React.FC<{
             if (hit) session.record(entry);
             return;
         }
-        gesture.current = { kind: 'stroke', stroke, depth };
-        stroke.moveTo(x, y, pressure, (px, py) => hitAt(px, py));
+        if (brush.mode === 'clone' && cloneSource.current) stroke.cloneSource(cloneSource.current.triangle, cloneSource.current.uv);
+        gesture.current = { kind: 'stroke', stroke, depth, anchor: { x, y } };
+        stroke.moveTo(x, y, pressure, (px, py) => hitAt(px, py), tilt);
     };
 
     const pickColour = (x: number, y: number) => {
@@ -476,6 +484,14 @@ export const PaintViewport: React.FC<{
             return;
         }
         if (event.button !== 0) return;
+        if (brush.mode === 'clone' && (event.ctrlKey || event.metaKey) && (tool === 'paint' || tool === 'erase')) {
+            const hit = hitAt(x, y);
+            if (hit) {
+                cloneSource.current = { triangle: hit.triangle, uv: hit.uv.clone() };
+                onMessage('Copying from there: paint where the copy goes. The copy keeps its distance on the picture.');
+            }
+            return;
+        }
         if (tool === 'polygon' || tool === 'pick') {
             const hit = hitAt(x, y);
             if (hit && onSurfacePick?.(hit, event.shiftKey)) return;
@@ -487,7 +503,7 @@ export const PaintViewport: React.FC<{
             else if (!uv) onMessage('Open the UVs panel to edit seams.');
             return;
         }
-        startStroke(x, y, event.pointerType === 'pen' ? event.pressure : 1);
+        startStroke(x, y, event.pointerType === 'pen' ? event.pressure : 1, event.pointerType === 'pen' ? { x: event.tiltX, y: event.tiltY } : undefined);
     };
 
     const onPointerMove = (event: React.PointerEvent) => {
@@ -499,8 +515,11 @@ export const PaintViewport: React.FC<{
             const coalesced = (event.nativeEvent as PointerEvent).getCoalescedEvents?.() ?? [];
             const events = coalesced.length ? coalesced : [event.nativeEvent];
             for (const each of events) {
-                const point = toPixels(each);
-                current.stroke.moveTo(point.x, point.y, each.pointerType === 'pen' ? each.pressure : 1, (px, py) => hitAt(px, py));
+                // Lazy mouse: the stroke trails the pointer on a string.
+                const point = lazyFollow(current.anchor, toPixels(each), brush.lazy * size.ratio);
+                if (point.x === current.anchor.x && point.y === current.anchor.y) continue;
+                current.anchor = point;
+                current.stroke.moveTo(point.x, point.y, each.pointerType === 'pen' ? each.pressure : 1, (px, py) => hitAt(px, py), each.pointerType === 'pen' ? { x: each.tiltX, y: each.tiltY } : undefined);
             }
             return;
         }
