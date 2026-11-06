@@ -2,6 +2,7 @@ import { BLEND_MODES, type BlendMode } from '../gpu/glslLibrary';
 import type { MeshMapName } from '../graph/nodes/io';
 import type { BakeSettings, PositionSpace } from '../bake/meshBaker';
 import type { ChannelTextureIds } from '../materialOutput';
+import type { PickMode } from './selection';
 
 /**
  * PAINTED TEXTURE SETS: THE DOCUMENT
@@ -58,7 +59,7 @@ export type FillSource =
     /** What the layers below this one make of a channel (its brightness, when a colour fills a grey channel). */
     | { kind: 'below'; channel: PaintChannel };
 
-export type MaskEffectKind = 'paint' | 'fill' | 'generator' | 'levels' | 'blur' | 'invert' | 'below';
+export type MaskEffectKind = 'paint' | 'fill' | 'generator' | 'levels' | 'blur' | 'invert' | 'below' | 'polygon' | 'id';
 export type MaskBlend = 'multiply' | 'add' | 'subtract' | 'replace' | 'max' | 'min';
 
 export interface MaskEffect {
@@ -82,6 +83,12 @@ export interface MaskEffect {
     /** Below: the channel of the layers below read (its brightness), or where it changes fastest (`edges`). */
     channel?: PaintChannel;
     edges?: boolean;
+    /** Polygon: the triangles it covers, as sorted runs (start, count, ...), and how they are picked on the model. */
+    triangles?: number[];
+    pick?: PickMode;
+    /** ID colour: the colours of the baked ID map it covers (0..1), and how near a colour must be to count. */
+    colors?: Array<[number, number, number]>;
+    tolerance?: number;
 }
 
 export type LayerKind = 'paint' | 'fill' | 'folder' | 'filter';

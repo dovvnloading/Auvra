@@ -5,6 +5,7 @@ import { CHANNEL_IS_COLOR, PAINT_CHANNELS, type PaintChannel, type PaintDocument
 import { GpuResetError, pictureKey, type PaintStack } from './paintStack';
 import { DirtyRegion, intersectRect, isEmptyRect, rectOfUvBox, scissorOf, unionRect, type Rect } from './regions';
 import { pageRect, type SparsePicture } from './sparsePicture';
+import { SELECTION_WIDTH, encodeTriangles, selectionBytes } from './selection';
 
 /**
  * BRUSH STROKES
@@ -165,7 +166,8 @@ uniform float uStencilAngle;
 uniform float uStencilOpacity;
 uniform int uStencilSrgb;
 uniform int uStencilFlip;
-uniform int uIsland;
+uniform int uSelecting;
+uniform sampler2D uSelection;
 
 // How much the stencil lets through at a place on the screen (pixels from the top left): its picture's
 // brightness inside it, nothing outside it, eased by its strength.
@@ -251,12 +253,17 @@ float coverageAt(vec3 p, vec3 n) {
 }
 
 void main() {
-    if (uIsland >= 0 && int(vIds.x + 0.5) != uIsland) { outColor = vec4(0.0); return; }
+    // Filling picked triangles: each of them whole, nothing else.
+    if (uSelecting == 1) {
+        int t = int(vIds.z + 0.5);
+        outColor = vec4(texelFetch(uSelection, ivec2(t % ${SELECTION_WIDTH}, t / ${SELECTION_WIDTH}), 0).r > 0.5 ? 1.0 : 0.0);
+        return;
+    }
     vec3 n = normalize(vNormal);
-    float a = uIsland >= 0 ? 1.0 : coverageAt(vPos, n);
+    float a = coverageAt(vPos, n);
     // Mirrored copies: the texel is painted where its mirror image would be.
     for (int axis = 0; axis < 3; axis++) {
-        if (uSymmetry[axis] < 0.5 || uIsland >= 0) continue;
+        if (uSymmetry[axis] < 0.5) continue;
         vec3 m = vec3(1.0);
         m[axis] = -1.0;
         float b = coverageAt(uCentre + (vPos - uCentre) * m, n * m);
@@ -270,7 +277,7 @@ void main() {
         }
     }
     // Mirrored across all three at once: the eighth copy.
-    if (uIsland < 0 && uSymmetry.x > 0.5 && uSymmetry.y > 0.5 && uSymmetry.z > 0.5) {
+    if (uSymmetry.x > 0.5 && uSymmetry.y > 0.5 && uSymmetry.z > 0.5) {
         float e = coverageAt(uCentre - (vPos - uCentre), -n);
         a = 1.0 - (1.0 - a) * (1.0 - e);
     }
@@ -465,10 +472,10 @@ export const mirrorsOf = (symmetry: BrushSettings['symmetry'], centre: THREE.Vec
 };
 
 /**
- * The texels a batch of dabs (or one island) can change, per tile: the boxes of the triangles the dabs
- * reach (found through the surface's tree of boxes), with a small margin, as a few rectangles.
+ * The texels a batch of dabs (or picked triangles) can change, per tile: the boxes of the triangles the
+ * dabs reach (found through the surface's tree of boxes), with a small margin, as a few rectangles.
  */
-export const footprint = (stack: PaintStack, dabs: readonly Dab[], view: StrokeView, brush: BrushSettings, island: number): Map<number, Rect[]> => {
+export const footprint = (stack: PaintStack, dabs: readonly Dab[], view: StrokeView, brush: BrushSettings, picked: readonly number[] | null = null): Map<number, Rect[]> => {
     const part = stack.part;
     const boxes = stack.uvBoxes();
     const regions = new Map<number, DirtyRegion>();
@@ -478,8 +485,8 @@ export const footprint = (stack: PaintStack, dabs: readonly Dab[], view: StrokeV
         if (!region) regions.set(tile, region = new DirtyRegion(stack.size, 12));
         region.add(rectOfUvBox(boxes[triangle * 4], boxes[triangle * 4 + 1], boxes[triangle * 4 + 2], boxes[triangle * 4 + 3], stack.size, FOOTPRINT_MARGIN));
     };
-    if (island >= 0) {
-        for (let triangle = 0; triangle < part.triangleIsland.length; triangle++) if (part.triangleIsland[triangle] === island) reach(triangle);
+    if (picked) {
+        for (const triangle of picked) if (triangle >= 0 && triangle < part.triangleTile.length) reach(triangle);
     } else {
         const mirrors = mirrorsOf(brush.symmetry, part.bounds.getCenter(new THREE.Vector3()));
         const seen = new Uint8Array(part.indices.length / 3);
@@ -600,25 +607,35 @@ export class Stroke {
         if (dabs.length) this.draw(dabs);
     }
 
-    /** Fills the whole UV island under the pointer (a triangle's island) with the brush. */
+    /** Fills a whole UV island with the brush. */
     fillIsland(island: number): void {
-        this.draw([], island);
+        const triangles: number[] = [];
+        this.stack.part.triangleIsland.forEach((value, triangle) => { if (value === island) triangles.push(triangle); });
+        this.fillTriangles(triangles);
     }
 
-    private draw(dabs: Dab[], island = -1): void {
+    /** Fills picked triangles, each whole, with the brush. */
+    fillTriangles(triangles: readonly number[]): void {
+        if (triangles.length) this.draw([], triangles);
+    }
+
+    private draw(dabs: Dab[], picked: readonly number[] | null = null): void {
         const stack = this.stack;
         const gpu = stack.host.gpu;
         const view = this.view;
         const centre = stack.part.bounds.getCenter(new THREE.Vector3());
         const batches: Dab[][] = [];
         for (let i = 0; i < dabs.length; i += MAX_DABS) batches.push(dabs.slice(i, i + MAX_DABS));
-        if (island >= 0) batches.push([]);
+        if (picked) batches.push([]);
+        const bytes = picked ? selectionBytes(encodeTriangles(picked), stack.part.indices.length / 3) : null;
+        const selection = bytes ? new THREE.DataTexture(bytes.data, bytes.width, bytes.height, THREE.RedFormat, THREE.UnsignedByteType) : null;
+        if (selection) selection.needsUpdate = true;
         const stencil = this.brush.stencil;
         const place = stencilPlace(stencil, pictureAspect(this.stencil), view.width, view.height);
         const areas = new Map<number, Rect[]>();
         for (const batch of batches) {
             // Only the texels these dabs can reach are drawn.
-            const reach = footprint(stack, batch, view, this.brush, island);
+            const reach = footprint(stack, batch, view, this.brush, picked);
             if (!reach.size) continue;
             const d1 = Array.from({ length: MAX_DABS }, () => new THREE.Vector4());
             const d2 = Array.from({ length: MAX_DABS }, () => new THREE.Vector4());
@@ -669,7 +686,8 @@ export class Stroke {
                             uStencilOpacity: stencil.opacity,
                             uStencilSrgb: this.stencil?.colorSpace === THREE.SRGBColorSpace ? 1 : 0,
                             uStencilFlip: this.stencil?.flipY ? 1 : 0,
-                            uIsland: island,
+                            uSelecting: selection ? 1 : 0,
+                            uSelection: selection ?? gpu.constant('black'),
                         },
                     });
                     gpu.passNow(this.masks.get(tile)!, { fragment: GATHER_SHADER, inputs: { batch: this.batch }, blend: 'alpha', scissor: scissorOf(area) });
@@ -677,6 +695,7 @@ export class Stroke {
                 areas.set(tile, [...(areas.get(tile) ?? []), ...rects]);
             }
         }
+        selection?.dispose();
         if (areas.size) this.apply(areas);
     }
 

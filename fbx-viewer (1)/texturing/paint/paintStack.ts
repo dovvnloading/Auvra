@@ -25,6 +25,7 @@ import {
     type PaintLayer,
     type TilePictures,
 } from './paintTypes';
+import { SELECTION_WIDTH, selectionBytes } from './selection';
 import { DirtyRegion, alignRect, clampRect, expandRect, scissorOf, type Rect } from './regions';
 import { SparsePicture } from './sparsePicture';
 
@@ -350,7 +351,35 @@ void main() {
     outColor = vec4(normalize(local) * 0.5 + 0.5, 1.0);
 }`;
 
-const MASK_KINDS = { paint: 0, fill: 1, generator: 2, levels: 3, blur: 4, invert: 5, below: 6 } as const;
+const MASK_KINDS = { paint: 0, fill: 1, generator: 2, levels: 3, blur: 4, invert: 5, below: 6, polygon: 7, id: 8 } as const;
+
+/** The most colours an ID colour mask takes. */
+export const MAX_ID_COLOURS = 16;
+
+/** The triangles of a polygon mask, white where a picked one lies (a texel per triangle number in uSelection). */
+const POLYGON_MASK = /* glsl */ `
+uniform sampler2D uSelection;
+void main() {
+    int t = int(vIds.z + 0.5);
+    outColor = vec4(texelFetch(uSelection, ivec2(t % ${SELECTION_WIDTH}, t / ${SELECTION_WIDTH}), 0).r > 0.5 ? 1.0 : 0.0);
+}`;
+
+/** White where the baked ID map holds one of the colours (each channel within the tolerance). */
+const ID_MASK = /* glsl */ `
+uniform vec2 uAt;
+uniform vec3 uColours[${MAX_ID_COLOURS}];
+uniform int uCount;
+uniform float uTolerance;
+void main() {
+    vec3 c = texelFetch(idMap, ivec2(gl_FragCoord.xy + uAt), 0).rgb;
+    float m = 0.0;
+    for (int i = 0; i < ${MAX_ID_COLOURS}; i++) {
+        if (i >= uCount) break;
+        vec3 d = abs(c - uColours[i]);
+        if (max(d.x, max(d.y, d.z)) <= uTolerance) { m = 1.0; break; }
+    }
+    outColor = vec4(m);
+}`;
 const MASK_BLENDS = { multiply: 0, add: 1, subtract: 2, replace: 3, max: 4, min: 5 } as const;
 const FILTER_KINDS = { blur: 0, sharpen: 1, hsl: 2, levels: 3, warp: 4, invert: 5 } as const;
 
@@ -505,6 +534,8 @@ export class PaintStack {
     /** The painted normal detail of each tile, padded (the final normal is built on it). */
     private readonly detail = new Map<number, GpuImage>();
     private readonly fills = new Map<string, Cached>();
+    /** Polygon masks, whole tiles, by `effect|tile` (signed with their triangles). */
+    private readonly polygonMasks = new Map<string, Cached>();
     /** Graph pictures copied with smaller versions of themselves, for casting. */
     private readonly castCopies = new Map<string, { signature: string; target: THREE.WebGLRenderTarget }>();
     private readonly evaluators = new Map<string, TextureGraphEvaluator>();
@@ -558,6 +589,7 @@ export class PaintStack {
         this.outputs.clear();
         this.detail.clear();
         this.fills.clear();
+        this.polygonMasks.clear();
         this.castCopies.clear();
         this.padding.clear();
         this.watchedMasks.clear();
@@ -982,7 +1014,32 @@ export class PaintStack {
     setDocument(document: PaintDocument): void {
         if (document === this.document) return;
         this.document = document;
+        // Polygon masks of effects that are gone are let go of (undo bringing one back draws it again).
+        const effects = new Set(allLayers(document.layers).flatMap((layer) => (layer.mask ?? []).map((effect) => effect.id)));
+        for (const [key, cached] of this.polygonMasks) {
+            if (effects.has(key.slice(0, key.indexOf('|')))) continue;
+            this.gpu.release(cached.image);
+            this.polygonMasks.delete(key);
+        }
         this.invalidate();
+    }
+
+    /** A polygon mask effect's triangles drawn on a whole tile (kept until its triangles change). */
+    private polygonMask(effect: MaskEffect, tile: number): GpuImage {
+        const key = `${effect.id}|${tile}`;
+        const signature = (effect.triangles ?? []).join(',');
+        const cached = this.polygonMasks.get(key);
+        if (cached && cached.signature === signature) return cached.image;
+        if (cached) this.gpu.release(cached.image);
+        const image = this.gpu.image(this.size, this.size, 'gray', 8);
+        const bytes = selectionBytes(effect.triangles ?? [], this.part.indices.length / 3);
+        const selection = new THREE.DataTexture(bytes.data, bytes.width, bytes.height, THREE.RedFormat, THREE.UnsignedByteType);
+        selection.needsUpdate = true;
+        // Edge lines too, so thin triangles are not lost; a picked triangle wins a texel it shares.
+        this.raster.draw(image, tile, POLYGON_MASK, { blend: 'max', clear: [0, 0, 0, 0], uniforms: { uSelection: selection } });
+        selection.dispose();
+        this.polygonMasks.set(key, { signature, image });
+        return image;
     }
 
     private markAll(): void {
@@ -1582,6 +1639,21 @@ void main() {
                 owned = true;
             }
         }
+        if (effect.kind === 'polygon') {
+            src = this.polygonMask(effect, area.tile);
+            at = area.at;
+        }
+        if (effect.kind === 'id') {
+            const idMap = this.meshMaps(area.tile).id;
+            const colours = (effect.colors ?? []).slice(0, MAX_ID_COLOURS);
+            // Like a polygon mask with nothing picked, it covers nothing until colours are picked (on a baked ID map).
+            src = this.gpu.image(area.width, area.height, 'gray', 16);
+            owned = true;
+            if (idMap && colours.length) {
+                const list = Array.from({ length: MAX_ID_COLOURS }, (_, i) => new THREE.Vector3(...(colours[i] ?? [0, 0, 0])));
+                this.gpu.passNow(src, { fragment: ID_MASK, inputs: { idMap }, uniforms: { uAt: area.at, uColours: list, uCount: colours.length, uTolerance: effect.tolerance ?? 0.02 } });
+            } else this.gpu.clear(src, [0, 0, 0, 1]);
+        }
         if ((effect.kind === 'paint' || effect.kind === 'generator' || effect.kind === 'below') && !src) return m;
         const next = this.gpu.image(area.width, area.height, 'gray', 16);
         this.gpu.passNow(next, {
@@ -1630,6 +1702,8 @@ void main() {
         for (const image of this.detail.values()) this.gpu.release(image);
         for (const byTile of this.pictures.values()) for (const picture of byTile.values()) picture.dispose();
         for (const cached of this.fills.values()) this.gpu.release(cached.image);
+        for (const cached of this.polygonMasks.values()) this.gpu.release(cached.image);
+        this.polygonMasks.clear();
         for (const image of this.watchedMasks.values()) this.gpu.release(image);
         for (const evaluator of this.evaluators.values()) evaluator.dispose();
         for (const copy of this.castCopies.values()) copy.target.dispose();

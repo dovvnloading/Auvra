@@ -22,7 +22,7 @@ in vec3 edge2;
 in vec4 uvEdges;
 in vec4 tangent;
 in vec3 color;
-in vec2 ids;
+in vec3 ids;
 out vec3 vPos;
 out vec3 vNormal;
 out vec2 vUv;
@@ -32,7 +32,7 @@ out vec3 vColor;
 flat out vec3 vE1;
 flat out vec3 vE2;
 flat out vec4 vD;
-flat out vec2 vIds;
+flat out vec3 vIds;
 void main() {
     vPos = position;
     vNormal = normal;
@@ -59,7 +59,7 @@ in vec3 vColor;
 flat in vec3 vE1;
 flat in vec3 vE2;
 flat in vec4 vD;
-flat in vec2 vIds;
+flat in vec3 vIds;
 uniform int uHasTangent;
 // The tangent frame the renderer will use for a normal map on this surface: the mesh's own tangents
 // when it has them, else the one worked out from texture coordinate slopes, as the standard shader does.

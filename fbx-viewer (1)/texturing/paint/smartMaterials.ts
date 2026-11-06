@@ -40,7 +40,7 @@ export interface SavedSmartMaterial {
 }
 
 /** What was left out of a saved smart material, because it belongs to one texture set. */
-export interface LeftOut { paintLayers: number; paintedMasks: number; ownPictures: number }
+export interface LeftOut { paintLayers: number; paintedMasks: number; pickedMasks: number; ownPictures: number }
 
 const without = <T extends object, K extends keyof T>(value: T, ...keys: K[]): Omit<T, K> => {
     const copy: Partial<T> = { ...value };
@@ -53,13 +53,15 @@ const without = <T extends object, K extends keyof T>(value: T, ...keys: K[]): O
  * counted), or null when nothing would be left.
  */
 export const smartMaterialFrom = (layer: PaintLayer): { layer: PaintLayer | null; leftOut: LeftOut } => {
-    const leftOut: LeftOut = { paintLayers: 0, paintedMasks: 0, ownPictures: 0 };
+    const leftOut: LeftOut = { paintLayers: 0, paintedMasks: 0, pickedMasks: 0, ownPictures: 0 };
     const clean = (item: PaintLayer): PaintLayer | null => {
         if (item.kind === 'paint') { leftOut.paintLayers++; return null; }
         const result = structuredClone(without(item, 'pictures', 'mask', 'layers')) as PaintLayer;
         const mask = (item.mask ?? []).filter((effect) => {
-            if (effect.kind !== 'paint') return true;
-            leftOut.paintedMasks++;
+            // Painted masks, and masks of picked triangles or ID colours, are one set's.
+            if (effect.kind === 'paint') leftOut.paintedMasks++;
+            else if (effect.kind === 'polygon' || effect.kind === 'id') leftOut.pickedMasks++;
+            else return true;
             return false;
         }).map((effect) => structuredClone(without(effect, 'pictures')) as MaskEffect);
         if (mask.length) result.mask = mask;

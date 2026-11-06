@@ -64,6 +64,7 @@ const EXEMPT = new Map(Object.entries({
   'texturing/paint/sparsePicture.ts': 'hot-loop',
   'texturing/paint/materialPresets.ts': 'data-model',
   'texturing/paint/smartMaterials.ts': 'pure-utility',
+  'texturing/paint/selection.ts': 'pure-utility',
   'components/Texturing/Paint/openMaterial.ts': 'pure-utility',
   'texturing/uv/uvTopology.ts': 'pure-utility',
   'texturing/uv/lscm.ts': 'pure-utility',
