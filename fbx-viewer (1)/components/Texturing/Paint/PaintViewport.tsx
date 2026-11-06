@@ -23,15 +23,15 @@ interface Preview { base: GpuImage | null; orm: GpuImage | null; emissive: GpuIm
 
 const FIELD_OF_VIEW = 32;
 
-const environments = new WeakMap<TextureGpu, THREE.Texture>();
+/** The room light, drawn once per GPU context (a reset loses it with everything else drawn on the GPU). */
+const environments = new WeakMap<TextureGpu, { texture: THREE.Texture; generation: number }>();
 const environmentOf = (gpu: TextureGpu): THREE.Texture => {
-    let texture = environments.get(gpu);
-    if (!texture) {
-        const pmrem = new THREE.PMREMGenerator(gpu.renderer);
-        texture = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
-        pmrem.dispose();
-        environments.set(gpu, texture);
-    }
+    const kept = environments.get(gpu);
+    if (kept && kept.generation === gpu.generation) return kept.texture;
+    const pmrem = new THREE.PMREMGenerator(gpu.renderer);
+    const texture = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+    pmrem.dispose();
+    environments.set(gpu, { texture, generation: gpu.generation });
     return texture;
 };
 
@@ -306,6 +306,10 @@ export const PaintViewport: React.FC<{
     }, [placeCamera, session.picker, size, world.camera]);
 
     const startStroke = (x: number, y: number, pressure: number) => {
+        if (!session.usable) {
+            onMessage('The graphics card was reset: painting waits until the set has opened again from its saved pictures.');
+            return;
+        }
         if (!target) {
             onMessage(tool === 'island' ? 'Pick a paint layer or a painted mask to fill.' : 'Pick a paint layer, or a painted mask effect, to paint on. Fill layers take their values from their settings.');
             return;

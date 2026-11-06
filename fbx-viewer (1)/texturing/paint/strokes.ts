@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { GpuImage, TextureGpu } from '../gpu/textureGpu';
 import { CHANNEL_IS_COLOR, type PaintChannel, type PaintDocument } from './paintTypes';
-import { pictureKey, type PaintStack } from './paintStack';
+import { GpuResetError, pictureKey, type PaintStack } from './paintStack';
 
 /**
  * BRUSH STROKES
@@ -405,6 +405,8 @@ export class Stroke {
         private readonly alpha: THREE.Texture | null,
         private readonly stencil: THREE.Texture | null,
     ) {
+        // Painting on pictures a lost GPU context left blank would save blank-based pictures over kept work.
+        if (!stack.usable) throw new GpuResetError();
         const gpu = stack.host.gpu;
         this.batch = gpu.image(stack.size, stack.size, 'gray', 16);
         for (const tile of stack.tiles) {
@@ -638,6 +640,7 @@ export class Stroke {
 
 /** Puts back (or forward) the pixels an entry changed, and puts the set together again. */
 export const applyPixelHistory = (stack: PaintStack, patches: readonly PixelPatch[], direction: 'undo' | 'redo'): void => {
+    if (!stack.usable) throw new GpuResetError();
     const gpu = stack.host.gpu;
     for (const patch of patches) {
         const picture = stack.picture(patch.key, patch.tile);

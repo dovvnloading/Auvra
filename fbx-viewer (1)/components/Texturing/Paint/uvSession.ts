@@ -10,7 +10,7 @@ import { newTriangleTiles, transferPicture } from '../../../texturing/uv/transfe
 import { DEFAULT_UNWRAP, unwrap, type UnwrapSettings } from '../../../texturing/uv/unwrap';
 import { applyLayout, buildLayout, decodeLayout, encodeLayout, type UvLayoutFile } from '../../../texturing/uv/uvLayout';
 import { buildCharts, buildTopology, chartCoordinates, edgeKey, existingSeams, type Chart, type UvTopology } from '../../../texturing/uv/uvTopology';
-import { BEFORE, pictureKey, pictureOwner, pictureOwners, picturePrecision } from '../../../texturing/paint/paintStack';
+import { BEFORE, GpuResetError, pictureKey, pictureOwner, pictureOwners, picturePrecision } from '../../../texturing/paint/paintStack';
 import { BLEND_FOR, type FillSource, type PaintChannel, type PaintDocument, type PaintLayer } from '../../../texturing/paint/paintTypes';
 import type { PaintSession } from './paintSession';
 
@@ -520,6 +520,11 @@ export class UvSession {
         const proposal = this.proposal;
         if (!proposal || this.busy) return;
         const paint = this.paint;
+        if (!paint.usable) {
+            this.status = new GpuResetError().message;
+            this.emit();
+            return;
+        }
         const gpu = paint.gpu;
         const stack = paint.stack;
         const part = paint.part;
@@ -633,6 +638,8 @@ export class UvSession {
                     previous = null;
                 }
             }
+            // Pictures carried across a GPU reset are blank: the model keeps its layout, and nothing is kept.
+            if (!paint.usable) throw new GpuResetError();
             const layout = buildLayout(object, part, corner, proposal.cornerKey, previous);
             applyLayout(object, layout);
             await this.host.saveLayout(paint.target.modelId, encodeLayout(layout), layout.meshes.length);

@@ -251,6 +251,14 @@ export const pictureOwners = (documents: Iterable<PaintDocument>): Set<string> =
 
 interface Cached { signature: string; image: GpuImage }
 
+/** The GPU context was lost or reset: the set's pictures are gone until it is opened again. */
+export class GpuResetError extends Error {
+    constructor() {
+        super('The graphics card was reset, so painting is paused. The set opens again from its saved pictures.');
+        this.name = 'GpuResetError';
+    }
+}
+
 export class PaintStack {
     readonly size: number;
     readonly raster: UvRaster;
@@ -281,12 +289,51 @@ export class PaintStack {
     private again = false;
     /** Bumped when a fill or mask source outside the document changes (a re-bake, a picture loading). */
     sourcesVersion = 0;
+    /** The GPU context the pictures were made on (TextureGpu.generation): after a reset they are blank. */
+    private readonly generation: number;
+    /** Set once the GPU context is lost: the pictures are gone, and nothing may be painted on or kept from them. */
+    private abandoned = false;
 
     private constructor(readonly host: StackHost, readonly part: PartMesh, document: PaintDocument) {
         this.document = document;
         this.size = 2 ** document.size;
         this.tiles = part.tiles;
         this.raster = new UvRaster(host.gpu, part);
+        this.generation = host.gpu.generation;
+    }
+
+    /**
+     * Whether the pictures on the GPU are the set's: false once the GPU context is lost (and after it comes
+     * back, when every picture made before is blank). Painting, saving and baking wait for the set to be
+     * opened again from its kept pictures.
+     */
+    get usable(): boolean {
+        return !this.abandoned && this.gpu.generation === this.generation && !this.gpu.renderer.getContext().isContextLost();
+    }
+
+    /**
+     * Gives the set up after the GPU context was lost: its pictures died with the context, so they are let
+     * go of without being handed back to the pool, and nothing is kept from them.
+     */
+    abandon(): void {
+        this.abandoned = true;
+        this.unsaved.clear();
+        this.pictures.clear();
+        this.outputs.clear();
+        this.fills.clear();
+        this.masks.clear();
+        this.castCopies.clear();
+        this.padding.clear();
+        this.bake = null;
+        // Evaluators stop listening for the context coming back (what they held died with it).
+        for (const evaluator of this.evaluators.values()) evaluator.dispose();
+        this.evaluators.clear();
+        this.emit();
+    }
+
+    /** Throws when the pictures are not the set's (see usable), so nothing blank is kept over saved work. */
+    private assertUsable(): void {
+        if (!this.usable) throw new GpuResetError();
     }
 
     /** Opens a texture set: lays out its surface, reads its pictures and puts it together. */
@@ -469,14 +516,20 @@ export class PaintStack {
         for (const entry of [...this.unsaved]) {
             const [key, tileName] = entry.split('|');
             if (!used.has(pictureOwner(key))) continue;
+            // A lost GPU reads back nothing: never keep that over the saved picture.
+            this.assertUsable();
             const image = this.pictures.get(key)?.get(Number(tileName));
             // Marked kept as its pixels are read: a stroke landing while they are stored marks it again.
             this.unsaved.delete(entry);
             if (!image) continue;
             // Half-float pictures are kept as 16-bit PNGs, the rest at 8 bits.
-            const encoded = image.precision === 8
-                ? encodePng(this.gpu.readRgba8(image, this.size, this.size, 'raw', false), this.size, this.size)
-                : encodePng16(this.gpu.readUint16(image, this.size, this.size, 'color', false), this.size, this.size, 4);
+            const pixels = image.precision === 8 ? this.gpu.readRgba8(image, this.size, this.size, 'raw', false) : this.gpu.readUint16(image, this.size, this.size, 'color', false);
+            if (!this.usable) {
+                // Lost while being read: what came back is not the picture.
+                this.unsaved.add(entry);
+                throw new GpuResetError();
+            }
+            const encoded = pixels instanceof Uint16Array ? encodePng16(pixels, this.size, this.size, 4) : encodePng(pixels, this.size, this.size);
             try {
                 stored.set(entry, await this.host.storePicture(await encoded));
             } catch (error) {
@@ -557,14 +610,19 @@ export class PaintStack {
         for (const [tile, result] of this.bake) {
             for (const [name, image] of Object.entries(result.maps)) {
                 if (!image) continue;
+                this.assertUsable();
                 let blob: Blob;
+                const gray = image.kind === 'gray';
                 if (FINE_MAPS.has(name as MeshMapName)) {
                     // 8 bits would step these in 1/255ths: noise and triplanar masks read from them would turn
                     // blocky, and normals and occlusion would band once lit. Read a strip at a time.
-                    const gray = image.kind === 'gray';
-                    blob = await encodePng16(this.gpu.readUint16(image, image.width, image.height, gray ? 'gray' : 'color', false), image.width, image.height, gray ? 1 : 4);
+                    const samples = this.gpu.readUint16(image, image.width, image.height, gray ? 'gray' : 'color', false);
+                    this.assertUsable();
+                    blob = await encodePng16(samples, image.width, image.height, gray ? 1 : 4);
                 } else {
-                    blob = await encodePng(this.gpu.readRgba8(image, this.size, this.size, image.kind === 'gray' ? 'gray' : 'raw', false), this.size, this.size);
+                    const pixels = this.gpu.readRgba8(image, this.size, this.size, gray ? 'gray' : 'raw', false);
+                    this.assertUsable();
+                    blob = await encodePng(pixels, this.size, this.size);
                 }
                 const assetId = await this.host.storePicture(blob);
                 maps[name as MeshMapName] = { ...(maps[name as MeshMapName] ?? {}), [String(tile)]: { assetId } };
@@ -599,6 +657,8 @@ export class PaintStack {
 
     /** Puts the stale channels together; calls made meanwhile run once more afterwards. */
     compose(): Promise<void> {
+        // Nothing to put together once the GPU context is lost: the set opens again.
+        if (this.abandoned) return Promise.resolve();
         if (this.composing) {
             this.again = true;
             return this.composing;
@@ -610,7 +670,10 @@ export class PaintStack {
                     this.prune();
                     const channels = this.stale ? [...this.stale] : [...PAINT_CHANNELS];
                     this.stale = new Set();
-                    for (const tile of this.tiles) await this.composeTile(tile, channels);
+                    for (const tile of this.tiles) {
+                        if (this.abandoned) return;
+                        await this.composeTile(tile, channels);
+                    }
                     this.problem = null;
                     this.emit();
                 } while (this.again);
@@ -654,6 +717,7 @@ export class PaintStack {
         // Normal comes last: it is built on the height just made.
         const ordered = [...channels].sort((a, b) => Number(a === 'normal') - Number(b === 'normal'));
         for (const channel of ordered) {
+            if (this.abandoned) return;
             if (!enabled.includes(channel) && channel !== 'normal') {
                 this.gpu.release(outputs[channel]);
                 delete outputs[channel];

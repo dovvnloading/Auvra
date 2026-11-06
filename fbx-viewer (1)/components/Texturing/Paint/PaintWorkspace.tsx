@@ -62,6 +62,8 @@ export const PaintWorkspace: React.FC = () => {
     const [reopen, setReopen] = useState(0);
     // A new layout is put on the model once the set reopens on it.
     const putOnAfterOpen = useRef(false);
+    // Why the set was opened again after the GPU context came back, shown once it has.
+    const restoredNote = useRef<string | null>(null);
     const [opening, setOpening] = useState(false);
     const [message, setMessage] = useState<string | null>(null);
     const latest = useRef({ models, updateModelMaterialOverrides, textureStore, saveModelUvLayout, model, part, textures });
@@ -75,6 +77,7 @@ export const PaintWorkspace: React.FC = () => {
         if (!model || !part) { setSession(null); setOpening(false); return undefined; }
         let disposed = false;
         let made: PaintSession | null = null;
+        let stopRestored: (() => void) | null = null;
         setOpening(true);
         setMessage(null);
         const target: PaintTarget = { modelId: model.id, modelName: model.name, object: model.object, partName: part.name, materials: part.materials, materialNames: part.materialNames.length ? part.materialNames : [part.rawName || part.name] };
@@ -93,6 +96,16 @@ export const PaintWorkspace: React.FC = () => {
             if (disposed) { opened.dispose(); return; }
             made = opened;
             setSession(opened);
+            // The GPU context lost and back: the set opens again from its kept pictures, saying why.
+            stopRestored = opened.whenRestored(() => {
+                restoredNote.current = opened.status;
+                setReopen((value) => value + 1);
+            });
+            if (restoredNote.current) {
+                opened.status = restoredNote.current;
+                restoredNote.current = null;
+                opened.emit();
+            }
             if (putOnAfterOpen.current) {
                 putOnAfterOpen.current = false;
                 void opened.apply();
@@ -107,6 +120,7 @@ export const PaintWorkspace: React.FC = () => {
         }).finally(() => { if (!disposed) setOpening(false); });
         return () => {
             disposed = true;
+            stopRestored?.();
             made?.dispose();
             // Spare pictures kept for reuse are given back to the GPU once the set is closed.
             made?.gpu.trimPool(0);
