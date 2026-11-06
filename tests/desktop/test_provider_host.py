@@ -617,6 +617,45 @@ class ProviderHostTests(unittest.TestCase):
                 previews.close()
                 service.shutdown()
 
+    def test_media_commit_onto_a_material_makes_it_the_painted_base_map_of_its_override(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            service = ProjectService(index=ProjectIndex(root / "projects.sqlite3"))
+            service.create(root / "project", "Media")
+            previews = PreviewStore(root / "previews")
+            host = NativeProviderHost(root / "provider", project_host=SimpleNamespace(service=service), preview_store=previews)
+            try:
+                project_id = service.active.project_id
+                job_id = "job-media-f039-00004"
+                picture = lambda width, height: b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR" + width.to_bytes(4, "big") + height.to_bytes(4, "big") + b"\x08\x06\x00\x00\x00"
+                preview = previews.ingest(job_id, io.BytesIO(picture(2, 3)), project_id=project_id)
+                host.jobs.create(project_id=project_id, provider="fal", model="gpt-test", capability=Capability.MEDIA_EDIT.value, prompt_hash="a" * 64, job_id=job_id)
+                for state in (JobState.SUBMITTING, JobState.RUNNING, JobState.SUCCEEDED):
+                    host.jobs.transition(job_id, state, project_id=project_id)
+                host._meta[job_id] = {"route": "cloud", "createdAt": 0, "assetIds": []}
+                older = service.active.assets.put_stream(io.BytesIO(picture(4, 4)), mime="image/png").asset_id
+                model_asset = service.active.assets.put_stream(io.BytesIO(b"model"), mime="application/octet-stream").asset_id
+                service.apply_changes({
+                    "textures": [{"id": "older", "name": "Older", "assetId": older, "dimensions": {"width": 4, "height": 4}}],
+                    "models": [{
+                        "id": "robot", "name": "Robot.fbx", "assetId": model_asset,
+                        # A picture put on the old way, which the commit lets go of for the material it paints.
+                        "textureOverrides": {"Body": "older", "Visor": "older"},
+                        "materialOverrides": {"Body": {"roughness": 0.4}},
+                    }],
+                }, project_id=project_id, expected_revision=service.active.revision)
+                host._commit_media({
+                    "projectId": project_id, "expectedRevision": service.active.revision, "jobId": job_id, "previewAssetId": preview.asset_id,
+                    "textureId": "painted", "name": "Painted", "materialName": "Body", "targetModelId": "robot",
+                })
+                model = service.active.get_domain("models")["documents"][0]
+                self.assertEqual(model["materialOverrides"], {"Body": {"roughness": 0.4, "mapTextureId": "painted", "paintedMap": True}})
+                self.assertEqual(model["textureOverrides"], {"Visor": "older"})
+            finally:
+                host.shutdown()
+                previews.close()
+                service.shutdown()
+
     def test_media_commit_validates_before_ingest_rolls_back_and_tolerates_discard_failure(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)

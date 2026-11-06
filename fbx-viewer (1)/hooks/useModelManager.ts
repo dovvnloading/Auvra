@@ -27,6 +27,9 @@ import {
   normalizeMaterialOverrides,
   overrideTextureCacheKey,
   overrideTextureFlipY,
+  tagOverrideTexture,
+  withPaintedBaseMap,
+  withoutPaintedBaseMaps,
   type MaterialOverrides,
 } from '../utils/materialOverrides';
 
@@ -870,21 +873,16 @@ export const useModelManager = (
         file,
         { width: newTexture.image?.width || 0, height: newTexture.image?.height || 0 },
       );
-      const newOverrides = { ...(model.textureOverrides || {}) };
-      for (const materialName of materialNames) newOverrides[materialName] = textureId;
-      model.object.traverse((child) => {
-        if (!(child as THREE.Mesh).isMesh) return;
-        const material = (child as THREE.Mesh).material;
-        const materials = Array.isArray(material) ? material : [material];
-        for (const candidate of materials as any[]) {
-          if (!materialNames.has(candidate.name)) continue;
-          if (candidate.map) candidate.map.dispose();
-          candidate.map = newTexture;
-          drawAsPaintedTexture(candidate);
-        }
-      });
+      // The picture is each material's painted base map, in its material override like every other map, so
+      // Material Overrides shows it and Reset Textures takes it off. The imported maps are kept to go back to.
+      const latest = modelsRef.current.find((candidate) => candidate.id === modelId) ?? model;
+      const materialOverrides = withPaintedBaseMap(normalizeMaterialOverrides(latest.materialOverrides), materialNames, textureId);
+      const textures = collectOverrideTextures(latest.object);
+      textures.set(overrideTextureCacheKey(textureId, 'map'), tagOverrideTexture(newTexture, textureId, 'map', overrideTextureFlipY(latest.object)));
+      attachMaterialOverrides(latest.object, materialOverrides, textures);
+      const textureOverrides = Object.fromEntries(Object.entries(latest.textureOverrides || {}).filter(([materialName]) => !materialNames.has(materialName)));
       setModels((previous) => previous.map((candidate) => candidate.id === modelId
-        ? { ...candidate, textureOverrides: newOverrides }
+        ? { ...candidate, materialOverrides, textureOverrides }
         : candidate));
     } catch (error) {
       frontendDiagnostics.failure('texture_override_persist_failed', error);

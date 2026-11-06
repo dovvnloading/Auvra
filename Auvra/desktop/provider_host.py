@@ -801,7 +801,17 @@ class NativeProviderHost:
                                 if isinstance(item, dict) and item.get("id") == target_model_id), None)
             if model_index is None:
                 raise HostOperationError("invalid_project", "Target model is unavailable")
-            model = dict(model_documents[model_index]); overrides = dict(model.get("textureOverrides", {})); overrides[payload["materialName"]] = payload["textureId"]; model["textureOverrides"] = overrides
+            # The picture becomes the material's painted base map, in its material override beside whatever else
+            # that holds; an older per-material texture override of the same material is let go of.
+            material_name = payload["materialName"]
+            model = dict(model_documents[model_index])
+            material_overrides = dict(model.get("materialOverrides") or {})
+            material_overrides[material_name] = {**dict(material_overrides.get(material_name) or {}), "mapTextureId": payload["textureId"], "paintedMap": True}
+            model["materialOverrides"] = material_overrides
+            texture_overrides = dict(model.get("textureOverrides") or {})
+            if material_name in texture_overrides:
+                del texture_overrides[material_name]
+                model["textureOverrides"] = texture_overrides
             model_documents[model_index] = model
             # Keep every model record and only update the selected model.
             changes["models"] = model_documents
