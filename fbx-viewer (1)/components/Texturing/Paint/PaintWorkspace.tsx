@@ -9,12 +9,16 @@ import { MESH_MAP_LABELS, MESH_MAPS } from '../../../texturing/graph/nodes/io';
 import { readStoredGraph } from '../../../texturing/graph/stored';
 import { CHANNEL_LABELS, allLayers, readPaintDocument } from '../../../texturing/paint/paintTypes';
 import { DEFAULT_BRUSH, MAX_BRUSH_SIZE, type BrushSettings, type StrokeTarget } from '../../../texturing/paint/strokes';
+import { paintWithMaterial } from '../../../texturing/paint/materialPresets';
+import type { PreviewHost } from '../../../texturing/paint/previews';
 import { listModelParts, type ModelPart } from '../../Tools/Retexture/parts';
-import { IconButton, Segmented, Spinner } from '../../UI/kit';
+import { IconButton, PanelEdge, Segmented, Spinner, usePanelWidth } from '../../UI/kit';
 import { Select } from '../../UI/Select';
 import { useTextureStore } from '../useTextureStore';
 import { BrushPanel } from './BrushPanel';
 import { LayerPanel, type LayerSelection } from './LayerPanel';
+import { useMaterialSections, type MaterialChoice } from './MaterialPicker';
+import { SliderRow } from './PaintFields';
 import { PaintSession, findPaintAsset, paintGraphResolver, type PaintTarget } from './paintSession';
 import { PaintViewport, type PaintTool, type ViewMode } from './PaintViewport';
 import { SetPanel } from './SetPanel';
@@ -145,6 +149,8 @@ export const PaintWorkspace: React.FC = () => {
     const [panel, setPanel] = useState<'layers' | 'brush' | 'set' | 'uvs'>('layers');
     const [view, setView] = useState<ViewMode | 'uv2d'>('material');
     const [frameSignal, setFrameSignal] = useState(0);
+    const sets = usePanelWidth('paint.sets', 224, 180, 360);
+    const side = usePanelWidth('paint.panel', 320, 280, 560);
 
     // Select the top layer when a set opens.
     useEffect(() => {
@@ -163,6 +169,21 @@ export const PaintWorkspace: React.FC = () => {
         const channels = brush.channels.filter((channel) => layer.channels[channel] && document.channels.includes(channel));
         return channels.length ? { kind: 'layer', layerId: layer.id, channels } : null;
     }, [brush.channels, document, effect, layer]);
+
+    // Painting with a whole material: a fill layer of it under a black painted mask, which strokes paint white.
+    const brushSections = useMaterialSections({ resolve, graphs, textures, brush });
+    const previewHost: PreviewHost | null = useMemo(() => (session ? { resolveGraph: resolve, texture: (id: string) => session.stack.host.texture(id) } : null), [resolve, session]);
+    const paintWith = useCallback((choice: MaterialChoice) => {
+        if (!session) return;
+        if (session.locked) { setMessage(session.locked); return; }
+        const made = paintWithMaterial(session.document, choice.make(session.document), selection.layerId);
+        session.stack.startMaskPicture(made.effectId, false);
+        session.change(made.document, `Paint with ${choice.name}`);
+        setSelection({ layerId: made.layerId, effectId: made.effectId });
+        setTool('paint');
+        setBrush({ ...brush, maskValue: 1 });
+        setMessage(`Painting with ${choice.name}: strokes lay it on in every channel it has. Erase (E) takes it off again.`);
+    }, [brush, selection.layerId, session, setBrush]);
 
     const maskImage = useCallback((tile: number) => (session && layer ? session.stack.cachedMask(layer.id, tile) : null), [layer, session]);
     // The mask view's layer has its mask kept whole while it is shown.
@@ -214,7 +235,7 @@ export const PaintWorkspace: React.FC = () => {
 
     return (
         <div className="flex h-full min-h-0 w-full bg-zinc-950 text-white">
-            <aside className="flex w-56 shrink-0 flex-col border-r border-zinc-800">
+            <aside className="flex shrink-0 flex-col border-r border-zinc-800" style={{ width: sets.width }}>
                 <div className="space-y-1.5 border-b border-zinc-800 p-2">
                     <div className="text-xs font-semibold text-zinc-300">Model</div>
                     <Select value={model?.id ?? ''} placeholder="No models yet" options={paintable.map((item) => ({ value: item.id, label: item.name }))} onChange={(value) => setModelId(String(value))} className="w-full" />
@@ -235,6 +256,7 @@ export const PaintWorkspace: React.FC = () => {
                     })}
                 </div>
             </aside>
+            <PanelEdge side="left" width={sets.width} onResize={sets.setWidth} onDone={sets.save} label="Resize the texture sets panel" />
 
             <div className="flex min-w-0 flex-1 flex-col">
                 <div className="flex items-center gap-1 border-b border-zinc-800 px-2 py-1">
@@ -249,8 +271,7 @@ export const PaintWorkspace: React.FC = () => {
                     <IconButton label="Frame the model" shortcut="F" onClick={() => setFrameSignal((value) => value + 1)}><FrameIcon size={14} /></IconButton>
                     <span className="mx-1 h-4 w-px bg-zinc-800" />
                     <span className="text-2xs text-zinc-500">Size</span>
-                    <input type="range" min={1} max={MAX_BRUSH_SIZE} value={brush.size} onChange={(event) => setBrush({ ...brush, size: Number(event.target.value) })} className="h-1 w-24 accent-sky-500" aria-label="Brush size" />
-                    <span className="w-8 text-2xs tabular-nums text-zinc-400">{brush.size}</span>
+                    <div className="flex w-40"><SliderRow label="Brush size" hideLabel value={brush.size} min={1} max={MAX_BRUSH_SIZE} step={1} onChange={(size) => setBrush({ ...brush, size })} /></div>
                     <Segmented value={brush.projection} options={[{ value: 'screen', label: 'Screen' }, { value: 'surface', label: 'Surface' }]} onChange={(projection) => setBrush({ ...brush, projection })} label="Brush projection" />
                     <span className="flex-1" />
                     <span className="text-2xs text-zinc-500">Show</span>
@@ -286,13 +307,15 @@ export const PaintWorkspace: React.FC = () => {
                 </div>
             </div>
 
-            <aside className="flex w-[320px] shrink-0 flex-col border-l border-zinc-800">
+            <PanelEdge side="right" width={side.width} onResize={side.setWidth} onDone={side.save} label="Resize the layers panel" />
+            <aside className="flex shrink-0 flex-col border-l border-zinc-800" style={{ width: side.width }}>
                 <div className="border-b border-zinc-800 p-2">
                     <Segmented value={panel} options={[{ value: 'layers', label: 'Layers' }, { value: 'brush', label: 'Brush' }, { value: 'set', label: 'Texture set' }, { value: 'uvs', label: 'UVs' }]} onChange={setPanel} label="Panel" />
                 </div>
                 {session ? (
-                    panel === 'layers' ? <LayerPanel session={session} selection={selection} onSelect={setSelection} resolve={resolve} graphs={graphs} textures={textures} />
-                        : panel === 'brush' ? <div className="min-h-0 flex-1 overflow-y-auto"><BrushPanel brush={brush} onChange={setBrush} channels={session.document.channels} paintingMask={target?.kind === 'mask'} textures={textures} onPick={() => setTool('pick')} /></div>
+                    panel === 'layers' ? <LayerPanel session={session} selection={selection} onSelect={setSelection} resolve={resolve} graphs={graphs} textures={textures} onPaintWith={paintWith} onMessage={setMessage} />
+                        : panel === 'brush' ? <div className="min-h-0 flex-1 overflow-y-auto"><BrushPanel brush={brush} onChange={setBrush} channels={session.document.channels} paintingMask={target?.kind === 'mask'} textures={textures} onPick={() => setTool('pick')}
+                            paintWith={previewHost ? { sections: brushSections, host: previewHost, onPick: paintWith, onMessage: setMessage } : undefined} /></div>
                             : panel === 'uvs' && uv ? <div className="min-h-0 flex-1 overflow-y-auto"><UvPanel uv={uv} onSeamTool={() => setTool('seam')} onApplied={() => { if (!uv.proposal) { putOnAfterOpen.current = uv.putOnWhenOpen; setReopen((value) => value + 1); } }} /></div>
                                 : <div className="min-h-0 flex-1 overflow-y-auto"><SetPanel session={session} models={paintable} onReopen={() => setReopen((value) => value + 1)} /></div>
                 ) : (

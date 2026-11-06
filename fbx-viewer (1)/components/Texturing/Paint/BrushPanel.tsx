@@ -1,19 +1,18 @@
-import React from 'react';
+import React, { useRef, useState } from 'react';
+import { BrushIcon } from '../../UI/Icons';
 import { CHANNEL_IS_COLOR, CHANNEL_LABELS, type PaintChannel } from '../../../texturing/paint/paintTypes';
+import type { PreviewHost } from '../../../texturing/paint/previews';
 import { MAX_BRUSH_SIZE, type BrushSettings } from '../../../texturing/paint/strokes';
-import { Segmented } from '../../UI/kit';
+import { Popover, Segmented } from '../../UI/kit';
 import { Select } from '../../UI/Select';
 import { ColourFieldRgb } from '../../UI/ColourPicker';
+import { MaterialPicker, type MaterialChoice, type MaterialSection } from './MaterialPicker';
+import { SliderRow } from './PaintFields';
 
 /** The brush: its size and feel, how it is cast onto the model, and what it lays down on each channel. */
 
-const Row: React.FC<{ label: string; value: number; min: number; max: number; step?: number; suffix?: string; onChange: (value: number) => void }> = ({ label, value, min, max, step = 0.01, suffix = '', onChange }) => (
-    <label className="flex items-center gap-2 text-2xs text-zinc-400">
-        <span className="w-24 shrink-0">{label}</span>
-        <input type="range" min={min} max={max} step={step} value={value} onChange={(event) => onChange(Number(event.target.value))} className="h-1 min-w-0 flex-1 accent-sky-500" aria-label={label} />
-        <span className="w-10 text-right tabular-nums text-zinc-300">{Number(value.toFixed(2))}{suffix}</span>
-    </label>
-);
+/** A setting dragged or typed (typed values keep to the slider's ends). */
+const Row: React.FC<{ label: string; value: number; min: number; max: number; step?: number; suffix?: string; onChange: (value: number) => void }> = (props) => <SliderRow labelWidth="w-24" {...props} />;
 
 const Toggle: React.FC<{ label: string; checked: boolean; onChange: (value: boolean) => void }> = ({ label, checked, onChange }) => (
     <label className="flex items-center gap-1.5 text-2xs text-zinc-300">
@@ -29,10 +28,25 @@ export const BrushPanel: React.FC<{
     textures: ReadonlyArray<{ id: string; name: string }>;
     /** Picks the base colour off the model (the paint tab's pick tool). */
     onPick?: () => void;
-}> = ({ brush, onChange, channels, paintingMask, textures, onPick }) => {
+    /** Materials to paint on whole, and what picking one does. */
+    paintWith?: { sections: readonly MaterialSection[]; host: PreviewHost; onPick: (choice: MaterialChoice) => void; onMessage: (message: string) => void };
+}> = ({ brush, onChange, channels, paintingMask, textures, onPick, paintWith }) => {
     const set = (patch: Partial<BrushSettings>) => onChange({ ...brush, ...patch });
+    const pickButton = useRef<HTMLButtonElement>(null);
+    const [picking, setPicking] = useState(false);
     return (
         <div className="space-y-4 p-3">
+            {paintWith && (
+                <section>
+                    <button ref={pickButton} onClick={() => setPicking(true)} className="flex w-full items-center gap-2 rounded border border-sky-800/70 bg-sky-950/40 px-2 py-1.5 text-left hover:bg-sky-900/40">
+                        <BrushIcon size={14} className="shrink-0 text-sky-400" />
+                        <span><span className="block text-xs text-zinc-100">Paint with a material</span><span className="block text-2xs leading-snug text-zinc-400">Steel, rust, a smart material, a picture: every channel in one stroke.</span></span>
+                    </button>
+                    <Popover anchor={pickButton} open={picking} onClose={() => setPicking(false)} width={340} label="Paint with a material">
+                        <MaterialPicker sections={paintWith.sections} host={paintWith.host} onPick={(choice) => { setPicking(false); paintWith.onPick(choice); }} onMessage={paintWith.onMessage} />
+                    </Popover>
+                </section>
+            )}
             <section className="space-y-2">
                 <div className="text-2xs font-semibold text-zinc-300">{paintingMask ? 'Painting a mask' : 'What it paints'}</div>
                 {paintingMask ? (
@@ -51,8 +65,8 @@ export const BrushPanel: React.FC<{
                             ) : channel === 'normal' ? (
                                 <span className="text-2xs text-zinc-500">Flat (smooths detail)</span>
                             ) : (
-                                <input type="range" min={0} max={1} step={0.01} value={value[0]} disabled={!on} aria-label={`${CHANNEL_LABELS[channel]} value`}
-                                    onChange={(event) => { const v = Number(event.target.value); set({ values: { ...brush.values, [channel]: [v, v, v] } }); }} className="h-1 min-w-0 flex-1 accent-sky-500 disabled:opacity-30" />
+                                <SliderRow label={`${CHANNEL_LABELS[channel]} value`} hideLabel value={value[0]} min={0} max={1} disabled={!on}
+                                    onChange={(v) => set({ values: { ...brush.values, [channel]: [v, v, v] } })} />
                             )}
                         </div>
                     );
