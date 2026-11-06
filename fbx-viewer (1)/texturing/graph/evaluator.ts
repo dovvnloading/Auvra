@@ -97,6 +97,17 @@ interface Prepared {
 /** A node the editor cannot draw: one this build does not have (kept as it was), in words. */
 export const unknownNodeMessage = (type: string): string => `This node ("${type}") is not available in this version of the editor. Its settings and wires are kept.`;
 
+/** The input a node can pass through when bypassed: its main one, when it has inputs and outputs. */
+export const mainInput = (definition: TexNodeDef): string | null =>
+    (definition.inputs.length && definition.outputs.length ? definition.main ?? definition.inputs[0].key : null);
+
+/** The input a bypassed node passes through, or null when it is not bypassed (or cannot be). */
+const bypassedInput = (node: TexGraphNode, definition: TexNodeDef): string | null => (node.bypass ? mainInput(definition) : null);
+
+const FALLBACK_VALUES: Record<string, [number, number, number, number]> = {
+    white: [1, 1, 1, 1], black: [0, 0, 0, 1], mid: [0.5, 0.5, 0.5, 1], normal: [0.5, 0.5, 1, 1], clear: [0, 0, 0, 0],
+};
+
 let identities = new WeakMap<object, number>();
 let nextIdentity = 1;
 const identityOf = (value: object): number => {
@@ -249,6 +260,10 @@ export class TextureGraphEvaluator {
                 width = width * 2 ** (node.size?.w ?? 0);
                 height = height * 2 ** (node.size?.h ?? 0);
             }
+            // A bypassed node passes its main input through: it takes that input's size and kind.
+            const main = bypassedInput(node, definition);
+            const mainSource = main ? info.get(links?.get(main)?.from ?? '') : undefined;
+            if (mainSource) { width = mainSource.width; height = mainSource.height; }
             const limit = Math.min(this.gpu.maxSize, 2 ** MAX_SIZE_LOG2);
             width = Math.max(1, Math.min(limit, Math.round(width)));
             height = Math.max(1, Math.min(limit, Math.round(height)));
@@ -261,6 +276,10 @@ export class TextureGraphEvaluator {
                 : wiredKinds.length ? (wiredKinds.includes('color') ? 'color' : 'gray') : definition.anyDefault ?? 'gray';
             for (const port of definition.outputs) kinds[port.key] = port.kind === 'any' ? anyKind : port.kind;
             if (node.type === OUTPUT_NODE_TYPE) kinds.out = outputNodeKind(params);
+            if (main) {
+                const passed = outputKind(links?.get(main)) ?? (definition.inputs.find((port) => port.key === main)?.kind === 'gray' ? 'gray' : null);
+                if (passed) for (const port of definition.outputs) kinds[port.key] = passed;
+            }
             // Precision: as asked, else the widest wired in, else by kind.
             let precision: ImagePrecision = anyKind === 'color' ? 8 : 16;
             if (node.precision && node.precision !== 'auto') precision = node.precision;
@@ -296,6 +315,7 @@ export class TextureGraphEvaluator {
                 const id = params[param.key];
                 extras.push(typeof id === 'string' && id && this.texture(id) ? `${id}:ready` : `${String(id)}:waiting`);
             }
+            if (main) extras.push(`bypass:${main}`);
             const signature = hashText(JSON.stringify([node.type, params, width, height, precision, seed, kinds, inputSignatures, extras]));
             info.set(node.id, { signature, width, height, kinds, precision, params, warnings, seed, innerSeed });
         }
@@ -378,7 +398,10 @@ export class TextureGraphEvaluator {
                 for (const image of made) if (!kept.has(image)) this.gpu.release(image);
             };
             try {
-                state.outputs = await definition.run(this.context(node, definition, details, plan, request, external, made));
+                const main = bypassedInput(node, definition);
+                state.outputs = main
+                    ? this.passThrough(definition, main, details, plan.incoming.get(node.id), made)
+                    : await definition.run(this.context(node, definition, details, plan, request, external, made));
             } catch (error) {
                 state.outputs = {};
                 leftovers();
@@ -401,6 +424,25 @@ export class TextureGraphEvaluator {
         }
         this.evict(new Set(plan.order.map((node) => node.id)));
         return results;
+    }
+
+    /**
+     * A bypassed node's outputs: the image wired into its main input, as it is, on every output; or,
+     * with nothing wired there, that input's own fallback value.
+     */
+    private passThrough(definition: TexNodeDef, main: string, details: NodeDetails, links: Map<string, TexGraphLink> | undefined, made: GpuImage[]): Record<string, GpuImage> {
+        const link = links?.get(main);
+        const image = link ? this.cache.get(link.from)?.outputs[link.fromOutput] ?? null : null;
+        const outputs: Record<string, GpuImage> = {};
+        for (const port of definition.outputs) {
+            if (image) { outputs[port.key] = this.gpu.retain(image); continue; }
+            const kind = details.kinds[port.key] ?? 'color';
+            const filled = this.gpu.image(details.width, details.height, kind, details.precision);
+            made.push(filled);
+            this.gpu.clear(filled, FALLBACK_VALUES[definition.inputs.find((input) => input.key === main)?.fallback ?? 'black'] ?? FALLBACK_VALUES.black);
+            outputs[port.key] = filled;
+        }
+        return outputs;
     }
 
     private context(

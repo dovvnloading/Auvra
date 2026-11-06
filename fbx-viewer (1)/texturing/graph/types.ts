@@ -22,6 +22,8 @@ export interface TexPortDef {
     /** 'any' takes either kind; an 'any' output is the kind of the node's `kindFrom` input. */
     kind: PortKind | 'any';
     fallback?: InputFallback;
+    /** A heading the canvas lists the port under, for nodes with many ports. */
+    group?: string;
 }
 
 export type TexParamKind = 'float' | 'int' | 'bool' | 'color' | 'vec2' | 'select' | 'ramp' | 'curve' | 'texture' | 'string' | 'code' | 'graph';
@@ -73,7 +75,18 @@ export interface TexGraphNode {
     size?: NodeSize;
     /** Bits a channel the node's images keep; 'auto' takes its inputs' (8 for colour, 16 for grey when it makes them). */
     precision?: 'auto' | 8 | 16 | 32;
+    /** A name of the user's own, shown instead of the node's kind. */
+    name?: string;
+    /** Its header's colour (#rrggbb), instead of its category's. */
+    color?: string;
+    /** Shown on the canvas as its header only. */
+    collapsed?: boolean;
+    /** Passes its main input straight through instead of doing its work. */
+    bypass?: boolean;
 }
+
+/** Fields of a node that change only how the canvas shows it, never what it draws. */
+export const SHOWN_ONLY_FIELDS = ['x', 'y', 'name', 'color', 'collapsed'] as const;
 
 export interface TexGraphLink {
     from: string;
@@ -198,6 +211,8 @@ export interface TexNodeDef {
     anyDefault?: PortKind;
     /** An 'any' output's kind from the node's settings instead (Input and Pixel processor nodes). */
     kindOf?: (params: Readonly<Record<string, unknown>>) => PortKind;
+    /** The input a bypassed node passes through (its first unless said: a blend's background). */
+    main?: string;
     /** How the editor shows its images. */
     preview?: 'normal';
     /** The node's own drawing. */

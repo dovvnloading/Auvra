@@ -3,6 +3,7 @@ import { INPUT_NODE_TYPE, MESH_READING_NODE_TYPES, OUTPUT_NODE_TYPE, SUBGRAPH_NO
 import { textureNodeDefinitionByType } from './registry';
 import {
     isParamLink,
+    SHOWN_ONLY_FIELDS,
     type GraphParameter,
     type GraphParameterKind,
     type NodeSize,
@@ -197,6 +198,10 @@ export const readTextureGraph = (value: unknown): { graph: TextureGraph; problem
         const size = readSize(node.size);
         if (size) result.size = size;
         if (node.precision === 8 || node.precision === 16 || node.precision === 32) result.precision = node.precision;
+        if (typeof node.name === 'string' && node.name.trim()) result.name = node.name.trim().slice(0, 64);
+        if (typeof node.color === 'string' && /^#[0-9a-f]{6}$/i.test(node.color)) result.color = node.color.toLowerCase();
+        if (node.collapsed === true) result.collapsed = true;
+        if (node.bypass === true) result.bypass = true;
         nodes.push(result);
     }
     if (raw.nodes.length > MAX_NODES) problems.push(`This graph has ${raw.nodes.length} nodes: only the first ${MAX_NODES} could be opened.`);
@@ -424,6 +429,12 @@ export const hashText = (text: string): string => {
     return `${(h1 >>> 0).toString(36)}${(h2 >>> 0).toString(36)}`;
 };
 
+/** A node without what only changes how the canvas shows it (its place, own name, colour, folding). */
+export const drawnPart = (node: TexGraphNode): Omit<TexGraphNode, typeof SHOWN_ONLY_FIELDS[number]> => {
+    const { x: _x, y: _y, name: _name, color: _color, collapsed: _collapsed, ...rest } = node;
+    return rest;
+};
+
 /** Every project texture a graph draws from (Bitmap nodes), for keeping them while it does. */
 export const graphTextureIds = (graph: TextureGraph): string[] => {
     const ids = new Set<string>();
@@ -463,7 +474,7 @@ export const graphReadsMeshMaps = (graph: TextureGraph, resolve: (id: string) =>
  * draw differently.
  */
 export const graphContentKey = (graph: TextureGraph, resolve: (id: string) => { graph: TextureGraph } | undefined, loaded: (textureId: string) => boolean): string => {
-    const shape = (g: TextureGraph) => [g.size, g.seed, g.parameters, g.nodes.map(({ x: _x, y: _y, ...rest }) => rest), g.links, graphTextureIds(g).filter(loaded)];
+    const shape = (g: TextureGraph) => [g.size, g.seed, g.parameters, g.nodes.map(drawnPart), g.links, graphTextureIds(g).filter(loaded)];
     const used: unknown[] = [];
     const seen = new Set<string>();
     const visit = (g: TextureGraph) => {

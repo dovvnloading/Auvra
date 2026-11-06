@@ -9,6 +9,8 @@ export const INPUT_NODE_TYPE = 'input';
 export const OUTPUT_NODE_TYPE = 'output';
 export const SUBGRAPH_NODE_TYPE = 'subgraph';
 export const MESH_MAP_NODE_TYPE = 'meshMap';
+/** A point a wire passes through on the canvas; it changes nothing. */
+export const REROUTE_NODE_TYPE = 'reroute';
 
 /**
  * A sub-graph node's own random seed and whether each copy varies, kept under names no graph
@@ -198,6 +200,25 @@ export const IO_NODES: TexNodeDef[] = [
         async run(context) {
             const image = context.image('color');
             await context.pass(image, 'void main() { vec4 c = p_texture_ok == 1 ? texture(p_texture, vUv) : vec4(0.0, 0.0, 0.0, 1.0); if (p_texture_srgb == 1) c.rgb = linearToSrgb(c.rgb); outColor = c; }');
+            return { out: image };
+        },
+    },
+    {
+        type: REROUTE_NODE_TYPE,
+        label: 'Reroute point',
+        category: 'Utility',
+        description: 'A point a wire passes through, to lead it round other nodes. It changes nothing.',
+        keywords: ['reroute', 'dot', 'elbow', 'wire point', 'knot'],
+        inputs: [anyIn('in', 'In')],
+        outputs: [out('any')],
+        params: [],
+        sizeFrom: 'input',
+        kindFrom: 'in',
+        async run(context) {
+            const input = context.input('in');
+            if (input) return { out: context.gpu.retain(input) };
+            const image = context.image(context.outputKind('out'));
+            context.gpu.clear(image, [0, 0, 0, 1]);
             return { out: image };
         },
     },
