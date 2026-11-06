@@ -9,7 +9,8 @@ import { MAX_SIZE_LOG2, MIN_SIZE_LOG2, coerceParameter, formulaScope, parameterV
 import { OUTPUT_NODE_TYPE, SUBGRAPH_NODE_TYPE, SUBGRAPH_SEED_KEY, SUBGRAPH_VARY_KEY } from '../../texturing/graph/nodes/io';
 import { textureNodeDefinition, type GraphEntry, type GraphResolver } from '../../texturing/graph/registry';
 import { bakeSignature, readStoredGraph, type StoredTextureGraph } from '../../texturing/graph/stored';
-import { OUTPUT_CHANNELS, OUTPUT_CHANNEL_LABELS, type GraphParameter, type GraphParameterKind, type OutputChannel, type TexGraphNode, type TexParamDef, type TextureGraph } from '../../texturing/graph/types';
+import { MATERIAL_CHANNELS, MATERIAL_CHANNEL_LABELS, materialKey } from '../../texturing/graph/material';
+import { OUTPUT_CHANNELS, OUTPUT_CHANNEL_LABELS, type GraphParameter, type GraphParameterKind, type OutputChannel, type TexGraphNode, type TexNodeDef, type TexParamDef, type TextureGraph } from '../../texturing/graph/types';
 import { DEEP_EXPORT, ROLE_LABELS, encodeChannels, materialGraphForTextures, type ChannelImages, type ChannelTextureIds, type MaterialChannel, type PictureLayout, materialReadsPicture } from '../../texturing/materialOutput';
 import { download, makeZip } from '../../texturing/zip';
 import { Button, IconButton, Segmented, Spinner } from '../UI/kit';
@@ -209,6 +210,11 @@ const contextOf = (outerSession: TextureGraphSession, outer: StoredTextureGraph,
     const size = { w: Math.round(Math.log2(width)), h: Math.round(Math.log2(height)) };
     return { inputs, parameters, seed, size, version: JSON.stringify([version, parameters, seed, size]) };
 };
+
+/** What the 2D view can show of a node: each image it gives, each channel of a material it gives. */
+const shownOptions = (definition: TexNodeDef): Array<{ value: string; label: string }> => definition.outputs.flatMap((port) => (port.kind === 'material'
+    ? MATERIAL_CHANNELS.map((channel) => ({ value: materialKey(port.key, channel), label: `${port.label}: ${MATERIAL_CHANNEL_LABELS[channel]}` }))
+    : [{ value: port.key, label: port.label }]));
 
 const noSubscribe = () => () => undefined;
 const noVersion = () => 0;
@@ -629,10 +635,10 @@ const Workspace: React.FC<{
                         {state && <p className="text-2xs text-ink-3">{state.width} × {state.height}, drawn in {state.milliseconds < 1 ? 'under 1' : Math.round(state.milliseconds)} ms</p>}
                     </div>
                 )}
-                {definition.outputs.length > 1 && (
+                {shownOptions(definition).length > 1 && (
                     <div className="space-y-1">
                         <span className="text-2xs text-ink-2">Shown in 2D</span>
-                        <Select value={viewedOutput ?? definition.outputs[0].key} options={definition.outputs.map((port) => ({ value: port.key, label: port.label }))}
+                        <Select value={viewedOutput ?? shownOptions(definition)[0].value} options={shownOptions(definition)}
                             onChange={(value) => { setViewed(single.id); setViewedOutput(String(value)); }} className="w-full" />
                     </div>
                 )}

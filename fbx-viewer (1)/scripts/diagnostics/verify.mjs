@@ -44,6 +44,8 @@ const EXEMPT = new Map(Object.entries({
   'texturing/graph/nodes/distance.ts': 'pure-utility',
   'texturing/graph/nodes/generators.ts': 'pure-utility',
   'texturing/graph/nodes/io.ts': 'pure-utility',
+  'texturing/graph/nodes/materials.ts': 'pure-utility',
+  'texturing/graph/material.ts': 'pure-utility',
   'texturing/graph/nodes/transform.ts': 'pure-utility',
   'texturing/graph/registry.ts': 'data-model',
   'texturing/graph/stored.ts': 'data-model',

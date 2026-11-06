@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import {
-    CircleDashedIcon, CubeIcon, DropletsIcon, EyeIcon, GearIcon, GraphIcon, ImageIcon, MergeIcon, MountainIcon, MoveIcon, SelectBoxIcon,
+    CircleDashedIcon, CubeIcon, DropletsIcon, EyeIcon, GearIcon, GraphIcon, ImageIcon, MaterialIcon, MergeIcon, MountainIcon, MoveIcon, SelectBoxIcon,
     SlidersIcon, SparklesIcon, TilesIcon, WindIcon, type IconComponent,
 } from '../UI/Icons';
 import type { FinderEntry } from '../NodeGraph/finder';
@@ -9,9 +9,10 @@ import { NodeGraphCanvas, type NodeGraphAdapter } from '../NodeGraph/NodeGraphCa
 import type { MenuItem, NodeView, PinKindStyle } from '../NodeGraph/types';
 import { createNode, newNodeId } from '../../texturing/graph/document';
 import { mainInput, unknownNodeMessage } from '../../texturing/graph/evaluator';
+import { wireFits } from '../../texturing/graph/material';
 import { INPUT_NODE_TYPE, MESH_MAPS, MESH_MAP_LABELS, MESH_MAP_NODE_TYPE, OUTPUT_NODE_TYPE, REROUTE_NODE_TYPE, SUBGRAPH_NODE_TYPE } from '../../texturing/graph/nodes/io';
 import { NODE_CATEGORY_ORDER, TEXTURE_NODE_DEFINITIONS, placeholderDefinition, textureNodeDefinition, type GraphResolver } from '../../texturing/graph/registry';
-import { OUTPUT_CHANNELS, OUTPUT_CHANNEL_LABELS, type OutputChannel, type TexGraphComment, type TexGraphLink, type TexGraphNode, type TexNodeDef, type TextureGraph } from '../../texturing/graph/types';
+import { OUTPUT_CHANNELS, OUTPUT_CHANNEL_LABELS, type OutputChannel, type PinKind, type TexGraphComment, type TexGraphLink, type TexGraphNode, type TexNodeDef, type TexPortDef, type TextureGraph } from '../../texturing/graph/types';
 import { copyNodes, outputKinds, readClipboard, unusedNodes, type Point } from './graphEditing';
 import { NODE_PICTURE_SIZE, requestNodePictures, useNodePicture, type PictureRequest } from './nodePictures';
 import { THUMBNAIL_SIZE, type TextureGraphSession } from './textureGraphSession';
@@ -27,19 +28,33 @@ const KINDS: Readonly<Record<string, PinKindStyle>> = {
     color: { colour: '#e9b949', words: 'colour' },
     gray: { colour: '#a3a3a3', words: 'grey' },
     any: { colour: '#f5f5f5', words: 'colour or grey' },
+    material: { colour: '#5eead4', words: 'a whole material', wide: true },
+    anyMaterial: { colour: '#f5f5f5', words: 'colour, grey or a whole material' },
 };
-/** Any image goes into any input: grey reads as grey colour, colour as its brightness. */
-const match = (from: string, to: string): number => (from === to || from === 'any' || to === 'any' ? 2 : 1);
+/** The kind a pin shows on the canvas: an input that also takes a material wire (an Output's) is a kind of its own. */
+const pinKind = (port: TexPortDef): string => (port.material ? 'anyMaterial' : port.kind);
+const asPort = (kind: string): Pick<TexPortDef, 'kind' | 'material'> => (kind === 'anyMaterial' ? { kind: 'any', material: true } : { kind: kind as PinKind });
+/**
+ * Any image goes into any image input (grey reads as grey colour, colour as its brightness); a material
+ * wire goes only into a material input or an Output (texturing/graph/material.ts says the rules).
+ */
+const match = (from: string, to: string): number => {
+    if (!wireFits(from as PinKind, asPort(to))) return 0;
+    return from === to || from === 'any' || to === 'any' || to === 'anyMaterial' ? 2 : 1;
+};
+const refusal = (from: string, to: string): string => (from === 'material'
+    ? 'A material wire goes only into a material input or an Output. Split material gives its channels as images.'
+    : to === 'material' ? 'A material input takes a material wire. Make material puts images on one.' : 'These two pins do not fit together.');
 
 const CATEGORY_TINTS: Record<string, string> = {
     'Inputs and outputs': '#3f4a5c', 'Mesh maps': '#2f5560', Noises: '#4b3f6b', Patterns: '#523d66', Shapes: '#5a4170',
     Adjustments: '#2f5a48', Blending: '#2d5653', Transforms: '#5f5230', Warps: '#634a2c', 'Blurs and sharpening': '#45562e',
-    'Edges and distance': '#5f3448', 'Height and normals': '#3d4370', Utility: '#46474d', 'Graphs in this project': '#3b4a63',
+    'Edges and distance': '#5f3448', 'Height and normals': '#3d4370', Utility: '#46474d', 'Graphs in this project': '#3b4a63', Materials: '#2c5a55',
 };
 const CATEGORY_MARKS: Record<string, IconComponent> = {
     'Inputs and outputs': ImageIcon, 'Mesh maps': CubeIcon, Noises: SparklesIcon, Patterns: TilesIcon, Shapes: CircleDashedIcon,
     Adjustments: SlidersIcon, Blending: MergeIcon, Transforms: MoveIcon, Warps: WindIcon, 'Blurs and sharpening': DropletsIcon,
-    'Edges and distance': SelectBoxIcon, 'Height and normals': MountainIcon, Utility: GearIcon, 'Graphs in this project': GraphIcon,
+    'Edges and distance': SelectBoxIcon, 'Height and normals': MountainIcon, Utility: GearIcon, 'Graphs in this project': GraphIcon, Materials: MaterialIcon,
 };
 const OUTPUT_TINT = '#2b4a6b';
 const MISSING_TINT = '#5a4317';
@@ -117,7 +132,7 @@ const typeEntry = (definition: TexNodeDef): FinderEntry => ({
     category: definition.category,
     description: definition.description,
     keywords: definition.keywords,
-    inputs: definition.inputs.map((port) => port.kind),
+    inputs: definition.inputs.map(pinKind),
     outputs: definition.outputs.map((port) => port.kind),
 });
 
@@ -135,7 +150,7 @@ const NODE_ENTRIES: readonly FinderEntry[] = (() => {
             category: 'Inputs and outputs',
             description: channel === 'custom' ? 'A named image the graph gives, for using it inside other graphs.' : `The material's ${OUTPUT_CHANNEL_LABELS[channel].toLowerCase()}.`,
             keywords: ['output', 'result', 'channel', channel, ...(channel === 'custom' ? ['named', 'other graphs', 'mask'] : [])],
-            inputs: ['any'],
+            inputs: ['anyMaterial'],
             outputs: [],
         });
     }
@@ -267,7 +282,7 @@ export const TextureGraphCanvas: React.FC<TextureGraphCanvasProps> = (props) => 
                 layout: node.type === REROUTE_NODE_TYPE ? 'dot' : 'edges',
                 width: NODE_WIDTH,
                 body: missing ? 48 : THUMBNAIL_SIZE,
-                inputs: (def?.inputs ?? []).map((port) => ({ key: port.key, label: port.label, kind: port.kind, ...(port.group ? { group: port.group } : {}) })),
+                inputs: (def?.inputs ?? []).map((port) => ({ key: port.key, label: port.label, kind: pinKind(port), ...(port.group ? { group: port.group } : {}) })),
                 outputs: (def?.outputs ?? []).map((port) => ({ key: port.key, label: port.label, kind: kindOf(node.id, port.key) })),
                 ...(unused.has(node.id) ? { unused: true } : {}),
                 ...(error ? { error } : {}),
@@ -310,7 +325,7 @@ export const TextureGraphCanvas: React.FC<TextureGraphCanvasProps> = (props) => 
         const pins = (node: EditableNode<TexGraphNode>): PinSet => {
             const def = textureNodeDefinition(node.source, latest.current.resolve);
             return {
-                inputs: (def?.inputs ?? []).map((port) => ({ key: port.key, kind: port.kind })),
+                inputs: (def?.inputs ?? []).map((port) => ({ key: port.key, kind: pinKind(port) })),
                 outputs: (def?.outputs ?? []).map((port) => ({ key: port.key, kind: port.kind === 'any' ? def?.kindOf?.(node.source.params) ?? 'any' : port.kind })),
             };
         };
@@ -332,6 +347,7 @@ export const TextureGraphCanvas: React.FC<TextureGraphCanvasProps> = (props) => 
             kind: 'texture',
             kinds: KINDS,
             match,
+            refusal,
             entries,
             renderPicture,
             onFinderOpen: startPictures,

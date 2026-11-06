@@ -1,6 +1,7 @@
 import type * as THREE from 'three';
 import type { GpuImage, ImagePrecision, TextureGpu } from '../gpu/textureGpu';
 import { formulaScope, graphContentKey, hashText, parameterValues, resolveNodeParams, shaderSeed, subgraphRunSeed, MAX_SIZE_LOG2 } from './document';
+import { MATERIAL_CHANNELS, materialOf, materialResults, type MaterialImages } from './material';
 import { nodeBindings } from './nodeKit';
 import { INPUT_NODE_TYPE, MESH_MAP_NODE_TYPE, MESH_READING_NODE_TYPES, OUTPUT_NODE_TYPE, SUBGRAPH_NODE_TYPE, SUBGRAPH_SEED_KEY, SUBGRAPH_VARY_KEY } from './nodes/io';
 import { textureNodeDefinition, type GraphResolver } from './registry';
@@ -99,7 +100,7 @@ export const unknownNodeMessage = (type: string): string => `This node ("${type}
 
 /** The input a node can pass through when bypassed: its main one, when it has inputs and outputs. */
 export const mainInput = (definition: TexNodeDef): string | null =>
-    (definition.inputs.length && definition.outputs.length ? definition.main ?? definition.inputs[0].key : null);
+    (definition.bypass !== false && definition.inputs.length && definition.outputs.length ? definition.main ?? definition.inputs[0].key : null);
 
 /** The input a bypassed node passes through, or null when it is not bypassed (or cannot be). */
 const bypassedInput = (node: TexGraphNode, definition: TexNodeDef): string | null => (node.bypass ? mainInput(definition) : null);
@@ -274,11 +275,12 @@ export class TextureGraphEvaluator {
             const anyKind: PortKind = definition.kindOf
                 ? definition.kindOf(params)
                 : wiredKinds.length ? (wiredKinds.includes('color') ? 'color' : 'gray') : definition.anyDefault ?? 'gray';
-            for (const port of definition.outputs) kinds[port.key] = port.kind === 'any' ? anyKind : port.kind;
+            // A material output carries a picture per channel, each of its channel's kind: it has no one kind.
+            for (const port of definition.outputs) if (port.kind !== 'material') kinds[port.key] = port.kind === 'any' ? anyKind : port.kind;
             if (node.type === OUTPUT_NODE_TYPE) kinds.out = outputNodeKind(params);
             if (main) {
                 const passed = outputKind(links?.get(main)) ?? (definition.inputs.find((port) => port.key === main)?.kind === 'gray' ? 'gray' : null);
-                if (passed) for (const port of definition.outputs) kinds[port.key] = passed;
+                if (passed) for (const port of definition.outputs) if (port.kind !== 'material') kinds[port.key] = passed;
             }
             // Precision: as asked, else the widest wired in, else by kind.
             let precision: ImagePrecision = anyKind === 'color' ? 8 : 16;
@@ -432,8 +434,27 @@ export class TextureGraphEvaluator {
      */
     private passThrough(definition: TexNodeDef, main: string, details: NodeDetails, links: Map<string, TexGraphLink> | undefined, made: GpuImage[]): Record<string, GpuImage> {
         const link = links?.get(main);
-        const image = link ? this.cache.get(link.from)?.outputs[link.fromOutput] ?? null : null;
+        const source = link ? this.cache.get(link.from)?.outputs : undefined;
         const outputs: Record<string, GpuImage> = {};
+        if (definition.inputs.find((input) => input.key === main)?.kind === 'material') {
+            // A material passes on whole to every material output; anything else the node gives is left black.
+            const material = source && link ? materialOf(source, link.fromOutput) : null;
+            for (const port of definition.outputs) {
+                if (port.kind === 'material') {
+                    if (!material) continue;
+                    const kept: MaterialImages = {};
+                    for (const channel of MATERIAL_CHANNELS) { const image = material[channel]; if (image) kept[channel] = this.gpu.retain(image); }
+                    Object.assign(outputs, materialResults(port.key, kept));
+                    continue;
+                }
+                const filled = this.gpu.image(details.width, details.height, details.kinds[port.key] ?? 'gray', details.precision);
+                made.push(filled);
+                this.gpu.clear(filled, FALLBACK_VALUES.black);
+                outputs[port.key] = filled;
+            }
+            return outputs;
+        }
+        const image = link ? source?.[link.fromOutput] ?? null : null;
         for (const port of definition.outputs) {
             if (image) { outputs[port.key] = this.gpu.retain(image); continue; }
             const kind = details.kinds[port.key] ?? 'color';
@@ -489,6 +510,11 @@ export class TextureGraphEvaluator {
             },
             texture: this.texture,
             external: (name) => external[name] ?? null,
+            material: (key) => {
+                const link = links?.get(key);
+                const outputs = link ? this.cache.get(link.from)?.outputs : undefined;
+                return outputs && link ? materialOf(outputs, link.fromOutput) : null;
+            },
             subgraph: async (graphId, params, inputs) => {
                 if (this.depth >= MAX_DEPTH || this.visiting.has(graphId)) throw new Error('This graph uses itself, directly or through others.');
                 const entry = this.resolve(graphId);

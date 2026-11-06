@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { GpuImage } from '../../gpu/textureGpu';
+import { MATERIAL_DEFAULTS, outputChannelOf } from '../material';
 import { anyIn, color, colorIn, float, onePass, out, select, vec2 } from '../nodeKit';
 import { OUTPUT_CHANNELS, OUTPUT_CHANNEL_LABELS, outputNodeKind, type NodeRunContext, type OutputChannel, type PortKind, type TexNodeDef, type TexParamDef } from '../types';
 
@@ -140,9 +141,9 @@ export const IO_NODES: TexNodeDef[] = [
         type: OUTPUT_NODE_TYPE,
         label: 'Output',
         category: 'Inputs and outputs',
-        description: 'One of the images the graph gives: a channel of the material (base colour, normal, roughness...) or a named image for another graph.',
+        description: 'One of the images the graph gives: a channel of the material (base colour, normal, roughness...) or a named image for another graph. Wire a whole material into it and it keeps its own channel of it.',
         keywords: ['output', 'result', 'channel', 'base colour', 'roughness', 'metallic', 'normal'],
-        inputs: [anyIn('in', 'Image')],
+        inputs: [{ ...anyIn('in', 'Image or material'), material: true }],
         outputs: [],
         params: [
             select('channel', 'Channel', 'baseColor', OUTPUT_CHANNELS.map((channel) => [channel, OUTPUT_CHANNEL_LABELS[channel]] as [string, string])),
@@ -156,7 +157,15 @@ export const IO_NODES: TexNodeDef[] = [
         async run(context) {
             const channel = (OUTPUT_CHANNELS as readonly string[]).includes(String(context.params.channel)) ? context.params.channel as OutputChannel : 'custom';
             const kind = outputNodeKind(context.params);
-            const input = context.input('in');
+            // A material wired in: its channel for this output (a named image takes its base colour, or height when grey).
+            const material = context.material('in');
+            const kept = material ? outputChannelOf(channel, kind) : null;
+            const input = kept ? material?.[kept] ?? null : context.input('in');
+            if (!input && kept) {
+                const image = context.image(kind);
+                context.gpu.clear(image, MATERIAL_DEFAULTS[kept]);
+                return { out: image };
+            }
             if (!input) {
                 const image = context.image(kind);
                 const value = channel === 'normal' ? [0.5, 0.5, 1, 1] : channel === 'roughness' ? [0.5, 0.5, 0.5, 1] : channel === 'ambientOcclusion' || channel === 'opacity' ? [1, 1, 1, 1] : channel === 'height' ? [0.5, 0.5, 0.5, 1] : [0, 0, 0, 1];

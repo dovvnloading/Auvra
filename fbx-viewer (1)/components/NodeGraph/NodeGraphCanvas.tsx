@@ -46,6 +46,8 @@ export interface NodeGraphAdapter<S> {
     /** What pins carry: colours and words. */
     kinds: Readonly<Record<string, PinKindStyle>>;
     match: KindMatch;
+    /** Why a wire from a pin carrying `from` cannot go into one taking `to` (they do not match), in words. */
+    refusal?: (from: string, to: string) => string;
     /** The nodes the finder offers. */
     entries: readonly FinderEntry[];
     /** A picture (or a mark) for an entry, `size` pixels across. */
@@ -177,6 +179,8 @@ export function NodeGraphCanvas<S>(props: NodeGraphCanvasProps<S>): React.ReactE
     const [renaming, setRenaming] = useState<string | null>(null);
     const [frameTitle, setFrameTitle] = useState<string | null>(null);
     const [openGroups, setOpenGroups] = useState<ReadonlyMap<string, ReadonlyMap<string, boolean>>>(new Map());
+    const [refused, setRefused] = useState<string | null>(null);
+    const refusedTimer = useRef<number>();
     const [snap, setSnap] = useState(() => readSetting('snap', false));
     const [showMap, setShowMap] = useState(() => readSetting('minimap', true));
     const pointer = useRef<Point>({ x: 0, y: 0 });
@@ -601,11 +605,27 @@ export function NodeGraphCanvas<S>(props: NodeGraphCanvasProps<S>): React.ReactE
         setMenu({ x: anchor.left, y: anchor.bottom + 4, title: ids.size === 1 ? 'Colour the selected node' : `Colour ${ids.size} nodes`, items: [], colours: { label: 'Header colour', colours: NODE_COLOURS, names: NODE_COLOUR_NAMES, onPick: (colour) => changeLook(ids, { color: colour }) } });
     }, [changeLook]);
 
+    /** Says for a while, in the line at the bottom, why something was not done. */
+    const refuse = useCallback((message: string) => {
+        setRefused(message);
+        window.clearTimeout(refusedTimer.current);
+        refusedTimer.current = window.setTimeout(() => setRefused(null), 4000);
+    }, []);
+    useEffect(() => () => window.clearTimeout(refusedTimer.current), []);
+
     // ---- pointer ----
     const finishWire = (wire: PendingWire, target: HTMLElement | null, clientX: number, clientY: number) => {
         const { graph: current, views: shown, adapter: own } = latest.current;
         const pin = target?.closest('[data-pin]') as HTMLElement | null;
         if (pin && pin.dataset.pin !== wire.side && pin.dataset.node !== wire.nodeId) {
+            const other = pin.dataset.pin === 'in' ? shown.get(pin.dataset.node!)?.inputs : shown.get(pin.dataset.node!)?.outputs;
+            const otherKind = other?.find((candidate) => candidate.key === pin.dataset.key)?.kind ?? 'any';
+            const from = wire.side === 'out' ? wire.kind : otherKind;
+            const to = wire.side === 'out' ? otherKind : wire.kind;
+            if (own.match(from, to) === 0) {
+                refuse(own.refusal?.(from, to) ?? 'These two pins do not fit together.');
+                return;
+            }
             const link = wire.side === 'out'
                 ? { from: wire.nodeId, fromPin: wire.key, to: pin.dataset.node!, toPin: pin.dataset.key! }
                 : { from: pin.dataset.node!, fromPin: pin.dataset.key!, to: wire.nodeId, toPin: wire.key };
@@ -622,7 +642,7 @@ export function NodeGraphCanvas<S>(props: NodeGraphCanvasProps<S>): React.ReactE
                 const link = wire.side === 'out' ? { from: wire.nodeId, fromPin: wire.key, to: nodeElement.dataset.node!, toPin: key } : { from: nodeElement.dataset.node!, fromPin: key, to: wire.nodeId, toPin: wire.key };
                 const next = connect(current, link);
                 if (next) commit(next);
-            }
+            } else refuse(`${other?.title ?? 'That node'} has no pin this wire fits.`);
             return;
         }
         if (!target || !root.current?.contains(target) || target.closest('[data-overlay]')) return;
@@ -989,7 +1009,7 @@ export function NodeGraphCanvas<S>(props: NodeGraphCanvasProps<S>): React.ReactE
             const style = adapter.kinds[linkKind(link)];
             context.globalAlpha = views.get(link.to)?.unused && !near && !hot ? 0.4 : near || hot ? 1 : 0.78;
             context.strokeStyle = key === spliceKey ? 'rgb(240 138 60)' : style?.colour ?? '#a3a3a3';
-            context.lineWidth = (hot ? 3.2 : near ? 2.4 : 1.7) / viewport.scale;
+            context.lineWidth = ((hot ? 3.2 : near ? 2.4 : 1.7) * (style?.wide ? 1.7 : 1)) / viewport.scale;
             if (key === spliceKey) context.setLineDash([8 / viewport.scale, 5 / viewport.scale]);
             line(from, to);
             context.setLineDash([]);
@@ -1175,9 +1195,9 @@ export function NodeGraphCanvas<S>(props: NodeGraphCanvasProps<S>): React.ReactE
                 </div>
             )}
             {findOpen && <FindBar targets={findTargets} onGo={goTo} onClose={() => { setFindOpen(false); root.current?.focus({ preventScroll: true }); }} />}
-            {(hoverWire || status) && (
-                <div className="pointer-events-none absolute bottom-2 left-2 z-10 rounded bg-panel/90 px-2 py-1 text-2xs text-ink-3">
-                    {hoverWire ? 'Wire: right-click for more · double-click for a reroute point · Alt+click to cut' : status}
+            {(refused || hoverWire || status) && (
+                <div role={refused ? 'alert' : undefined} className={`pointer-events-none absolute bottom-2 left-2 z-10 rounded bg-panel/90 px-2 py-1 text-2xs ${refused ? 'text-warn' : 'text-ink-3'}`}>
+                    {refused ?? (hoverWire ? 'Wire: right-click for more · double-click for a reroute point · Alt+click to cut' : status)}
                 </div>
             )}
             {showMap && size.width > 0 && graph.nodes.length > 0 && (
