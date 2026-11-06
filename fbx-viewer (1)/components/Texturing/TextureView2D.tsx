@@ -7,7 +7,7 @@ import { IconButton, Segmented } from '../UI/kit';
 import { finishPicking, stopsFrom, usePicking, type Rgba } from './eyedropper';
 import type { TextureGraphSession } from './textureGraphSession';
 import {
-    dragGradient, dragShape, dragTile, dragTransform, gradientFrame, histogramOf, rangeShare, shapeFrame, tileFrame, transformFrame, uvToView, viewToUv,
+    dragGradient, dragShape, dragTile, dragTransform, gradientFrame, rangeShare, shapeFrame, tileFrame, transformFrame, uvToView, viewToUv,
     type HandleFrame, type Histogram, type UV, type Vec2, type ViewPlacement,
 } from './view2d';
 
@@ -280,16 +280,7 @@ export const TextureView2D: React.FC<{
     useEffect(() => {
         if (!showHistogram || !image) { setHistogram(null); return undefined; }
         let cancelled = false;
-        const gpu = session.gpu;
-        const small = gpu.image(128, 128, 'color', 8);
-        gpu.passNow(small, {
-            fragment: 'uniform int gray;\nvoid main() { vec4 v = texture(source, vUv); outColor = gray == 1 ? vec4(v.rrr, 1.0) : vec4(v.rgb, 1.0); }',
-            inputs: { source: image },
-            uniforms: { gray: image.kind === 'gray' ? 1 : 0 },
-        });
-        const reading = gpu.readRgba8Later(small);
-        gpu.release(small);
-        void reading.then((pixels) => { if (!cancelled && pixels) setHistogram(histogramOf(pixels, 64)); });
+        void session.histogram(image).then((made) => { if (!cancelled && made) setHistogram(made); });
         return () => { cancelled = true; };
     }, [image, session, showHistogram, version]);
 

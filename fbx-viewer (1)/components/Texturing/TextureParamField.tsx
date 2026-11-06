@@ -3,10 +3,12 @@ import { LinkIcon, SigmaIcon, UnlinkIcon, UploadIcon } from '../UI/Icons';
 import { expressionError } from '../../texturing/graph/expressions';
 import { MAX_RAMP_STOPS, readRamp } from '../../texturing/graph/nodeKit';
 import { isParamLink, type GraphParameter, type GraphParameterKind, type RampStop, type TexParamDef } from '../../texturing/graph/types';
-import { CodeField, RampEditor, ScrubLabel } from '../Materials/MaterialParamField';
+import { RampEditor, ScrubLabel } from '../Materials/MaterialParamField';
 import { Popover } from '../UI/kit';
 import { Select } from '../UI/Select';
 import { CurveEditor } from './CurveEditor';
+import { AngleDial, CodeEditor, EyedropperButton, GradientPickButton, PositionPad } from './SettingWidgets';
+import type { Histogram } from './view2d';
 import { ColourFieldRgb } from '../UI/ColourPicker';
 
 /**
@@ -102,16 +104,37 @@ const NumberRow: React.FC<{ param: TexParamDef; value: number; onChange: (value:
     );
 };
 
+/** What a few settings show besides their value: a code setting its compile errors and the names it can use, a curve the histogram of its input. */
+export interface ParamExtras {
+    error?: string | null;
+    names?: readonly string[];
+    histogram?: Histogram | null;
+}
+
+/** True for a setting in degrees: it gets a dial. */
+const isAngle = (param: TexParamDef) => param.kind === 'float' && (/degree/i.test(param.label) || param.key === 'rotation' || param.key === 'angle');
+/** True for a pair whose range is small enough to place on a pad (an offset, a centre). */
+const hasPad = (param: TexParamDef) => param.kind === 'vec2' && param.min !== undefined && param.max !== undefined && param.max - param.min <= 2;
+
 export const ParamControl: React.FC<{
     param: TexParamDef;
     value: unknown;
     textures: ReadonlyArray<{ id: string; name: string }>;
     onChange: (value: unknown) => void;
-}> = ({ param, value, textures, onChange }) => {
+    extras?: ParamExtras;
+}> = ({ param, value, textures, onChange, extras }) => {
     switch (param.kind) {
         case 'float':
-        case 'int':
-            return <NumberRow param={param} value={Number(value ?? param.default) || 0} onChange={onChange} />;
+        case 'int': {
+            const number = Number(value ?? param.default) || 0;
+            if (!isAngle(param)) return <NumberRow param={param} value={number} onChange={onChange} />;
+            return (
+                <div className="flex items-center gap-2">
+                    <div className="min-w-0 flex-1"><NumberRow param={param} value={number} onChange={onChange} /></div>
+                    <AngleDial label={param.label} value={number} min={param.min} max={param.max} onChange={onChange} />
+                </div>
+            );
+        }
         case 'bool':
             return (
                 <button role="switch" aria-checked={Boolean(value)} aria-label={param.label} onClick={() => onChange(!value)}
@@ -122,19 +145,28 @@ export const ParamControl: React.FC<{
         case 'color': {
             const c = (Array.isArray(value) ? value : param.default) as number[];
             return (
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1">
                     <ColourFieldRgb label={param.label} value={[c[0] ?? 0, c[1] ?? 0, c[2] ?? 0, c[3] ?? 1]} alpha onChange={onChange} className="h-5 w-9" showHex />
+                    <EyedropperButton label={param.label} onPick={(colour) => onChange([colour[0], colour[1], colour[2], c[3] ?? colour[3]])} />
                 </div>
             );
         }
         case 'vec2': {
             const v = (Array.isArray(value) ? value : param.default) as number[];
-            return (
-                <div className="flex gap-1">
+            const numbers = (
+                <div className="flex min-w-0 flex-1 gap-1">
                     {[0, 1].map((index) => (
                         <DraftNumber key={index} label={`${param.label} ${'XY'[index]}`} value={Number(v[index]) || 0} className="w-full min-w-0" limit={(next) => clampToParam(param, next)}
                             onCommit={(next) => onChange([0, 1].map((at) => (at === index ? next : Number(v[at]) || 0)))} />
                     ))}
+                </div>
+            );
+            if (!hasPad(param)) return numbers;
+            const fallback = param.default as [number, number];
+            return (
+                <div className="flex items-center gap-2">
+                    {numbers}
+                    <PositionPad label={param.label} value={[Number(v[0]) || 0, Number(v[1]) || 0]} min={param.min!} max={param.max!} fallback={[fallback[0], fallback[1]]} onChange={onChange} />
                 </div>
             );
         }
@@ -143,15 +175,23 @@ export const ParamControl: React.FC<{
         case 'ramp': {
             // Stops keep their alpha: a gradient map can fade to see-through.
             const stops = readRamp(value, (param.default as { stops: RampStop[] }).stops);
-            return <RampEditor label={param.label} alpha maxStops={MAX_RAMP_STOPS} ramp={{ stops: stops.map((stop) => ({ position: stop.position, color: [...stop.color] })) }}
-                onChange={(ramp) => onChange({ stops: ramp.stops.map((stop) => ({ position: stop.position, color: [stop.color[0] ?? 0, stop.color[1] ?? 0, stop.color[2] ?? 0, stop.color[3] ?? 1] })) })} />;
+            return (
+                <div className="space-y-1">
+                    <RampEditor label={param.label} alpha maxStops={MAX_RAMP_STOPS} ramp={{ stops: stops.map((stop) => ({ position: stop.position, color: [...stop.color] })) }}
+                        onChange={(ramp) => onChange({ stops: ramp.stops.map((stop) => ({ position: stop.position, color: [stop.color[0] ?? 0, stop.color[1] ?? 0, stop.color[2] ?? 0, stop.color[3] ?? 1] })) })} />
+                    <div className="flex items-center justify-end gap-1 text-2xs text-ink-3">
+                        <span>Pick from an image</span>
+                        <GradientPickButton label={param.label} onPick={(picked) => onChange({ stops: picked.slice(0, MAX_RAMP_STOPS).map((stop) => ({ position: stop.position, color: [...stop.color] })) })} />
+                    </div>
+                </div>
+            );
         }
         case 'curve':
-            return <CurveEditor value={value} onChange={onChange} />;
+            return <CurveEditor value={value} onChange={onChange} histogram={extras?.histogram} />;
         case 'texture':
             return <Select value={String(value ?? '')} options={[{ value: '', label: 'No picture' }, ...textures.map((texture) => ({ value: texture.id, label: texture.name }))]} onChange={(next) => onChange(next)} className="w-full" />;
         case 'code':
-            return <CodeField label={param.label} code={String(value ?? '')} onChange={onChange} />;
+            return <CodeEditor label={param.label} code={String(value ?? '')} onChange={onChange} error={extras?.error} names={extras?.names} />;
         case 'string':
             return <DraftText label={param.label} value={String(value ?? '')} allowEmpty onCommit={onChange} className="w-full" />;
         default:
@@ -170,7 +210,8 @@ export const TextureParamField: React.FC<{
     problem?: string;
     onChange: (value: unknown) => void;
     onExpose: () => void;
-}> = ({ param, value, parameters, textures, problem, onChange, onExpose }) => {
+    extras?: ParamExtras;
+}> = ({ param, value, parameters, textures, problem, onChange, onExpose, extras }) => {
     const anchor = useRef<HTMLButtonElement>(null);
     const [menu, setMenu] = useState(false);
     const [formula, setFormula] = useState('');
@@ -197,7 +238,7 @@ export const TextureParamField: React.FC<{
         <div className="space-y-1" title={param.hint}>
             <div className="flex items-center gap-1.5">
                 <span className="min-w-0 flex-1 truncate">{label}</span>
-                {inline(param) && !linked && <ParamControl param={param} value={value} textures={textures} onChange={onChange} />}
+                {inline(param) && !linked && <ParamControl param={param} value={value} textures={textures} onChange={onChange} extras={extras} />}
                 {linkButton}
             </div>
             {linked ? (
@@ -206,7 +247,7 @@ export const TextureParamField: React.FC<{
                         : <span className="flex-1 truncate font-mono">{linked.$expr}</span>}
                     <button aria-label="Stop following" title="Stop following" onClick={() => onChange(structuredClone(param.default))} className="text-accent hover:text-ink"><UnlinkIcon size={12} /></button>
                 </div>
-            ) : !inline(param) && <ParamControl param={param} value={value} textures={textures} onChange={onChange} />}
+            ) : !inline(param) && <ParamControl param={param} value={value} textures={textures} onChange={onChange} extras={extras} />}
             {(problem || formulaProblem) && <p className="text-2xs text-warn">{formulaProblem ?? problem}</p>}
             <Popover anchor={anchor} open={menu} onClose={() => setMenu(false)} width={260} label={`Link ${param.label}`}>
                 <div className="space-y-2 p-2 text-xs">

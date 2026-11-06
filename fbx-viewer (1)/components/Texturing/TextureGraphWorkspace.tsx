@@ -21,6 +21,7 @@ import { TextureGraphCanvas } from './TextureGraphCanvas';
 import { DraftNumber, DraftText, ParamControl, TextureParamField, exposedKind } from './TextureParamField';
 import { TextureGraphSession, type GraphContext } from './textureGraphSession';
 import { TextureView2D } from './TextureView2D';
+import type { Histogram } from './view2d';
 import { TextureView3D } from './TextureView3D';
 import { useTextureStore } from './useTextureStore';
 
@@ -215,6 +216,13 @@ const contextOf = (outerSession: TextureGraphSession, outer: StoredTextureGraph,
 const shownOptions = (definition: TexNodeDef): Array<{ value: string; label: string }> => definition.outputs.flatMap((port) => (port.kind === 'material'
     ? MATERIAL_CHANNELS.map((channel) => ({ value: materialKey(port.key, channel), label: `${port.label}: ${MATERIAL_CHANNEL_LABELS[channel]}` }))
     : [{ value: port.key, label: port.label }]));
+
+/** The names a node's code can use: its inputs (c_, g_, w_), its settings (p_), the pixel's place and what it writes. */
+const codeNames = (definition: TexNodeDef): string[] => [
+    'uv', 'vUv', 'outColor', 'uSeed', 'uSize',
+    ...definition.inputs.filter((port) => port.kind !== 'material').flatMap((port) => [`c_${port.key}`, `g_${port.key}`, `w_${port.key}`]),
+    ...definition.params.map((param) => `p_${param.key}`),
+];
 
 const noSubscribe = () => () => undefined;
 const noVersion = () => 0;
@@ -501,6 +509,19 @@ const Workspace: React.FC<{
     }, [graph.nodes, selection]);
     const selectedSet = useMemo(() => new Set(selected), [selected]);
     const single = selected.length === 1 ? graph.nodes.find((node) => node.id === selected[0]) ?? null : null;
+    const singleDefinition = single ? textureNodeDefinition(single, resolve) : null;
+    // A curve setting shows the histogram of what comes into the node, read again as that changes.
+    const curveInput = single && singleDefinition?.params.some((param) => param.kind === 'curve') ? graph.links.find((link) => link.to === single.id && link.toInput === 'in') : undefined;
+    const curveSignature = curveInput ? JSON.stringify([curveInput.from, curveInput.fromOutput, session.state(curveInput.from)?.signature ?? '']) : '';
+    const [curveHistogram, setCurveHistogram] = useState<Histogram | null>(null);
+    useEffect(() => {
+        const [from, fromOutput] = curveSignature ? JSON.parse(curveSignature) as [string, string] : ['', ''];
+        const image = from ? session.imageOf(from, fromOutput) : null;
+        if (!image) { setCurveHistogram(null); return undefined; }
+        let cancelled = false;
+        void session.histogram(image).then((made) => { if (!cancelled) setCurveHistogram(made); });
+        return () => { cancelled = true; };
+    }, [curveSignature, session]);
     const comment = !selected.length && selectedComment ? graph.comments?.find((candidate) => candidate.id === selectedComment) ?? null : null;
     void sessionVersion;
 
@@ -623,6 +644,7 @@ const Workspace: React.FC<{
                         problem={state?.warnings?.find((warning) => warning.includes(`"${param.label}"`))}
                         onChange={(value) => changeNode({ ...single, params: { ...single.params, [param.key]: value } }, `${single.id}:${param.key}`)}
                         onExpose={() => expose(single, param)}
+                        extras={param.kind === 'code' ? { error: state?.error, names: codeNames(definition) } : param.kind === 'curve' ? { histogram: curveHistogram } : undefined}
                     />
                 ))}
                 {!isOutput && (

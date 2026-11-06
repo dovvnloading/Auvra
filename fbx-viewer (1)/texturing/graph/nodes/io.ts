@@ -277,7 +277,8 @@ export const IO_NODES: TexNodeDef[] = [
         async run(context) {
             const image = context.image(context.outputKind('out'));
             const code = String(context.params.code ?? '').slice(0, 8000);
-            await context.pass(image, `void main() {\nvec2 uv = vUv;\n${code}\n}`, { cost: pixelProcessorCost(code) });
+            // #line 1: the compiler counts the typed code's lines from 1, so its errors point at them.
+            await context.pass(image, `void main() {\nvec2 uv = vUv;\n#line 1\n${code}\n}`, { cost: pixelProcessorCost(code) });
             return { out: image };
         },
     },

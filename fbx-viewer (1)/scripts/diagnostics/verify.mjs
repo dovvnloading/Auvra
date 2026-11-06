@@ -28,6 +28,7 @@ const EXEMPT = new Map(Object.entries({
   'components/Tools/paintedPictures.ts': 'pure-utility',
   'components/Texturing/graphEditing.ts': 'pure-utility',
   'components/Texturing/view2d.ts': 'pure-utility',
+  'components/Texturing/codeText.ts': 'pure-utility',
   'components/Texturing/eyedropper.ts': 'input-adapter',
   'components/NodeGraph/arrange.ts': 'pure-utility',
   'components/NodeGraph/finder.ts': 'pure-utility',
