@@ -237,6 +237,10 @@ void main() {
     outColor = vec4(a);
 }`;
 
+/** One batch's coverage laid over what the stroke has gathered so far (blended: batch + mask × (1 − batch)). */
+const GATHER_SHADER = /* glsl */ `
+void main() { outColor = vec4(texelFetch(batch, ivec2(gl_FragCoord.xy), 0).r); }`;
+
 const APPLY_SHADER = /* glsl */ `
 uniform int uErase;
 uniform int uMask;
@@ -328,6 +332,12 @@ const BLOCK = 32;
 
 export class Stroke {
     private readonly masks = new Map<number, GpuImage>();
+    /**
+     * One batch of dabs before it joins the stroke. A texel can be drawn more than once in a batch (by its
+     * triangle and by the lines along that triangle's edges and its neighbours', drawn so thin slivers are
+     * covered), so the batch is drawn here keeping the largest value, then laid over the stroke once.
+     */
+    private readonly batch: GpuImage;
     private readonly before = new Map<string, GpuImage>();
     private last: { x: number; y: number } | null = null;
     private travelled = 0;
@@ -344,6 +354,7 @@ export class Stroke {
         private readonly stencil: THREE.Texture | null,
     ) {
         const gpu = stack.host.gpu;
+        this.batch = gpu.image(stack.size, stack.size, 'gray', 16);
         for (const tile of stack.tiles) {
             const mask = gpu.image(stack.size, stack.size, 'gray', 16);
             gpu.clear(mask, [0, 0, 0, 0]);
@@ -438,8 +449,11 @@ export class Stroke {
                 }
             });
             for (const tile of stack.tiles) {
-                stack.raster.draw(this.masks.get(tile)!, tile, DAB_SHADER, {
-                    blend: 'alpha',
+                // Each texel takes each dab once: the batch is drawn keeping the largest value any of its
+                // draws gives a texel, then laid over the stroke.
+                stack.raster.draw(this.batch, tile, DAB_SHADER, {
+                    blend: 'max',
+                    clear: [0, 0, 0, 0],
                     uniforms: {
                         uViewProj: view.viewProjection,
                         uViewport: new THREE.Vector2(view.width, view.height),
@@ -466,6 +480,7 @@ export class Stroke {
                         uIsland: island,
                     },
                 });
+                gpu.passNow(this.masks.get(tile)!, { fragment: GATHER_SHADER, inputs: { batch: this.batch }, blend: 'alpha' });
             }
         }
         this.apply();
@@ -546,6 +561,7 @@ export class Stroke {
         }
         for (const image of this.masks.values()) gpu.release(image);
         for (const image of this.before.values()) gpu.release(image);
+        gpu.release(this.batch);
         this.masks.clear();
         this.before.clear();
         return { label, pixels: patches };
@@ -563,6 +579,7 @@ export class Stroke {
         }
         for (const image of this.masks.values()) gpu.release(image);
         for (const image of this.before.values()) gpu.release(image);
+        gpu.release(this.batch);
         this.masks.clear();
         this.before.clear();
         this.stack.invalidate();
