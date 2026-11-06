@@ -831,7 +831,6 @@ export const useModelManager = (
       const blob = await sourceResponse.blob();
       const mime = blob.type || 'image/png';
       const extension = mime.split('/')[1]?.replace('jpeg', 'jpg') || 'png';
-      const file = new File([blob], `material-override.${extension}`, { type: mime });
       const newTexture = await new THREE.TextureLoader().loadAsync(textureUrl);
       const model = models.find((candidate) => candidate.id === modelId);
       if (!model) {
@@ -867,6 +866,9 @@ export const useModelManager = (
       });
       if (!materialNames.size) return;
 
+      // Named for what it is, as the texture library lists it.
+      const painted = [...materialNames].join(', ');
+      const file = new File([blob], `Painted ${painted.length > 80 ? `${painted.slice(0, 79)}…` : painted}.${extension}`, { type: mime });
       const textureId = await dbOperations.addModelTextureOverride(
         modelId,
         [...materialNames],

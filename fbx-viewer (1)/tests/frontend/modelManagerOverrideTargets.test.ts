@@ -128,6 +128,8 @@ describe('useModelManager texture overrides follow the model UV origin', () => {
     const { result } = renderManager(model);
     await act(() => result.current.retextureModel('m1', 'blob:retexture'));
     expect(mocks.dbOperations.addModelTextureOverride).toHaveBeenCalledWith('m1', ['Body'], expect.any(File), expect.anything());
+    // Named for what it is, as the texture library will list it.
+    expect((mocks.dbOperations.addModelTextureOverride.mock.calls[0] as unknown[])[2]).toMatchObject({ name: 'Painted Body.png' });
     const updated = result.current.models[0];
     expect(updated.materialOverrides).toEqual({ Body: { roughness: 0.3, mapTextureId: 'tex-1', paintedMap: true } });
     expect(updated.textureOverrides).toEqual({});
