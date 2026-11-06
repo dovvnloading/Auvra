@@ -109,7 +109,7 @@ Change how a model's materials look without editing its source file:
 
 Overrides are stored with the model, so every placed copy and every build uses them: all copies of a model share one set of values. They are matched by material name and survive **Reimport**; an override whose material no longer exists is flagged so you can remove it. Unnamed materials cannot be overridden, and Animation models have no overrides. Closing the section discards unsaved edits.
 
-Every map a model's material wears shows here, including those **Retexture** saves. A result Retexture saves is a painted picture: it shows its own colours, is cut out where it is see-through and draws from both sides, as the note under its **Base map** says. Picking another base map, or clearing it, draws the material as usual again. Base maps that older projects stored apart from the other overrides show here as painted pictures too.
+Every map a model's material wears shows here, including those **Retexture** saves. A result Retexture saves is a painted picture: it shows its own colours, is cut out where it is see-through and draws from both sides, as the note under its **Base map** says. Picking another base map, or clearing it, draws the material as usual again. Base maps that older projects stored apart from the other overrides show here as painted pictures too. **Reset Textures** at the top of the model's properties takes every painted picture off, so the model wears the maps it was imported with; the other overrides stay.
 
 ## Material graphs
 

@@ -221,6 +221,31 @@ export const withBaseMap = (overrides: MaterialOverrides, materialName: string, 
   return next;
 };
 
+/**
+ * The overrides with `textureId` as the painted base map of each named material, beside whatever else
+ * their overrides hold: how the mask tool and the host's texture commit put a picture on a material.
+ */
+export const withPaintedBaseMap = (overrides: MaterialOverrides, materialNames: Iterable<string>, textureId: string): MaterialOverrides => {
+  let next = overrides;
+  for (const name of materialNames) next = { ...next, [name]: { ...next[name], mapTextureId: textureId, paintedMap: true } };
+  return next;
+};
+
+/**
+ * The overrides without their painted base maps (Retexture's results, the mask tool's pictures and the
+ * older per-model texture overrides taken in), so their materials wear their imported maps again: what
+ * Reset Textures leaves. The same overrides when there are none.
+ */
+export const withoutPaintedBaseMaps = (overrides: MaterialOverrides): MaterialOverrides => {
+  let next = overrides;
+  for (const [name, entry] of Object.entries(overrides)) {
+    if (entry.paintedMap !== true) continue;
+    next = setMaterialOverrideField(next, name, 'mapTextureId', undefined);
+    next = setMaterialOverrideField(next, name, 'paintedMap', undefined);
+  }
+  return next;
+};
+
 /** Texture ids referenced by the overrides, per slot. */
 export const materialOverrideTextureIds = (overrides: MaterialOverrides): Array<{ textureId: string; slot: MaterialTextureSlot }> => {
   const seen = new Set<string>();
