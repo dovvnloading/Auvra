@@ -5,6 +5,7 @@ import {
     STATIC_PARAM_KINDS,
     compileMaterialGraph,
     getMaterialNodeDefinition,
+    materialGraphLook,
     materialGraphSettings,
     materialGraphShape,
     normalizeMaterialGraph,
@@ -454,10 +455,18 @@ const programFlags = (material: StandardMaterial): unknown[] =>
     [material.transparent, material.side, material.blending, material.alphaTest, material.map, material.normalMap];
 
 /** The graph stage of a material (shaderStages.ts): the graph's shaders spliced into three's. */
+/** The renderer that last compiled each graph-shaded material, for drawing what the graph works out (bounceColour.ts). */
+const compilers = new WeakMap<THREE.Material, THREE.WebGLRenderer>();
+
+/** The renderer that last compiled `material`'s graph, if one has. */
+export const graphRenderer = (material: THREE.Material): THREE.WebGLRenderer | null => compilers.get(material) ?? null;
+
 const graphStage = (material: StandardMaterial): ShaderStage => ({
-    patch: (shader) => {
+    patch: (shader, renderer) => {
         const binding = bindings.get(material);
-        if (binding) patchShader(binding, shader);
+        if (!binding) return;
+        if (renderer && !binding.preview) compilers.set(material, renderer);
+        patchShader(binding, shader);
     },
     key: () => `graph:${bindings.get(material)?.key ?? '-'}`,
     uniforms: () => uniformsOf(material),
@@ -567,6 +576,8 @@ export interface GraphSurface {
     metalness: number;
     /** 1 for a material the graph does not draw through. */
     opacity: number;
+    /** Whether the graph draws it without lighting. */
+    unlit?: boolean;
 }
 
 /** The surface of a material a graph shades, or null for one it does not. */
@@ -590,7 +601,87 @@ export const graphSurface = (material: THREE.Material): GraphSurface | null => {
         roughness: read('roughness') as number,
         metalness: read('metalness') as number,
         opacity: binding.settings.blendMode === 'opaque' ? 1 : read('opacity') as number,
+        unlit: binding.settings.unlit,
     };
+};
+
+/**
+ * How a graph-shaded material's base colour is made, for what needs its average (bounced light):
+ * - a constant (nothing wired, or a Color or Number node), in linear light;
+ * - a texture's picture, times a constant tint (a Texture Sample or Triplanar Sample, perhaps through a
+ *   Multiply with a constant); the texture null while it is still loading;
+ * - worked out by the graph some other way: `look` changes whenever what it works out may have.
+ */
+export type GraphColourSource =
+    | { kind: 'constant'; colour: [number, number, number] }
+    | { kind: 'texture'; texture: THREE.Texture | null; tint: [number, number, number] }
+    | { kind: 'worked'; look: string };
+
+type ColourEstimate = { colour: [number, number, number]; texture?: THREE.Texture | null };
+
+const srgbToLinear = (rgb: readonly number[]): [number, number, number] => {
+    const colour = new THREE.Color().setRGB(rgb[0] ?? 0, rgb[1] ?? rgb[0] ?? 0, rgb[2] ?? rgb[0] ?? 0, THREE.SRGBColorSpace);
+    return [colour.r, colour.g, colour.b];
+};
+
+/** The base colour a simple chain of nodes gives, or null for anything the graph must work out. */
+const estimateColour = (binding: GraphBinding, nodeId: string, depth: number): ColourEstimate | null => {
+    const node = binding.graph.nodes.find(candidate => candidate.id === nodeId);
+    if (!node || depth > 8) return null;
+    const definition = getMaterialNodeDefinition(node.type);
+    if (!definition) return null;
+    const param = (key: string) => readParam(definition.params.find(candidate => candidate.key === key)!, node.params[key]);
+    const fed = (input: string) => binding.graph.links.find(link => link.toNode === node.id && link.toInput === input);
+    switch (node.type) {
+        case 'color':
+            return { colour: srgbToLinear(param('value') as number[]) };
+        case 'float': {
+            const value = param('value') as number;
+            return { colour: [value, value, value] };
+        }
+        case 'vector': {
+            const [x, y, z] = param('value') as number[];
+            return { colour: [x, y, z] };
+        }
+        case 'reroute': {
+            const link = fed('in');
+            return link ? estimateColour(binding, link.fromNode, depth + 1) : null;
+        }
+        case 'texture':
+        case 'triplanar': {
+            const spec = [...binding.specs.values()].find(candidate => candidate.nodeId === node.id && candidate.param === 'texture');
+            const value = spec ? binding.uniforms[spec.name]?.value as THREE.Texture | undefined : undefined;
+            return { colour: [1, 1, 1], texture: value && value !== WHITE && value !== FLAT_NORMAL ? value : null };
+        }
+        case 'multiply': {
+            const a = fed('a');
+            const b = fed('b');
+            const left = a ? estimateColour(binding, a.fromNode, depth + 1) : { colour: [param('a'), param('a'), param('a')] as [number, number, number] };
+            const right = b ? estimateColour(binding, b.fromNode, depth + 1) : { colour: [param('b'), param('b'), param('b')] as [number, number, number] };
+            if (!left || !right || (left.texture !== undefined && right.texture !== undefined)) return null;
+            return { colour: [left.colour[0] * right.colour[0], left.colour[1] * right.colour[1], left.colour[2] * right.colour[2]], texture: left.texture ?? right.texture };
+        }
+        default:
+            return null;
+    }
+};
+
+/** How the base colour of a material a graph shades is made (GraphColourSource), or null for one it does not shade. */
+export const graphColourSource = (material: THREE.Material): GraphColourSource | null => {
+    const binding = bindings.get(material);
+    if (!binding || binding.preview) return null;
+    const output = binding.graph.nodes.find(node => node.type === OUTPUT_NODE_TYPE);
+    const link = output && binding.graph.links.find(candidate => candidate.toNode === output.id && candidate.toInput === 'baseColor');
+    if (!link) {
+        const definition = getMaterialNodeDefinition(OUTPUT_NODE_TYPE)!;
+        return { kind: 'constant', colour: srgbToLinear(readParam(definition.params.find(param => param.key === 'baseColor')!, output?.params.baseColor) as number[]) };
+    }
+    const from = binding.graph.nodes.find(node => node.id === link.fromNode);
+    const simple = from && (link.fromOutput === 'rgb' || link.fromOutput === 'out') ? estimateColour(binding, from.id, 0) : null;
+    if (simple) return simple.texture !== undefined ? { kind: 'texture', texture: simple.texture, tint: simple.colour } : { kind: 'constant', colour: simple.colour };
+    // What it works out changes with its values and with the textures that have loaded.
+    const textures = [...binding.specs.values()].filter(spec => spec.kind === 'texture').map(spec => (binding.uniforms[spec.name]?.value as THREE.Texture | undefined)?.uuid ?? '-');
+    return { kind: 'worked', look: `${materialGraphLook(binding.graph)}#${textures.join(',')}` };
 };
 
 /** A new standard material shaded by `graph` (material previews, and meshes that have none of their own). */
