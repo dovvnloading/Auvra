@@ -3,7 +3,7 @@ import type { GpuImage, TextureGpu } from '../gpu/textureGpu';
 import { NO_MIRROR, type Mirror } from '../mesh/picker';
 import { CHANNEL_IS_COLOR, PAINT_CHANNELS, type PaintChannel, type PaintDocument } from './paintTypes';
 import { GpuResetError, pictureKey, type PaintStack } from './paintStack';
-import { DirtyRegion, intersectRect, isEmptyRect, rectOfUvBox, scissorOf, unionRect, type Rect } from './regions';
+import { DirtyRegion, clampRect, expandRect, intersectRect, isEmptyRect, rectOfUvBox, scissorOf, unionRect, type Rect } from './regions';
 import { pageRect, type SparsePicture } from './sparsePicture';
 import { SELECTION_WIDTH, encodeTriangles, selectionBytes } from './selection';
 
@@ -26,6 +26,12 @@ import { SELECTION_WIDTH, encodeTriangles, selectionBytes } from './selection';
 
 export type BrushShape = 'round' | 'square' | 'picture';
 export type BrushProjection = 'screen' | 'surface';
+/**
+ * What a stroke does: lays the brush's values on, or works on what is painted already: blurs or sharpens
+ * it, pushes it along the stroke, or copies it from elsewhere on the same picture.
+ */
+export type BrushMode = 'paint' | 'blur' | 'sharpen' | 'smudge' | 'clone';
+export type SymmetryAxis = 'x' | 'y' | 'z';
 
 export interface BrushSettings {
     /** Radius in screen pixels. */
@@ -44,13 +50,28 @@ export interface BrushSettings {
     flowJitter: number;
     pressureSize: boolean;
     pressureFlow: boolean;
+    /** How pen pressure turns into size or flow: a curve from 0,0 to 1,1 through two control points. */
+    pressureCurve: [number, number, number, number];
+    /** The brush turns with the way the pen leans. */
+    tiltAngle: boolean;
+    /** Lazy mouse: the stroke trails the pointer on a string this many pixels long, for smooth lines. */
+    lazy: number;
+    mode: BrushMode;
+    /** Dabs build up on one another within a stroke, as an airbrush does, instead of stopping at the opacity. */
+    buildUp: boolean;
     shape: BrushShape;
     /** A picture from the library for the 'picture' shape (its brightness). */
     alphaTexture: string;
     projection: BrushProjection;
     /** Texels facing away by more than this many degrees are not painted. */
     facingLimit: number;
-    symmetry: { x: boolean; y: boolean; z: boolean };
+    /**
+     * Mirrored across any of the model's X, Y and Z middles, moved by `offset` (a share of the model's
+     * size along each axis), so the mirror can be any plane square to an axis.
+     */
+    symmetry: { x: boolean; y: boolean; z: boolean; offset?: [number, number, number] };
+    /** Copies turned round an axis through the mirror's middle (1 is none). */
+    radial: { count: number; axis: SymmetryAxis };
     stencil: { enabled: boolean; textureId: string; scale: number; rotation: number; offsetX: number; offsetY: number; opacity: number };
     /** What the brush lays down on each channel. */
     values: Record<PaintChannel, [number, number, number]>;
@@ -92,11 +113,17 @@ export const DEFAULT_BRUSH: BrushSettings = {
     flowJitter: 0,
     pressureSize: true,
     pressureFlow: false,
+    pressureCurve: [0.25, 0.25, 0.75, 0.75],
+    tiltAngle: false,
+    lazy: 0,
+    mode: 'paint',
+    buildUp: false,
     shape: 'round',
     alphaTexture: '',
     projection: 'screen',
     facingLimit: 85,
-    symmetry: { x: false, y: false, z: false },
+    symmetry: { x: false, y: false, z: false, offset: [0, 0, 0] },
+    radial: { count: 1, axis: 'y' },
     stencil: { enabled: false, textureId: '', scale: 1, rotation: 0, offsetX: 0, offsetY: 0, opacity: 1 },
     values: {
         baseColor: [0.72, 0.18, 0.12], roughness: [0.45, 0.45, 0.45], metallic: [0, 0, 0], height: [0.6, 0.6, 0.6],
@@ -104,6 +131,37 @@ export const DEFAULT_BRUSH: BrushSettings = {
     },
     channels: ['baseColor', 'roughness', 'metallic'],
     maskValue: 1,
+};
+
+/**
+ * Pen pressure through a curve from 0,0 to 1,1 with control points (x1, y1) and (x2, y2), as easing curves
+ * are drawn: the curve's height where it is `pressure` across.
+ */
+export const curvePressure = (pressure: number, [x1, y1, x2, y2]: readonly number[]): number => {
+    const p = Math.min(1, Math.max(0, pressure));
+    const along = (t: number, a: number, b: number) => 3 * (1 - t) * (1 - t) * t * a + 3 * (1 - t) * t * t * b + t * t * t;
+    let low = 0;
+    let high = 1;
+    for (let i = 0; i < 24; i++) {
+        const mid = (low + high) / 2;
+        if (along(mid, x1, x2) < p) low = mid;
+        else high = mid;
+    }
+    return Math.min(1, Math.max(0, along((low + high) / 2, y1, y2)));
+};
+
+/**
+ * Lazy mouse: where the stroke's end goes when the pointer moves to `pointer`, trailing it on a string
+ * `length` long (it stays put while the pointer is within reach, then is pulled straight after it).
+ */
+export const lazyFollow = (anchor: { x: number; y: number }, pointer: { x: number; y: number }, length: number): { x: number; y: number } => {
+    const dx = pointer.x - anchor.x;
+    const dy = pointer.y - anchor.y;
+    const distance = Math.hypot(dx, dy);
+    if (length <= 0) return { x: pointer.x, y: pointer.y };
+    if (distance <= length) return { x: anchor.x, y: anchor.y };
+    const pull = (distance - length) / distance;
+    return { x: anchor.x + dx * pull, y: anchor.y + dy * pull };
 };
 
 /** One dab: on the screen (pixels from the top left) and, for surface brushes, its place on the model. */
@@ -116,7 +174,13 @@ export interface Dab {
     point?: THREE.Vector3;
     normal?: THREE.Vector3;
     worldRadius?: number;
+    /** Smudge and clone: where the dab lies in its tile's texels, and the tile. */
+    texel?: [number, number];
+    tile?: number;
 }
+
+/** Where the pointer meets the surface, for surface dabs (and the texel under smudge and clone dabs). */
+export type SurfaceProbe = (x: number, y: number) => { point: THREE.Vector3; normal: THREE.Vector3; distance: number; uv?: THREE.Vector2; triangle?: number } | null;
 
 /** What a stroke paints on. */
 export type StrokeTarget =
@@ -141,6 +205,9 @@ export interface StrokeView {
 
 const MAX_DABS = 16;
 
+/** The most copies a brush paints with: mirrored and turned, the brush itself included. */
+export const MAX_COPIES = 16;
+
 const DAB_SHADER = /* glsl */ `
 uniform mat4 uViewProj;
 uniform vec2 uViewport;
@@ -157,8 +224,8 @@ uniform float uHardness;
 uniform sampler2D uAlpha;
 uniform int uAlphaSrgb;
 uniform float uFacing;
-uniform vec3 uSymmetry;
-uniform vec3 uCentre;
+uniform mat4 uCopies[${MAX_COPIES}];
+uniform int uCopyCount;
 uniform sampler2D uStencil;
 uniform int uHasStencil;
 uniform vec4 uStencilPlace;
@@ -261,25 +328,11 @@ void main() {
     }
     vec3 n = normalize(vNormal);
     float a = coverageAt(vPos, n);
-    // Mirrored copies: the texel is painted where its mirror image would be.
-    for (int axis = 0; axis < 3; axis++) {
-        if (uSymmetry[axis] < 0.5) continue;
-        vec3 m = vec3(1.0);
-        m[axis] = -1.0;
-        float b = coverageAt(uCentre + (vPos - uCentre) * m, n * m);
+    // Copies, mirrored and turned: the texel is painted where its copy would be.
+    for (int i = 1; i < ${MAX_COPIES}; i++) {
+        if (i >= uCopyCount) break;
+        float b = coverageAt((uCopies[i] * vec4(vPos, 1.0)).xyz, normalize(mat3(uCopies[i]) * n));
         a = 1.0 - (1.0 - a) * (1.0 - b);
-        for (int other = axis + 1; other < 3; other++) {
-            if (uSymmetry[other] < 0.5) continue;
-            vec3 mm = m;
-            mm[other] = -1.0;
-            float c = coverageAt(uCentre + (vPos - uCentre) * mm, n * mm);
-            a = 1.0 - (1.0 - a) * (1.0 - c);
-        }
-    }
-    // Mirrored across all three at once: the eighth copy.
-    if (uSymmetry.x > 0.5 && uSymmetry.y > 0.5 && uSymmetry.z > 0.5) {
-        float e = coverageAt(uCentre - (vPos - uCentre), -n);
-        a = 1.0 - (1.0 - a) * (1.0 - e);
     }
     outColor = vec4(a);
 }`;
@@ -301,10 +354,21 @@ uniform float uOpacity;
 uniform vec2 uAt;
 uniform int uHasBefore;
 uniform vec4 uFill;
+uniform int uSource;
+uniform vec2 uSourceAt;
 void main() {
     ivec2 p = ivec2(gl_FragCoord.xy);
     vec4 b = uHasBefore == 1 ? texelFetch(before, p, 0) : uFill;
     float c = clamp(texelFetch(stroke, p + ivec2(uAt), 0).r * uOpacity, 0.0, 1.0);
+    // Blur, sharpen, smudge and clone lay on what is painted already, worked out round the area
+    // (colour weighted by coverage, a mask as it is), read where this texel takes it from.
+    if (uSource == 1 && uErase == 0) {
+        vec4 s = texelFetch(source, p + ivec2(uAt) - ivec2(uSourceAt), 0);
+        if (uMask == 1) { outColor = vec4(vec3(mix(b.r, s.r, c)), 1.0); return; }
+        vec4 o = mix(vec4(b.rgb * b.a, b.a), s, c);
+        outColor = o.a > 1e-5 ? vec4(o.rgb / o.a, o.a) : vec4(0.0);
+        return;
+    }
     if (uMask == 1) {
         outColor = vec4(vec3(mix(b.r, uErase == 1 ? 0.0 : uValue.x, c)), 1.0);
         return;
@@ -313,6 +377,37 @@ void main() {
     float alpha = b.a + c * (1.0 - b.a);
     vec3 value = alpha > 0.0 ? (b.rgb * b.a * (1.0 - c) + uValue * c) / alpha : uValue;
     outColor = vec4(value, alpha);
+}`;
+
+/** A picture's colour weighted by its coverage (so blurring see-through texels adds no colour). */
+const PREMULTIPLY = /* glsl */ `
+void main() { vec4 c = texelFetch(source, ivec2(gl_FragCoord.xy), 0); outColor = vec4(c.rgb * c.a, c.a); }`;
+
+/** A gaussian blur one way (uDir), out to three times uSigma texels. */
+const BLUR_LINE = /* glsl */ `
+uniform vec2 uDir;
+uniform float uSigma;
+void main() {
+    ivec2 p = ivec2(gl_FragCoord.xy);
+    ivec2 last = textureSize(source, 0) - 1;
+    int reach = int(ceil(uSigma * 3.0));
+    vec4 sum = vec4(0.0);
+    float weights = 0.0;
+    for (int i = -24; i <= 24; i++) {
+        if (i < -reach || i > reach) continue;
+        float w = exp(-float(i * i) / (2.0 * uSigma * uSigma));
+        sum += texelFetch(source, clamp(p + ivec2(uDir) * i, ivec2(0), last), 0) * w;
+        weights += w;
+    }
+    outColor = sum / weights;
+}`;
+
+/** Sharpened: pushed away from its blurred copy. */
+const SHARPEN_FROM = /* glsl */ `
+void main() {
+    ivec2 p = ivec2(gl_FragCoord.xy);
+    vec4 c = texelFetch(source, p, 0);
+    outColor = clamp(c + (c - texelFetch(blurred, p, 0)), 0.0, 1.0);
 }`;
 
 /** Each pixel's distance from the camera, for telling what the eye sees. */
@@ -472,6 +567,38 @@ export const mirrorsOf = (symmetry: BrushSettings['symmetry'], centre: THREE.Vec
 };
 
 /**
+ * Every copy a brush paints with, the brush itself first: mirrored across the planes that are on (square
+ * to an axis, through the model's middle moved by the symmetry offset), each turned round the radial axis
+ * through that point the radial count of times. At most MAX_COPIES.
+ */
+export const copiesOf = (brush: Pick<BrushSettings, 'symmetry' | 'radial'>, bounds: THREE.Box3): Mirror[] => {
+    const centre = bounds.getCenter(new THREE.Vector3());
+    const size = bounds.getSize(new THREE.Vector3());
+    const extent = Math.max(size.x, size.y, size.z, 1e-6);
+    const offset = brush.symmetry.offset ?? [0, 0, 0];
+    const pivot = new THREE.Vector3(centre.x + offset[0] * extent, centre.y + offset[1] * extent, centre.z + offset[2] * extent);
+    const about = (change: THREE.Matrix4) => new THREE.Matrix4().makeTranslation(pivot.x, pivot.y, pivot.z).multiply(change).multiply(new THREE.Matrix4().makeTranslation(-pivot.x, -pivot.y, -pivot.z));
+    const axes = [brush.symmetry.x, brush.symmetry.y, brush.symmetry.z];
+    const reflections: THREE.Matrix4[] = [];
+    for (let mask = 0; mask < 8; mask++) {
+        if ([0, 1, 2].some((axis) => (mask >> axis) & 1 && !axes[axis])) continue;
+        reflections.push(about(new THREE.Matrix4().makeScale(mask & 1 ? -1 : 1, mask & 2 ? -1 : 1, mask & 4 ? -1 : 1)));
+    }
+    const count = Math.max(1, Math.min(MAX_COPIES, Math.round(brush.radial?.count ?? 1)));
+    const axis = brush.radial?.axis ?? 'y';
+    const around = new THREE.Vector3(axis === 'x' ? 1 : 0, axis === 'y' ? 1 : 0, axis === 'z' ? 1 : 0);
+    const copies: Mirror[] = [];
+    for (let k = 0; k < count; k++) {
+        const turn = about(new THREE.Matrix4().makeRotationAxis(around, (k * 2 * Math.PI) / count));
+        reflections.forEach((reflection, r) => {
+            if (copies.length >= MAX_COPIES) return;
+            copies.push(k === 0 && r === 0 ? NO_MIRROR : { signs: [1, 1, 1], centre: [0, 0, 0], matrix: new THREE.Matrix4().multiplyMatrices(turn, reflection).elements.slice() });
+        });
+    }
+    return copies;
+};
+
+/**
  * The texels a batch of dabs (or picked triangles) can change, per tile: the boxes of the triangles the
  * dabs reach (found through the surface's tree of boxes), with a small margin, as a few rectangles.
  */
@@ -488,7 +615,7 @@ export const footprint = (stack: PaintStack, dabs: readonly Dab[], view: StrokeV
     if (picked) {
         for (const triangle of picked) if (triangle >= 0 && triangle < part.triangleTile.length) reach(triangle);
     } else {
-        const mirrors = mirrorsOf(brush.symmetry, part.bounds.getCenter(new THREE.Vector3()));
+        const mirrors = copiesOf(brush, part.bounds);
         const seen = new Uint8Array(part.indices.length / 3);
         const once = (triangle: number) => { if (!seen[triangle]) { seen[triangle] = 1; reach(triangle); } };
         for (const dab of dabs) {
@@ -523,6 +650,12 @@ export class Stroke {
     /** Everything the stroke changed so far, per tile. */
     private readonly changed = new Map<number, Rect>();
     private last: { x: number; y: number } | null = null;
+    /** Smudge: the texel the last dab lay on; the push of the last move, in texels. */
+    private lastTexel: { tile: number; at: [number, number] } | null = null;
+    private smudgeShift: [number, number] | null = null;
+    /** Clone: the texel copied from, and how far (in texels) from the stroke's first dab it lies. */
+    private cloneFrom: { tile: number; at: [number, number] } | null = null;
+    private cloneShift: [number, number] | null = null;
     private travelled = 0;
     private dabIndex = 0;
     private readonly seed = Math.floor(Math.random() * 1e9);
@@ -562,10 +695,19 @@ export class Stroke {
         return [...this.target.channels];
     }
 
+    /** Clone: where on the surface (its triangle and texture coordinates) the stroke copies from. */
+    cloneSource(triangle: number, uv: THREE.Vector2): void {
+        const part = this.stack.part;
+        this.cloneFrom = { tile: part.triangleTile[triangle], at: [(uv.x - part.triangleShift[triangle * 2]) * this.stack.size, (uv.y - part.triangleShift[triangle * 2 + 1]) * this.stack.size] };
+    }
+
     /** Dabs from the last point to this one, spaced along the way. */
-    moveTo(x: number, y: number, pressure: number, hit: (x: number, y: number) => { point: THREE.Vector3; normal: THREE.Vector3; distance: number } | null): void {
+    moveTo(x: number, y: number, pressure: number, hit: SurfaceProbe, tilt?: { x: number; y: number }): void {
         const brush = this.brush;
-        const radiusFor = (p: number) => Math.max(0.5, brush.size * (brush.pressureSize ? Math.max(0.05, p) : 1));
+        // Pressure through the brush's curve; the way the pen leans, as a turn on the screen.
+        const pushed = curvePressure(pressure, brush.pressureCurve ?? [0.25, 0.25, 0.75, 0.75]);
+        const lean = brush.tiltAngle && tilt && (tilt.x || tilt.y) ? Math.atan2(tilt.y, tilt.x) : 0;
+        const radiusFor = (p: number) => Math.max(0.5, brush.size * (brush.pressureSize ? Math.max(0.05, curvePressure(p, brush.pressureCurve ?? [0.25, 0.25, 0.75, 0.75])) : 1));
         const dabs: Dab[] = [];
         const place = (px: number, py: number, direction: number) => {
             const n = this.dabIndex++;
@@ -575,8 +717,8 @@ export class Stroke {
             const scatter = brush.scatter * radius * 2 * random(this.seed + n * 7 + 2);
             const sx = px + Math.cos(scatterAngle) * scatter;
             const sy = py + Math.sin(scatterAngle) * scatter;
-            const angle = (brush.angle * Math.PI) / 180 + (brush.followStroke ? direction : 0) + (random(this.seed + n * 7 + 3) - 0.5) * Math.PI * 2 * brush.angleJitter;
-            const flow = brush.flow * (brush.pressureFlow ? pressure : 1) * (1 - brush.flowJitter * random(this.seed + n * 7 + 4));
+            const angle = (brush.angle * Math.PI) / 180 + (brush.followStroke ? direction : 0) + lean + (random(this.seed + n * 7 + 3) - 0.5) * Math.PI * 2 * brush.angleJitter;
+            const flow = brush.flow * (brush.pressureFlow ? pushed : 1) * (1 - brush.flowJitter * random(this.seed + n * 7 + 4));
             const dab: Dab = { x: sx, y: sy, radius, angle, flow };
             if (brush.projection === 'surface') {
                 const found = hit(sx, sy);
@@ -585,6 +727,15 @@ export class Stroke {
                 dab.normal = found.normal;
                 // A screen radius in pixels as a distance on the model where it meets the surface.
                 dab.worldRadius = (radius * found.distance) / this.view.perspective;
+            }
+            if (brush.mode === 'smudge' || brush.mode === 'clone') {
+                // The texel under the dab: what the push of a smudge and the copy of a clone are measured by.
+                const found = hit(sx, sy);
+                if (found?.uv && found.triangle !== undefined) {
+                    const part = this.stack.part;
+                    dab.tile = part.triangleTile[found.triangle];
+                    dab.texel = [(found.uv.x - part.triangleShift[found.triangle * 2]) * this.stack.size, (found.uv.y - part.triangleShift[found.triangle * 2 + 1]) * this.stack.size];
+                }
             }
             dabs.push(dab);
         };
@@ -623,7 +774,19 @@ export class Stroke {
         const stack = this.stack;
         const gpu = stack.host.gpu;
         const view = this.view;
-        const centre = stack.part.bounds.getCenter(new THREE.Vector3());
+        // Smudge pushes by the way the brush last moved on the picture; clone copies from a fixed distance
+        // away, set by the stroke's first dab.
+        for (const dab of dabs) {
+            if (!dab.texel || dab.tile === undefined) continue;
+            if (this.brush.mode === 'smudge') {
+                if (this.lastTexel && this.lastTexel.tile === dab.tile) this.smudgeShift = [Math.round(dab.texel[0] - this.lastTexel.at[0]), Math.round(dab.texel[1] - this.lastTexel.at[1])];
+                this.lastTexel = { tile: dab.tile, at: dab.texel };
+            } else if (this.brush.mode === 'clone' && !this.cloneShift && this.cloneFrom && this.cloneFrom.tile === dab.tile) {
+                this.cloneShift = [Math.round(dab.texel[0] - this.cloneFrom.at[0]), Math.round(dab.texel[1] - this.cloneFrom.at[1])];
+            }
+        }
+        const copies = copiesOf(this.brush, stack.part.bounds);
+        const copyMatrices = Array.from({ length: MAX_COPIES }, (_, i) => (copies[i]?.matrix ? new THREE.Matrix4().fromArray(copies[i].matrix!) : new THREE.Matrix4()));
         const batches: Dab[][] = [];
         for (let i = 0; i < dabs.length; i += MAX_DABS) batches.push(dabs.slice(i, i + MAX_DABS));
         if (picked) batches.push([]);
@@ -677,8 +840,8 @@ export class Stroke {
                             uAlpha: this.alpha ?? gpu.constant('white'),
                             uAlphaSrgb: this.alpha?.colorSpace === THREE.SRGBColorSpace ? 1 : 0,
                             uFacing: Math.cos((Math.min(179, this.brush.facingLimit) * Math.PI) / 180),
-                            uSymmetry: new THREE.Vector3(this.brush.symmetry.x ? 1 : 0, this.brush.symmetry.y ? 1 : 0, this.brush.symmetry.z ? 1 : 0),
-                            uCentre: centre,
+                            uCopies: copyMatrices,
+                            uCopyCount: copies.length,
                             uStencil: this.stencil ?? gpu.constant('white'),
                             uHasStencil: stencil.enabled && this.stencil ? 1 : 0,
                             uStencilPlace: new THREE.Vector4(place.x, place.y, place.width, place.height),
@@ -691,19 +854,69 @@ export class Stroke {
                         },
                     });
                     gpu.passNow(this.masks.get(tile)!, { fragment: GATHER_SHADER, inputs: { batch: this.batch }, blend: 'alpha', scissor: scissorOf(area) });
+                    // Building up: this batch is laid over the picture as it is now, at once.
+                    if (this.brush.buildUp) this.apply(new Map([[tile, [area]]]), true);
                 }
                 areas.set(tile, [...(areas.get(tile) ?? []), ...rects]);
             }
         }
         selection?.dispose();
-        if (areas.size) this.apply(areas);
+        if (areas.size && !this.brush.buildUp) this.apply(areas);
+    }
+
+    /**
+     * What blur, sharpen, smudge or clone lay on over an area of a picture: worked out from the picture as
+     * it is now round the area, with the tile texel its first texel stands for; null to lay the brush's
+     * values on (painting, erasing, or a smudge or clone with nowhere to take from yet).
+     */
+    private sourceFor(key: string, picture: SparsePicture, area: Rect): { image: GpuImage; at: [number, number] } | null {
+        const mode = this.brush.mode;
+        if (mode === 'paint' || this.tool === 'erase') return null;
+        const shift = mode === 'smudge' ? this.smudgeShift : mode === 'clone' ? this.cloneShift : [0, 0] as [number, number];
+        if (!shift) return null;
+        const gpu = this.stack.host.gpu;
+        const sigma = Math.max(1, this.stack.size / 1024 * 2);
+        const reach = mode === 'blur' || mode === 'sharpen' ? Math.ceil(sigma * 3) + 1 : 0;
+        // The texels the area reads: the area moved back by the shift, and as far round as the blur reaches.
+        const region = clampRect(expandRect({ x0: area.x0 - shift[0], y0: area.y0 - shift[1], x1: area.x1 - shift[0], y1: area.y1 - shift[1] }, reach), this.stack.size);
+        if (isEmptyRect(region)) return null;
+        const width = region.x1 - region.x0;
+        const height = region.y1 - region.y0;
+        const raw = gpu.image(width, height, 'color', 16);
+        picture.drawInto(raw, region, [region.x0, region.y0]);
+        let image = raw;
+        // A layer's colour is weighted by its coverage; a mask is a value alone.
+        if (key.includes(':')) {
+            image = gpu.image(width, height, 'color', 16);
+            gpu.passNow(image, { fragment: PREMULTIPLY, inputs: { source: raw } });
+            gpu.release(raw);
+        }
+        if (mode === 'blur' || mode === 'sharpen') {
+            const across = gpu.image(width, height, 'color', 16);
+            gpu.passNow(across, { fragment: BLUR_LINE, inputs: { source: image }, uniforms: { uDir: new THREE.Vector2(1, 0), uSigma: sigma } });
+            const blurred = gpu.image(width, height, 'color', 16);
+            gpu.passNow(blurred, { fragment: BLUR_LINE, inputs: { source: across }, uniforms: { uDir: new THREE.Vector2(0, 1), uSigma: sigma } });
+            gpu.release(across);
+            if (mode === 'blur') {
+                gpu.release(image);
+                image = blurred;
+            } else {
+                const sharpened = gpu.image(width, height, 'color', 16);
+                gpu.passNow(sharpened, { fragment: SHARPEN_FROM, inputs: { source: image, blurred } });
+                gpu.release(blurred);
+                gpu.release(image);
+                image = sharpened;
+            }
+        }
+        return { image, at: [region.x0 + shift[0], region.y0 + shift[1]] };
     }
 
     /**
      * Lays the brush onto the pictures through the stroke mask, page by page within the areas just painted
-     * (from the pages as they were before the stroke).
+     * (from the pages as they were before the stroke); building up, through the batch just drawn, over the
+     * pages as they are now.
      */
-    private apply(areas: ReadonlyMap<number, readonly Rect[]>): void {
+    private apply(areas: ReadonlyMap<number, readonly Rect[]>, buildUp = false): void {
         const stack = this.stack;
         const gpu = stack.host.gpu;
         for (const [tile, rects] of areas) {
@@ -715,6 +928,7 @@ export class Stroke {
                 let kept = this.before.get(`${key}|${tile}`);
                 if (!kept) this.before.set(`${key}|${tile}`, kept = new Map());
                 for (const area of rects) {
+                    const source = this.sourceFor(key, picture, area);
                     for (const [px, py] of pagesOfArea(area, picture)) {
                         const index = py * picture.columns + px;
                         if (!kept.has(index)) {
@@ -730,10 +944,17 @@ export class Stroke {
                         const bounds = pageRect(px, py, picture.page);
                         const within = intersectRect(area, bounds);
                         if (isEmptyRect(within)) continue;
-                        const before = kept.get(index) ?? null;
+                        let before = kept.get(index) ?? null;
+                        // Building up lays each batch over the page as it is now (copied, as a page is not read while drawn on).
+                        let now: GpuImage | null = null;
+                        if (buildUp) {
+                            now = gpu.image(picture.page, picture.page, 'color', picture.precision);
+                            gpu.copy(page, now);
+                            before = now;
+                        }
                         gpu.passNow(page, {
                             fragment: APPLY_SHADER,
-                            inputs: { before: before ?? gpu.constant('clear'), stroke: this.masks.get(tile)! },
+                            inputs: { before: before ?? gpu.constant('clear'), stroke: buildUp ? this.batch : this.masks.get(tile)!, source: source?.image ?? gpu.constant('clear') },
                             uniforms: {
                                 uErase: this.tool === 'erase' ? 1 : 0,
                                 uMask: this.target.kind === 'mask' ? 1 : 0,
@@ -742,10 +963,14 @@ export class Stroke {
                                 uAt: new THREE.Vector2(bounds.x0, bounds.y0),
                                 uHasBefore: before ? 1 : 0,
                                 uFill: new THREE.Vector4(...picture.fill),
+                                uSource: source ? 1 : 0,
+                                uSourceAt: new THREE.Vector2(...(source?.at ?? [0, 0])),
                             },
                             scissor: scissorOf({ x0: within.x0 - bounds.x0, y0: within.y0 - bounds.y0, x1: within.x1 - bounds.x0, y1: within.y1 - bounds.y0 }),
                         });
+                        gpu.release(now);
                     }
+                    gpu.release(source?.image);
                 }
                 stack.touch(key, tile);
             }
