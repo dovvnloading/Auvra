@@ -107,7 +107,7 @@ export const BrushPanel: React.FC<{
                         <Row label="Across" value={brush.stencil.offsetX} min={-0.5} max={0.5} onChange={(offsetX) => set({ stencil: { ...brush.stencil, offsetX } })} />
                         <Row label="Down" value={brush.stencil.offsetY} min={-0.5} max={0.5} onChange={(offsetY) => set({ stencil: { ...brush.stencil, offsetY } })} />
                         <Row label="Strength" value={brush.stencil.opacity} min={0} max={1} onChange={(opacity) => set({ stencil: { ...brush.stencil, opacity } })} />
-                        <p className="text-2xs text-zinc-500">The stencil stays still on the screen while the model turns under it.</p>
+                        <p className="text-2xs leading-snug text-zinc-500">Shown faintly over the view, in its picture's proportions. It stays still on the screen while the model turns under it, whether the brush is laid on from the screen or on the surface.</p>
                     </>
                 )}
             </section>

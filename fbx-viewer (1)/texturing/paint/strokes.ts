@@ -59,6 +59,21 @@ export interface BrushSettings {
 /** The largest brush radius, in screen pixels: the size sliders and the ] key stop here. */
 export const MAX_BRUSH_SIZE = 600;
 
+/** A picture's width over its height (1 when not known yet). */
+export const pictureAspect = (texture: THREE.Texture | null): number => {
+    const image = texture?.image as { width?: number; height?: number } | undefined;
+    return image?.width && image.height ? image.width / image.height : 1;
+};
+
+/**
+ * Where the stencil lies on a view of `width` × `height` pixels: its middle (from the top left), its size
+ * (a share of the view's height tall, as wide as its picture's proportions make it) and its turn in degrees.
+ */
+export const stencilPlace = (stencil: BrushSettings['stencil'], aspect: number, width: number, height: number): { x: number; y: number; width: number; height: number; angle: number } => {
+    const tall = height * stencil.scale;
+    return { x: width / 2 + stencil.offsetX * width, y: height / 2 + stencil.offsetY * height, width: tall * aspect, height: tall, angle: stencil.rotation };
+};
+
 export const DEFAULT_BRUSH: BrushSettings = {
     size: 40,
     hardness: 0.6,
@@ -145,7 +160,30 @@ uniform int uHasStencil;
 uniform vec4 uStencilPlace;
 uniform float uStencilAngle;
 uniform float uStencilOpacity;
+uniform int uStencilSrgb;
+uniform int uStencilFlip;
 uniform int uIsland;
+
+// How much the stencil lets through at a place on the screen (pixels from the top left): its picture's
+// brightness inside it, nothing outside it, eased by its strength.
+float stencilAt(vec2 screen) {
+    vec2 sp = rotate2(-uStencilAngle) * ((screen - uStencilPlace.xy) / uStencilPlace.zw) + 0.5;
+    // The picture's top row at the top of its place on the screen, however the texture was uploaded.
+    if (uStencilFlip == 1) sp.y = 1.0 - sp.y;
+    vec4 c = texture(uStencil, sp);
+    if (uStencilSrgb == 1) c.rgb = linearToSrgb(c.rgb);
+    float inside = step(0.0, sp.x) * step(sp.x, 1.0) * step(0.0, sp.y) * step(sp.y, 1.0);
+    return mix(1.0, luma(c.rgb) * c.a * inside, uStencilOpacity);
+}
+
+// The stencil cast from the screen onto a place on the model, as a slide is cast through the model
+// (a surface brush can reach places the eye cannot see; they take the stencil where they fall on the screen).
+float stencilOnModel(vec3 p) {
+    vec4 clip = uViewProj * vec4(p, 1.0);
+    if (clip.w <= 0.0) return 1.0 - uStencilOpacity;
+    vec3 ndc = clip.xyz / clip.w;
+    return stencilAt(vec2((ndc.x * 0.5 + 0.5) * uViewport.x, (0.5 - ndc.y * 0.5) * uViewport.y));
+}
 
 float shapeAt(vec2 local, float radiusPixels) {
     float r = uShape == 1 ? max(abs(local.x), abs(local.y)) : length(local);
@@ -184,12 +222,7 @@ float coverageAt(vec3 p, vec3 n) {
             float s = shapeAt(local, d.z) * uDabs2[i].x;
             a = 1.0 - (1.0 - a) * (1.0 - s);
         }
-        if (uHasStencil == 1) {
-            vec2 sp = rotate2(-uStencilAngle) * ((screen - uStencilPlace.xy) / uStencilPlace.zw) + 0.5;
-            vec4 c = texture(uStencil, sp);
-            float inside = step(0.0, sp.x) * step(sp.x, 1.0) * step(0.0, sp.y) * step(sp.y, 1.0);
-            a *= mix(1.0, luma(c.rgb) * c.a * inside, uStencilOpacity);
-        }
+        if (uHasStencil == 1) a *= stencilAt(screen);
         return a * smoothstep(uFacing, uFacing + 0.15, facing);
     }
     float a = 0.0;
@@ -210,6 +243,7 @@ float coverageAt(vec3 p, vec3 n) {
         float s = shapeAt(local, radius * uDabs3[i].w) * uDabs2[i].x;
         a = 1.0 - (1.0 - a) * (1.0 - s);
     }
+    if (uHasStencil == 1 && a > 0.0) a *= stencilOnModel(p);
     return a;
 }
 
@@ -488,6 +522,7 @@ export class Stroke {
         for (let i = 0; i < dabs.length; i += MAX_DABS) batches.push(dabs.slice(i, i + MAX_DABS));
         if (island >= 0) batches.push([]);
         const stencil = this.brush.stencil;
+        const place = stencilPlace(stencil, pictureAspect(this.stencil), view.width, view.height);
         for (const batch of batches) {
             const d1 = Array.from({ length: MAX_DABS }, () => new THREE.Vector4());
             const d2 = Array.from({ length: MAX_DABS }, () => new THREE.Vector4());
@@ -531,9 +566,11 @@ export class Stroke {
                         uCentre: centre,
                         uStencil: this.stencil ?? gpu.constant('white'),
                         uHasStencil: stencil.enabled && this.stencil ? 1 : 0,
-                        uStencilPlace: new THREE.Vector4(view.width / 2 + stencil.offsetX * view.width, view.height / 2 + stencil.offsetY * view.height, view.height * stencil.scale, view.height * stencil.scale),
-                        uStencilAngle: (stencil.rotation * Math.PI) / 180,
+                        uStencilPlace: new THREE.Vector4(place.x, place.y, place.width, place.height),
+                        uStencilAngle: (place.angle * Math.PI) / 180,
                         uStencilOpacity: stencil.opacity,
+                        uStencilSrgb: this.stencil?.colorSpace === THREE.SRGBColorSpace ? 1 : 0,
+                        uStencilFlip: this.stencil?.flipY ? 1 : 0,
                         uIsland: island,
                     },
                 });

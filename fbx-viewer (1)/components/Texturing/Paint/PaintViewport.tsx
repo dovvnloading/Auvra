@@ -4,7 +4,7 @@ import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment
 import type { GpuImage, TextureGpu } from '../../../texturing/gpu/textureGpu';
 import { tileGeometry } from '../../../texturing/mesh/partMesh';
 import type { MeshMapName } from '../../../texturing/graph/nodes/io';
-import { MAX_BRUSH_SIZE, renderDepth, Stroke, type BrushSettings, type StrokeTarget } from '../../../texturing/paint/strokes';
+import { MAX_BRUSH_SIZE, pictureAspect, renderDepth, stencilPlace, Stroke, type BrushSettings, type StrokeTarget } from '../../../texturing/paint/strokes';
 import type { PaintChannel } from '../../../texturing/paint/paintTypes';
 import type { PaintSession } from './paintSession';
 import type { UvSession } from './uvSession';
@@ -74,6 +74,30 @@ const SINGLE_VIEW = new THREE.ShaderMaterial({
     fragmentShader: 'uniform sampler2D map; uniform int gray; varying vec2 vUv; void main() { vec4 c = texture2D(map, vUv); gl_FragColor = vec4(gray == 1 ? c.rrr : c.rgb, 1.0); }',
 });
 SINGLE_VIEW.toneMapped = false;
+
+/** The stencil drawn faintly over the view where it lies, so it can be seen and placed while painting. */
+const StencilOverlay: React.FC<{ texture: THREE.Texture; place: ReturnType<typeof stencilPlace> }> = ({ texture, place }) => {
+    const ref = useRef<HTMLCanvasElement>(null);
+    const version = texture.version;
+    useEffect(() => {
+        const canvas = ref.current;
+        const image = texture.image as (CanvasImageSource & { width?: number; height?: number }) | undefined;
+        if (!canvas || !image?.width || !image.height) return;
+        const scale = Math.min(1, 1024 / Math.max(image.width, image.height));
+        canvas.width = Math.max(1, Math.round(image.width * scale));
+        canvas.height = Math.max(1, Math.round(image.height * scale));
+        try {
+            canvas.getContext('2d')?.drawImage(image, 0, 0, canvas.width, canvas.height);
+        } catch {
+            // A picture kept as raw data cannot be drawn here; painting through it still works.
+        }
+    }, [texture, version]);
+    return (
+        <canvas ref={ref} className="pointer-events-none absolute opacity-40" style={{
+            left: place.x - place.width / 2, top: place.y - place.height / 2, width: place.width, height: place.height, transform: `rotate(${place.angle}deg)`,
+        }} />
+    );
+};
 
 export const PaintViewport: React.FC<{
     session: PaintSession;
@@ -445,6 +469,7 @@ export const PaintViewport: React.FC<{
     }, [brush.size, frame, onBrushSize]);
 
     const showCursor = cursor && (tool === 'paint' || tool === 'erase');
+    const stencilTexture = brush.stencil.enabled && brush.stencil.textureId && (tool === 'paint' || tool === 'erase') ? session.host.texture(brush.stencil.textureId) : null;
     return (
         <div
             ref={host}
@@ -457,6 +482,7 @@ export const PaintViewport: React.FC<{
             onContextMenu={(event) => event.preventDefault()}
         >
             <canvas ref={canvas} className="absolute inset-0 h-full w-full" />
+            {stencilTexture && <StencilOverlay texture={stencilTexture} place={stencilPlace(brush.stencil, pictureAspect(stencilTexture), size.width / size.ratio, size.height / size.ratio)} />}
             {showCursor && (
                 <div className="pointer-events-none absolute rounded-full border border-white/80 mix-blend-difference" style={{
                     left: cursor.x - brush.size / size.ratio, top: cursor.y - brush.size / size.ratio, width: (brush.size * 2) / size.ratio, height: (brush.size * 2) / size.ratio,
