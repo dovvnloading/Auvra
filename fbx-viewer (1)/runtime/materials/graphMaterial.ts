@@ -454,13 +454,13 @@ THREE.Mesh.prototype.onBeforeShadow = function onBeforeShadow(this: THREE.Mesh, 
 const programFlags = (material: StandardMaterial): unknown[] =>
     [material.transparent, material.side, material.blending, material.alphaTest, material.map, material.normalMap];
 
-/** The graph stage of a material (shaderStages.ts): the graph's shaders spliced into three's. */
 /** The renderer that last compiled each graph-shaded material, for drawing what the graph works out (bounceColour.ts). */
 const compilers = new WeakMap<THREE.Material, THREE.WebGLRenderer>();
 
 /** The renderer that last compiled `material`'s graph, if one has. */
 export const graphRenderer = (material: THREE.Material): THREE.WebGLRenderer | null => compilers.get(material) ?? null;
 
+/** The graph stage of a material (shaderStages.ts): the graph's shaders spliced into three's. */
 const graphStage = (material: StandardMaterial): ShaderStage => ({
     patch: (shader, renderer) => {
         const binding = bindings.get(material);
@@ -659,7 +659,8 @@ const estimateColour = (binding: GraphBinding, nodeId: string, depth: number): C
             const left = a ? estimateColour(binding, a.fromNode, depth + 1) : { colour: [param('a'), param('a'), param('a')] as [number, number, number] };
             const right = b ? estimateColour(binding, b.fromNode, depth + 1) : { colour: [param('b'), param('b'), param('b')] as [number, number, number] };
             if (!left || !right || (left.texture !== undefined && right.texture !== undefined)) return null;
-            return { colour: [left.colour[0] * right.colour[0], left.colour[1] * right.colour[1], left.colour[2] * right.colour[2]], texture: left.texture ?? right.texture };
+            // A texture still loading (null) stays one: it is not a constant.
+            return { colour: [left.colour[0] * right.colour[0], left.colour[1] * right.colour[1], left.colour[2] * right.colour[2]], texture: left.texture !== undefined ? left.texture : right.texture };
         }
         default:
             return null;

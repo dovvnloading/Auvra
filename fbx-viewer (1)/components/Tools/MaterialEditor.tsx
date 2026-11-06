@@ -508,7 +508,8 @@ const MaterialEditorSession: React.FC<MaterialEditorProps> = ({ model, textures,
           const editable = !unnamed && !reserved;
           const isOpen = editable && expanded === material.name;
           const override = draft[material.name];
-          const fieldCount = override ? Object.keys(override).length : 0;
+          // How a base map draws is part of the base map, not a field of its own.
+          const fieldCount = override ? Object.keys(override).filter((field) => field !== 'paintedMap').length : 0;
           const swatch = override?.color ?? material.base.color ?? '#000000';
           return (
             <div key={material.name || '(unnamed)'} className={`rounded-md border ${isOpen ? 'border-blue-500/30 bg-gray-950/60' : 'border-gray-800 bg-gray-950/30'}`}>

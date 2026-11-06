@@ -570,6 +570,13 @@ describe('what a material gives rays', () => {
             const look = rayMaterialFor(material, () => [0.5, 0.5, 0.5]);
             expect(look.albedo).toEqual([0.5, 0, 0]);
             expect(look.flags & MATERIAL_UNLIT).toBeTruthy();
+            // Tinted, too: a texture still loading is not a constant.
+            const tinted = imported();
+            bindMaterialGraph(tinted, normalizeMaterialGraph({
+                nodes: [node('out', OUTPUT_NODE_TYPE), node('tex', 'texture', { texture: 'later' }), node('tint', 'color'), node('mul', 'multiply')],
+                links: [link('tex', 'rgb', 'mul', 'a'), link('tint', 'out', 'mul', 'b'), link('mul', 'out', 'out', 'baseColor')],
+            }), () => null);
+            expect(rayMaterialFor(tinted, () => [0.5, 0.5, 0.5]).albedo).toEqual([0.5, 0, 0]);
         });
 
         it('keeps its own colour until a graph that works its colour out has been drawn on a renderer', () => {
