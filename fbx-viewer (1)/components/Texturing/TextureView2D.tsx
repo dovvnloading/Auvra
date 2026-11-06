@@ -7,7 +7,9 @@ import type { TextureGraphSession } from './textureGraphSession';
 
 /**
  * The 2D view: one node's image, zoomed and panned with the wheel and a drag, shown once or
- * repeated to check it tiles, as all channels or one at a time. Pixel values show under the pointer.
+ * repeated to check it tiles, as all channels or one at a time. The pixel under the pointer shows
+ * with its values as the image keeps them (red, green, blue and alpha, or the one value of a grey
+ * image), read from the GPU without holding it up.
  */
 
 type Channel = 'rgb' | 'r' | 'g' | 'b' | 'a';
@@ -54,11 +56,39 @@ export const TextureView2D: React.FC<{ session: TextureGraphSession; nodeId: str
     const [tile, setTile] = useState(false);
     const [view, setView] = useState({ panX: 0, panY: 0, zoom: 0 });
     const [size, setSize] = useState({ width: 0, height: 0 });
-    const [probe, setProbe] = useState<string | null>(null);
+    /** The pixel under the pointer (counted from the top left) and its values once read. */
+    const [probe, setProbe] = useState<{ x: number; y: number; values: number[] | null } | null>(null);
     const drag = useRef<{ x: number; y: number } | null>(null);
+    /** The pixel to read (from the bottom left, as the GPU counts) and whether a read is on its way. */
+    const wanted = useRef<{ image: GpuImage; x: number; y: number } | null>(null);
+    const reading = useRef(false);
 
     const image: GpuImage | null = nodeId ? session.imageOf(nodeId, output) : null;
     const state = nodeId ? session.state(nodeId) : undefined;
+
+    // One read at a time: when it lands, the pointer's newest pixel is read next if it moved meanwhile.
+    const readNext = useCallback(() => {
+        const want = wanted.current;
+        if (reading.current || !want) return;
+        reading.current = true;
+        const { image: source, x, y } = want;
+        void session.gpu.readPixelLater(source, x, y).then((values) => {
+            reading.current = false;
+            const now = wanted.current;
+            if (!now) return;
+            if (now.image === source && now.x === x && now.y === y) {
+                if (values) setProbe({ x, y: source.height - 1 - y, values: source.kind === 'gray' ? [values[0]] : [...values] });
+            } else readNext();
+        });
+    }, [session]);
+
+    // The image drawn again (an edit) under a still pointer: its values are read again.
+    useEffect(() => {
+        if (!wanted.current) return;
+        if (!image) { wanted.current = null; setProbe(null); return; }
+        wanted.current = { ...wanted.current, image };
+        readNext();
+    }, [image, readNext, version]);
 
     useEffect(() => {
         const element = host.current;
@@ -126,18 +156,34 @@ export const TextureView2D: React.FC<{ session: TextureGraphSession; nodeId: str
 
     const readPixel = (clientX: number, clientY: number) => {
         const element = host.current;
-        if (!element || !image) { setProbe(null); return; }
+        const leave = () => { wanted.current = null; setProbe(null); };
+        if (!element || !image) { leave(); return; }
         const box = element.getBoundingClientRect();
         const ratio = window.devicePixelRatio || 1;
         const lx = (clientX - box.left) * ratio;
         const ly = (box.bottom - clientY) * ratio;
         const u = (lx - size.width / 2 - view.panX) / (zoom() * image.width) + 0.5;
         const v = (ly - size.height / 2 - view.panY) / (zoom() * image.height) + 0.5;
-        const px = Math.floor((((u % 1) + 1) % 1) * image.width);
-        const py = Math.floor((((v % 1) + 1) % 1) * image.height);
-        if (!tile && (u < 0 || v < 0 || u > 1 || v > 1)) { setProbe(null); return; }
-        setProbe(`${px}, ${image.height - 1 - py}`);
+        if (!tile && (u < 0 || v < 0 || u > 1 || v > 1)) { leave(); return; }
+        if (tile && (u < -1 || v < -1 || u > 2 || v > 2)) { leave(); return; }
+        const px = Math.min(image.width - 1, Math.floor((((u % 1) + 1) % 1) * image.width));
+        const py = Math.min(image.height - 1, Math.floor((((v % 1) + 1) % 1) * image.height));
+        const before = wanted.current;
+        if (before && before.image === image && before.x === px && before.y === py) return;
+        wanted.current = { image, x: px, y: py };
+        // The place shows at once; its values follow when the read lands (a frame or so).
+        setProbe((current) => ({ x: px, y: image.height - 1 - py, values: current?.values ?? null }));
+        readNext();
     };
+
+    const probeText = (() => {
+        if (!probe) return null;
+        const values = probe.values;
+        const place = `${probe.x}, ${probe.y}`;
+        if (!values) return place;
+        if (values.length === 1) return `${place}   ${values[0].toFixed(3)}`;
+        return `${place}   R ${values[0].toFixed(3)}  G ${values[1].toFixed(3)}  B ${values[2].toFixed(3)}  A ${values[3].toFixed(3)}`;
+    })();
 
     return (
         <div className="flex min-h-0 flex-1 flex-col">
@@ -161,16 +207,15 @@ export const TextureView2D: React.FC<{ session: TextureGraphSession; nodeId: str
                     setView((current) => ({ zoom: current.zoom > 0 ? current.zoom : zoom(), panX: current.panX + dx, panY: current.panY - dy }));
                 }}
                 onPointerUp={() => { drag.current = null; }}
-                onPointerLeave={() => setProbe(null)}
+                onPointerLeave={() => { wanted.current = null; setProbe(null); }}
             >
                 <canvas ref={canvas} className="absolute inset-0 h-full w-full" />
                 {!image && <div className="absolute inset-0 flex items-center justify-center text-2xs text-zinc-500">{nodeId ? (state?.error ?? 'Drawing…') : 'Double-click a node to look at it here.'}</div>}
             </div>
-            <div className="flex items-center gap-3 border-t border-zinc-800 px-2 py-1 text-2xs text-zinc-500">
-                {image ? <span>{image.width} × {image.height} · {image.kind === 'color' ? 'colour' : 'grey'} · {image.precision}-bit</span> : <span>—</span>}
-                {state && <span>{state.milliseconds < 1 ? '<1' : Math.round(state.milliseconds)} ms</span>}
-                <span className="flex-1" />
-                {probe && <span className="font-mono">{probe}</span>}
+            <div className="flex flex-wrap items-center gap-x-3 border-t border-zinc-800 px-2 py-1 text-2xs text-zinc-500">
+                {image ? <span className="shrink-0">{image.width} × {image.height} · {image.kind === 'color' ? 'colour' : 'grey'} · {image.precision === 8 ? '8-bit' : image.precision === 16 ? 'half float' : 'full float'}</span> : <span>—</span>}
+                {state && <span className="shrink-0">{state.milliseconds < 1 ? '<1' : Math.round(state.milliseconds)} ms</span>}
+                {probeText && <span className="ml-auto whitespace-nowrap font-mono text-zinc-400" title="The pixel under the pointer, counted from the top left, and its values">{probeText}</span>}
             </div>
         </div>
     );

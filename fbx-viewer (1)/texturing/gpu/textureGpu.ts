@@ -469,6 +469,53 @@ export class TextureGpu {
     }
 
     /**
+     * One pixel of an image (x and y from the bottom left) as it is kept, four floats, read without holding
+     * up the GPU: the value is copied out behind the image's drawing and collected once a fence says it is
+     * done. Resolves null if the context is lost meanwhile.
+     */
+    readPixelLater(source: GpuImage, x: number, y: number): Promise<Float32Array | null> {
+        const probe = this.image(1, 1, 'color', 32);
+        this.passNow(probe, {
+            fragment: 'uniform vec2 uAt;\nvoid main() { outColor = texelFetch(source, ivec2(uAt), 0); }',
+            inputs: { source },
+            uniforms: { uAt: new THREE.Vector2(Math.max(0, Math.min(source.width - 1, Math.floor(x))), Math.max(0, Math.min(source.height - 1, Math.floor(y)))) },
+        });
+        const gl = this.renderer.getContext() as WebGL2RenderingContext;
+        const previous = this.renderer.getRenderTarget();
+        this.renderer.setRenderTarget(probe.target);
+        const buffer = gl.createBuffer();
+        gl.bindBuffer(gl.PIXEL_PACK_BUFFER, buffer);
+        gl.bufferData(gl.PIXEL_PACK_BUFFER, 16, gl.STREAM_READ);
+        gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.FLOAT, 0);
+        gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+        this.renderer.setRenderTarget(previous);
+        // The read is queued before anything else can draw into the probe: it may go back to the pool now.
+        this.release(probe);
+        const fence = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
+        gl.flush();
+        return new Promise((resolve) => {
+            const finish = (value: Float32Array | null) => {
+                if (fence) gl.deleteSync(fence);
+                gl.deleteBuffer(buffer);
+                resolve(value);
+            };
+            let waited = 0;
+            const poll = () => {
+                if (gl.isContextLost() || !fence) { finish(null); return; }
+                const status = gl.clientWaitSync(fence, 0, 0);
+                if (status === gl.WAIT_FAILED || waited > 2000) { finish(null); return; }
+                if (status === gl.TIMEOUT_EXPIRED) { waited += 4; setTimeout(poll, 4); return; }
+                const value = new Float32Array(4);
+                gl.bindBuffer(gl.PIXEL_PACK_BUFFER, buffer);
+                gl.getBufferSubData(gl.PIXEL_PACK_BUFFER, 0, value);
+                gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+                finish(value);
+            };
+            setTimeout(poll, 0);
+        });
+    }
+
+    /**
      * Reads `source` scaled to `width` × `height` as 16-bit values (one per pixel for 'gray', four for
      * 'color'), top row first when `flipRows`. Read a strip at a time, so even an 8K picture needs little memory.
      */
