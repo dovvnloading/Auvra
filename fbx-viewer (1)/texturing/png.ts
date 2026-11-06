@@ -85,11 +85,11 @@ export const pngBitDepth = async (blob: Blob): Promise<number> => {
     return head[24];
 };
 
-/**
- * Reads a PNG (grey, grey and alpha, RGB or RGBA, 8 or 16 bits, not interlaced) to floats 0..1, four
- * per pixel (grey repeated, alpha 1 when absent), rows in the order of the file.
- */
-export const readPng16 = async (blob: Blob): Promise<{ width: number; height: number; data: Float32Array }> => {
+/** A PNG's rows, unfiltered in place: each row is a filter byte, then `row` bytes of samples. */
+interface PngRows { width: number; height: number; depth: 8 | 16; channels: 1 | 2 | 3 | 4; raw: Uint8Array; row: number }
+
+/** Reads a PNG (grey, grey and alpha, RGB or RGBA, 8 or 16 bits, not interlaced) to its rows of samples. */
+const readRows = async (blob: Blob): Promise<PngRows> => {
     const bytes = new Uint8Array(await blob.arrayBuffer());
     const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
     let at = 8;
@@ -109,23 +109,23 @@ export const readPng16 = async (blob: Blob): Promise<{ width: number; height: nu
         else if (type === 'IEND') break;
         at += 12 + length;
     }
-    const channels = { 0: 1, 2: 3, 4: 2, 6: 4 }[colourType as 0 | 2 | 4 | 6];
+    const channels = ({ 0: 1, 2: 3, 4: 2, 6: 4 } as const)[colourType as 0 | 2 | 4 | 6];
     if (!channels || (depth !== 8 && depth !== 16)) throw new Error('This PNG picture is of a kind not read here.');
     const stream = new Blob(parts as BlobPart[]).stream().pipeThrough(new DecompressionStream('deflate'));
     const raw = new Uint8Array(await new Response(stream).arrayBuffer());
     const stride = depth / 8 * channels;
     const row = width * stride;
-    const lines = new Uint8Array(row * height);
+    // Unfiltered where it lies (the row above is already unfiltered when a row needs it): no second copy.
     for (let y = 0; y < height; y++) {
-        const filter = raw[y * (row + 1)];
-        const source = raw.subarray(y * (row + 1) + 1, (y + 1) * (row + 1));
-        const line = lines.subarray(y * row, (y + 1) * row);
-        const above = y > 0 ? lines.subarray((y - 1) * row, y * row) : null;
+        const start = y * (row + 1);
+        const filter = raw[start];
+        const line = start + 1;
+        const above = start + 1 - (row + 1);
         for (let i = 0; i < row; i++) {
-            const left = i >= stride ? line[i - stride] : 0;
-            const up = above ? above[i] : 0;
-            const corner = above && i >= stride ? above[i - stride] : 0;
-            let value = source[i];
+            const left = i >= stride ? raw[line + i - stride] : 0;
+            const up = y > 0 ? raw[above + i] : 0;
+            const corner = y > 0 && i >= stride ? raw[above + i - stride] : 0;
+            let value = raw[line + i];
             if (filter === 1) value += left;
             else if (filter === 2) value += up;
             else if (filter === 3) value += (left + up) >> 1;
@@ -134,28 +134,100 @@ export const readPng16 = async (blob: Blob): Promise<{ width: number; height: nu
                 const pa = Math.abs(p - left), pb = Math.abs(p - up), pc = Math.abs(p - corner);
                 value += pa <= pb && pa <= pc ? left : pb <= pc ? up : corner;
             }
-            line[i] = value & 255;
+            raw[line + i] = value & 255;
         }
     }
+    return { width, height, depth, channels, raw, row };
+};
+
+/**
+ * Reads a PNG (grey, grey and alpha, RGB or RGBA, 8 or 16 bits, not interlaced) to floats 0..1, four
+ * per pixel (grey repeated, alpha 1 when absent), rows in the order of the file. Four bytes a value:
+ * prefer readPng16Half, which the GPU's 16-bit images take as they are.
+ */
+export const readPng16 = async (blob: Blob): Promise<{ width: number; height: number; data: Float32Array }> => {
+    const { width, height, depth, channels, raw, row } = await readRows(blob);
     const data = new Float32Array(width * height * 4);
     const scale = depth === 16 ? 1 / 65535 : 1 / 255;
-    const sample = (offset: number) => (depth === 16 ? (lines[offset] << 8) | lines[offset + 1] : lines[offset]) * scale;
     const size = depth / 8;
-    for (let p = 0, base = 0, o = 0; p < width * height; p++, base += stride, o += 4) {
-        if (channels <= 2) {
-            const v = sample(base);
-            data[o] = v;
-            data[o + 1] = v;
-            data[o + 2] = v;
-            data[o + 3] = channels === 2 ? sample(base + size) : 1;
-        } else {
-            data[o] = sample(base);
-            data[o + 1] = sample(base + size);
-            data[o + 2] = sample(base + 2 * size);
-            data[o + 3] = channels === 4 ? sample(base + 3 * size) : 1;
+    const sample = (offset: number) => (depth === 16 ? (raw[offset] << 8) | raw[offset + 1] : raw[offset]) * scale;
+    for (let y = 0, o = 0; y < height; y++) {
+        for (let x = 0, base = y * (row + 1) + 1; x < width; x++, base += size * channels, o += 4) {
+            if (channels <= 2) {
+                const v = sample(base);
+                data[o] = v;
+                data[o + 1] = v;
+                data[o + 2] = v;
+                data[o + 3] = channels === 2 ? sample(base + size) : 1;
+            } else {
+                data[o] = sample(base);
+                data[o + 1] = sample(base + size);
+                data[o + 2] = sample(base + 2 * size);
+                data[o + 3] = channels === 4 ? sample(base + 3 * size) : 1;
+            }
         }
     }
     return { width, height, data };
+};
+
+/** The bits of the half float nearest `value` (0..1): 10 bits of fraction, rounded, small values kept as subnormals. */
+export const toHalf = (value: number): number => {
+    if (!(value > 0)) return 0;
+    let exponent = Math.floor(Math.log2(value));
+    if (value / 2 ** exponent >= 2) exponent++;
+    else if (value / 2 ** exponent < 1) exponent--;
+    // Below 2^-14 halves have no implicit one: steps of 2^-24.
+    if (exponent < -14) return Math.round(value * 2 ** 24);
+    let fraction = Math.round((value / 2 ** exponent - 1) * 1024);
+    if (fraction === 1024) { fraction = 0; exponent++; }
+    return ((exponent + 15) << 10) | fraction;
+};
+
+/** Half-float bits of every 16-bit (and 8-bit) sample value, worked out once. */
+let halves16: Uint16Array | null = null;
+let halves8: Uint16Array | null = null;
+const HALF_ONE = 0x3c00;
+const halfTable = (depth: 8 | 16): Uint16Array => {
+    if (depth === 16) {
+        if (!halves16) { halves16 = new Uint16Array(65536); for (let i = 0; i < 65536; i++) halves16[i] = toHalf(i / 65535); }
+        return halves16;
+    }
+    if (!halves8) { halves8 = new Uint16Array(256); for (let i = 0; i < 256; i++) halves8[i] = toHalf(i / 255); }
+    return halves8;
+};
+
+/**
+ * Reads a PNG (grey, grey and alpha, RGB or RGBA, 8 or 16 bits, not interlaced) to half floats 0..1,
+ * as a 16-bit GPU image keeps them: the bits of each value, ready for a HalfFloatType texture. A grey
+ * picture gives one value per pixel (`channels` 1, for a RedFormat texture), the rest four (grey
+ * repeated, alpha 1 when absent). Rows come in the order of the file. Two bytes a value, against four
+ * for readPng16: a 4K colour picture takes 128 MB instead of 256, and no full copy is made on the way.
+ */
+export const readPng16Half = async (blob: Blob): Promise<{ width: number; height: number; channels: 1 | 4; data: Uint16Array }> => {
+    const { width, height, depth, channels, raw, row } = await readRows(blob);
+    const table = halfTable(depth);
+    const size = depth / 8;
+    const out = channels === 1 ? 1 : 4;
+    const data = new Uint16Array(width * height * out);
+    const sample = depth === 16 ? (offset: number) => table[(raw[offset] << 8) | raw[offset + 1]] : (offset: number) => table[raw[offset]];
+    for (let y = 0, o = 0; y < height; y++) {
+        for (let x = 0, base = y * (row + 1) + 1; x < width; x++, base += size * channels, o += out) {
+            if (channels === 1) data[o] = sample(base);
+            else if (channels === 2) {
+                const v = sample(base);
+                data[o] = v;
+                data[o + 1] = v;
+                data[o + 2] = v;
+                data[o + 3] = sample(base + size);
+            } else {
+                data[o] = sample(base);
+                data[o + 1] = sample(base + size);
+                data[o + 2] = sample(base + 2 * size);
+                data[o + 3] = channels === 4 ? sample(base + 3 * size) : HALF_ONE;
+            }
+        }
+    }
+    return { width, height, channels: out, data };
 };
 
 /**
