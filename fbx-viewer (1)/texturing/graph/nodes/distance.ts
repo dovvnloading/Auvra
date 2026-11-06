@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import type { GpuImage, TextureGpu } from '../../gpu/textureGpu';
 import { anyIn, bool, colorIn, float, grayIn, int, onePass, out, select, seed } from '../nodeKit';
 import type { NodeRunContext, TexNodeDef } from '../types';
+import { FLOOD_ANY, FLOOD_BOX_VERTEX, FLOOD_CHANGED, FLOOD_HOOK, FLOOD_JUMP, FLOOD_RESULT, FLOOD_START } from '../flood';
 import { gaussianBlur } from './transform';
 
 /**
@@ -88,226 +89,63 @@ const emptyResult = (context: NodeRunContext, value = 0) => {
 };
 
 // ---------------------------------------------------------------------------
-// Flood fill: islands of a mask, labelled on the CPU from runs of white pixels
+// Flood fill: islands of a mask, labelled on the GPU (flood.ts)
 // ---------------------------------------------------------------------------
 
-/** Bytes a row of a packed mask takes: a bit per pixel, in whole RGBA texels of 32 pixels each. */
-export const packedRowBytes = (width: number): number => Math.ceil(width / 32) * 4;
+/** Rounds of hooking and jumping between checks of whether the labels have settled. */
+const ROUNDS_A_CHECK = 6;
+/** Checks at most: past that the labels are kept as they are (only very winding islands get there). */
+const MOST_CHECKS = 40;
+
+/** True when any pixel differs between two label images: halved to one pixel on the GPU, and only that read. */
+const labelsChanged = async (gpu: TextureGpu, before: GpuImage, after: GpuImage): Promise<boolean> => {
+    let level = gpu.image(after.width, after.height, 'gray', 8);
+    await gpu.pass(level, { fragment: FLOOD_CHANGED, inputs: { before, labels: after } });
+    while (level.width > 1 || level.height > 1) {
+        const half = gpu.image(Math.max(1, Math.ceil(level.width / 2)), Math.max(1, Math.ceil(level.height / 2)), 'gray', 8);
+        await gpu.pass(half, { fragment: FLOOD_ANY, inputs: { source: level } });
+        gpu.release(level);
+        level = half;
+    }
+    const value = await gpu.readPixelLater(level, 0, 0);
+    gpu.release(level);
+    return Boolean(value && value[0] > 0.5);
+};
+
+/** Each pixel's island label (its root's place) in .xy, .z 1 inside the mask: hooking and pointer jumping until settled. */
+const labelIslandsGpu = async (context: NodeRunContext, mask: GpuImage, threshold: number): Promise<GpuImage> => {
+    const { gpu, width, height } = context;
+    const wrapAxes = [context.tiling[0] ? 1 : 0, context.tiling[1] ? 1 : 0];
+    let labels = gpu.image(width, height, 'color', 32);
+    await gpu.pass(labels, { fragment: FLOOD_START, inputs: { mask }, uniforms: { uThreshold: threshold, uGray: mask.kind === 'gray' ? 1 : 0 } });
+    const step = async (fragment: string): Promise<void> => {
+        const next = gpu.image(width, height, 'color', 32);
+        await gpu.pass(next, { fragment, inputs: { labels }, uniforms: { uWrapAxes: wrapAxes } });
+        gpu.release(labels);
+        labels = next;
+    };
+    for (let check = 0; check < MOST_CHECKS; check++) {
+        for (let round = 0; round < ROUNDS_A_CHECK - 1; round++) { await step(FLOOD_HOOK); await step(FLOOD_JUMP); await step(FLOOD_JUMP); }
+        const before = gpu.retain(labels);
+        await step(FLOOD_HOOK);
+        await step(FLOOD_JUMP);
+        await step(FLOOD_JUMP);
+        const changed = await labelsChanged(gpu, before, labels);
+        gpu.release(before);
+        if (!changed) break;
+    }
+    return labels;
+};
 
 /**
- * A mask (white at 128 and up, `stride` bytes a pixel, bottom row first) packed a bit per pixel as the
- * flood fill's GPU pass packs it: pixel x of a row is bit (x & 7) of byte (x >> 3).
+ * GLSL reading the flood fill data an image holds: local place in its island's box, its random value
+ * (negative outside), and the box's size (as parts of the image, packed); with the box's size in pixels
+ * and its corner and middle (pixels) worked out from them.
  */
-export const packMask = (mask: ArrayLike<number>, width: number, height: number, stride = 1): Uint8Array => {
-    const row = packedRowBytes(width);
-    const bits = new Uint8Array(row * height);
-    for (let y = 0; y < height; y++) {
-        for (let x = 0; x < width; x++) if (mask[(y * width + x) * stride] >= 128) bits[y * row + (x >> 3)] |= 1 << (x & 7);
-    }
-    return bits;
-};
-
-export interface FloodIslands {
-    /** Runs of white pixels, row by row from the bottom: where each starts, and where it ends (not included). */
-    runStart: Uint16Array | Uint32Array;
-    runEnd: Uint16Array | Uint32Array;
-    /** Where each row's runs begin in the run lists, and one past the last row. */
-    rowStart: Uint32Array;
-    /** Each run's island, from 0. */
-    runIsland: Int32Array;
-    /** Per island: left, bottom, width, height in pixels (an island may wrap round the edges). */
-    boxes: Float32Array;
-    count: number;
-}
-
-/**
- * Labels the white islands of a packed mask (see packMask), joining across the edges as the tiled
- * image does. It works on runs of white pixels rather than on pixels, so an 8K mask of tiles takes a
- * few megabytes rather than a gigabyte. Runs that touch (in the next row, or across the left and right
- * edges) are joined, each remembering how many whole images round the edges it lies from the run it
- * joined, which gives every island's box even when it wraps.
- */
-export const labelIslands = (bits: Uint8Array | Uint8ClampedArray, width: number, height: number): FloodIslands => {
-    const rowBytes = packedRowBytes(width);
-    const scan = (visit: (y: number, start: number, end: number) => void) => {
-        for (let y = 0; y < height; y++) {
-            const offset = y * rowBytes;
-            let start = -1;
-            for (let x = 0; x < width; x++) {
-                // Whole empty bytes are skipped outside a run.
-                if (start < 0 && (x & 7) === 0 && bits[offset + (x >> 3)] === 0) { x += 7; continue; }
-                const lit = ((bits[offset + (x >> 3)] >> (x & 7)) & 1) === 1;
-                if (lit) { if (start < 0) start = x; } else if (start >= 0) { visit(y, start, x); start = -1; }
-            }
-            if (start >= 0) visit(y, start, width);
-        }
-    };
-    // Runs counted first, so their lists are made once at their size.
-    const perRow = new Uint32Array(height);
-    scan((y) => { perRow[y]++; });
-    const rowStart = new Uint32Array(height + 1);
-    for (let y = 0; y < height; y++) rowStart[y + 1] = rowStart[y] + perRow[y];
-    const total = rowStart[height];
-    const runStart = width < 65536 ? new Uint16Array(total) : new Uint32Array(total);
-    const runEnd = width < 65536 ? new Uint16Array(total) : new Uint32Array(total);
-    let at = 0;
-    scan((_y, start, end) => { runStart[at] = start; runEnd[at] = end; at++; });
-
-    // Joined runs: each points at a parent, with its place relative to it in whole images (how often it
-    // lies round the edges from it). A root keeps the smallest run number of its island. An island met
-    // again one image over runs all the way round that way (`around`: 1 across, 2 up).
-    const parent = new Int32Array(total);
-    for (let r = 0; r < total; r++) parent[r] = r;
-    const shiftX = new Int8Array(total);
-    const shiftY = new Int8Array(total);
-    const around = new Uint8Array(total);
-    const clampShift = (value: number) => Math.max(-127, Math.min(127, value));
-    let foundX = 0;
-    let foundY = 0;
-    /** The run's root, with its place relative to the root left in foundX and foundY. */
-    const find = (run: number): number => {
-        let root = run;
-        let sx = 0;
-        let sy = 0;
-        while (parent[root] !== root) { sx += shiftX[root]; sy += shiftY[root]; root = parent[root]; }
-        foundX = sx;
-        foundY = sy;
-        // Every run on the way now points straight at the root.
-        for (let node = run; node !== root;) {
-            const next = parent[node];
-            const nx = sx - shiftX[node];
-            const ny = sy - shiftY[node];
-            parent[node] = root;
-            shiftX[node] = clampShift(sx);
-            shiftY[node] = clampShift(sy);
-            sx = nx;
-            sy = ny;
-            node = next;
-        }
-        return root;
-    };
-    /** Joins run `b` to run `a`, `b` lying (dx, dy) images on from `a`. */
-    const join = (a: number, b: number, dx: number, dy: number) => {
-        const rootA = find(a);
-        const ax = foundX;
-        const ay = foundY;
-        const rootB = find(b);
-        const bx = foundX;
-        const by = foundY;
-        if (rootA === rootB) {
-            if (ax + dx !== bx) around[rootA] |= 1;
-            if (ay + dy !== by) around[rootA] |= 2;
-            return;
-        }
-        // b = a + d, so rootB lies (ax + dx - bx, ay + dy - by) from rootA.
-        const ox = ax + dx - bx;
-        const oy = ay + dy - by;
-        if (rootA < rootB) {
-            parent[rootB] = rootA;
-            shiftX[rootB] = clampShift(ox);
-            shiftY[rootB] = clampShift(oy);
-            around[rootA] |= around[rootB];
-        } else {
-            parent[rootA] = rootB;
-            shiftX[rootA] = clampShift(-ox);
-            shiftY[rootA] = clampShift(-oy);
-            around[rootB] |= around[rootA];
-        }
-    };
-    for (let y = 0; y < height; y++) {
-        const first = rowStart[y];
-        const last = rowStart[y + 1] - 1;
-        if (last < first) continue;
-        // Across the right edge onto the left: the row's first run lies one image right of its last.
-        if (runStart[first] === 0 && runEnd[last] === width) join(last, first, 1, 0);
-        // Onto the row above; the top row onto the bottom one, an image up.
-        const above = (y + 1) % height;
-        const dy = y + 1 === height ? 1 : 0;
-        let i = first;
-        let j = rowStart[above];
-        const endJ = rowStart[above + 1];
-        while (i <= last && j < endJ) {
-            if (runStart[i] < runEnd[j] && runStart[j] < runEnd[i]) join(i, j, 0, dy);
-            if (runEnd[i] < runEnd[j]) i++;
-            else j++;
-        }
-    }
-
-    // Islands numbered in order of their first run (a root comes before the rest of its island).
-    const runIsland = new Int32Array(total);
-    let count = 0;
-    for (let r = 0; r < total; r++) {
-        const root = find(r);
-        runIsland[r] = root === r ? count++ : runIsland[root];
-    }
-    // Boxes from where the runs lie round their roots: lowest and highest place first, then turned into
-    // left, bottom, width and height (the whole width or height when an island runs all the way round).
-    const boxes = new Float32Array(count * 4);
-    for (let island = 0; island < count; island++) {
-        boxes[island * 4] = Infinity;
-        boxes[island * 4 + 1] = Infinity;
-        boxes[island * 4 + 2] = -Infinity;
-        boxes[island * 4 + 3] = -Infinity;
-    }
-    const wraps = new Uint8Array(count);
-    for (let y = 0; y < height; y++) {
-        for (let r = rowStart[y]; r < rowStart[y + 1]; r++) {
-            const root = find(r);
-            const island = runIsland[r];
-            wraps[island] |= around[root];
-            const left = runStart[r] + foundX * width;
-            const right = runEnd[r] - 1 + foundX * width;
-            const row = y + foundY * height;
-            const at4 = island * 4;
-            if (left < boxes[at4]) boxes[at4] = left;
-            if (row < boxes[at4 + 1]) boxes[at4 + 1] = row;
-            if (right > boxes[at4 + 2]) boxes[at4 + 2] = right;
-            if (row > boxes[at4 + 3]) boxes[at4 + 3] = row;
-        }
-    }
-    for (let island = 0; island < count; island++) {
-        const at4 = island * 4;
-        const [minX, minY, maxX, maxY] = [boxes[at4], boxes[at4 + 1], boxes[at4 + 2], boxes[at4 + 3]];
-        const fullX = (wraps[island] & 1) !== 0 || maxX - minX + 1 >= width;
-        const fullY = (wraps[island] & 2) !== 0 || maxY - minY + 1 >= height;
-        boxes[at4] = fullX ? 0 : ((minX % width) + width) % width;
-        boxes[at4 + 1] = fullY ? 0 : ((minY % height) + height) % height;
-        boxes[at4 + 2] = fullX ? width : maxX - minX + 1;
-        boxes[at4 + 3] = fullY ? height : maxY - minY + 1;
-    }
-    return { runStart, runEnd, rowStart, runIsland, boxes, count };
-};
-
-/** Island numbers + 1 (0 outside) for `rows` rows from y0 of the islands' image, a row of `width` each, into `out`. */
-export const islandLabelRows = (islands: FloodIslands, y0: number, rows: number, width: number, out: Float32Array): void => {
-    out.fill(0, 0, rows * width);
-    for (let y = y0; y < y0 + rows; y++) {
-        const base = (y - y0) * width;
-        for (let r = islands.rowStart[y]; r < islands.rowStart[y + 1]; r++) out.fill(islands.runIsland[r] + 1, base + islands.runStart[r], base + islands.runEnd[r]);
-    }
-};
-
-const TABLE_WIDTH = 2048;
-
-/** A mask's pixels at the node's size, a bit each, packed into RGBA texels of 32 pixels (see packMask). */
-const PACK_MASK = `uniform vec2 uMaskSize;
-float packByte(int first, int row) {
-    float value = 0.0;
-    for (int k = 0; k < 8; k++) {
-        int x = first + k;
-        if (float(x) >= uMaskSize.x) break;
-        if (g_mask((vec2(float(x), float(row)) + 0.5) / uMaskSize) >= p_threshold) value += exp2(float(k));
-    }
-    return value / 255.0;
-}
-void main() {
-    ivec2 p = ivec2(gl_FragCoord.xy);
-    int first = p.x * 32;
-    outColor = vec4(packByte(first, p.y), packByte(first + 8, p.y), packByte(first + 16, p.y), packByte(first + 24, p.y));
-}`;
-
-/** GLSL reading the flood fill data an image holds: local place in its island, its random value, its size. */
-const FLOOD_READ = `vec4 flood(vec2 uv) { return c_in(uv); }`;
+const FLOOD_READ = `vec4 flood(vec2 uv) { return texelFetch(t_in, ivec2(uv * vec2(textureSize(t_in, 0))), 0); }
+vec2 floodBoxSize(vec4 f) { return vec2(floor(f.a / 4096.0), mod(f.a, 4096.0)) / 4095.0; }
+vec2 floodBoxPixels(vec4 f) { return max(floodBoxSize(f) * uSize, vec2(1.0)); }
+vec2 floodBoxCorner(vec4 f) { return floor(gl_FragCoord.xy - f.xy * floodBoxPixels(f) + 0.5); }`;
 
 export const DISTANCE_NODES: TexNodeDef[] = [
     {
@@ -430,7 +268,7 @@ void main() { float d = texture(distanceMap, vUv).r; outColor = vec4(1.0 - smoot
         type: 'floodFill',
         label: 'Flood fill',
         category: 'Edges and distance',
-        description: 'Finds every separate white island of a mask (tiles, cells, planks) so the Flood fill nodes after it can give each its own value, colour or gradient.',
+        description: 'Finds every separate white island of a mask (tiles, cells, planks), all on the GPU, so the Flood fill nodes after it can give each its own value, colour, gradient, index, position or pattern. Where the image tiles, an island over an edge is one island.',
         keywords: ['islands', 'connected', 'label', 'per tile', 'shape id'],
         inputs: [grayIn('mask', 'Mask')],
         outputs: [out('color', 'out', 'Islands')],
@@ -439,51 +277,19 @@ void main() { float d = texture(distanceMap, vUv).r; outColor = vec4(1.0 - smoot
         async run(context) {
             const mask = context.input('mask');
             const { width, height } = context;
-            // Full float, so the random value every island gets (24 bits of it) is kept exactly: no two
-            // islands share one unless their places hash alike.
+            // Full float, so the random value every island gets (24 bits of it) is kept exactly.
             const result = context.image('color', width, height, 32);
             if (!mask) { context.gpu.clear(result, [0, 0, -1, 0]); return { out: result }; }
-            // The mask at the node's size, a bit a pixel, read back: 8 MB at 8K rather than 256.
-            const packedWidth = Math.ceil(width / 32);
-            const packed = context.image('color', packedWidth, height, 8);
-            await context.pass(packed, PACK_MASK, { uniforms: { uMaskSize: new THREE.Vector2(width, height) }, cost: 32 });
-            const bits = context.gpu.readRgba8(packed, packedWidth, height, 'raw', false);
-            context.gpu.release(packed);
-            const islands = labelIslands(bits, width, height);
-            // Island numbers per pixel, written a strip of rows at a time so no full-size copy is made here.
-            const labels = context.image('gray', width, height, 32);
-            const stripRows = Math.max(1, Math.min(height, Math.floor((4 * 1024 * 1024) / width)));
-            const strip = new Float32Array(stripRows * width);
-            for (let y0 = 0; y0 < height; y0 += stripRows) {
-                const rows = Math.min(stripRows, height - y0);
-                islandLabelRows(islands, y0, rows, width, strip);
-                context.gpu.write(labels, rows === stripRows ? strip : strip.subarray(0, rows * width), { x: 0, y: y0, width, height: rows });
-            }
-            const tableRows = Math.max(1, Math.ceil(islands.count / TABLE_WIDTH));
-            const table = new Float32Array(TABLE_WIDTH * tableRows * 4);
-            table.set(islands.boxes);
-            const tableTexture = new THREE.DataTexture(table, TABLE_WIDTH, tableRows, THREE.RGBAFormat, THREE.FloatType);
-            tableTexture.minFilter = tableTexture.magFilter = THREE.NearestFilter;
-            tableTexture.needsUpdate = true;
-            await context.gpu.pass(result, {
-                fragment: `void main() {
-    float id = texelFetch(labels, ivec2(gl_FragCoord.xy), 0).r;
-    if (id < 0.5) { outColor = vec4(0.0, 0.0, -1.0, 0.0); return; }
-    int index = int(id + 0.5) - 1;
-    vec4 box = texelFetch(boxes, ivec2(index % ${TABLE_WIDTH}, index / ${TABLE_WIDTH}), 0);
-    vec2 p = floor(gl_FragCoord.xy);
-    vec2 local = (mod(p - box.xy, uSize) + 0.5) / max(box.zw, vec2(1.0));
-    // A random value from the island's place and size, so it stays the same as the mask changes
-    // elsewhere; 24 bits, which a full float holds exactly.
-    uint key = hashU(uvec3(uvec2(box.xy), uint(box.z) * 16384u + uint(box.w)));
-    float random = float(key >> 8u) / 16777216.0;
-    outColor = vec4(local, random, max(box.z, box.w) / max(uSize.x, uSize.y));
-}`,
-                inputs: { labels, boxes: tableTexture },
-                cost: 2,
+            const labels = await labelIslandsGpu(context, mask, Number(context.params.threshold) || 0.5);
+            const wrapAxes = [context.tiling[0] ? 1 : 0, context.tiling[1] ? 1 : 0];
+            // Each island's box: every pixel adds its offset from the root into the root, largest each way.
+            const boxes = context.image('color', width, height, 32);
+            await context.gpu.drawInstances(boxes, {
+                count: width * height, points: true, varyings: ['vec4 vBox'], vertex: FLOOD_BOX_VERTEX, fragment: 'void main() { outColor = vBox; }',
+                inputs: { labels }, uniforms: { uWidth: width, uWrapAxes: wrapAxes }, stack: 'max', clear: [-1e9, -1e9, -1e9, -1e9],
             });
+            await context.gpu.pass(result, { fragment: FLOOD_RESULT, inputs: { labels, boxes }, uniforms: { uWrapAxes: wrapAxes } });
             context.gpu.release(labels);
-            tableTexture.dispose();
             return { out: result };
         },
     },
@@ -541,24 +347,89 @@ void main() { float d = texture(distanceMap, vUv).r; outColor = vec4(1.0 - smoot
         outputs: [out('gray')],
         params: [float('scale', 'Scale', 1, 0.1, 10)],
         sizeFrom: 'input',
-        glsl: `${FLOOD_READ}\nvoid main() { vec4 f = flood(vUv); outColor = vec4(f.b < 0.0 ? 0.0 : saturate(f.a * p_scale)); }`,
+        glsl: `${FLOOD_READ}\nvoid main() { vec4 f = flood(vUv); vec2 box = floodBoxPixels(f); outColor = vec4(f.b < 0.0 ? 0.0 : saturate(max(box.x, box.y) / max(uSize.x, uSize.y) * p_scale)); }`,
+    }),
+    onePass({
+        type: 'floodBox',
+        label: 'Flood fill to bounding box',
+        category: 'Edges and distance',
+        description: 'Each island from a Flood fill as bright as its bounding box is wide, tall, its larger side, or its area (as parts of the image).',
+        keywords: ['bounding box', 'bbox', 'island width', 'island height', 'per tile size'],
+        inputs: [colorIn('in', 'Flood fill')],
+        outputs: [out('gray')],
+        params: [select('measure', 'Measure', 'larger', [['width', 'Width'], ['height', 'Height'], ['larger', 'Larger side'], ['area', 'Area']]), float('scale', 'Scale', 1, 0.1, 10)],
+        sizeFrom: 'input',
+        glsl: `${FLOOD_READ}\nvoid main() {
+    vec4 f = flood(vUv);
+    if (f.b < 0.0) { outColor = vec4(0.0); return; }
+    vec2 box = floodBoxSize(f);
+    float v = p_measure == 0 ? box.x : p_measure == 1 ? box.y : p_measure == 2 ? max(box.x, box.y) : box.x * box.y;
+    outColor = vec4(saturate(v * p_scale));
+}`,
+    }),
+    onePass({
+        type: 'floodIndex',
+        label: 'Flood fill to index',
+        category: 'Edges and distance',
+        description: 'Numbers the islands from a Flood fill in order, by where their boxes start (row by row from the bottom), as greys from black to white.',
+        keywords: ['island index', 'order', 'per tile number', 'id'],
+        inputs: [colorIn('in', 'Flood fill')],
+        outputs: [out('gray')],
+        params: [],
+        sizeFrom: 'input',
+        glsl: `${FLOOD_READ}\nvoid main() {
+    vec4 f = flood(vUv);
+    if (f.b < 0.0) { outColor = vec4(0.0); return; }
+    vec2 corner = mod(floodBoxCorner(f), uSize);
+    outColor = vec4((corner.y * uSize.x + corner.x + 1.0) / (uSize.x * uSize.y));
+}`,
+    }),
+    onePass({
+        type: 'floodPosition',
+        label: 'Flood fill to position',
+        category: 'Edges and distance',
+        description: 'Gives every island from a Flood fill the place of its middle, as red (across) and green (down) from 0 to 1: for sampling a picture once per island.',
+        keywords: ['island position', 'centre', 'per tile position', 'sample per tile'],
+        inputs: [colorIn('in', 'Flood fill')],
+        outputs: [out('color')],
+        params: [],
+        sizeFrom: 'input',
+        glsl: `${FLOOD_READ}\nvoid main() {
+    vec4 f = flood(vUv);
+    if (f.b < 0.0) { outColor = vec4(0.0, 0.0, 0.0, 1.0); return; }
+    vec2 middle = floodBoxCorner(f) + floodBoxPixels(f) * 0.5;
+    outColor = vec4(fract(middle / uSize), 0.0, 1.0);
+}`,
     }),
     onePass({
         type: 'floodMapper',
         label: 'Flood fill mapper',
         category: 'Edges and distance',
-        description: 'Fits a pattern into every island from a Flood fill, each turned and offset at random.',
+        description: 'Fits a pattern into every island from a Flood fill, each turned (by any angle), scaled, flipped and offset at random.',
         keywords: ['per tile pattern', 'map pattern to tiles'],
         inputs: [colorIn('in', 'Flood fill'), anyIn('pattern', 'Pattern', 'white')],
         outputs: [out('any')],
-        params: [float('rotationRandom', 'Turn randomness', 0, 0, 1), float('offsetRandom', 'Offset randomness', 0, 0, 1), float('brightnessRandom', 'Brightness randomness', 0, 0, 1), seed()],
+        params: [
+            float('rotation', 'Turn (degrees)', 0, -360, 360, { step: 1 }),
+            float('rotationRandom', 'Turn randomness', 0, 0, 1),
+            float('scale', 'Scale', 1, 0.05, 8),
+            float('scaleRandom', 'Scale randomness', 0, 0, 1),
+            bool('flipX', 'Flip across at random', false),
+            bool('flipY', 'Flip down at random', false),
+            float('offsetRandom', 'Offset randomness', 0, 0, 1),
+            float('brightnessRandom', 'Brightness randomness', 0, 0, 1),
+            seed(),
+        ],
         sizeFrom: 'input',
         kindFrom: 'pattern',
         glsl: `${FLOOD_READ}\nvoid main() {
     vec4 f = flood(vUv);
     if (f.b < 0.0) { outColor = vec4(0.0, 0.0, 0.0, 1.0); return; }
     vec2 p = f.xy - 0.5;
-    p = rotate2(floor(hashF(f.b, uSeed) * 4.0 * p_rotationRandom) * PI * 0.5) * p;
+    if (p_flipX == 1 && hashF(f.b, uSeed + 5.0) < 0.5) p.x = -p.x;
+    if (p_flipY == 1 && hashF(f.b, uSeed + 6.0) < 0.5) p.y = -p.y;
+    p = rotate2(radians(p_rotation) + (hashF(f.b, uSeed) - 0.5) * TAU * p_rotationRandom) * p;
+    p /= max(p_scale * (1.0 - hashF(f.b, uSeed + 4.0) * p_scaleRandom), 1e-3);
     p += 0.5 + (vec2(hashF(f.b, uSeed + 1.0), hashF(f.b, uSeed + 2.0)) - 0.5) * p_offsetRandom;
     vec4 v = c_pattern(fract(p));
     v.rgb *= 1.0 - hashF(f.b, uSeed + 3.0) * p_brightnessRandom;
