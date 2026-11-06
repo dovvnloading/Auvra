@@ -10,7 +10,7 @@ import { BAKE_VERSION, padImage, releaseTileBake, spaceOfBox, type PositionSpace
 import { UvRaster } from '../bake/uvRaster';
 import type { PartMesh } from '../mesh/partMesh';
 import { SurfacePicker } from '../mesh/picker';
-import { encodePng, encodePng16, pngBitDepth, readPicture, readPng16 } from '../png';
+import { encodePng, encodePng16, pngBitDepth, readPicture, readPng16Half } from '../png';
 import type { ChannelImages } from '../materialOutput';
 import {
     CHANNEL_DEFAULT,
@@ -268,6 +268,23 @@ void main() {
     }
     outColor = sum.a > 1e-5 ? vec4(sum.rgb / sum.a, sum.a) : vec4(0.0);
 }`;
+
+/** A grey picture (one value a pixel) read as grey pictures always were: the value in every channel, alpha 1. */
+const GREY_TO_COLOUR = /* glsl */ `void main() { outColor = vec4(texture(source, vUv).rrr, 1.0); }`;
+
+/**
+ * A kept 16-bit picture as a texture the set's 16-bit images take as they are: half floats, one value a
+ * pixel for a grey picture (RedFormat), four for colour. Half the memory of 32-bit floats; a quarter
+ * for grey.
+ */
+export const halfFloatTexture = (fine: { width: number; height: number; channels: 1 | 4; data: Uint16Array }, filter: THREE.MagnificationTextureFilter = THREE.NearestFilter): THREE.DataTexture => {
+    const texture = new THREE.DataTexture(fine.data, fine.width, fine.height, fine.channels === 1 ? THREE.RedFormat : THREE.RGBAFormat, THREE.HalfFloatType);
+    texture.colorSpace = THREE.NoColorSpace;
+    texture.minFilter = texture.magFilter = filter;
+    texture.generateMipmaps = false;
+    texture.needsUpdate = true;
+    return texture;
+};
 
 /**
  * A fill's picture laid onto the texels: along the UVs, or cast along each axis and blended by how the
@@ -642,40 +659,52 @@ export class PaintStack {
                 const tile = Number(tileName);
                 if (!this.tiles.includes(tile) || !picture?.assetId) continue;
                 let resampled: GpuImage | null = null;
+                let expanded: GpuImage | null = null;
                 let texture: THREE.Texture | null = null;
                 let bitmap: ImageBitmap | null = null;
                 try {
                     const blob = await this.host.fetchPicture(picture.assetId);
                     let width: number;
                     let height: number;
+                    let grey = false;
                     if (await pngBitDepth(blob) === 16) {
-                        // Kept at 16 bits (painted height and normals): read whole, as a browser reads it at 8.
-                        const fine = await readPng16(blob);
-                        texture = new THREE.DataTexture(fine.data, fine.width, fine.height, THREE.RGBAFormat, THREE.FloatType);
+                        // Kept at 16 bits (painted height and normals): read whole (a browser reads it at 8),
+                        // straight into half floats as the set's 16-bit pictures hold them.
+                        const fine = await readPng16Half(blob);
+                        texture = halfFloatTexture(fine);
+                        grey = fine.channels === 1;
                         ({ width, height } = fine);
                     } else {
                         bitmap = await readPicture(blob);
                         texture = new THREE.Texture(bitmap);
                         texture.flipY = false;
                         texture.premultiplyAlpha = false;
+                        texture.colorSpace = THREE.NoColorSpace;
+                        texture.minFilter = texture.magFilter = THREE.NearestFilter;
+                        texture.generateMipmaps = false;
+                        texture.needsUpdate = true;
                         ({ width, height } = bitmap);
                     }
-                    texture.colorSpace = THREE.NoColorSpace;
-                    texture.minFilter = texture.magFilter = THREE.NearestFilter;
-                    texture.generateMipmaps = false;
-                    texture.needsUpdate = true;
+                    let source: THREE.Texture | GpuImage = texture;
+                    if (grey) {
+                        // Painted pictures are kept in colour; one kept in grey reads as its value in every channel.
+                        expanded = this.gpu.image(width, height, 'color', picturePrecision(key));
+                        this.gpu.passNow(expanded, { fragment: GREY_TO_COLOUR, inputs: { source: texture } });
+                        source = expanded;
+                    }
                     if (width !== this.size || height !== this.size) {
                         // Kept at another size (the set was resized): scaled with the colour of see-through
                         // pixels left out, so stroke edges do not darken.
                         resampled = this.gpu.image(this.size, this.size, 'color', picturePrecision(key));
-                        this.gpu.passNow(resampled, { fragment: RESAMPLE, inputs: { source: texture } });
+                        this.gpu.passNow(resampled, { fragment: RESAMPLE, inputs: { source } });
                     }
                     // Only the pages holding paint are kept.
-                    this.picture(key, tile).adopt(resampled ?? texture, this.gpu);
+                    this.picture(key, tile).adopt(resampled ?? source, this.gpu);
                 } catch {
                     // A picture that will not read leaves the layer empty rather than the set unopenable.
                 } finally {
                     this.gpu.release(resampled);
+                    this.gpu.release(expanded);
                     texture?.dispose();
                     bitmap?.close();
                 }
@@ -701,14 +730,12 @@ export class PaintStack {
                         const gray = ['ambientOcclusion', 'curvature', 'thickness', 'height'].includes(name);
                         const image = this.gpu.image(this.size, this.size, gray ? 'gray' : 'color', gray || FINE_MAPS.has(name as MeshMapName) ? 16 : 8);
                         if (await pngBitDepth(blob) === 16) {
-                            // Kept at 16 bits: read whole (a browser would read it at 8).
-                            const fine = await readPng16(blob);
+                            // Kept at 16 bits: read whole (a browser would read it at 8), straight into half
+                            // floats as the 16-bit maps hold them; a grey map one value a pixel.
+                            const fine = await readPng16Half(blob);
                             if (fine.width !== this.size) this.bakeSize = Math.round(Math.log2(fine.width));
-                            const texture = new THREE.DataTexture(fine.data, fine.width, fine.height, THREE.RGBAFormat, THREE.FloatType);
-                            texture.colorSpace = THREE.NoColorSpace;
-                            texture.minFilter = texture.magFilter = fine.width === this.size ? THREE.NearestFilter : THREE.LinearFilter;
-                            texture.needsUpdate = true;
-                            this.gpu.passNow(image, { fragment: 'void main() { outColor = texture(source, vUv); }', inputs: { source: texture } });
+                            const texture = halfFloatTexture(fine, fine.width === this.size ? THREE.NearestFilter : THREE.LinearFilter);
+                            this.gpu.passNow(image, { fragment: fine.channels === 1 ? GREY_TO_COLOUR : 'void main() { outColor = texture(source, vUv); }', inputs: { source: texture } });
                             texture.dispose();
                         } else {
                             const bitmap = await readPicture(blob);

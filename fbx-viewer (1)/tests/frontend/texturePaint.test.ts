@@ -1,9 +1,11 @@
+import { Blob as NodeBlob } from 'node:buffer';
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import { buildPartMesh } from '../../texturing/mesh/partMesh';
 import { SurfacePicker } from '../../texturing/mesh/picker';
 import { allLayers, castsFromThreeSides, createPaintDocument, insertLayer, locateLayer, mapLayer, moveLayer, newFillLayer, newFolder, newPaintLayer, readPaintDocument } from '../../texturing/paint/paintTypes';
-import { BEFORE, pictureKey, pictureOwner, pictureOwners, picturePrecision } from '../../texturing/paint/paintStack';
+import { BEFORE, halfFloatTexture, pictureKey, pictureOwner, pictureOwners, picturePrecision } from '../../texturing/paint/paintStack';
+import { encodePng16, readPng16, readPng16Half } from '../../texturing/png';
 import { historyBytes, trimmedHistory, type HistoryEntry } from '../../texturing/paint/strokes';
 import { BUILTIN_GRAPHS, SMART_MASKS, SMART_MATERIALS } from '../../texturing/paint/smartLibrary';
 import { textureNodeDefinitionByType } from '../../texturing/graph/registry';
@@ -151,5 +153,36 @@ describe('texture set meshes', () => {
         expect(hit!.uv.x).toBeCloseTo(0.75);
         expect(hit!.uv.y).toBeCloseTo(0.75);
         expect(part.islandCount).toBe(1);
+    });
+});
+
+describe('kept pictures', () => {
+    it('open 16-bit pictures as half floats with the values they had, a grey one with one value a pixel', async () => {
+        // The test page's Blob cannot be read as a stream; Node's can, as a browser's can.
+        const pageBlob = globalThis.Blob;
+        globalThis.Blob = NodeBlob as unknown as typeof Blob;
+        try {
+            const grey = new Uint16Array(4 * 4).map((_, i) => (i * 4099) % 65536);
+            const colour = new Uint16Array(4 * 4 * 4).map((_, i) => (i * 7919) % 65536);
+            for (const [samples, channels] of [[grey, 1], [colour, 4]] as const) {
+                const png = await encodePng16(samples, 4, 4, channels);
+                const texture = halfFloatTexture(await readPng16Half(png));
+                expect(texture.type).toBe(THREE.HalfFloatType);
+                expect(texture.format).toBe(channels === 1 ? THREE.RedFormat : THREE.RGBAFormat);
+                const halves = texture.image.data as Uint16Array;
+                const floats = (await readPng16(png)).data;
+                // Half the bytes of 32-bit floats for colour; an eighth for grey (one value a pixel, not four).
+                expect(halves.byteLength * (channels === 1 ? 8 : 2)).toBe(floats.byteLength);
+                for (let p = 0; p < 16; p++) {
+                    for (let c = 0; c < channels; c++) {
+                        const was = floats[p * 4 + c];
+                        expect(Math.abs(THREE.DataUtils.fromHalfFloat(halves[p * channels + c]) - was)).toBeLessThanOrEqual(was / 2048 + 1e-7);
+                    }
+                }
+                texture.dispose();
+            }
+        } finally {
+            globalThis.Blob = pageBlob;
+        }
     });
 });
