@@ -44,6 +44,8 @@ export interface MaterialGraphCanvasProps {
     onUndo: () => void;
     onRedo: () => void;
     onTogglePreviews: () => void;
+    /** What went wrong compiling, by node id: those nodes are marked, with the message in their tooltip. */
+    nodeErrors?: Readonly<Record<string, string>>;
 }
 
 const CATEGORY_MARKS: Record<string, IconComponent> = {
@@ -172,7 +174,7 @@ const pins = (node: EditableNode<MaterialGraphNode>): PinSet => {
 };
 
 export const MaterialGraphCanvas: React.FC<MaterialGraphCanvasProps> = (props) => {
-    const { graph, selection, selectedComment, previews, unused, canUndo, canRedo, onUndo, onRedo, onTogglePreviews } = props;
+    const { graph, selection, selectedComment, previews, unused, canUndo, canRedo, onUndo, onRedo, onTogglePreviews, nodeErrors } = props;
     const latest = useRef(props);
     latest.current = props;
 
@@ -188,14 +190,16 @@ export const MaterialGraphCanvas: React.FC<MaterialGraphCanvasProps> = (props) =
     const views = useMemo(() => {
         const result = new Map<string, NodeView>();
         for (const node of graph.nodes) {
-            const view = materialNodeView(node, { autoTypes, previews, unused: unused.has(node.id) });
+            const error = nodeErrors?.[node.id];
+            const shown = materialNodeView(node, { autoTypes, previews, unused: unused.has(node.id) });
+            const view = error ? { ...shown, error } : shown;
             const key = JSON.stringify(view);
             const cached = viewCache.current.get(node.id);
             if (cached?.key === key) result.set(node.id, cached.view);
             else { viewCache.current.set(node.id, { key, view }); result.set(node.id, view); }
         }
         return result;
-    }, [autoTypes, graph.nodes, previews, unused]);
+    }, [autoTypes, graph.nodes, nodeErrors, previews, unused]);
 
     const adapter = useMemo<NodeGraphAdapter<MaterialGraphNode>>(() => ({
         kind: 'material',
