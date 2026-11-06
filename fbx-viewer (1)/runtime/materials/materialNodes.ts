@@ -178,6 +178,7 @@ export const MATERIAL_NODE_DEFINITIONS: MaterialNodeDef[] = [
             float('emissiveStrength', 'Emission strength', 1, { min: 0, max: 100, step: 0.1, group: 'Emission' }),
             float('opacity', 'Opacity', 1, { min: 0, max: 1, step: 0.01, group: 'Opacity' }),
             select('blendMode', 'Alpha mode', [['opaque', 'Opaque'], ['masked', 'Masked (cut-out)'], ['translucent', 'Translucent'], ['additive', 'Additive']]),
+            select('normalSpace', 'Normal input', [['tangent', 'Like a normal map'], ['world', 'In world space']]),
             float('alphaClip', 'Alpha clip', 0.5, { min: 0, max: 1, step: 0.01 }),
             { key: 'twoSided', label: 'Two-sided', kind: 'boolean', default: false },
             select('shading', 'Shading', [['lit', 'Lit'], ['unlit', 'Unlit']]),
@@ -582,6 +583,35 @@ export const MATERIAL_NODE_DEFINITIONS: MaterialNodeDef[] = [
                 );
             }
             return { statements, outputs: { uv, shadow } };
+        },
+    },
+    {
+        type: 'triplanarNormal',
+        preview: 'normal',
+        label: 'Triplanar Normal Map',
+        category: 'Texture',
+        description: 'Projects a normal map onto the surface from the three axes, each face reading it the right way round, and blends them onto the surface\'s normal: bumps on cliffs, rocks and terrain without UVs, seams or mirroring. It gives a world-space normal, so set the Material Output\'s Normal input to world space.',
+        keywords: ['world aligned normal', 'box mapping', 'projection', 'bump'],
+        inputs: [
+            { key: 'position', label: 'Position', type: 'vec3', fallback: builtin('worldPosition') },
+            { key: 'normal', label: 'Normal', type: 'vec3', fallback: builtin('worldNormal') },
+        ],
+        outputs: [{ key: 'out', label: 'Normal (world)', type: 'vec3' }],
+        params: [
+            { key: 'texture', label: 'Texture', kind: 'texture', default: '' },
+            float('tiling', 'Tiling (per unit)', 0.5, { min: 0.001, max: 100, step: 0.01 }),
+            float('sharpness', 'Blend Sharpness', 4, { min: 1, max: 32, step: 0.5 }),
+            float('strength', 'Strength', 1, { min: 0, max: 4, step: 0.05 }),
+            { key: 'flipGreen', label: 'Flip Green (DirectX)', kind: 'boolean', default: false },
+        ],
+        emit: (inputs, context) => {
+            context.helper('mgTriplanarNormal');
+            const green = context.static('flipGreen') === true ? '-1.0' : '1.0';
+            return {
+                outputs: {
+                    out: `mgTriplanarNormal(${context.param('texture')}, ${inputs.position} * ${context.param('tiling')}, ${inputs.normal}, ${context.param('sharpness')}, ${context.param('strength')}, ${green})`,
+                },
+            };
         },
     },
     {

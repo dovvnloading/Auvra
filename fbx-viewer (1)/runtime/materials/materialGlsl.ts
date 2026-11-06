@@ -4,6 +4,8 @@
  * Every name starts with `mg` so it cannot meet three's own.
  */
 
+import { MG_TRIPLANAR_NORMAL } from './triplanarNormal';
+
 interface GlslHelper {
     /** Helpers this one calls. */
     needs?: readonly string[];
@@ -262,6 +264,7 @@ float mgParallaxShadow(sampler2D heightMap, vec2 uv, vec3 light, float depth, fl
     return 1.0 - clamp(blocked * 8.0, 0.0, 1.0);
 }`,
     },
+    mgTriplanarNormal: { source: MG_TRIPLANAR_NORMAL },
     mgTangentFrame: {
         source: `
 mat3 mgTangentFrame(vec3 position, vec3 normal, vec2 uv) {

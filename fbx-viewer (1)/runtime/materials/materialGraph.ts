@@ -244,7 +244,9 @@ export type TextureSlot = 'map' | 'normal' | 'data';
 
 /** The way `node` reads the texture its 'texture' param picks. */
 export const textureSlot = (node: MaterialGraphNode): TextureSlot => {
-    if (node.type === 'normalMap') return 'normal';
+    if (node.type === 'normalMap' || node.type === 'triplanarNormal') return 'normal';
+    // A height map's values are heights, not colours.
+    if (node.type === 'parallax') return 'data';
     const space = DEFINITIONS.get(node.type)?.params.find(param => param.key === 'space');
     return space && readParam(space, node.params.space) === 'data' ? 'data' : 'map';
 };
@@ -260,7 +262,7 @@ export const textureSlot = (node: MaterialGraphNode): TextureSlot => {
  */
 export const PARAMETER_NODE_PARAMS: Readonly<Record<string, string>> = {
     float: 'value', color: 'value', vector: 'value', vector2: 'value',
-    texture: 'texture', normalMap: 'texture', triplanar: 'texture', parallax: 'texture',
+    texture: 'texture', normalMap: 'texture', triplanar: 'texture', parallax: 'texture', triplanarNormal: 'texture',
     switch: 'on',
 };
 export const MAX_PARAMETER_NAME_LENGTH = 64;
@@ -822,6 +824,8 @@ export interface MaterialGraphSettings {
     alphaClip: number;
     twoSided: boolean;
     unlit: boolean;
+    /** How the Normal input is read: like a normal map (tangent space), or as a world-space normal (Triplanar Normal Map). */
+    normalSpace: 'tangent' | 'world';
 }
 
 /** How the graph's Material Output says the material blends, clips, faces and lights. */
@@ -836,5 +840,6 @@ export const materialGraphSettings = (graph: MaterialGraph): MaterialGraphSettin
         alphaClip: params('alphaClip') as number,
         twoSided: params('twoSided') === true,
         unlit: params('shading') === 'unlit',
+        normalSpace: params('normalSpace') === 'world' ? 'world' : 'tangent',
     };
 };

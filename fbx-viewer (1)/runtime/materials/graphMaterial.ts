@@ -188,7 +188,7 @@ export const materialGraphOffsetsVertices = (material: THREE.Material): boolean 
 /** Whether the graph shapes the material's shadow (a cut-out, or offset vertices). */
 const shapesShadow = (binding: Pick<GraphBinding, 'settings' | 'vertex'>): boolean => binding.settings.blendMode === 'masked' || binding.vertex !== null;
 
-const PREVIEW_SETTINGS: MaterialGraphSettings = { blendMode: 'opaque', alphaClip: 0.5, twoSided: false, unlit: true };
+const PREVIEW_SETTINGS: MaterialGraphSettings = { blendMode: 'opaque', alphaClip: 0.5, twoSided: false, unlit: true, normalSpace: 'tangent' };
 
 /**
  * The shaders of a (normalised) graph, drawn as `kind` with the physical `features` it uses. They depend
@@ -415,7 +415,10 @@ const patchShader = (binding: GraphBinding, shader: THREE.WebGLProgramParameters
     source = replaceOnce(source, '#include <roughnessmap_fragment>', `float roughnessFactor = ${outputs.roughness};`);
     source = replaceOnce(source, '#include <metalnessmap_fragment>', `float metalnessFactor = ${outputs.metalness};`);
     if (connected.has('normal')) {
-        source = replaceOnce(source, '#include <normal_fragment_maps>', THREE.ShaderChunk.normal_fragment_maps.replace(NORMAL_READ, `vec3 mapN = ${outputs.normal};`));
+        source = replaceOnce(source, '#include <normal_fragment_maps>', settings.normalSpace === 'world'
+            // A world-space normal (Triplanar Normal Map) needs no tangent frame: only turning into view space.
+            ? `normal = normalize((viewMatrix * vec4(${outputs.normal}, 0.0)).xyz);`
+            : THREE.ShaderChunk.normal_fragment_maps.replace(NORMAL_READ, `vec3 mapN = ${outputs.normal};`));
     }
     source = replaceOnce(source, '#include <emissivemap_fragment>', preview ? 'totalEmissiveRadiance = vec3(0.0);' : `totalEmissiveRadiance = ${outputs.emissive} * ${outputs.emissiveStrength};`);
     if (binding.kind === 'physical') {
