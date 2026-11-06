@@ -260,7 +260,8 @@ export const PaintViewport: React.FC<{
                 normal.set(part.normals.subarray(v * 3, v * 3 + 3), i * 3);
                 if (uv?.proposal) uvs.set(uv.proposal.cornerUv.subarray(i * 2, i * 2 + 2), i * 2);
                 else uvs.set([part.uvs[v * 2], part.uvs[v * 2 + 1]], i * 2);
-                stretch[i] = uv?.proposal ? uv.proposal.triangleStretch[Math.floor(i / 3)] : 0;
+                // The proposal's stretch, or the current layout's.
+                stretch[i] = (uv?.proposal ? uv.proposal.triangleStretch : uv?.currentStretch)?.[Math.floor(i / 3)] ?? 0;
             }
             const geometry = world.layoutMesh.geometry;
             geometry.setAttribute('position', new THREE.BufferAttribute(position, 3));

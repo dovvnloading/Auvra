@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import React, { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { UvSession } from './uvSession';
 
 /**
@@ -15,7 +15,7 @@ export const UvView2D: React.FC<{ uv: UvSession }> = ({ uv }) => {
     const canvas = useRef<HTMLCanvasElement>(null);
     const [view, setView] = useState({ x: 40, y: 40, scale: 0 });
     const [size, setSize] = useState({ width: 0, height: 0 });
-    const background = useRef<HTMLCanvasElement | null>(null);
+    const background = useRef<Map<number, HTMLCanvasElement>>(new Map());
     const drag = useRef<{ kind: 'move' | 'pan'; x: number; y: number; moved: boolean } | null>(null);
     const hatch = useRef<CanvasPattern | null>(null);
 
@@ -30,17 +30,66 @@ export const UvView2D: React.FC<{ uv: UvSession }> = ({ uv }) => {
         return () => observer.disconnect();
     }, []);
 
-    // The set's base colour behind the islands, read once per set.
+    // Each tile's current base colour behind the islands, read again (without holding up the GPU) a little
+    // after the painting changes.
+    const paintVersion = useSyncExternalStore(uv.paint.subscribe, uv.paint.getVersion);
+    const [backgroundVersion, setBackgroundVersion] = useState(0);
+    const refresh = useRef<{ timer: ReturnType<typeof setTimeout> | null; reading: boolean; again: boolean; alive: boolean }>({ timer: null, reading: false, again: false, alive: true });
+    const latestUv = useRef(uv);
+    latestUv.current = uv;
+    const readBackgrounds = useCallback(async (): Promise<void> => {
+        const state = refresh.current;
+        if (state.reading) { state.again = true; return; }
+        state.reading = true;
+        try {
+            const reading = latestUv.current;
+            const paint = reading.paint;
+            const stack = paint.stack;
+            const gpu = paint.gpu;
+            if (!paint.usable) return;
+            const side = Math.min(stack.size, 1024);
+            const pictures = new Map<number, HTMLCanvasElement>();
+            for (const tile of stack.tiles) {
+                const image = stack.outputs.get(tile)?.baseColor;
+                if (!image) continue;
+                const small = gpu.image(side, side, 'color', 8);
+                gpu.passNow(small, { fragment: 'void main() { outColor = vec4(texture(source, vUv).rgb, 1.0); }', inputs: { source: image } });
+                const later = gpu.readRgba8Later(small);
+                gpu.release(small);
+                const pixels = await later;
+                if (!pixels || !state.alive || latestUv.current !== reading) return;
+                // Read bottom row first; a canvas starts at the top.
+                const rows = new Uint8ClampedArray(pixels.length);
+                const row = side * 4;
+                for (let y = 0; y < side; y++) rows.set(pixels.subarray((side - 1 - y) * row, (side - y) * row), y * row);
+                const picture = document.createElement('canvas');
+                picture.width = picture.height = side;
+                picture.getContext('2d')!.putImageData(new ImageData(rows, side, side), 0, 0);
+                pictures.set(tile, picture);
+            }
+            background.current = pictures;
+            setBackgroundVersion((value) => value + 1);
+        } finally {
+            state.reading = false;
+            // Painting went on while this was read: read once more.
+            if (state.again && state.alive) { state.again = false; void readBackgrounds(); }
+        }
+    }, []);
+    // A new set starts without its old set's pictures behind it.
+    useEffect(() => { background.current = new Map(); }, [uv]);
     useEffect(() => {
-        const stack = uv.paint.stack;
-        const image = stack.outputs.get(stack.tiles[0])?.baseColor;
-        if (!image) return;
-        const pixels = uv.paint.gpu.readRgba8(image, 512, 512, 'raw', true);
-        const picture = document.createElement('canvas');
-        picture.width = picture.height = 512;
-        picture.getContext('2d')!.putImageData(new ImageData(pixels, 512, 512), 0, 0);
-        background.current = picture;
-    }, [uv]);
+        const state = refresh.current;
+        if (state.timer) clearTimeout(state.timer);
+        state.timer = setTimeout(() => { state.timer = null; void readBackgrounds(); }, background.current.size ? 300 : 0);
+    }, [uv, paintVersion, readBackgrounds]);
+    useEffect(() => {
+        const state = refresh.current;
+        state.alive = true;
+        return () => {
+            state.alive = false;
+            if (state.timer) { clearTimeout(state.timer); state.timer = null; }
+        };
+    }, []);
 
     const scale = view.scale || Math.min(size.width, size.height) * 0.86;
     const toScreen = (u: number, v: number): [number, number] => [view.x + u * scale, view.y + (1 - v) * scale];
@@ -62,9 +111,11 @@ export const UvView2D: React.FC<{ uv: UvSession }> = ({ uv }) => {
             for (let tx = 0; tx < tilesX; tx++) {
                 const [x0, y1] = toScreen(tx, ty);
                 const [x1, y0] = toScreen(tx + 1, ty + 1);
-                if (tx === 0 && ty === 0 && background.current && !uv.proposal) {
+                // The tile's own picture behind the current layout (a new layout's islands lie elsewhere).
+                const picture = uv.proposal ? null : background.current.get(1001 + tx + ty * 10);
+                if (picture) {
                     g.globalAlpha = 0.85;
-                    g.drawImage(background.current, x0, y0, x1 - x0, y1 - y0);
+                    g.drawImage(picture, x0, y0, x1 - x0, y1 - y0);
                     g.globalAlpha = 1;
                 } else {
                     g.fillStyle = '#1d1d21';
@@ -124,7 +175,7 @@ export const UvView2D: React.FC<{ uv: UvSession }> = ({ uv }) => {
             g.strokeStyle = selectedFaces.has(t) ? 'rgba(186,230,253,0.9)' : 'rgba(228,228,231,0.35)';
             g.stroke();
         }
-    }, [size, uv, version, view]); // eslint-disable-line react-hooks/exhaustive-deps
+    }, [size, uv, version, view, backgroundVersion]); // eslint-disable-line react-hooks/exhaustive-deps
 
     useEffect(() => {
         const element = host.current;
