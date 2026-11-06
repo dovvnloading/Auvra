@@ -231,6 +231,24 @@ export const picturePrecision = (key: string): 8 | 16 => (key.endsWith(':height'
 /** The owner of the pictures of what the surface wore before painting began, carried onto a new layout. */
 export const BEFORE = 'before';
 
+/** Whose a picture is: a layer's or a mask effect's id, or BEFORE. */
+export const pictureOwner = (key: string): string => {
+    const colon = key.indexOf(':');
+    return colon < 0 ? key : key.slice(0, colon);
+};
+
+/** Owners of pictures the documents use: their layers, their mask effects, and what the surface wore before. */
+export const pictureOwners = (documents: Iterable<PaintDocument>): Set<string> => {
+    const owners = new Set<string>([BEFORE]);
+    for (const document of documents) {
+        for (const layer of allLayers(document.layers)) {
+            owners.add(layer.id);
+            for (const effect of layer.mask ?? []) owners.add(effect.id);
+        }
+    }
+    return owners;
+};
+
 interface Cached { signature: string; image: GpuImage }
 
 export class PaintStack {
@@ -423,6 +441,15 @@ export class PaintStack {
         if (!byTile) return;
         for (const image of byTile.values()) this.gpu.release(image);
         this.pictures.delete(key);
+        for (const tile of byTile.keys()) {
+            this.unsaved.delete(`${key}|${tile}`);
+            this.versions.delete(`${key}|${tile}`);
+        }
+    }
+
+    /** Lets go of every picture whose layer or mask effect none of `owners` is (see pictureOwners). */
+    dropPicturesExcept(owners: ReadonlySet<string>): void {
+        for (const key of [...this.pictures.keys()]) if (!owners.has(pictureOwner(key))) this.dropPictures(key);
     }
 
     /** A mask effect painted fully white or black to start with. */
@@ -437,8 +464,11 @@ export class PaintStack {
      */
     async keepPictures(): Promise<PaintDocument> {
         const stored = new Map<string, string>();
+        // Pictures of deleted layers wait (undo may bring the layer back) rather than being kept for nothing.
+        const used = pictureOwners([this.document]);
         for (const entry of [...this.unsaved]) {
             const [key, tileName] = entry.split('|');
+            if (!used.has(pictureOwner(key))) continue;
             const image = this.pictures.get(key)?.get(Number(tileName));
             // Marked kept as its pixels are read: a stroke landing while they are stored marks it again.
             this.unsaved.delete(entry);

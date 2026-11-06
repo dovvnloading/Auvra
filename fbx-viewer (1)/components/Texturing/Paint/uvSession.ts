@@ -10,7 +10,7 @@ import { newTriangleTiles, transferPicture } from '../../../texturing/uv/transfe
 import { DEFAULT_UNWRAP, unwrap, type UnwrapSettings } from '../../../texturing/uv/unwrap';
 import { applyLayout, buildLayout, decodeLayout, encodeLayout, type UvLayoutFile } from '../../../texturing/uv/uvLayout';
 import { buildCharts, buildTopology, edgeKey, existingSeams, type Chart, type UvTopology } from '../../../texturing/uv/uvTopology';
-import { BEFORE, pictureKey, picturePrecision } from '../../../texturing/paint/paintStack';
+import { BEFORE, pictureKey, pictureOwner, pictureOwners, picturePrecision } from '../../../texturing/paint/paintStack';
 import { BLEND_FOR, type FillSource, type PaintChannel, type PaintDocument, type PaintLayer } from '../../../texturing/paint/paintTypes';
 import type { PaintSession } from './paintSession';
 
@@ -370,8 +370,11 @@ export class UvSession {
             const newTiles = [...new Set(newTriangleTiles(corner))].sort((a, b) => a - b);
             const spread = newTiles.length > 1;
             // 1. Every picture of the set (painted layers, masks, what it wore before once carried): each tile
-            // of the new layout drawn from the current tiles' pictures.
+            // of the new layout drawn from the current tiles' pictures. Pictures of layers deleted earlier
+            // are kept only for undo, which the set reopens without: they are not carried (nor kept again).
+            const used = pictureOwners([stack.document]);
             for (const [key, byTile] of [...stack.pictures]) {
+                if (!used.has(pictureOwner(key))) continue;
                 const moved: Array<[number, GpuImage]> = [];
                 for (const tile of newTiles) moved.push([tile, await transferPicture(gpu, part, corner, (from) => byTile.get(from) ?? null, size, key.endsWith(':normal'), tile, picturePrecision(key))]);
                 for (const [tile, image] of moved) {

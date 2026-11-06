@@ -12,9 +12,9 @@ import { readStoredGraph } from '../../../texturing/graph/stored';
 import { buildPartMesh, buildWholeMesh, type PartMesh } from '../../../texturing/mesh/partMesh';
 import { SurfacePicker } from '../../../texturing/mesh/picker';
 import { DEEP_EXPORT, ROLE_LABELS, encodeChannels, materialGraphForTextures, tileAtlas, type ChannelTextureIds, type PictureLayout } from '../../../texturing/materialOutput';
-import { PaintStack, type StackHost } from '../../../texturing/paint/paintStack';
+import { PaintStack, pictureOwners, type StackHost } from '../../../texturing/paint/paintStack';
 import { BUILTIN_GRAPHS } from '../../../texturing/paint/smartLibrary';
-import { applyPixelHistory, type HistoryEntry } from '../../../texturing/paint/strokes';
+import { applyPixelHistory, trimmedHistory, type HistoryEntry } from '../../../texturing/paint/strokes';
 import { castsFromThreeSides, createPaintDocument, newFillLayer, paintId, readPaintDocument, type PaintChannel, type PaintDocument } from '../../../texturing/paint/paintTypes';
 import { download, makeZip } from '../../../texturing/zip';
 import type { PartMaterial } from '../../Tools/Retexture/parts';
@@ -46,6 +46,11 @@ export interface PaintSessionHost {
 }
 
 const HISTORY_LIMIT = 80;
+/**
+ * Pixels the undo history may hold, in bytes (strokes keep the blocks they touched). Past it, the oldest
+ * steps go first; the newest step is always kept.
+ */
+export const HISTORY_BYTES = 256 * 1024 * 1024;
 const SAVE_DELAY_MS = 2500;
 /** Changes to one thing this close together make one undo step. */
 const COALESCE_MS = 1000;
@@ -184,16 +189,33 @@ export class PaintSession {
         this.coalesceKey = coalesce ?? null;
         this.coalesceAt = now;
         this.stack.setDocument(next);
+        this.dropUnusedPictures();
         this.dirty();
     }
 
     /** A step already made (a brush stroke) goes into the history. */
     record(entry: HistoryEntry): void {
         this.past.push(entry);
-        if (this.past.length > HISTORY_LIMIT) this.past.shift();
         this.future = [];
+        this.trimHistory();
+        this.dropUnusedPictures();
         if (entry.pixels) this.dirty();
         this.emit();
+    }
+
+    /** Keeps the history within its step count and its memory (oldest first, never the newest step). */
+    private trimHistory(): void {
+        this.past = trimmedHistory(this.past, this.future, HISTORY_LIMIT, HISTORY_BYTES);
+    }
+
+    /**
+     * Lets go of the pictures of layers and mask effects that neither the set as it is nor any step of
+     * its history uses (deleted, and out of reach of undo).
+     */
+    private dropUnusedPictures(): void {
+        const documents: PaintDocument[] = [this.stack.document];
+        for (const entry of [...this.past, ...this.future]) if (entry.document) documents.push(entry.document.before, entry.document.after);
+        this.stack.dropPicturesExcept(pictureOwners(documents));
     }
 
     get canUndo(): boolean { return this.past.length > 0; }
@@ -207,6 +229,11 @@ export class PaintSession {
         if (entry.pixels) applyPixelHistory(this.stack, entry.pixels, 'undo');
         if (entry.document) this.stack.setDocument(entry.document.before);
         this.future.push(entry);
+        // Undoing a stroke keeps the pixels it undid, for redo: the history may now hold too much.
+        if (entry.pixels) {
+            this.trimHistory();
+            this.dropUnusedPictures();
+        }
         this.dirty();
         this.emit();
     }

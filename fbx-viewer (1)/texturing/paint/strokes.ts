@@ -338,6 +338,20 @@ export const historyBytes = (entry: HistoryEntry): number => {
     return bytes;
 };
 
+/**
+ * The past steps to keep: at most `steps` of them, and few enough that the pixels of every step kept,
+ * past and future, fit in `bytes`. The oldest go first; the newest past step always stays.
+ */
+export const trimmedHistory = (past: readonly HistoryEntry[], future: readonly HistoryEntry[], steps: number, bytes: number): HistoryEntry[] => {
+    const kept = past.length > steps ? past.slice(past.length - steps) : [...past];
+    let total = 0;
+    for (const entry of kept) total += historyBytes(entry);
+    for (const entry of future) total += historyBytes(entry);
+    let first = 0;
+    while (total > bytes && kept.length - first > 1) total -= historyBytes(kept[first++]);
+    return first ? kept.slice(first) : kept;
+};
+
 /** Reads a block of a picture. Half-float pictures are read as 32-bit floats (which every GPU allows) and kept as half floats. */
 const readBlock = (gpu: TextureGpu, image: GpuImage, x: number, y: number, width: number, height: number): BlockPixels => {
     if (image.precision === 8) {
