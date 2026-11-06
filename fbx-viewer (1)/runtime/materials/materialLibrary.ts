@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { getMaterialNodeDefinition, normalizeMaterialGraph, textureSlot, withMaterialParameters, type MaterialGraph, type MaterialParameterValues, type TextureSlot } from './materialGraph';
+import { getMaterialNodeDefinition, materialGraphLook, normalizeMaterialGraph, textureSlot, withMaterialParameters, type MaterialGraph, type MaterialParameterValues, type TextureSlot } from './materialGraph';
 import { bindMaterialGraph, canBindMaterialGraph, unbindMaterialGraph, type MaterialTextureLookup } from './graphMaterial';
 
 /**
@@ -132,6 +132,32 @@ export const readMaterialAsset = (value: unknown): MaterialAsset | null => {
     return asset;
 };
 
+/**
+ * What an asset is to a model's material:
+ * - 'material': it draws (a shader graph, or a texture graph or painting whose pictures have been made);
+ * - 'needsPictures': a texture graph not yet drawn into pictures, or a painting not yet put on a model,
+ *   whose graph would only shade grey;
+ * - 'forOtherGraphs': a texture graph made to be used as a node inside others, never a material.
+ * Read generically, as authoringTextureIds is, so the game build need not load the authoring code.
+ */
+export type MaterialAssetUse = 'material' | 'needsPictures' | 'forOtherGraphs';
+
+const recordOf = (value: unknown): Record<string, unknown> | null => (value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null);
+
+const madePictures = (record: Record<string, unknown> | null): boolean => {
+    const textures = recordOf(record?.textures);
+    return !!textures && Object.values(textures).some((textureId) => typeof textureId === 'string' && textureId.length > 0);
+};
+
+export const materialAssetUse = (asset: Pick<MaterialAsset, 'textureGraph' | 'paint'>): MaterialAssetUse => {
+    if (asset.textureGraph) {
+        if (asset.textureGraph.library === true) return 'forOtherGraphs';
+        return madePictures(recordOf(asset.textureGraph.baked)) ? 'material' : 'needsPictures';
+    }
+    if (asset.paint) return madePictures(recordOf(asset.paint.applied)) ? 'material' : 'needsPictures';
+    return 'material';
+};
+
 /** Where a texture id's image is, for loading it. */
 export type TextureUrlResolver = (textureId: string) => string | undefined;
 
@@ -146,6 +172,8 @@ interface Binding {
 class MaterialLibrary {
     /** Counts changes to the assets, for subscribers that compare snapshots. */
     version = 0;
+    /** Counts projects opened (replaceAll), for what is kept per project for the session. */
+    generation = 0;
     private readonly assets = new Map<string, MaterialAsset>();
     private readonly listeners = new Set<() => void>();
     private readonly bound = new Map<THREE.MeshStandardMaterial, Binding>();
@@ -176,16 +204,23 @@ class MaterialLibrary {
 
     /** Replaces every asset (a project opened). */
     replaceAll(assets: readonly MaterialAsset[]): void {
+        this.generation++;
         this.assets.clear();
         for (const asset of assets) this.assets.set(asset.id, asset);
         this.rebindAll();
         this.emit();
     }
 
-    /** Adds or changes one asset; every material using it follows. */
+    /**
+     * Adds or changes one asset; every material using it follows. Moving nodes or comments changes
+     * nothing a material draws, so it touches no material; a change of values updates the materials'
+     * uniforms as they are (graphMaterial.ts), and only a change of shape compiles anything.
+     */
     upsert(asset: MaterialAsset): void {
+        const previous = this.assets.get(asset.id);
         this.assets.set(asset.id, asset);
-        for (const [material, binding] of this.bound) if (binding.materialId === asset.id) this.bindNow(material, binding);
+        const drawsTheSame = previous !== undefined && (previous.graph === asset.graph || materialGraphLook(previous.graph) === materialGraphLook(asset.graph));
+        if (!drawsTheSame) for (const [material, binding] of this.bound) if (binding.materialId === asset.id) this.bindNow(material, binding);
         this.emit();
     }
 

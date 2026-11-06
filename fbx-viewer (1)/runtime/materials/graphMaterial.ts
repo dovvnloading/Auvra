@@ -6,6 +6,7 @@ import {
     compileMaterialGraph,
     getMaterialNodeDefinition,
     materialGraphSettings,
+    materialGraphShape,
     normalizeMaterialGraph,
     readParam,
     textureSlot,
@@ -18,6 +19,7 @@ import {
     type TextureSlot,
 } from './materialGraph';
 import { helperSource } from './materialGlsl';
+import { hasShaderStage, setShaderStage, type ShaderStage } from './shaderStages';
 
 /**
  * Standard materials shaded by a material graph (runtime/materials/materialGraph.ts). The graph's
@@ -27,7 +29,14 @@ import { helperSource } from './materialGlsl';
  * settings choose the blend mode (opaque, masked, translucent, additive), alpha clip, two-sided
  * and unlit shading. A graph binds to a material in place, so every mesh sharing it (each placed
  * copy of a model) follows. Its constants and textures are uniforms: editing them updates the
- * material as it is, and only a change to the graph's wiring or settings rebuilds its shader.
+ * material's uniform values as they are, and only a change to the graph's shape (its nodes' kinds,
+ * their settings written into the shader, and its wiring) rebuilds its shader. Graphs of one shape
+ * share one compiled shader, however many materials use them.
+ *
+ * The graph is the first of a material's shader stages (shaderStages.ts): the normal map's rebuild,
+ * rain, snow and wind still apply on top of it. Each material keeps one set of uniform objects for
+ * as long as it lives, whichever graphs it is bound to, so a program three reuses always reads values
+ * that are kept up to date.
  *
  * Shadows: a material whose shadow the graph shapes (masked, or offset vertices) is given an
  * alpha test and a map, which makes three give it a depth material of its own; just before each
@@ -79,8 +88,6 @@ interface OwnState {
     alphaTest: number;
     map: THREE.Texture | null;
     normalMap: THREE.Texture | null;
-    onBeforeCompile: StandardMaterial['onBeforeCompile'];
-    customProgramCacheKey: StandardMaterial['customProgramCacheKey'];
     hadUv: boolean;
 }
 
@@ -94,10 +101,8 @@ export interface MaterialPreviewOptions {
     columns: number;
 }
 
-interface GraphBinding {
-    graph: MaterialGraph;
-    preview: MaterialPreviewOptions | null;
-    settings: MaterialGraphSettings;
+/** The shaders a graph of one shape compiles to: the same for every graph of that shape, whatever its values. */
+interface CompiledStages {
     fragment: CompiledMaterialGraph;
     /** The vertex offset, when the graph wires one. */
     vertex: CompiledMaterialGraph | null;
@@ -106,12 +111,33 @@ interface GraphBinding {
     /** Every stage's uniforms by name. */
     specs: Map<string, MaterialUniformSpec>;
     key: string;
+}
+
+interface GraphBinding extends CompiledStages {
+    graph: MaterialGraph;
+    /** materialGraphShape of the graph, with the previews asked for. */
+    shape: string;
+    preview: MaterialPreviewOptions | null;
+    settings: MaterialGraphSettings;
+    /** The material's uniforms (uniformsOf). */
     uniforms: Record<string, THREE.IUniform>;
     textures: MaterialTextureLookup;
     own: OwnState;
 }
 
 const bindings = new WeakMap<THREE.Material, GraphBinding>();
+
+/**
+ * Each material's graph uniforms by name, for as long as it lives: kept across rebinding, unbinding and
+ * binding again, so every program three ever built for it reads objects whose values are current.
+ */
+const materialUniforms = new WeakMap<THREE.Material, Record<string, THREE.IUniform>>();
+
+const uniformsOf = (material: THREE.Material): Record<string, THREE.IUniform> => {
+    let uniforms = materialUniforms.get(material);
+    if (!uniforms) materialUniforms.set(material, uniforms = {});
+    return uniforms;
+};
 
 /** True for the materials a graph can shade: standard and physical. */
 export const canBindMaterialGraph = (material: THREE.Material): material is StandardMaterial =>
@@ -134,12 +160,14 @@ const shapesShadow = (binding: Pick<GraphBinding, 'settings' | 'vertex'>): boole
 
 const PREVIEW_SETTINGS: MaterialGraphSettings = { blendMode: 'opaque', alphaClip: 0.5, twoSided: false, unlit: true };
 
-const compileStages = (graph: MaterialGraph, preview: MaterialPreviewOptions | null): Omit<GraphBinding, 'uniforms' | 'textures' | 'own'> => {
+/** The shaders of a (normalised) graph. They depend only on its shape, so graphs of one shape share them. */
+const compileStages = (graph: MaterialGraph, preview: MaterialPreviewOptions | null): CompiledStages => {
     if (preview) {
         const fragment = compileMaterialGraph(graph, { stage: 'fragment', previews: preview.nodeIds });
         const specs = new Map(fragment.uniforms.map(spec => [spec.name, spec]));
-        return { graph, preview, settings: PREVIEW_SETTINGS, fragment, vertex: null, shadow: null, specs, key: `preview#${preview.columns}#${fragment.key}` };
+        return { fragment, vertex: null, shadow: null, specs, key: `preview#${preview.columns}#${preview.tile}#${fragment.key}` };
     }
+    // Blend mode, two-sided and unlit are settings written into the shader, so they are part of the shape.
     const settings = materialGraphSettings(graph);
     const fragment = compileMaterialGraph(graph, { stage: 'fragment' });
     const vertex = fragment.connected.has('worldPositionOffset') ? compileMaterialGraph(graph, { stage: 'vertex' }) : null;
@@ -147,7 +175,26 @@ const compileStages = (graph: MaterialGraph, preview: MaterialPreviewOptions | n
     const specs = new Map<string, MaterialUniformSpec>();
     for (const stage of [fragment, vertex, shadow]) for (const spec of stage?.uniforms ?? []) specs.set(spec.name, spec);
     const key = [fragment.key, vertex?.key ?? '-', shadow?.key ?? '-', settings.blendMode, settings.unlit, settings.twoSided].join('#');
-    return { graph, preview: null, settings, fragment, vertex, shadow, specs, key };
+    return { fragment, vertex, shadow, specs, key };
+};
+
+/** Shapes compiled lately, most recent last: many materials using one asset, and an asset edited value by value, compile once. */
+const compiledShapes = new Map<string, CompiledStages>();
+const COMPILED_SHAPES_KEPT = 64;
+
+const shapeOf = (graph: MaterialGraph, preview: MaterialPreviewOptions | null): string =>
+    preview ? `${materialGraphShape(graph)}#preview:${preview.tile}:${preview.columns}:${preview.nodeIds.join(',')}` : materialGraphShape(graph);
+
+const compiledFor = (graph: MaterialGraph, preview: MaterialPreviewOptions | null, shape: string): CompiledStages => {
+    let compiled = compiledShapes.get(shape);
+    if (compiled) {
+        compiledShapes.delete(shape);
+    } else {
+        compiled = compileStages(graph, preview);
+        if (compiledShapes.size >= COMPILED_SHAPES_KEPT) compiledShapes.delete(compiledShapes.keys().next().value!);
+    }
+    compiledShapes.set(shape, compiled);
+    return compiled;
 };
 
 /** Sets each uniform the graph needs from its node's param (adding the ones it lacks). */
@@ -289,9 +336,13 @@ vec3 mgVertexColor() {
 #endif
 }`;
 
-const bindUniforms = (binding: GraphBinding, shader: THREE.WebGLProgramParametersWithUniforms, stages: Array<CompiledMaterialGraph | null>): void => {
+/**
+ * Hands a program every uniform the material has, not only the ones this shader declares: three may
+ * later reuse these uniforms for another program it built for the material (see shaderStages.ts).
+ */
+const bindUniforms = (binding: GraphBinding, shader: THREE.WebGLProgramParametersWithUniforms): void => {
     shader.uniforms.uMaterialTime = MATERIAL_TIME;
-    for (const stage of stages) for (const spec of stage?.uniforms ?? []) shader.uniforms[spec.name] = binding.uniforms[spec.name];
+    Object.assign(shader.uniforms, binding.uniforms);
 };
 
 /** GLSL picking the value of the preview tile the pixel is in. */
@@ -304,7 +355,7 @@ const previewSelection = (preview: MaterialPreviewOptions, previews: readonly st
 const patchShader = (binding: GraphBinding, shader: THREE.WebGLProgramParametersWithUniforms): void => {
     const { fragment, vertex, settings, preview } = binding;
     const { statements, outputs, connected } = fragment;
-    bindUniforms(binding, shader, [fragment, vertex]);
+    bindUniforms(binding, shader);
     const fragmentBuiltins = fragment.builtins;
 
     shader.vertexShader = replaceOnce(shader.vertexShader, 'void main() {',
@@ -317,6 +368,8 @@ const patchShader = (binding: GraphBinding, shader: THREE.WebGLProgramParameters
     source = replaceOnce(source, '#include <map_fragment>', preview
         ? `${statements.join('\n')}\n${previewSelection(preview, fragment.previews)}\ndiffuseColor.rgb = mgPreview;`
         : `${statements.join('\n')}\ndiffuseColor.rgb = ${outputs.baseColor};`);
+    // A graph reading the vertex colours uses them as it likes: three must not multiply them in again.
+    if (fragmentBuiltins.has('vertexColor')) source = replaceOnce(source, '#include <color_fragment>', '');
     source = replaceOnce(source, '#include <alphamap_fragment>', settings.blendMode === 'opaque' ? 'diffuseColor.a = 1.0;' : `diffuseColor.a = ${outputs.opacity};`);
     source = replaceOnce(source, '#include <roughnessmap_fragment>', `float roughnessFactor = ${outputs.roughness};`);
     source = replaceOnce(source, '#include <metalnessmap_fragment>', `float metalnessFactor = ${outputs.metalness};`);
@@ -343,7 +396,7 @@ const patchShader = (binding: GraphBinding, shader: THREE.WebGLProgramParameters
 /** Teaches a shadow depth (or distance) material the graph's vertex offset and cut-out. */
 const patchShadowShader = (binding: GraphBinding, shader: THREE.WebGLProgramParametersWithUniforms): void => {
     const { vertex, shadow } = binding;
-    bindUniforms(binding, shader, [vertex, shadow]);
+    bindUniforms(binding, shader);
     const builtins = shadow?.builtins ?? new Set<MaterialBuiltin>();
     shader.vertexShader = replaceOnce(shader.vertexShader, 'void main() {',
         `${varyingsFor(builtins).join('\n')}\n#define MG_OBJECT_NORMAL normal\n${VERTEX_COLOR_ATTRIBUTE}\n${preamble([vertex])}\nvoid main() {`);
@@ -380,7 +433,10 @@ const prepareShadow = (material: THREE.Material, depthMaterial: THREE.Material):
     if (shadowKeys.get(depthMaterial) === key) return;
     shadowKeys.set(depthMaterial, key);
     depthMaterial.defines = { ...(depthMaterial.defines ?? {}), USE_UV: '' };
-    depthMaterial.onBeforeCompile = (shader) => patchShadowShader(binding, shader);
+    depthMaterial.onBeforeCompile = (shader) => {
+        const current = bindings.get(material);
+        if (current) patchShadowShader(current, shader);
+    };
     depthMaterial.customProgramCacheKey = () => `graph-shadow:${key}`;
     depthMaterial.needsUpdate = true;
 };
@@ -393,9 +449,24 @@ THREE.Mesh.prototype.onBeforeShadow = function onBeforeShadow(this: THREE.Mesh, 
     if (material) prepareShadow(material, depthMaterial);
 };
 
+/** What decides whether three must rebuild a material's program, besides its key. */
+const programFlags = (material: StandardMaterial): unknown[] =>
+    [material.transparent, material.side, material.blending, material.alphaTest, material.map, material.normalMap];
+
+/** The graph stage of a material (shaderStages.ts): the graph's shaders spliced into three's. */
+const graphStage = (material: StandardMaterial): ShaderStage => ({
+    patch: (shader) => {
+        const binding = bindings.get(material);
+        if (binding) patchShader(binding, shader);
+    },
+    key: () => `graph:${bindings.get(material)?.key ?? '-'}`,
+    uniforms: () => uniformsOf(material),
+});
+
 /**
- * Shades `material` by `graph`: in place when the material already follows a graph and only its
- * constants or textures changed, by rebuilding the shader when its wiring or settings did.
+ * Shades `material` by `graph`. A graph of the shape the material already follows only changes values:
+ * its uniforms are updated as they are, with nothing compiled. A new shape takes the shaders compiled
+ * for it (once for every material of that shape), and three rebuilds the material's program.
  */
 export const bindMaterialGraph = (
     material: StandardMaterial,
@@ -403,22 +474,39 @@ export const bindMaterialGraph = (
     textures: MaterialTextureLookup = () => null,
     preview: MaterialPreviewOptions | null = null,
 ): void => {
-    const stages = compileStages(normalizeMaterialGraph(graph), preview);
+    const normalised = normalizeMaterialGraph(graph);
+    const shape = shapeOf(normalised, preview);
+    const settings = preview ? PREVIEW_SETTINGS : materialGraphSettings(normalised);
     const existing = bindings.get(material);
     if (existing) {
-        const rebuild = stages.key !== existing.key;
-        const before = [material.transparent, material.side, material.blending, material.alphaTest, material.map, material.normalMap];
-        Object.assign(existing, stages);
+        // Something gave the material a compile hook of its own since: the graph goes back on after it.
+        if (!hasShaderStage(material, 'graph')) setShaderStage(material, 'graph', graphStage(material));
+        const compiled = existing.shape === shape ? existing : compiledFor(normalised, preview, shape);
+        const rebuild = compiled.key !== existing.key;
+        const before = programFlags(material);
+        existing.fragment = compiled.fragment;
+        existing.vertex = compiled.vertex;
+        existing.shadow = compiled.shadow;
+        existing.specs = compiled.specs;
+        existing.key = compiled.key;
+        existing.graph = normalised;
+        existing.shape = shape;
+        existing.preview = preview;
+        existing.settings = settings;
         existing.textures = textures;
         syncUniforms(existing);
         applyFlags(material, existing);
-        const after = [material.transparent, material.side, material.blending, material.alphaTest, material.map, material.normalMap];
+        const after = programFlags(material);
         if (rebuild || before.some((value, index) => value !== after[index])) material.needsUpdate = true;
         return;
     }
     const binding: GraphBinding = {
-        ...stages,
-        uniforms: {},
+        ...compiledFor(normalised, preview, shape),
+        graph: normalised,
+        shape,
+        preview,
+        settings,
+        uniforms: uniformsOf(material),
         textures,
         own: {
             transparent: material.transparent,
@@ -428,8 +516,6 @@ export const bindMaterialGraph = (
             alphaTest: material.alphaTest,
             map: material.map,
             normalMap: material.normalMap,
-            onBeforeCompile: material.onBeforeCompile,
-            customProgramCacheKey: material.customProgramCacheKey,
             hadUv: 'USE_UV' in (material.defines ?? {}),
         },
     };
@@ -437,9 +523,7 @@ export const bindMaterialGraph = (
     syncUniforms(binding);
     applyFlags(material, binding);
     material.defines = { ...(material.defines ?? {}), USE_UV: '' };
-    material.onBeforeCompile = (shader) => patchShader(binding, shader);
-    material.customProgramCacheKey = () => `graph:${binding.key}`;
-    material.needsUpdate = true;
+    setShaderStage(material, 'graph', graphStage(material));
 };
 
 /** The material's own colour and normal maps, as they are while no graph is bound (painting starts from them). */
@@ -454,8 +538,7 @@ export const unbindMaterialGraph = (material: StandardMaterial): void => {
     if (!binding) return;
     bindings.delete(material);
     const { own } = binding;
-    material.onBeforeCompile = own.onBeforeCompile;
-    material.customProgramCacheKey = own.customProgramCacheKey;
+    setShaderStage(material, 'graph', null);
     if (!own.hadUv && material.defines) {
         const { USE_UV: _uv, ...rest } = material.defines;
         material.defines = rest;

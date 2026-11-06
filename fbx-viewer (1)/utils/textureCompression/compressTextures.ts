@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import type { BlockFormat } from './bcEncoder';
 import type { CompressResponse, TextureKind } from '../../workers/textureCompress.worker';
 import { isCompressibleSize } from './textureEncoding';
+import { setShaderStage, type ShaderStage } from '../../runtime/materials/shaderStages';
 
 /**
  * GPU TEXTURE COMPRESSION
@@ -10,8 +11,9 @@ import { isCompressibleSize } from './textureEncoding';
  * the memory for BC1, a quarter for BC3 when the texture has alpha) with their full mip chains,
  * compressed in workers and cached by the pixels' hash so each texture is compressed once. Normal
  * maps become BC5 (their two angles, a quarter of the memory), and their materials rebuild the
- * third component in the shader. Where the GPU cannot sample BC textures, or a texture's sides are
- * not powers of two, the texture is left alone.
+ * third component in the shader, in a shader stage that keeps the weather, wind and material graphs.
+ * Where the GPU cannot sample BC textures, or a texture's sides are not powers of two, the texture
+ * is left alone.
  */
 
 /** Changing the encoder changes this, so textures cached by an older encoder are made again. */
@@ -76,28 +78,32 @@ const NORMAL_REBUILD = 'vec3 mapN = vec3( texture2D( normalMap, vNormalMapUv ).x
 const rebuildsNormals = new WeakSet<THREE.Material>();
 
 /**
+ * The normal map's rebuild as a shader stage (runtime/materials/shaderStages.ts): after a material
+ * graph, which reads no normal map of the material's own, and before the weather, which it leaves be.
+ */
+const NORMAL_RG_STAGE: ShaderStage = {
+    patch: (shader) => {
+        shader.fragmentShader = shader.fragmentShader.replace('#include <normal_fragment_maps>', THREE.ShaderChunk.normal_fragment_maps.replace(NORMAL_READ, NORMAL_REBUILD));
+    },
+    key: () => 'normal-rg',
+};
+
+/**
  * Makes `material` rebuild its normal map's third component from the first two, as a BC5 normal map
  * keeps only those. It gives the same result for a full normal map, so it stays if the map changes.
  * A copy of the material needs it too: copying leaves a compile hook behind, and the copy would read
- * a third component the map does not have.
+ * a third component the map does not have. The material still takes the weather, wind and a graph.
  */
 export const rebuildNormalZ = (material: THREE.Material): void => {
     if (rebuildsNormals.has(material)) return;
     rebuildsNormals.add(material);
-    const previous = material.onBeforeCompile;
-    material.onBeforeCompile = (shader, renderer) => {
-        previous.call(material, shader, renderer);
-        shader.fragmentShader = shader.fragmentShader.replace('#include <normal_fragment_maps>', THREE.ShaderChunk.normal_fragment_maps.replace(NORMAL_READ, NORMAL_REBUILD));
-    };
-    const previousKey = material.customProgramCacheKey.bind(material);
-    material.customProgramCacheKey = () => `${previousKey()}|normal-rg`;
+    setShaderStage(material, 'normalRg', NORMAL_RG_STAGE);
     const previousClone = material.clone.bind(material);
     material.clone = () => {
         const copy = previousClone();
         rebuildNormalZ(copy);
         return copy;
     };
-    material.needsUpdate = true;
 };
 
 type CompressResult = { format: BlockFormat; levels: { data: ArrayBuffer; width: number; height: number }[]; cached: boolean };
