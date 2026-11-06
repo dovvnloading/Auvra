@@ -10,6 +10,7 @@ import { materialLibrary } from '../../runtime/materials/materialLibrary';
 import { MaterialNodePreviewer, nodePreviewImages } from '../../runtime/materials/materialPreviews';
 import type { MaterialGraph } from '../../runtime/materials/materialGraph';
 import { frontendDiagnostics } from '../../diagnostics/runtime';
+import { nodeShaderErrors } from '../../runtime/materials/shaderErrors';
 
 /**
  * The material editor's preview: the asset on a shape (sphere, cube, plane, cylinder or knot) under
@@ -31,10 +32,13 @@ export const PREVIEW_SHAPES: ReadonlyArray<[PreviewShape, string]> = [
 // ---------------------------------------------------------------------------
 
 let shaderError: string | null = null;
+/** The nodes the last error was traced back to, each with its message in plain words. */
+let nodeErrors: ReadonlyMap<string, string> = new Map();
 const errorListeners = new Set<() => void>();
-const setShaderError = (message: string | null) => {
-    if (message === shaderError) return;
+const setShaderError = (message: string | null, nodes: ReadonlyMap<string, string> = new Map()) => {
+    if (message === shaderError && nodes.size === nodeErrors.size && [...nodes].every(([id, text]) => nodeErrors.get(id) === text)) return;
     shaderError = message;
+    nodeErrors = nodes;
     for (const listener of errorListeners) listener();
 };
 const subscribeErrors = (listener: () => void) => {
@@ -44,6 +48,8 @@ const subscribeErrors = (listener: () => void) => {
 
 /** The last shader compile error of the preview (the GLSL compiler's lines, each with the line it names). */
 export const useMaterialShaderError = (): string | null => useSyncExternalStore(subscribeErrors, () => shaderError);
+/** The nodes the last shader compile error was traced back to (node id → what is wrong, in plain words). */
+export const useMaterialNodeErrors = (): ReadonlyMap<string, string> => useSyncExternalStore(subscribeErrors, () => nodeErrors);
 /** Forgets the error: the graph changed, so its next compile reports afresh. */
 export const clearMaterialShaderError = (): void => setShaderError(null);
 
@@ -67,7 +73,12 @@ const ShaderErrorCatcher: React.FC = () => {
             const lines = [...describeShaderError(gl, vertex), ...describeShaderError(gl, fragment)];
             if (!lines.length) lines.push((gl.getProgramInfoLog(program) ?? 'The shader did not link.').trim());
             frontendDiagnostics.warning('material_shader_error');
-            setShaderError(lines.join('\n'));
+            // Traced back to the nodes whose code the failing lines are, for the canvas to mark.
+            const nodes = new Map<string, string>();
+            for (const shader of [vertex, fragment]) {
+                for (const [id, text] of nodeShaderErrors(gl.getShaderSource(shader) ?? '', gl.getShaderInfoLog(shader) ?? '')) if (!nodes.has(id)) nodes.set(id, text);
+            }
+            setShaderError(lines.join('\n'), nodes);
         };
         return () => { debug.onShaderError = previous; };
     }, [renderer]);

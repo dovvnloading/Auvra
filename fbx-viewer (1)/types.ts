@@ -5,6 +5,7 @@ import * as THREE from 'three';
 import React from 'react';
 import type { ProjectStatus } from './utils/projectStatus';
 import type { MaterialOverrides } from './utils/materialOverrides';
+import type { ObjectMaterialOverrides } from './utils/materialInstances';
 import type { ModelFileReport } from './utils/fbxImport/nativeImporter';
 import type { ClipTakeSource } from './utils/clipTakes';
 import type { StoredBoneRole } from './utils/retargeting';
@@ -284,6 +285,11 @@ export interface LevelObject {
   parentId?: string | null;
   /** Behaviour attached to the object (lights, movers, ...); see runtime/components. */
   components?: LevelComponent[];
+  /**
+   * This object's own values for what its model's material assets leave to each use (their graphs'
+   * parameters), keyed by material name; the model and its other copies keep theirs (utils/materialInstances.ts).
+   */
+  materialOverrides?: ObjectMaterialOverrides;
   /** Prefab this object belongs to an instance of (utils/prefabSync.ts keeps instances in step with it). */
   prefabId?: string;
   /** The prefab object this object was made from; the one matching the prefab's rootId heads the instance. */
@@ -522,6 +528,8 @@ export interface LogicNode {
           'GetLevelVariable' | 'SetLevelVariable' | 'InputActionPressed' | 'RandomFloat' | 'RandomInt' | 'Print' |
           // Animation (hooks/levelBlueprintNodes/world.ts)
           'PlayPlayerAnimation' | 'SetMorphTarget' |
+          // Materials (hooks/levelBlueprintNodes/world.ts)
+          'SetMaterialNumber' | 'SetMaterialColour' |
           // Player (hooks/levelBlueprintNodes/world.ts)
           'DamagePlayer' | 'HealPlayer' | 'AddAmmo' | 'GiveWeapon' | 'GetPlayerHealth' |
           // Splines (hooks/levelBlueprintNodes/world.ts)

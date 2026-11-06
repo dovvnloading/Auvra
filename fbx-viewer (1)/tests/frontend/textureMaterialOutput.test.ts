@@ -27,11 +27,21 @@ describe('painted and graph-made pictures as engine materials', () => {
         expect(code).toContain('texture(mg_roughness_texture, vUv)');
     });
 
-    it('keeps height but draws nothing with it', () => {
+    it('draws height through Parallax, moving the other pictures and shading the low parts', () => {
         const graph = materialGraphForTextures({ baseColor: 'colour', height: 'bumps' });
-        expect(graph.nodes.some((node) => node.params.texture === 'bumps')).toBe(false);
-        expect(materialReadsPicture('height')).toBe(false);
+        const parallax = graph.nodes.find((node) => node.type === 'parallax')!;
+        expect(parallax.params.texture).toBe('bumps');
+        expect(graph.links).toEqual(expect.arrayContaining([
+            { fromNode: 'parallax', fromOutput: 'uv', toNode: 'baseColor', toInput: 'uv' },
+            { fromNode: 'parallax', fromOutput: 'shadow', toNode: 'output', toInput: 'selfShadow' },
+            { fromNode: 'heightDepth', fromOutput: 'out', toNode: 'parallax', toInput: 'depth' },
+        ]));
+        // Its depth is a value each use of the material can change.
+        expect(graph.nodes.find((node) => node.id === 'heightDepth')).toMatchObject({ parameter: 'Height depth', params: { value: 0.03 } });
+        expect(materialReadsPicture('height')).toBe(true);
         expect(materialReadsPicture('orm')).toBe(true);
+        // Without height nothing marches through one.
+        expect(materialGraphForTextures({ baseColor: 'colour' }).nodes.some((node) => node.type === 'parallax')).toBe(false);
     });
 
     it('writes height at 16 bits whatever the pictures are for, and the rest as asked', async () => {

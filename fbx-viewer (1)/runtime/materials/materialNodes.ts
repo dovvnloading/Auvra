@@ -130,6 +130,7 @@ export const MATERIAL_NODE_DEFINITIONS: MaterialNodeDef[] = [
             { key: 'roughness', label: 'Roughness', type: 'float', fallback: fromParam('roughness'), group: 'Base' },
             { key: 'normal', label: 'Normal', type: 'vec3', fallback: 'vec3(0.0, 0.0, 1.0)', group: 'Base' },
             { key: 'occlusion', label: 'Ambient occlusion', type: 'float', fallback: '1.0', group: 'Base' },
+            { key: 'selfShadow', label: 'Self-shadow', type: 'float', fallback: '1.0', group: 'Base' },
             { key: 'specularWeight', label: 'Specular strength', type: 'float', fallback: fromParam('specularWeight'), group: 'Specular' },
             { key: 'specularColor', label: 'Specular colour', type: 'vec3', fallback: fromParam('specularColor'), group: 'Specular' },
             { key: 'ior', label: 'Index of refraction', type: 'float', fallback: fromParam('ior'), group: 'Specular' },
@@ -177,6 +178,7 @@ export const MATERIAL_NODE_DEFINITIONS: MaterialNodeDef[] = [
             float('emissiveStrength', 'Emission strength', 1, { min: 0, max: 100, step: 0.1, group: 'Emission' }),
             float('opacity', 'Opacity', 1, { min: 0, max: 1, step: 0.01, group: 'Opacity' }),
             select('blendMode', 'Alpha mode', [['opaque', 'Opaque'], ['masked', 'Masked (cut-out)'], ['translucent', 'Translucent'], ['additive', 'Additive']]),
+            select('normalSpace', 'Normal input', [['tangent', 'Like a normal map'], ['world', 'In world space']]),
             float('alphaClip', 'Alpha clip', 0.5, { min: 0, max: 1, step: 0.01 }),
             { key: 'twoSided', label: 'Two-sided', kind: 'boolean', default: false },
             select('shading', 'Shading', [['lit', 'Lit'], ['unlit', 'Unlit']]),
@@ -531,6 +533,84 @@ export const MATERIAL_NODE_DEFINITIONS: MaterialNodeDef[] = [
                     `vec4 ${sample} = texture(${texture}, ${position}.zy) * ${weights}.x + texture(${texture}, ${position}.xz) * ${weights}.y + texture(${texture}, ${position}.xy) * ${weights}.z;`,
                 ],
                 outputs: { rgb: `${sample}.rgb`, a: `${sample}.a` },
+            };
+        },
+    },
+    {
+        type: 'parallax',
+        label: 'Parallax',
+        category: 'Texture',
+        description: 'Makes a flat surface look deep: follows the view into a height map (white high, black low), so bricks, stones and tiles look raised as you move. Wire its UV into the textures it moves and its Shadow into the Material Output\'s Self-shadow, where the raised parts shade the low ones from the sun. Higher quality takes more steps.',
+        keywords: ['height', 'parallax occlusion', 'pom', 'depth', 'displacement', 'relief', 'bump'],
+        inputs: [
+            { key: 'uv', label: 'UV', type: 'vec2', fallback: builtin('uv') },
+            { key: 'depth', label: 'Depth', type: 'float', fallback: fromParam('depth') },
+        ],
+        outputs: [
+            { key: 'uv', label: 'UV', type: 'vec2' },
+            { key: 'shadow', label: 'Shadow', type: 'float' },
+        ],
+        params: [
+            { key: 'texture', label: 'Height map', kind: 'texture', default: '' },
+            float('depth', 'Depth', 0.03, { min: 0, max: 0.3, step: 0.005 }),
+            select('quality', 'Quality', [['low', 'Low (8 steps)'], ['medium', 'Medium (16 steps)'], ['high', 'High (32 steps)']], 'medium'),
+            { key: 'selfShadow', label: 'Self-shadow', kind: 'boolean', default: true },
+        ],
+        emit: (inputs, context) => {
+            // Only a pixel can march through the height map; elsewhere the UV passes through.
+            if (context.stage !== 'fragment' || !context.derivatives) return { outputs: { uv: inputs.uv, shadow: '1.0' } };
+            context.helper('mgParallaxUv');
+            context.helper('mgTangentFrame');
+            const quality = String(context.static('quality'));
+            const layers = quality === 'low' ? '8.0' : quality === 'high' ? '32.0' : '16.0';
+            const heightMap = context.param('texture');
+            const frame = context.local('frame');
+            const uv = context.local('uv');
+            const shadow = context.local('shadow');
+            const position = context.builtin('worldPosition');
+            const statements = [
+                `mat3 ${frame} = mgTangentFrame(${position}, ${context.builtin('worldNormal')}, ${inputs.uv});`,
+                `vec2 ${uv} = mgParallaxUv(${heightMap}, ${inputs.uv}, normalize(${context.builtin('cameraPosition')} - ${position}) * ${frame}, ${inputs.depth}, ${layers});`,
+                `float ${shadow} = 1.0;`,
+            ];
+            if (context.static('selfShadow') === true) {
+                context.helper('mgParallaxShadow');
+                // Toward the first sun, which three gives in view space.
+                statements.push(
+                    '#if NUM_DIR_LIGHTS > 0',
+                    `${shadow} = mgParallaxShadow(${heightMap}, ${uv}, normalize(inverseTransformDirection(directionalLights[0].direction, viewMatrix)) * ${frame}, ${inputs.depth}, ${layers});`,
+                    '#endif',
+                );
+            }
+            return { statements, outputs: { uv, shadow } };
+        },
+    },
+    {
+        type: 'triplanarNormal',
+        preview: 'normal',
+        label: 'Triplanar Normal Map',
+        category: 'Texture',
+        description: 'Projects a normal map onto the surface from the three axes, each face reading it the right way round, and blends them onto the surface\'s normal: bumps on cliffs, rocks and terrain without UVs, seams or mirroring. It gives a world-space normal, so set the Material Output\'s Normal input to world space.',
+        keywords: ['world aligned normal', 'box mapping', 'projection', 'bump'],
+        inputs: [
+            { key: 'position', label: 'Position', type: 'vec3', fallback: builtin('worldPosition') },
+            { key: 'normal', label: 'Normal', type: 'vec3', fallback: builtin('worldNormal') },
+        ],
+        outputs: [{ key: 'out', label: 'Normal (world)', type: 'vec3' }],
+        params: [
+            { key: 'texture', label: 'Texture', kind: 'texture', default: '' },
+            float('tiling', 'Tiling (per unit)', 0.5, { min: 0.001, max: 100, step: 0.01 }),
+            float('sharpness', 'Blend Sharpness', 4, { min: 1, max: 32, step: 0.5 }),
+            float('strength', 'Strength', 1, { min: 0, max: 4, step: 0.05 }),
+            { key: 'flipGreen', label: 'Flip Green (DirectX)', kind: 'boolean', default: false },
+        ],
+        emit: (inputs, context) => {
+            context.helper('mgTriplanarNormal');
+            const green = context.static('flipGreen') === true ? '-1.0' : '1.0';
+            return {
+                outputs: {
+                    out: `mgTriplanarNormal(${context.param('texture')}, ${inputs.position} * ${context.param('tiling')}, ${inputs.normal}, ${context.param('sharpness')}, ${context.param('strength')}, ${green})`,
+                },
             };
         },
     },
@@ -1167,6 +1247,19 @@ export const MATERIAL_NODE_DEFINITIONS: MaterialNodeDef[] = [
             const operator = COMPARISONS.some(([op]) => op === context.static('comparison')) ? String(context.static('comparison')) : '>';
             return { outputs: { out: `((${inputs.a} ${operator} ${inputs.b}) ? ${inputs.whenTrue} : ${inputs.whenFalse})` } };
         },
+    },
+
+    {
+        type: 'switch',
+        label: 'Switch',
+        category: 'Logic',
+        description: 'Picks On or Off when the material is built, so only the side picked is drawn and costs anything. Each choice builds a shader version of its own: give it a parameter name to let each use of the material choose.',
+        keywords: ['static switch', 'toggle', 'option', 'feature', 'variant'],
+        inputs: [auto('whenOn', 'On', value(1)), auto('whenOff', 'Off', value(0))],
+        outputs: [{ key: 'out', label: 'Result', type: 'auto' }],
+        params: [{ key: 'on', label: 'On', kind: 'boolean', default: true }],
+        reads: (statics) => [statics.on === false ? 'whenOff' : 'whenOn'],
+        emit: (inputs, context) => ({ outputs: { out: context.static('on') === false ? inputs.whenOff : inputs.whenOn } }),
     },
 
     // ------------------------------------------------------------------ Custom

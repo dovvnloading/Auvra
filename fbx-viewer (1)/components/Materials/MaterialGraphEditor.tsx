@@ -17,7 +17,7 @@ import { MATERIALS_DOMAIN, materialAssetDocument, materialLibrary, type Material
 import { MaterialFromDescription } from './MaterialFromDescription';
 import { STARTER_MATERIALS } from '../../runtime/materials/starterMaterials';
 import { MaterialGraphCanvas } from './MaterialGraphCanvas';
-import { MaterialPreview, clearMaterialShaderError, useMaterialShaderError } from './MaterialPreview';
+import { MaterialPreview, clearMaterialShaderError, useMaterialNodeErrors, useMaterialShaderError } from './MaterialPreview';
 import { NodeInspector } from './MaterialNodeInspector';
 import { GraphHistory, createComment, nodeRect, removeNodes, showsPreview, withComments } from './materialGraphEditing';
 import { Popover } from '../UI/kit';
@@ -85,6 +85,9 @@ export const MaterialGraphEditor: React.FC = () => {
     const [error, setError] = useState<string | null>(null);
     const [, setHistoryVersion] = useState(0);
     const shaderError = useMaterialShaderError();
+    // The nodes a failed compile was traced back to, marked on the canvas with what is wrong.
+    const nodeErrors = useMaterialNodeErrors();
+    const canvasMarks = { nodeErrors };
     const asset = assets.find(candidate => candidate.id === selectedId) ?? assets[0] ?? null;
     // A material another tab asked to open (Paint's "edit a copy"): taken when this tab opens, and while it is open.
     useEffect(() => {
@@ -335,6 +338,7 @@ export const MaterialGraphEditor: React.FC = () => {
             ) : asset && graph ? (
                 <>
                     <MaterialGraphCanvas
+                        {...canvasMarks}
                         key={asset.id}
                         graph={graph}
                         selection={selected}

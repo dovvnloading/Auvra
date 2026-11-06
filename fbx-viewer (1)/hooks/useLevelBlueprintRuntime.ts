@@ -21,6 +21,7 @@ import { playerActions } from '../runtime/playerActions';
 import { RuntimeServices, useRuntimeServices } from '../runtime/RuntimeServicesContext';
 import { useNoiseBus } from '../runtime/perception';
 import { FLOW_NODE_EXECUTORS, flowNodeOutputValue } from './levelBlueprintNodes/flow';
+import { releaseSessionMaterials, setObjectMaterialValue } from '../utils/materialInstances';
 import { findActorObject3D, isPureWorldNodeType, PLAYER_ACTOR_ID, setActorMorphTarget, WORLD_NODE_EXECUTORS, WorldExecutionContext, WorldNodeServices } from './levelBlueprintNodes/world';
 import { getLiveSpline, liveSplineQuery } from '../runtime/splineRegistry';
 import { KMH, vehicleSession, type VehicleSessionEvent } from '../runtime/vehicles';
@@ -247,6 +248,12 @@ export const useLevelBlueprintRuntime = ({
     // remembered while it stays in that scene, so a node run every frame does not search the scene each time.
     const sceneRoot = useRef<THREE.Object3D | null>(null);
     const actorObjects = useRef(new Map<string, THREE.Object3D>());
+    // Materials copied for values the blueprint set on one object (Set Material Number / Colour), freed with the session.
+    const sessionMaterials = useRef<THREE.Material[]>([]);
+    useEffect(() => {
+        const made = sessionMaterials.current;
+        return () => releaseSessionMaterials(made);
+    }, []);
     const sessionObject3D = useCallback((id: string): THREE.Object3D | null => {
         const player = world.current.playerEntityRef.current?.object ?? null;
         if (id === PLAYER_ACTOR_ID) return player;
@@ -278,6 +285,10 @@ export const useLevelBlueprintRuntime = ({
         setMorphTarget: (objectId, morph, weight) => {
             const object = sessionObject3D(objectId);
             return object ? setActorMorphTarget(object, morph, weight) : 0;
+        },
+        setMaterialValue: (objectId, name, value) => {
+            const object = sessionObject3D(objectId);
+            return object ? setObjectMaterialValue(object, name, value, sessionMaterials.current) : 0;
         },
         damagePlayer: amount => playerActions.damage(amount),
         healPlayer: amount => playerActions.heal(amount),
