@@ -20,6 +20,15 @@ describe('texture graph formulas', () => {
         expect(evaluateExpression('-x', { x: 3 })).toBe(-3);
     });
 
+    it('takes a power before a sign, as written maths does', () => {
+        expect(evaluateExpression('-2^2', {})).toBe(-4);
+        expect(evaluateExpression('(-2)^2', {})).toBe(4);
+        expect(evaluateExpression('2^-1', {})).toBe(0.5);
+        expect(evaluateExpression('-2 * 3', {})).toBe(-6);
+        expect(evaluateExpression('-x^2 + 1', { x: 3 })).toBe(-8);
+        expect(evaluateExpression('!0 && 1', {})).toBe(1);
+    });
+
     it('explains formulas that do not read, without running anything', () => {
         expect(expressionError('wear +', ['wear'])).toMatch(/ends too soon/);
         expect(expressionError('nothing * 2', ['wear'])).toMatch(/No parameter called "nothing"/);
