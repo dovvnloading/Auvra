@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_MATCHER_OPTIONS, END_MARGIN, FEATURE_SIZE, HISTORY_TIMES, MotionDatabase, MotionMatcher, SAMPLE_RATE, TRAJECTORY_TIMES, buildQuery, frameFeatures, predictTrajectory,
-  restFrom, type MotionClipSamples, type MotionSample,
+  restFrom, steadyTrajectory, STEER_TURN, type MotionClipSamples, type MotionSample,
 } from '../../runtime/motionMatching';
 import * as THREE from 'three';
 import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
@@ -413,5 +413,64 @@ describe('sampled clips', () => {
     expect(samples.slice(14, 23).some(sample => sample.contacts![0])).toBe(false);
     expect(samples.slice(14, 23).every(sample => sample.contacts![1])).toBe(true);
     expect(samples.slice(1, 11).some(sample => sample.contacts![1])).toBe(false);
+  });
+});
+
+describe('steering', () => {
+  /** An arc at `speed` m/s turning `turn` radians a second, as the movement would ask for it. */
+  const arc = (speed: number, turn: number) => ({
+    positions: TRAJECTORY_TIMES.map(t => ({ x: (speed / turn) * (1 - Math.cos(turn * t)), z: (speed / turn) * Math.sin(turn * t) })),
+    facings: TRAJECTORY_TIMES.map(t => turn * t),
+  });
+  /** Slows to a stop while turning, then walks off the other way: a turn of 180 degrees. */
+  const turnRound = () => shaped('turn round', 1.2, t => 1.5 * Math.abs(1 - t / 0.6), () => Math.PI / 1.2);
+
+  it('takes the bend out of a path, keeping its pace and which way it goes relative to the facing', () => {
+    // Walking round a quarter circle in a second becomes walking straight on, nearly as far.
+    const bent = steadyTrajectory(arc(1.5, Math.PI / 2));
+    bent.positions.forEach(position => expect(Math.abs(position.x)).toBeLessThan(1e-6));
+    expect(bent.positions[bent.positions.length - 1].z).toBeGreaterThan(1.4);
+    expect(bent.positions[bent.positions.length - 1].z).toBeLessThan(1.5);
+    bent.facings.forEach(facing => expect(Math.abs(facing)).toBeLessThan(1e-9));
+    // A sideways path with the facing held (aiming) stays sideways.
+    const sideways = steadyTrajectory({ positions: TRAJECTORY_TIMES.map(t => ({ x: 1.5 * t, z: 0 })), facings: TRAJECTORY_TIMES.map(() => 0) });
+    sideways.positions.forEach((position, i) => {
+      expect(position.x).toBeCloseTo(1.5 * TRAJECTORY_TIMES[i], 6);
+      expect(position.z).toBeCloseTo(0, 6);
+    });
+    // Turning further than the movement steers keeps the rest of the turn.
+    const round = steadyTrajectory({ positions: TRAJECTORY_TIMES.map(() => ({ x: 0, z: 0 })), facings: [0, 0, (160 * Math.PI) / 180] });
+    expect(round.facings[2]).toBeCloseTo((160 * Math.PI) / 180 - STEER_TURN, 6);
+  });
+
+  it('steers clips that travel and keep to their line, not ones that stand or turn round', () => {
+    const database = new MotionDatabase([
+      locomotion('idle', 0, 0), locomotion('walk', 0, 1.5), shaped('start', 1.2, t => Math.min(1.5, 2 * t)), turnRound(),
+    ]);
+    expect(database.clips.map((clip, c) => [clip.name, database.steered[c]])).toEqual([
+      ['idle', false], ['walk', true], ['start', true], ['turn round', false],
+    ]);
+  });
+
+  it('walks round a bend instead of turning round, and still turns round when asked to', () => {
+    const turn = turnRound();
+    const database = new MotionDatabase([locomotion('idle', 0, 0), locomotion('walk', 0, 1.5), turn]);
+    const walking = { x: 0, z: 1.5 };
+    // Walking, and asked to bend round by 80 degrees over the next second: it walks on, steered.
+    const steering = new MotionMatcher(database);
+    steering.clip = 1;
+    steering.time = 0.5;
+    steering.step(1 / 60, walking, walking, 0, arc(1.5, (80 * Math.PI) / 180));
+    expect(database.clips[steering.clip].name).toBe('walk');
+    // Asked to turn round (the path the turn itself takes): it turns round.
+    const at = (t: number) => turn.samples[Math.round(t * SAMPLE_RATE)];
+    const reversing = new MotionMatcher(database);
+    reversing.clip = 1;
+    reversing.time = 0.5;
+    reversing.step(1 / 60, walking, walking, 0, {
+      positions: TRAJECTORY_TIMES.map(t => ({ x: at(t).root.x, z: at(t).root.z })),
+      facings: TRAJECTORY_TIMES.map(t => at(t).facing),
+    });
+    expect(database.clips[reversing.clip].name).toBe('turn round');
   });
 });

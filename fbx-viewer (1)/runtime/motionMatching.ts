@@ -79,6 +79,13 @@ const SPREAD_FLOOR = { trajectoryPosition: 0.1, trajectoryFacing: 0.2, trajector
 export const END_MARGIN = 0.2;
 /** Frames a search block holds (see MotionDatabase.search). */
 const SEARCH_BLOCK = 16;
+/**
+ * The most a looping walk, run or strafe is steered round over the asked path (radians): a bend up to
+ * this is the movement's to make; a sharper turn (turning round) is left to clips that turn.
+ */
+export const STEER_TURN = (100 * Math.PI) / 180;
+/** A clip that travels and turns less than this over its length (radians) is steered by the movement. */
+const STEERED_CLIP_TURN = Math.PI / 4;
 /** A clip carrying the character slower than this many hips heights a second is standing still. */
 const STANDING_SPEED = 0.1;
 /** A clip whose root and feet move slower than STANDING_SPEED, turning slower than this (radians a second), is at rest. */
@@ -213,12 +220,21 @@ export class MotionDatabase {
     private readonly blockHigh: Float32Array;
     /** The hips' average height over the clips: the character's size, in the database's units. */
     readonly body: number;
+    /**
+     * Per clip, whether the movement steers it as it plays (see steadyTrajectory): one that travels and
+     * keeps roughly to its line (a walk, a run, a strafe, a start or a stop, which often drift a little).
+     * Its frames, and the path asked of them, are compared with the turning taken out; clips that stand
+     * or turn round (on the spot, or a turn of 180 degrees) keep their turn, so they win when one is asked.
+     */
+    readonly steered: boolean[];
 
     constructor(clips: MotionClipSamples[], weights: MotionWeights = DEFAULT_MOTION_WEIGHTS) {
         this.clips = clips.filter(clip => clip.samples.length > 1);
         const all = this.clips.flatMap(clip => clip.samples);
         const body = all.reduce((sum, sample) => sum + sample.hips.y - sample.root.y, 0) / Math.max(1, all.length) || 1;
         this.body = body;
+        this.steered = this.clips.map(clip => this.clipSpeed(clip.name) > 0
+            && Math.abs(clip.samples[clip.samples.length - 1].facing - clip.samples[0].facing) < STEERED_CLIP_TURN);
         const raw: Float32Array[] = [];
         const margin = Math.round(END_MARGIN * SAMPLE_RATE);
         this.clips.forEach((clip, c) => {
@@ -230,7 +246,7 @@ export class MotionDatabase {
             const usable = clip.loop ? n : Math.max(1, (rest - margin >= 1 ? rest : n) - margin);
             for (let i = 0; i < usable; i++) {
                 this.frames.push({ clip: c, time: i / SAMPLE_RATE });
-                raw.push(frameFeatures(clip, i));
+                raw.push(this.steered[c] ? steadyFeatures(frameFeatures(clip, i)) : frameFeatures(clip, i));
             }
         });
         // Each group scaled by its spread across the database (one scale per group, so directions keep their shape).
@@ -319,7 +335,8 @@ export class MotionDatabase {
     /** Raw features of a database frame (the pose to continue from). */
     rawFeatures(frame: number): Float32Array {
         const { clip, time } = this.frames[frame];
-        return frameFeatures(this.clips[clip], Math.round(time * SAMPLE_RATE));
+        const raw = frameFeatures(this.clips[clip], Math.round(time * SAMPLE_RATE));
+        return this.steered[clip] ? steadyFeatures(raw) : raw;
     }
 
     /**
@@ -328,7 +345,8 @@ export class MotionDatabase {
      */
     poseAt(clip: number, time: number): Float32Array {
         const entry = this.clips[clip];
-        return frameFeatures(entry, Math.max(0, Math.min(entry.samples.length - 1, Math.round(time * SAMPLE_RATE))));
+        const raw = frameFeatures(entry, Math.max(0, Math.min(entry.samples.length - 1, Math.round(time * SAMPLE_RATE))));
+        return this.steered[clip] ? steadyFeatures(raw) : raw;
     }
 
     /**
@@ -423,6 +441,49 @@ export const buildQuery = (database: MotionDatabase, playing: number | Float32Ar
     return database.normalize(raw);
 };
 
+/**
+ * The asked path with the movement's turning taken out, for clips the movement steers (a looping walk,
+ * run or strafe). The character's facing comes from its movement, and a matched clip plays with its own
+ * turn taken out, so such a clip follows any bend of the path while keeping its gait: what has to match
+ * is how fast it goes, and which way relative to the way it faces, not how the path bends. Each stretch
+ * of the path is turned back by the facing midway along it, and the facings ask for no turn. A path
+ * bending round at walking pace becomes a straight walk; a sideways path with the facing held (aiming)
+ * stays sideways; a stop stays a stop. Only up to STEER_TURN is taken out: turning further (turning
+ * round) is still asked of the clip, so a clip that turns round wins there.
+ */
+export const steadyTrajectory = (trajectory: MotionTrajectory): MotionTrajectory => {
+    const steer = (facing: number) => Math.max(-STEER_TURN, Math.min(STEER_TURN, facing));
+    let x = 0, z = 0, fromX = 0, fromZ = 0, fromFacing = 0;
+    const positions = trajectory.positions.map((position, i) => {
+        const facing = trajectory.facings[i] ?? fromFacing;
+        const leg = localDirection(position.x - fromX, position.z - fromZ, steer((fromFacing + facing) / 2));
+        x += leg.x;
+        z += leg.z;
+        fromX = position.x;
+        fromZ = position.z;
+        fromFacing = facing;
+        return { x, z };
+    });
+    return { positions, facings: trajectory.facings.map(facing => facing - steer(facing)), past: trajectory.past };
+};
+
+/** Raw features (a frame's or a query's) with their path steadied the same way (see steadyTrajectory). */
+const steadyFeatures = (raw: Float32Array): Float32Array => {
+    const steady = steadyTrajectory({
+        positions: TRAJECTORY_TIMES.map((_, i) => ({ x: raw[POSITIONS + i * 2], z: raw[POSITIONS + i * 2 + 1] })),
+        facings: TRAJECTORY_TIMES.map((_, i) => Math.atan2(raw[FACINGS + i * 2], raw[FACINGS + i * 2 + 1])),
+    });
+    steady.positions.forEach((position, i) => {
+        raw[POSITIONS + i * 2] = position.x;
+        raw[POSITIONS + i * 2 + 1] = position.z;
+    });
+    steady.facings.forEach((facing, i) => {
+        raw[FACINGS + i * 2] = Math.sin(facing);
+        raw[FACINGS + i * 2 + 1] = Math.cos(facing);
+    });
+    return raw;
+};
+
 export interface MotionMatcherOptions {
     /** Seconds between searches. */
     searchInterval: number;
@@ -493,10 +554,18 @@ export class MotionMatcher {
             this.searchedFor = asked;
             // The pose playing now, read from its clip (also in a play-once clip's last moments, which no search starts at).
             const pose = this.clip >= 0 ? db.poseAt(this.clip, this.time) : null;
-            const query = buildQuery(db, pose, trajectory ?? predictTrajectory(velocity, desired, desiredFacing));
+            const path = trajectory ?? predictTrajectory(velocity, desired, desiredFacing);
+            const query = buildQuery(db, pose, path);
+            // Clips the movement steers are matched against the path with its turning taken out (see steadyTrajectory).
+            const steadyQuery = buildQuery(db, pose, steadyTrajectory(path));
             // An ended clip is not gone back into: its frames would only replay its end.
             const playingClip = this.clip;
-            const best = db.search(query, ended ? frame => db.frames[frame].clip === playingClip : undefined);
+            const passed = (frame: number) => ended && db.frames[frame].clip === playingClip;
+            const asIs = db.search(query, frame => passed(frame) || db.steered[db.frames[frame].clip]);
+            const steadied = db.search(steadyQuery, frame => passed(frame) || !db.steered[db.frames[frame].clip]);
+            const best = steadied.cost < asIs.cost ? steadied : asIs;
+            // The query the playing clip is held to, carrying on.
+            const own = this.clip >= 0 && db.steered[this.clip] ? steadyQuery : query;
             if (best.frame >= 0) {
                 const candidate = db.frames[best.frame];
                 // How far apart in the playing clip, the short way round a loop.
@@ -506,9 +575,9 @@ export class MotionMatcher {
                 let continuing = Infinity;
                 if (pose && !ended) {
                     // Carrying on: the playing moment's own path against the one asked for.
-                    const own = db.normalize(pose);
+                    const playing = db.normalize(pose);
                     continuing = 0;
-                    for (let k = 0; k < FEATURE_SIZE; k++) continuing += (own[k] - query[k]) ** 2;
+                    for (let k = 0; k < FEATURE_SIZE; k++) continuing += (playing[k] - own[k]) ** 2;
                 }
                 if (!near && best.cost < continuing * (1 - this.options.switchMargin) - this.options.switchCost) {
                     this.clip = candidate.clip;

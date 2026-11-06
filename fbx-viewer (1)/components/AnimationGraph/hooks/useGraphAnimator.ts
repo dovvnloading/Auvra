@@ -258,6 +258,8 @@ export const useGraphAnimator = (
     const entry = useRef({ seconds: 0, crossfade: true });
     // Orientation warping: the hips and spine it turns, and the angle it turns them by now.
     const warp = useRef({ model: null as THREE.Object3D | null, hips: null as THREE.Object3D | null, spine: [] as THREE.Object3D[], angle: 0 });
+    // The hips a matched clip's own turn is taken out of (see takeOutClipFacing below), found once per model.
+    const facingHips = useRef({ model: null as THREE.Object3D | null, hips: null as THREE.Object3D | null });
 
     const blendModeRef = () => extras.blendModeRef?.current ?? 'crossfade';
 
@@ -502,9 +504,29 @@ export const useGraphAnimator = (
         const tracked = currentState?.stateType === 'Single' && currentState.clipName ? actionsMap[currentState.clipName] : undefined;
         const before = tracked ? tracked.time : 0;
 
+        // A matched clip plays with its travel taken out, and its turn is taken out the same way: the movement
+        // turns the character, so a clip that turns round (or drifts off its line) would otherwise turn the body
+        // a second time, away from where the character faces. Its steps and the sway of its hips stay. Done
+        // after every pose the mixer makes, so the inertializer only ever sees the turned-back pose.
+        const matchedAction = matched ? actionsMap[matched] : undefined;
+        const matchedClip = matched ? matching.current.matcher?.clip ?? -1 : -1;
+        const takeOutClipFacing = () => {
+            const matcher = matching.current.matcher;
+            if (!matchedAction || !matcher || matchedClip < 0 || !modelObject) return;
+            const f = facingHips.current;
+            if (f.model !== modelObject) {
+                f.model = modelObject;
+                f.hips = findBone(modelObject, 'Hips');
+            }
+            const weight = matchedAction.getEffectiveWeight();
+            const facing = matcher.database.facingAt(matchedClip, matchedAction.time) * weight;
+            if (f.hips && Math.abs(facing) > 1e-4) turnAboutUp(f.hips, -facing);
+        };
+
         extras.montage?.current?.update(delta);
         mixer.update(delta);
         extras.montage?.current?.applyMeshSpaceRotation();
+        takeOutClipFacing();
         if (inertializer) {
             if (switchHalfLife > 0) {
                 // How fast the new pose moves: the clips a moment earlier, then back to now.
@@ -514,10 +536,12 @@ export const useGraphAnimator = (
                     playing.forEach(action => { action.time -= delta * action.timeScale; });
                     mixer.update(0);
                     extras.montage?.current?.applyMeshSpaceRotation();
+                    takeOutClipFacing();
                     inertializer.noteBefore(delta);
                     playing.forEach((action, i) => { action.time = times[i]; });
                     mixer.update(0);
                     extras.montage?.current?.applyMeshSpaceRotation();
+                    takeOutClipFacing();
                 }
                 inertializer.halfLife = switchHalfLife;
                 inertializer.switchNow(delta);
