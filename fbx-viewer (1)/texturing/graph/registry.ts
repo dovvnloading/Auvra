@@ -2,17 +2,18 @@ import { ADJUST_NODES } from './nodes/adjust';
 import { DISTANCE_NODES } from './nodes/distance';
 import { GENERATOR_NODES } from './nodes/generators';
 import { INPUT_NODE_TYPE, IO_NODES, OUTPUT_NODE_TYPE, SUBGRAPH_NODE_TYPE, SUBGRAPH_SEED_KEY, SUBGRAPH_VARY_KEY, subgraphParamDefs } from './nodes/io';
+import { MATERIAL_NODES } from './nodes/materials';
 import { TRANSFORM_NODES } from './nodes/transform';
 import { OUTPUT_CHANNEL_LABELS, outputNodeKind, type NodeCategory, type OutputChannel, type PortKind, type TexGraphLink, type TexGraphNode, type TexNodeDef, type TexParamDef, type TextureGraph } from './types';
 
 /** Every node a texture graph can hold, by type; sub-graph nodes are made from the graph they use. */
 
-export const TEXTURE_NODE_DEFINITIONS: readonly TexNodeDef[] = [...IO_NODES, ...GENERATOR_NODES, ...ADJUST_NODES, ...TRANSFORM_NODES, ...DISTANCE_NODES];
+export const TEXTURE_NODE_DEFINITIONS: readonly TexNodeDef[] = [...IO_NODES, ...GENERATOR_NODES, ...ADJUST_NODES, ...TRANSFORM_NODES, ...DISTANCE_NODES, ...MATERIAL_NODES];
 
 const BY_TYPE = new Map(TEXTURE_NODE_DEFINITIONS.map((definition) => [definition.type, definition]));
 
 export const NODE_CATEGORY_ORDER: readonly NodeCategory[] = [
-    'Inputs and outputs', 'Mesh maps', 'Noises', 'Patterns', 'Shapes', 'Adjustments', 'Blending', 'Transforms', 'Warps',
+    'Inputs and outputs', 'Mesh maps', 'Materials', 'Noises', 'Patterns', 'Shapes', 'Adjustments', 'Blending', 'Transforms', 'Warps',
     'Blurs and sharpening', 'Edges and distance', 'Height and normals', 'Utility',
 ];
 

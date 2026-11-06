@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { TrashIcon } from '../UI/Icons';
 import { MAX_RAMP_STOPS, readParam, type MaterialParamDef, type MaterialRamp } from '../../runtime/materials/materialGraph';
 import { ColourFieldRgb } from '../UI/ColourPicker';
+import { CodeEditor } from '../Texturing/SettingWidgets';
 
 /**
  * The inspector's field for one node param, by its kind: a number (slider, or drag the label to
@@ -145,39 +146,10 @@ export const RampEditor: React.FC<{ label: string; ramp: MaterialRamp; onChange:
     );
 };
 
-/** GLSL edited as a draft and applied on demand (Ctrl+Enter or Apply), so a half-typed line never reaches the shader. */
-export const CodeField: React.FC<{ label: string; code: string; onChange: (code: string) => void }> = ({ label, code, onChange }) => {
-    const [draft, setDraft] = useState(code);
-    useEffect(() => setDraft(code), [code]);
-    const dirty = draft !== code;
-    return (
-        <label className="block space-y-1">
-            <span className="text-2xs text-gray-500">{label}</span>
-            <textarea
-                aria-label={label}
-                value={draft}
-                spellCheck={false}
-                rows={7}
-                onChange={(event) => setDraft(event.target.value)}
-                onKeyDown={(event) => {
-                    if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) { event.preventDefault(); onChange(draft); }
-                    if (event.key === 'Tab') {
-                        event.preventDefault();
-                        const target = event.currentTarget;
-                        const at = target.selectionStart;
-                        setDraft(`${draft.slice(0, at)}    ${draft.slice(target.selectionEnd)}`);
-                        requestAnimationFrame(() => { target.selectionStart = target.selectionEnd = at + 4; });
-                    }
-                }}
-                className="w-full resize-y rounded border border-gray-700 bg-gray-950 p-1.5 font-mono text-2xs leading-4 text-emerald-200 outline-none focus:border-blue-600"
-            />
-            <div className="flex items-center justify-between">
-                <span className="text-2xs text-gray-500">{dirty ? 'Not applied yet (Ctrl+Enter)' : 'Applied'}</span>
-                <button disabled={!dirty} onClick={() => onChange(draft)} className="rounded bg-blue-600 px-2 py-0.5 text-2xs font-bold text-accent-ink hover:bg-blue-500 disabled:opacity-40">Apply</button>
-            </div>
-        </label>
-    );
-};
+/** GLSL edited as a draft, coloured as it is typed, and applied on demand (Ctrl+Enter or Apply), so a half-typed line never reaches the shader. */
+export const CodeField: React.FC<{ label: string; code: string; onChange: (code: string) => void; error?: string | null }> = ({ label, code, onChange, error }) => (
+    <CodeEditor label={label} code={code} onChange={onChange} error={error} />
+);
 
 export const ParamField: React.FC<{
     param: MaterialParamDef;

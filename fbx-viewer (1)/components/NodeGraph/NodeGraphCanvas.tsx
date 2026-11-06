@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
-    ChevronDownIcon, CommentAddIcon, CopyIcon, FrameIcon, GlobeIcon, LayersIcon, LayoutIcon, MagnetIcon, PaletteIcon, PencilIcon, PlusIcon,
+    ChevronDownIcon, CommentAddIcon, CopyIcon, FlameIcon, FlowIcon, FrameIcon, GlobeIcon, LayersIcon, LayoutIcon, MagnetIcon, PaletteIcon, PencilIcon, PlusIcon,
     PowerIcon, RedoIcon, RouteIcon, ScissorsIcon, SearchIcon, TrashIcon, UndoIcon, WarningIcon,
 } from '../UI/Icons';
 import { IconButton } from '../UI/kit';
@@ -17,6 +17,7 @@ import {
 import { NodeCard, type CardActions } from './NodeCard';
 import { NodeFinder } from './NodeFinder';
 import { NodeMenu, type MenuColours } from './NodeMenu';
+import { tidyLayout } from './tidy';
 import type { MenuItem, NodeView, PinKindStyle } from './types';
 import { nearestWire, wireBounds, wireControls } from './wires';
 
@@ -46,6 +47,8 @@ export interface NodeGraphAdapter<S> {
     /** What pins carry: colours and words. */
     kinds: Readonly<Record<string, PinKindStyle>>;
     match: KindMatch;
+    /** Why a wire from a pin carrying `from` cannot go into one taking `to` (they do not match), in words. */
+    refusal?: (from: string, to: string) => string;
     /** The nodes the finder offers. */
     entries: readonly FinderEntry[];
     /** A picture (or a mark) for an entry, `size` pixels across. */
@@ -69,6 +72,12 @@ export interface NodeGraphAdapter<S> {
     onOpenNode?: (nodeId: string) => void;
     /** A graph used as a node, opened in place. */
     onOpenGraph?: (nodeId: string) => void;
+    /** What a node costs to draw (larger is costlier) and that in words, for the cost map. */
+    cost?: (nodeId: string) => { value: number; label: string } | null;
+    /** What the cost map measures, in words (its button's tooltip). */
+    costWords?: string;
+    /** Pairs of nodes tied together without a wire (named links): a faint line joins them while one is selected. */
+    ghostLinks?: ReadonlyArray<{ from: string; to: string }>;
 }
 
 export interface NodeGraphCanvasProps<S> {
@@ -177,6 +186,9 @@ export function NodeGraphCanvas<S>(props: NodeGraphCanvasProps<S>): React.ReactE
     const [renaming, setRenaming] = useState<string | null>(null);
     const [frameTitle, setFrameTitle] = useState<string | null>(null);
     const [openGroups, setOpenGroups] = useState<ReadonlyMap<string, ReadonlyMap<string, boolean>>>(new Map());
+    const [refused, setRefused] = useState<string | null>(null);
+    const refusedTimer = useRef<number | undefined>(undefined);
+    const [heatOn, setHeatOn] = useState(() => readSetting('heat', false));
     const [snap, setSnap] = useState(() => readSetting('snap', false));
     const [showMap, setShowMap] = useState(() => readSetting('minimap', true));
     const pointer = useRef<Point>({ x: 0, y: 0 });
@@ -318,13 +330,22 @@ export function NodeGraphCanvas<S>(props: NodeGraphCanvasProps<S>): React.ReactE
         frameView(rects);
     }, [frameView, rectOf]);
 
-    // The graph is framed the first time it is shown.
+    // The graph is framed the first time it is shown; one whose nodes sit on top of one another (a
+    // graph made elsewhere, crammed in a column) is offered a tidy.
     const framed = useRef(false);
+    const [crowded, setCrowded] = useState(false);
     useLayoutEffect(() => {
         if (framed.current || !size.width || !layouts.size) return;
         framed.current = true;
         frameAll();
-    }, [frameAll, layouts.size, size.width]);
+        const rects = [...nodeRects().values()];
+        if (rects.length < 4 || rects.length > 400) return;
+        let overlapping = 0;
+        for (let i = 0; i < rects.length; i++) {
+            for (let j = i + 1; j < rects.length; j++) if (rectsOverlap(rects[i], rects[j])) { overlapping++; break; }
+        }
+        if (overlapping >= Math.max(2, rects.length * 0.3)) setCrowded(true);
+    }, [frameAll, layouts.size, nodeRects, size.width]);
 
     const centreOn = useCallback((rect: Rect) => {
         const element = root.current;
@@ -453,6 +474,21 @@ export function NodeGraphCanvas<S>(props: NodeGraphCanvasProps<S>): React.ReactE
         commit({ ...next, frames: refitFrames(next.frames, before, after, new Set(places.keys())) });
     }, [commit, nodeRects, nodesById, rectOf]);
 
+    /** Lays out the selection (two nodes or more), or else the whole graph, in columns by depth. */
+    const tidy = useCallback(() => {
+        const { graph: current, selection: selected } = latest.current;
+        const ids = selected.size > 1 ? selected : new Set(current.nodes.map((node) => node.id));
+        const placed: Array<Rect & { id: string }> = [];
+        for (const id of ids) { const node = nodesById.get(id); const rect = node && rectOf(node, false); if (rect) placed.push({ id, ...rect }); }
+        const places = tidyLayout(placed, current.links.map((link) => ({ from: link.from, to: link.to })));
+        if (!places.size) return;
+        const before = nodeRects();
+        const next = placeNodes(current, places);
+        const after = new Map(before);
+        for (const [id, at] of places) { const rect = before.get(id); if (rect) after.set(id, { ...rect, x: at.x, y: at.y }); }
+        commit({ ...next, frames: refitFrames(next.frames, before, after, new Set(places.keys())) });
+    }, [commit, nodeRects, nodesById, rectOf]);
+
     const toggleBypass = useCallback((ids: ReadonlySet<string>) => {
         const shown = latest.current.views;
         const allowed = new Set([...ids].filter((id) => shown.get(id)?.canBypass));
@@ -539,12 +575,13 @@ export function NodeGraphCanvas<S>(props: NodeGraphCanvasProps<S>): React.ReactE
         const copyable = [...ids].some((id) => shown.get(id)?.canDelete !== false);
         items.push({ label: many ? `Duplicate ${ids.size} nodes` : 'Duplicate', icon: <CopyIcon size={12} />, shortcut: 'Ctrl+D', section: 'edit', disabled: !copyable, hint: 'The output cannot be copied.', onSelect: duplicate });
         items.push({ label: 'Frame round the selection', icon: <CommentAddIcon size={12} />, shortcut: 'C', section: 'edit', onSelect: addFrame });
+        if (many) items.push({ label: `Tidy ${ids.size} nodes into columns`, icon: <FlowIcon size={12} />, section: 'edit', onSelect: tidy });
         items.push({ label: many ? `Delete ${ids.size} nodes` : 'Delete', icon: <TrashIcon size={12} />, shortcut: 'Del', section: 'delete', danger: true, disabled: !copyable, hint: 'The output cannot be deleted.', onSelect: removeSelection });
         setMenu({
             x, y, title: many ? `${ids.size} nodes` : nodeView.title, items,
             colours: card && own.looks ? { label: 'Header colour', colours: NODE_COLOURS, names: NODE_COLOUR_NAMES, current: many ? undefined : node.color, onPick: (colour) => changeLook(ids, { color: colour }) } : undefined,
         });
-    }, [addFrame, changeLook, duplicate, nodesById, removeSelection, select, targetIds, toggleBypass, toggleCollapsed]);
+    }, [addFrame, changeLook, duplicate, nodesById, removeSelection, select, targetIds, tidy, toggleBypass, toggleCollapsed]);
 
     const wireMenu = useCallback((link: EditableLink, at: Point, x: number, y: number) => {
         const items: MenuItem[] = [
@@ -601,11 +638,27 @@ export function NodeGraphCanvas<S>(props: NodeGraphCanvasProps<S>): React.ReactE
         setMenu({ x: anchor.left, y: anchor.bottom + 4, title: ids.size === 1 ? 'Colour the selected node' : `Colour ${ids.size} nodes`, items: [], colours: { label: 'Header colour', colours: NODE_COLOURS, names: NODE_COLOUR_NAMES, onPick: (colour) => changeLook(ids, { color: colour }) } });
     }, [changeLook]);
 
+    /** Says for a while, in the line at the bottom, why something was not done. */
+    const refuse = useCallback((message: string) => {
+        setRefused(message);
+        window.clearTimeout(refusedTimer.current);
+        refusedTimer.current = window.setTimeout(() => setRefused(null), 4000);
+    }, []);
+    useEffect(() => () => window.clearTimeout(refusedTimer.current), []);
+
     // ---- pointer ----
     const finishWire = (wire: PendingWire, target: HTMLElement | null, clientX: number, clientY: number) => {
         const { graph: current, views: shown, adapter: own } = latest.current;
         const pin = target?.closest('[data-pin]') as HTMLElement | null;
         if (pin && pin.dataset.pin !== wire.side && pin.dataset.node !== wire.nodeId) {
+            const other = pin.dataset.pin === 'in' ? shown.get(pin.dataset.node!)?.inputs : shown.get(pin.dataset.node!)?.outputs;
+            const otherKind = other?.find((candidate) => candidate.key === pin.dataset.key)?.kind ?? 'any';
+            const from = wire.side === 'out' ? wire.kind : otherKind;
+            const to = wire.side === 'out' ? otherKind : wire.kind;
+            if (own.match(from, to) === 0) {
+                refuse(own.refusal?.(from, to) ?? 'These two pins do not fit together.');
+                return;
+            }
             const link = wire.side === 'out'
                 ? { from: wire.nodeId, fromPin: wire.key, to: pin.dataset.node!, toPin: pin.dataset.key! }
                 : { from: pin.dataset.node!, fromPin: pin.dataset.key!, to: wire.nodeId, toPin: wire.key };
@@ -622,7 +675,7 @@ export function NodeGraphCanvas<S>(props: NodeGraphCanvasProps<S>): React.ReactE
                 const link = wire.side === 'out' ? { from: wire.nodeId, fromPin: wire.key, to: nodeElement.dataset.node!, toPin: key } : { from: nodeElement.dataset.node!, fromPin: key, to: wire.nodeId, toPin: wire.key };
                 const next = connect(current, link);
                 if (next) commit(next);
-            }
+            } else refuse(`${other?.title ?? 'That node'} has no pin this wire fits.`);
             return;
         }
         if (!target || !root.current?.contains(target) || target.closest('[data-overlay]')) return;
@@ -989,9 +1042,26 @@ export function NodeGraphCanvas<S>(props: NodeGraphCanvasProps<S>): React.ReactE
             const style = adapter.kinds[linkKind(link)];
             context.globalAlpha = views.get(link.to)?.unused && !near && !hot ? 0.4 : near || hot ? 1 : 0.78;
             context.strokeStyle = key === spliceKey ? 'rgb(240 138 60)' : style?.colour ?? '#a3a3a3';
-            context.lineWidth = (hot ? 3.2 : near ? 2.4 : 1.7) / viewport.scale;
+            context.lineWidth = ((hot ? 3.2 : near ? 2.4 : 1.7) * (style?.wide ? 1.7 : 1)) / viewport.scale;
             if (key === spliceKey) context.setLineDash([8 / viewport.scale, 5 / viewport.scale]);
             line(from, to);
+            context.setLineDash([]);
+        }
+        // Named links: a faint line between the two ends while one of them is selected.
+        for (const ghost of adapter.ghostLinks ?? []) {
+            if (!selection.has(ghost.from) && !selection.has(ghost.to)) continue;
+            const a = nodesById.get(ghost.from);
+            const b = nodesById.get(ghost.to);
+            const la = layouts.get(ghost.from);
+            const lb = layouts.get(ghost.to);
+            if (!a || !b || !la || !lb) continue;
+            const oa = offsetOf(ghost.from);
+            const ob = offsetOf(ghost.to);
+            context.globalAlpha = 0.7;
+            context.strokeStyle = 'rgb(240 138 60)';
+            context.lineWidth = 1.5 / viewport.scale;
+            context.setLineDash([3 / viewport.scale, 5 / viewport.scale]);
+            line({ x: a.x + oa.x + la.width, y: a.y + oa.y + la.height / 2 }, { x: b.x + ob.x, y: b.y + ob.y + lb.height / 2 });
             context.setLineDash([]);
         }
         if (pending) {
@@ -1006,7 +1076,24 @@ export function NodeGraphCanvas<S>(props: NodeGraphCanvasProps<S>): React.ReactE
             }
         }
         context.globalAlpha = 1;
-    }, [adapter.kinds, graph.links, hoverWire, linkKind, pending, pinAt, selection, size, spliceKey, viewport, views]);
+    }, [adapter.ghostLinks, adapter.kinds, graph.links, hoverWire, layouts, linkKind, nodesById, offsetOf, pending, pinAt, selection, size, spliceKey, viewport, views]);
+
+    // ---- the cost map ----
+    const heats = useMemo(() => {
+        if (!heatOn || !adapter.cost) return null;
+        void views;
+        const costs = new Map<string, { value: number; label: string }>();
+        let most = 0;
+        for (const node of graph.nodes) {
+            const found = adapter.cost(node.id);
+            if (!found) continue;
+            costs.set(node.id, found);
+            most = Math.max(most, found.value);
+        }
+        const result = new Map<string, { heat: number; label: string }>();
+        for (const [id, found] of costs) result.set(id, { heat: most > 0 ? Math.round(Math.sqrt(found.value / most) * 100) / 100 : 0, label: found.label });
+        return result;
+    }, [adapter, graph.nodes, heatOn, views]);
 
     // ---- what is drawn ----
     const actions = useMemo<CardActions>(() => ({
@@ -1143,6 +1230,8 @@ export function NodeGraphCanvas<S>(props: NodeGraphCanvasProps<S>): React.ReactE
                             kinds={adapter.kinds}
                             actions={actions}
                             renderBody={adapter.renderBody}
+                            heat={heats?.get(node.id)?.heat}
+                            heatLabel={heats?.get(node.id)?.label}
                         />
                     );
                 })}
@@ -1162,6 +1251,8 @@ export function NodeGraphCanvas<S>(props: NodeGraphCanvasProps<S>): React.ReactE
                 <IconButton label="Put a frame round the selection" shortcut="C" onClick={addFrame}><CommentAddIcon size={14} /></IconButton>
                 <IconButton ref={alignButton} label="Line up or space out the selected nodes" onClick={alignMenu}><LayoutIcon size={14} /></IconButton>
                 {adapter.looks && <IconButton label="Colour the selected nodes" disabled={!selection.size} onClick={(event) => colourMenu((event.currentTarget as HTMLElement).getBoundingClientRect())}><PaletteIcon size={14} /></IconButton>}
+                <IconButton label={selection.size > 1 ? 'Tidy the selected nodes into columns' : 'Tidy the whole graph into columns'} onClick={tidy}><FlowIcon size={14} /></IconButton>
+                {adapter.cost && <IconButton label={heatOn ? 'Hide the cost map' : `Show the cost map: ${adapter.costWords ?? 'what each node costs'}`} active={heatOn} onClick={() => setHeatOn((value) => { writeSetting('heat', !value); return !value; })}><FlameIcon size={14} /></IconButton>}
                 <IconButton label={snap ? 'Snapping to the grid: on' : 'Snapping to the grid: off'} active={snap} onClick={() => setSnap((value) => { writeSetting('snap', !value); return !value; })}><MagnetIcon size={14} /></IconButton>
                 <IconButton label="Find in graph" shortcut="Ctrl+F" active={findOpen} onClick={() => setFindOpen((value) => !value)}><SearchIcon size={14} /></IconButton>
                 <IconButton label={showMap ? 'Hide the overview map' : 'Show the overview map'} active={showMap} onClick={() => setShowMap((value) => { writeSetting('minimap', !value); return !value; })}><GlobeIcon size={14} /></IconButton>
@@ -1175,9 +1266,17 @@ export function NodeGraphCanvas<S>(props: NodeGraphCanvasProps<S>): React.ReactE
                 </div>
             )}
             {findOpen && <FindBar targets={findTargets} onGo={goTo} onClose={() => { setFindOpen(false); root.current?.focus({ preventScroll: true }); }} />}
-            {(hoverWire || status) && (
-                <div className="pointer-events-none absolute bottom-2 left-2 z-10 rounded bg-panel/90 px-2 py-1 text-2xs text-ink-3">
-                    {hoverWire ? 'Wire: right-click for more · double-click for a reroute point · Alt+click to cut' : status}
+            {crowded && (
+                <div data-overlay role="status" className="absolute bottom-2 left-1/2 z-20 flex -translate-x-1/2 items-center gap-2 rounded-md border border-line bg-panel/95 px-2 py-1 text-2xs text-ink-2 shadow" {...stopOverlay}>
+                    <span>Many nodes sit on top of one another.</span>
+                    <button type="button" onClick={() => { setCrowded(false); latest.current.onSelect([], null); requestAnimationFrame(() => { tidy(); requestAnimationFrame(() => frameAll()); }); }}
+                        className="rounded bg-accent px-2 py-0.5 font-semibold text-accent-ink hover:bg-accent-hover">Tidy them</button>
+                    <button type="button" aria-label="Leave them" title="Leave them" onClick={() => setCrowded(false)} className="text-ink-3 hover:text-ink">Leave</button>
+                </div>
+            )}
+            {(refused || hoverWire || status) && (
+                <div role={refused ? 'alert' : undefined} className={`pointer-events-none absolute bottom-2 left-2 z-10 rounded bg-panel/90 px-2 py-1 text-2xs ${refused ? 'text-warn' : 'text-ink-3'}`}>
+                    {refused ?? (hoverWire ? 'Wire: right-click for more · double-click for a reroute point · Alt+click to cut' : status)}
                 </div>
             )}
             {showMap && size.width > 0 && graph.nodes.length > 0 && (
