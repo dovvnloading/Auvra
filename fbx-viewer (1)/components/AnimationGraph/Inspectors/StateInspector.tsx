@@ -1,5 +1,6 @@
 import React from 'react';
-import { Layers, Settings, Activity, Crown, Trash2, Link2, Network, GitFork } from 'lucide-react';
+import type * as THREE from 'three';
+import { CrownIcon, ForkIcon, GearIcon, GraphIcon, LayersIcon, LinkIcon, PulseIcon, TrashIcon } from '../../UI/Icons';
 import { GraphState, AnimationGraphData, StateType } from '../../../types';
 import { SingleStateConfig } from './SingleStateConfig';
 import { BlendStateConfig } from './BlendStateConfig';
@@ -29,6 +30,9 @@ interface StateInspectorProps {
     clipDuration?: number;
     /** Whether a clip says it loops, when it does. */
     clipLoop?: (name: string) => boolean | undefined;
+    /** The model the graph previews on, and its clips by name: what a Motion Match state's clips do on it. */
+    previewObject?: THREE.Object3D | null;
+    clipByName?: (name: string) => THREE.AnimationClip | null;
 }
 
 export const StateInspector: React.FC<StateInspectorProps> = ({
@@ -40,7 +44,9 @@ export const StateInspector: React.FC<StateInspectorProps> = ({
     blendParamOptions,
     onOpenStateMachine,
     clipDuration,
-    clipLoop
+    clipLoop,
+    previewObject = null,
+    clipByName
 }) => {
     const machine = node.stateType === 'StateMachine';
     const conduit = node.stateType === 'Conduit';
@@ -54,7 +60,7 @@ const curveVariableOptions = [
              <div className="p-4 border-b border-gray-800 bg-gray-800/30 shrink-0">
                 <div className="flex items-start gap-3">
                     <div className="w-10 h-10 rounded bg-gray-900 border border-gray-700 flex items-center justify-center shrink-0">
-                         {node.isRoot ? <Crown size={20} className="text-gray-200" /> : <Layers size={20} className="text-gray-400" />}
+                         {node.isRoot ? <CrownIcon size={20} className="text-gray-200" /> : <LayersIcon size={20} className="text-gray-400" />}
                     </div>
                     <div className="min-w-0 flex-1">
                         <h3 className="text-sm font-bold text-white truncate">{node.name}</h3>
@@ -77,7 +83,7 @@ const curveVariableOptions = [
                 <div className="space-y-3">
                     <div className="space-y-1.5">
                         <label className="text-2xs text-gray-500 font-bold flex items-center gap-1.5">
-                            <Settings size={10} /> Name
+                            <GearIcon size={10} /> Name
                         </label>
                         <input 
                             value={node.name}
@@ -90,7 +96,7 @@ const curveVariableOptions = [
                 {/* State Type Selector */}
                 <div className="space-y-1.5">
                     <label className="text-2xs text-gray-500 font-bold flex items-center gap-1.5">
-                        <Activity size={10} /> Type
+                        <PulseIcon size={10} /> Type
                     </label>
                     <div className="flex bg-gray-900 p-0.5 rounded border border-gray-700">
                         {STATE_TYPES.map(({ type, label }) => (
@@ -111,7 +117,7 @@ const curveVariableOptions = [
                 {/* Sync Group */}
                 {!machine && !conduit && <div className="space-y-1.5">
                     <label className="text-2xs text-gray-500 font-bold flex items-center gap-1.5">
-                        <Link2 size={10} /> Sync Group
+                        <LinkIcon size={10} /> Sync Group
                     </label>
                     <input
                         value={node.syncGroup ?? ''}
@@ -142,7 +148,7 @@ const curveVariableOptions = [
                 {conduit ? (
                     <div className="bg-gray-800 rounded-lg border border-gray-700 p-3 space-y-2">
                         <span className="text-xs font-medium text-gray-200 flex items-center gap-2">
-                            <GitFork size={12} className="text-gray-400" /> Conduit
+                            <ForkIcon size={12} className="text-gray-400" /> Conduit
                         </span>
                         <p className="text-2xs text-gray-500 leading-relaxed">
                             A junction with no animation. A transition into it is taken only when one of its own transitions
@@ -153,7 +159,7 @@ const curveVariableOptions = [
                 ) : machine ? (
                     <div className="bg-gray-800 rounded-lg border border-gray-700 p-3 space-y-3">
                         <span className="text-xs font-medium text-gray-200 flex items-center gap-2">
-                            <Network size={12} className="text-gray-400" /> {innerStateCount(node)} {innerStateCount(node) === 1 ? 'state' : 'states'} inside
+                            <GraphIcon size={12} className="text-gray-400" /> {innerStateCount(node)} {innerStateCount(node) === 1 ? 'state' : 'states'} inside
                         </span>
                         <p className="text-2xs text-gray-500 leading-relaxed">
                             Entering this state starts its entry state; its own transitions run while any state inside plays,
@@ -169,7 +175,7 @@ const curveVariableOptions = [
                         </button>
                     </div>
                 ) : node.stateType === 'MotionMatch' ? (
-                    <MotionMatchConfig node={node} updateState={updateState} clipOptions={clipOptions} />
+                    <MotionMatchConfig node={node} updateState={updateState} clipOptions={clipOptions} model={previewObject} clipByName={clipByName} />
                 ) : node.stateType === 'Single' ? (
                     <SingleStateConfig 
                         node={node} 
@@ -202,7 +208,7 @@ const curveVariableOptions = [
                             }
                         `}
                     >
-                        <Trash2 size={14} /> 
+                        <TrashIcon size={14} /> 
                         <span>Delete State</span>
                     </button>
                 </div>

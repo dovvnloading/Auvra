@@ -9,6 +9,9 @@ import type { ModelFileReport } from './utils/fbxImport/nativeImporter';
 import type { ClipTakeSource } from './utils/clipTakes';
 import type { StoredBoneRole } from './utils/retargeting';
 import type { SkinPaintFile, SkinPaintReference } from './utils/skinPaint/skinPaintFile';
+
+/** Where a model's UV layout is kept. */
+export interface UvLayoutReference { assetId: string; encoding: 'uv-layout-v1'; count: number }
 import type { LevelBakedLighting } from './runtime/lighting/bakedLighting';
 import type { WeatherSettings } from './runtime/weather';
 import type { SkyAtmosphereSettings, SkyCloudSettings, SkyImageSettings, SkyLightSettings, SkyModel, SkyNightSettings } from './runtime/sky/skySettings';
@@ -96,6 +99,8 @@ export interface LoadedModelData {
   boneRoles?: StoredBoneRole[];
   /** The weights painted on it, kept in an asset of their own. */
   skinPaint?: SkinPaintReference;
+  /** A new UV unwrap of some of its meshes, kept in an asset of its own (texturing/uv/uvLayout). */
+  uvLayout?: UvLayoutReference;
 }
 
 /** An image a model's source file names, kept with the project. */
@@ -477,6 +482,11 @@ export interface GraphTransition {
   anyState?: boolean;
   /** Higher fires first when several transitions are ready; default 0, ties keep list order. */
   priority?: number;
+  /**
+   * How the states meet: 'crossfade' (default) blends the two over `duration`; 'inertial' switches at
+   * once and eases away the difference over about a third of `duration`, keeping the motion's momentum.
+   */
+  blendMode?: 'crossfade' | 'inertial';
 }
 
 export interface AnimationGraphData {
@@ -589,6 +599,8 @@ export interface Blueprint {
   weaponVolume?: number; // Base volume for weapon sounds
   /** Pose fixes applied after the animation graph each frame (runtime/ik.ts). */
   ik?: CharacterIKSettings;
+  /** How a player character speeds up, slows down and turns (runtime/locomotion/characterMotion.ts); defaults when left out. */
+  movement?: MovementTuning;
   /** A player's fire and aim clips, layered over its locomotion. */
   upperBody?: UpperBodySettings;
   /** Added on top of whatever the character is doing each time it is hurt (not by the hit that kills it). */
@@ -629,11 +641,25 @@ export interface BehaviorTreeData {
   behaviorNodes: BehaviorNode[];
 }
 
+/** A character's movement, in the times a player feels; each left out keeps its default. */
+export interface MovementTuning {
+  /** Seconds to reach (most of) a faster speed (default 0.28). */
+  accelerate?: number;
+  /** Seconds to slow down or stop (default 0.14). */
+  brake?: number;
+  /** Seconds to turn (most of the way) round to face where it is going (default 0.34). */
+  turn?: number;
+  /** Setting off from a standstill toward a way further round than this (degrees), turn on the spot first; 0 never (default). */
+  turnFirst?: number;
+}
+
 export interface CharacterIKSettings {
   /** Plant each foot on the ground under it (needs colliders or terrain). */
   footIK?: boolean;
   /** Highest ground step a foot reaches for, in metres (default 0.5). */
   footMaxStep?: number;
+  /** With footIK, a planted foot stays where it landed until it lifts, so feet do not slide (default on). */
+  footLock?: boolean;
   /** Turn a bone toward a target: the camera (players) or the player (enemies). */
   lookAt?: 'none' | 'camera' | 'player';
   /** Bone that looks (default 'Head'). */
@@ -832,6 +858,8 @@ export interface SceneContextType {
   mirrorClip: (modelId: string, clipName: string) => Promise<void>;
   updateModelBoneRoles: (modelId: string, roles: StoredBoneRole[]) => Promise<void>;
   saveModelSkinPaint: (modelId: string, encode: () => SkinPaintFile | null) => Promise<void>;
+  /** Stores a model's UV layout (null takes it away); rejects when it cannot be saved. */
+  saveModelUvLayout: (modelId: string, bytes: Uint8Array | null, meshes: number) => Promise<void>;
 
   // Texture Actions
   textures: TextureData[];

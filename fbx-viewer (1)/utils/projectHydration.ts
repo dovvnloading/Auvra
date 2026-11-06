@@ -1,4 +1,3 @@
-import * as THREE from 'three';
 import type { AttachmentData, AudioData, Blueprint, LevelData, LevelObject, LoadedModelData, ModelSourceImage, PrefabData, SocketData, TerrainData, TextureData } from '../types';
 import { importFailureMessage, importPhaseLabel, loadFBXFile, type ModelLoadOptions } from './modelLoader';
 import { resolveTerrainHeightfield } from './terrainHeightfield';
@@ -11,7 +10,7 @@ import { generateThumbnail } from './thumbnailGenerator';
 import { disposeModel, disposeObject } from './processing/ModelLifecycle';
 import { applyStoredClipNames, mirrorModelClips, prepareAnimationClips } from './animationBinding';
 import { cutAttachedClips, noteAttachedClips, wholeClips } from './clipRanges';
-import { drawAsPaintedTexture, hydrateMaterialOverrides, overrideTextureFlipY } from './materialOverrides';
+import { hydrateMaterialOverrides } from './materialOverrides';
 import {
   assetDiagnosticAttributes,
   diagnosticErrorType,
@@ -29,6 +28,7 @@ import {
 } from '../runtime/types';
 import { MATERIALS_DOMAIN, materialLibrary, readMaterialAsset, type MaterialAsset } from '../runtime/materials/materialLibrary';
 import { loadSkinPaint } from './skinPaint/modelSkin';
+import { applyLayout, decodeLayout } from '../texturing/uv/uvLayout';
 import { setLightVolumeSource } from '../runtime/lighting/lightVolumeLoader';
 
 /** The HUD document in the project 'hud' domain. */
@@ -355,9 +355,20 @@ export function createGameContentLoader(
         loaded.sourceClipNames = wholeClips(loaded.animations).map((clip) => clip.name);
         loaded.category = item.category || 'Prop';
         loaded.isPlacedInScene = Boolean(item.isPlacedInScene);
-        loaded.textureOverrides = item.textureOverrides;
         if (sourceImages.length) loaded.sourceImages = sourceImages;
         if (Array.isArray(item.boneRoles) && item.boneRoles.length) loaded.boneRoles = item.boneRoles;
+        if (item.uvLayout?.assetId) {
+          loaded.uvLayout = item.uvLayout;
+          try {
+            const bytes = await loadProjectAssetBytes(item.uvLayout.assetId, traceAsset(assetAlias));
+            applyLayout(loaded.object, decodeLayout(bytes));
+            assertCurrent();
+          } catch (error) {
+            assertCurrent();
+            // A model keeps its file's own coordinates when its layout cannot be read.
+            recordAssetDiagnostic('uv_layout_hydration_failed', error, 'source_read', { ...diagnostic, fallback: 'file_uvs' });
+          }
+        }
         if (item.skinPaint?.assetId) {
           loaded.skinPaint = item.skinPaint;
           if (loaded.category !== 'Animation') {
@@ -375,43 +386,14 @@ export function createGameContentLoader(
         if (typeof item.folder === 'string') loaded.folder = item.folder;
         // A missing importSettings document field means the default (old) normalization.
         applyModelImportSettings(loaded, item.importSettings);
-        for (const [savedName, textureId] of Object.entries(item.textureOverrides || {}) as Array<[string, string]>) {
-          const materialName = currentMaterialName(savedName);
-          const textureUrl = textureAssetUrls.get(textureId);
-          if (!textureUrl) continue;
-          const texture = await new THREE.TextureLoader().loadAsync(textureUrl);
-          let attached = false;
-          try {
-            assertCurrent();
-            texture.colorSpace = THREE.SRGBColorSpace;
-            // glTF UVs start top-left; the editor's retexture orients it the same way.
-            texture.flipY = overrideTextureFlipY(loaded.object);
-            loaded.object.traverse((child) => {
-              if (!(child as THREE.Mesh).isMesh) return;
-              const material = (child as THREE.Mesh).material;
-              const materials = Array.isArray(material) ? material : [material];
-              for (const candidate of materials as any[]) {
-                if (candidate.name !== materialName) continue;
-                attached = true;
-                if (candidate.map) candidate.map.dispose();
-                // A plain colour tinted nothing until now; a painted texture shows its own colours.
-                else candidate.color?.set(0xffffff);
-                candidate.map = texture;
-                drawAsPaintedTexture(candidate);
-              }
-            });
-          } finally {
-            // An attached texture is owned by the model's materials; any other
-            // is never referenced again.
-            if (!attached) texture.dispose();
-          }
-        }
-        // Material overrides layer on top of the texture overrides above, so a
-        // material without its own map override keeps the overridden texture.
+        // A model's older per-material texture overrides are painted base maps: they are taken into its
+        // material overrides (where a material has not decided its base map there) and put on the same
+        // way as every other map, so Material Overrides shows them and can clear or replace them.
         loaded.materialOverrides = await hydrateMaterialOverrides(loaded.object, withCurrentMaterialNames(item.materialOverrides), {
           resolveTextureUrl: (textureId) => textureAssetUrls.get(textureId),
           assertCurrent,
-        });
+        }, withCurrentMaterialNames(item.textureOverrides));
+        loaded.textureOverrides = {};
         if (loaded.category === 'Animation') stripGeometry(loaded.object);
         if (generateThumbnails && !item.thumbnail && loaded.category !== 'Animation') {
           activePhase = 'thumbnail_generation';

@@ -3,7 +3,7 @@ import { textureService } from '../../services/TextureGenerationService';
 import { DescribeWithAI, nameFromWords } from '../Tools/DescribeWithAI';
 import { seamlessPanorama, skyInstruction, SKY_MEGAPIXELS } from '../Tools/paintedPictures';
 import React, { useEffect, useMemo, useState } from 'react';
-import { Cloud, Moon, Pause, Play, Sparkles, Sun, SunDim, Wind } from 'lucide-react';
+import { CloudIcon, MoonIcon, PauseIcon, PlayIcon, SparklesIcon, SunDimIcon, SunIcon, WindIcon } from '../UI/Icons';
 import type { SkyConfig } from '../../types';
 import { ScrubbableInput } from '../UI/Properties/ScrubbableInput';
 import { useGameContent } from '../../runtime/GameContentContext';
@@ -16,6 +16,7 @@ import {
     CLOUD_QUALITIES, CLOUD_QUALITY_LABELS, DEFAULT_SKY_LIGHT, resolveAtmosphere, resolveClouds, resolveNight, resolveSkyImage, resolveSkyLight, SKY_MODEL_LABELS, SKY_MODELS, skyModel, sunSize, sunTilt,
     type CloudQuality, type SkyAtmosphereSettings, type SkyCloudSettings, type SkyImageSettings, type SkyLightSettings, type SkyModel, type SkyNightSettings,
 } from '../../runtime/sky/skySettings';
+import { ColourField } from '../UI/ColourPicker';
 
 interface SkyDomeSectionProps {
     config: SkyConfig;
@@ -45,7 +46,7 @@ const Scrub: React.FC<{ label: string; title?: string; value: number; step: numb
 
 const Colour: React.FC<{ label: string; title?: string; value: string; onChange: (value: string) => void }> = ({ label, title, value, onChange }) => (
     <Row label={label} title={title}>
-        <input type="color" value={value} onChange={(e) => onChange(e.target.value)} className="w-6 h-4 bg-transparent border-none p-0 cursor-pointer" aria-label={label} />
+        <ColourField value={value} onChange={onChange} label={label} className="h-5 w-8" />
     </Row>
 );
 
@@ -79,7 +80,7 @@ export const DayPreviewControls: React.FC<{ hour: number; onHour: (hours: number
                 title="Plays the day through in the viewport, to see the light change. It does not change the level."
                 className="p-1 rounded bg-gray-900 border border-gray-700 text-cyan-300 hover:border-gray-500"
             >
-                {playing ? <Pause size={10} /> : <Play size={10} />}
+                {playing ? <PauseIcon size={10} /> : <PlayIcon size={10} />}
             </button>
             {playing && <span className="text-2xs font-mono text-gray-300 w-8">{formatHours(shown)}</span>}
             <div className="flex-1 flex flex-wrap justify-end gap-1">
@@ -178,7 +179,7 @@ export const SkyDomeSection: React.FC<SkyDomeSectionProps> = ({ config, onScrub,
     return (
         <>
             <div className="space-y-2">
-                <div className={SECTION_TITLE}><SunDim size={12} /> Sky Model</div>
+                <div className={SECTION_TITLE}><SunDimIcon size={12} /> Sky Model</div>
                 <div className={PANEL}>
                     <Row label="Draws With">
                         <select aria-label="Sky model" className={SELECT} value={model} onChange={(e) => setModel(e.target.value as SkyModel)}>
@@ -192,7 +193,7 @@ export const SkyDomeSection: React.FC<SkyDomeSectionProps> = ({ config, onScrub,
                 <>
                     {model === 'image' && (
                         <div className="space-y-2">
-                            <div className={SECTION_TITLE}><Sparkles size={12} /> Panorama</div>
+                            <div className={SECTION_TITLE}><SparklesIcon size={12} /> Panorama</div>
                             <div className={PANEL}>
                                 <Row label="Image" title="A panorama from your textures: 360 by 180 degrees, twice as wide as it is tall.">
                                     <select aria-label="Panorama image" className={`${SELECT} max-w-[140px]`} value={panorama.textureId} onChange={(e) => onCommit({ ...config, panorama: { ...panorama, textureId: e.target.value } })}>
@@ -212,7 +213,7 @@ export const SkyDomeSection: React.FC<SkyDomeSectionProps> = ({ config, onScrub,
 
                     {model === 'atmosphere' && (
                         <div className="space-y-2">
-                            <div className={SECTION_TITLE}><Sparkles size={12} /> Sky Presets</div>
+                            <div className={SECTION_TITLE}><SparklesIcon size={12} /> Sky Presets</div>
                             <PresetGallery current={config.preset} onPick={(next) => onCommit(applySkyPreset(config, next))} />
                             {preset && !matchesSkyPreset(config) && (
                                 <div className="text-2xs text-gray-500">Changed from {preset.label}.</div>
@@ -221,7 +222,7 @@ export const SkyDomeSection: React.FC<SkyDomeSectionProps> = ({ config, onScrub,
                     )}
 
                     <div className="space-y-2">
-                        <div className={SECTION_TITLE}><Sun size={12} /> Sun Path</div>
+                        <div className={SECTION_TITLE}><SunIcon size={12} /> Sun Path</div>
                         <div className={PANEL}>
                             <Scrub label="Compass Turn" title="Turns the sun's whole path round the horizon (0-1: a full turn)." value={config.azimuth} step={0.01} onChange={(v) => onScrub({ ...config, azimuth: v })} />
                             <Scrub label="Lean °" title="How far the sun's path leans from passing straight overhead. Away from the tropics it never quite reaches the top of the sky." value={sunTilt(config)} step={1} onChange={(v) => onScrub({ ...config, sunTilt: Math.min(80, Math.max(-80, v)) })} />
@@ -233,7 +234,7 @@ export const SkyDomeSection: React.FC<SkyDomeSectionProps> = ({ config, onScrub,
                     {model === 'atmosphere' && (
                         <>
                             <div className="space-y-2">
-                                <div className={SECTION_TITLE}><Wind size={12} /> Atmosphere</div>
+                                <div className={SECTION_TITLE}><WindIcon size={12} /> Atmosphere</div>
                                 <div className={PANEL}>
                                     <Scrub label="Air" title="How much the air scatters light. 1 is Earth's. More is a deeper sky and a redder sunset." value={atmosphere.rayleigh} step={0.05} onChange={(v) => setAtmosphere({ rayleigh: Math.max(0, v) })} />
                                     <Colour label="Air Colour" title="What the air scatters. White gives Earth's blue; a tint shifts the whole sky." value={atmosphere.rayleighTint} onChange={(v) => setAtmosphere({ rayleighTint: v })} />
@@ -246,7 +247,7 @@ export const SkyDomeSection: React.FC<SkyDomeSectionProps> = ({ config, onScrub,
                             </div>
 
                             <div className="space-y-2">
-                                <div className={SECTION_TITLE}><Cloud size={12} /> Clouds</div>
+                                <div className={SECTION_TITLE}><CloudIcon size={12} /> Clouds</div>
                                 <div className={PANEL}>
                                     <Row label="Quality" title="Volumetric clouds cost GPU time every frame; a higher quality is sharper. How much of the sky they cover is the weather's Clouds value.">
                                         <select aria-label="Cloud quality" className={SELECT} value={clouds.quality} onChange={(e) => onCommit({ ...config, cloudLayer: { ...clouds, quality: e.target.value as CloudQuality } })}>
@@ -263,7 +264,7 @@ export const SkyDomeSection: React.FC<SkyDomeSectionProps> = ({ config, onScrub,
                             </div>
 
                             <div className="space-y-2">
-                                <div className={SECTION_TITLE}><Moon size={12} /> Night</div>
+                                <div className={SECTION_TITLE}><MoonIcon size={12} /> Night</div>
                                 <div className={PANEL}>
                                     <Scrub label="Moon Phase" title="0 and 1: new moon. 0.5: full moon." value={night.moonPhase} step={0.01} onChange={(v) => setNight({ moonPhase: Math.min(1, Math.max(0, v)) })} />
                                     <Scrub label="Moon Size" title="1: as the moon really looks." value={night.moonSize} step={0.1} onChange={(v) => setNight({ moonSize: Math.min(12, Math.max(0.2, v)) })} />
@@ -277,7 +278,7 @@ export const SkyDomeSection: React.FC<SkyDomeSectionProps> = ({ config, onScrub,
                     )}
 
                     <div className="space-y-2">
-                        <div className={SECTION_TITLE}><SunDim size={12} /> Sky Light</div>
+                        <div className={SECTION_TITLE}><SunDimIcon size={12} /> Sky Light</div>
                         <div className={PANEL}>
                             <label className="flex items-center justify-between text-2xs text-gray-400" title="Lights the level from the sky as it looks now: its colour, clouds and time of day. Off leaves a flat fill.">
                                 <span>Light From Sky</span>

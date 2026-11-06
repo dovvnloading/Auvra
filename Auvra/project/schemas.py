@@ -62,6 +62,8 @@ _NESTED_KEYS = {
     "boneRoles": {"role", "bone"},
     # The weights painted on a model, in a binary asset of their own.
     "skinPaint": {"assetId", "encoding", "count"},
+    # A new UV unwrap of some of a model's meshes, in a binary asset of its own.
+    "uvLayout": {"assetId", "encoding", "count"},
     "size": {"width", "height"},
     "generation": {"providerId", "modelId", "modelVersion", "jobId", "createdAt", "routeOrigin", "routeConsent", "promptSha256", "settingsSha256", "artifactSha256", "inputAssetIds", "seed", "costMicroUsd"},
     "flashConfig": {"enabled", "textureId", "scale", "color", "duration", "rotationSpeed", "preview"},
@@ -74,7 +76,7 @@ _NESTED_KEYS = {
     "subGraph": {"states", "transitions"},
     "notifies": {"id", "name", "time"},
     "blendSamples": {"id", "clipName", "position"},
-    "transitions": {"id", "fromStateId", "toStateId", "duration", "conditions", "exitTime", "conditionMode", "anyState", "priority"},
+    "transitions": {"id", "fromStateId", "toStateId", "duration", "conditions", "exitTime", "conditionMode", "anyState", "priority", "blendMode"},
     "conditions": {"variableId", "operator", "value"},
     "nodes": {"id", "type", "name", "position", "inputs", "outputs", "data", "customData"},
     "outputs": {"id", "name", "dataType", "direction"},
@@ -86,18 +88,23 @@ _NESTED_KEYS = {
     "layout": {"x", "y", "width", "height", "customData"},
     "lods": {"level", "maxDistance"},
     "render": {"visible", "radius", "selected", "lods"},
-    "ik": {"footIK", "footMaxStep", "lookAt", "lookAtBone", "lookAtMaxAngle", "aimPitch"},
+    "ik": {"footIK", "footMaxStep", "footLock", "lookAt", "lookAtBone", "lookAtMaxAngle", "aimPitch"},
+    "movement": {"accelerate", "brake", "turn", "turnFirst"},
     "upperBody": {"fireClip", "aimClip", "maskBone"},
     "carry": {"boneName", "position", "rotation"},
     "weapons": {"id", "name", "attachmentId", "muzzleSocket", "startsOwned", "carry", "fireMode", "fireRate", "damage", "magazine", "reserve", "reloadSeconds", "spread", "pellets", "projectileSpeed", "fireClip", "aimClip", "reloadClip", "idleClip", "walkClip", "runClip", "backClip", "leftClip", "rightClip", "jumpClip", "turnLeftClip", "turnRightClip", "supportGrip", "supportRotation", "gripPoint", "muzzlePoint"},
     "behaviorTree": {"rootId", "behaviorNodes"},
     "behaviorNodes": {"id", "type", "children", "condition", "action", "value", "text"},
 }
-# ``graph`` is a material asset's node graph, whose node params belong to each node type.
-_FREEFORM_KEYS = {"settings", "overrides", "style", "payload", "data", "customData", "props", "graph"}
+# ``graph`` is a material asset's node graph, whose node params belong to each node type;
+# ``textureGraph`` is the image graph a material is made from and ``paint`` its painted layers.
+_FREEFORM_KEYS = {"settings", "overrides", "style", "payload", "data", "customData", "props", "graph", "textureGraph", "paint"}
 # ``materialOverrides`` is keyed by authored material names, so its entries are
 # checked against the override fields instead of by their (arbitrary) key.
-_MATERIAL_OVERRIDE_KEYS = {"color", "roughness", "metalness", "emissive", "emissiveIntensity", "opacity", "mapTextureId", "normalTextureId", "roughnessTextureId", "metalnessTextureId", "materialId", "parameters"}
+_MATERIAL_OVERRIDE_KEYS = {"color", "roughness", "metalness", "emissive", "emissiveIntensity", "opacity", "mapTextureId", "paintedMap", "normalTextureId", "roughnessTextureId", "metalnessTextureId", "materialId", "parameters",
+                           # A physical material's values (glTF coat, sheen, thin film, transmission, specular, index of refraction, anisotropy).
+                           "coat", "coatRoughness", "sheenColor", "sheenRoughness", "thinFilm", "thinFilmThickness", "transmission", "thickness",
+                           "attenuationColor", "attenuationDistance", "dispersion", "ior", "specularWeight", "specularColor", "anisotropy", "anisotropyRotation"}
 _MATERIAL_TEXTURE_KEYS = ("mapTextureId", "normalTextureId", "roughnessTextureId", "metalnessTextureId")
 # Material names are also the keys of ``materialOverrides`` and
 # ``textureOverrides``, but every document crosses two protocol key blocklists:

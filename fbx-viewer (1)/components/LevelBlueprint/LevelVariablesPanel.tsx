@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Plus, Trash2, Variable } from 'lucide-react';
+import { PlusIcon, TrashIcon, VariableIcon } from '../UI/Icons';
 import type { LogicNode } from '../../types';
 import { createLevelVariablesStore, type LevelVariableDefinition, type LevelVariableValue } from '../../runtime/levelVariables';
 import { WORLD_NODE_DEFINITIONS } from '../../hooks/levelBlueprintNodes/world';
@@ -234,7 +234,7 @@ export const LevelVariablesPanel: React.FC<LevelVariablesPanelProps> = ({ variab
         <section aria-label="Level variables" className="border-b border-gray-800 flex flex-col max-h-[45%] shrink-0">
             <div className="px-4 py-2 bg-gray-950 border-b border-gray-800 flex items-center justify-between">
                 <span className="text-xs font-bold text-gray-200 tracking-wider flex items-center gap-1.5">
-                    <Variable size={12} className="text-sky-400" /> VARIABLES
+                    <VariableIcon size={12} className="text-sky-400" /> VARIABLES
                     {variables.length > 0 && <span className="text-2xs font-normal text-gray-500">({variables.length})</span>}
                 </span>
                 <button
@@ -243,7 +243,7 @@ export const LevelVariablesPanel: React.FC<LevelVariablesPanelProps> = ({ variab
                     title="Add a level variable"
                     className="p-1 rounded hover:bg-gray-800 text-gray-400 hover:text-white transition-colors"
                 >
-                    <Plus size={14} />
+                    <PlusIcon size={14} />
                 </button>
             </div>
             <div className="min-h-0 overflow-y-auto custom-scrollbar p-2">
@@ -282,7 +282,7 @@ export const LevelVariablesPanel: React.FC<LevelVariablesPanelProps> = ({ variab
                                             title="Delete variable"
                                             className="p-1.5 rounded text-gray-500 hover:text-red-400 hover:bg-red-950/40 transition-colors"
                                         >
-                                            <Trash2 size={12} />
+                                            <TrashIcon size={12} />
                                         </button>
                                     </div>
                                     <div className="flex items-center gap-1">

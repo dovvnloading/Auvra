@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Check, Repeat, Scissors, X } from 'lucide-react';
+import { CheckIcon, CrossIcon, LoopIcon, ScissorsIcon } from '../Icons';
 import type { ClipRange, ModelImportSettings } from '../../../types';
 import { importFailureMessage } from '../../../utils/modelLoader';
 import { MAX_MODEL_TARGET_SIZE, reportSize, resolveImportSettings, suggestedImportSettings } from '../../../utils/processing/ModelTransforms';
@@ -257,7 +257,7 @@ export const ImportOptionsDialog: React.FC<ImportOptionsDialogProps> = ({ name, 
             <h2 className="text-xs font-semibold text-ink">{confirmLabel === 'Import' ? 'Import model' : 'Import settings'}</h2>
             <p className="truncate text-2xs text-ink-3" title={name}>{name}</p>
           </div>
-          <IconButton label="Cancel" onClick={onCancel}><X size={14} /></IconButton>
+          <IconButton label="Cancel" onClick={onCancel}><CrossIcon size={14} /></IconButton>
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto">
@@ -373,7 +373,7 @@ export const ImportOptionsDialog: React.FC<ImportOptionsDialogProps> = ({ name, 
                         <span className="shrink-0 text-2xs text-ink-3 tabular-nums">{clipTime(clip.duration)}</span>
                       </label>
                       {clip.duration > 0
-                        ? <IconButton label={`Cut ${takeLabel(clip.name)} into clips`} onClick={() => setCutting({ take: clip.name })}><Scissors size={12} /></IconButton>
+                        ? <IconButton label={`Cut ${takeLabel(clip.name)} into clips`} onClick={() => setCutting({ take: clip.name })}><ScissorsIcon size={12} /></IconButton>
                         : <span className="w-6 shrink-0" />}
                     </div>
                     {rangesFor(clip.name).map((range) => (
@@ -385,7 +385,7 @@ export const ImportOptionsDialog: React.FC<ImportOptionsDialogProps> = ({ name, 
                         className="flex h-5 w-full items-center gap-2 rounded pl-[22px] pr-7 text-left text-2xs text-ink-2 hover:bg-white/5"
                       >
                         <span className="min-w-0 flex-1 truncate">{takeLabel(range.name)}</span>
-                        {range.loop && <Repeat size={10} className="shrink-0 text-ink-3" />}
+                        {range.loop && <LoopIcon size={10} className="shrink-0 text-ink-3" />}
                         <span className="shrink-0 text-ink-3 tabular-nums">
                           {frameOfTime(range.start, clip.start, framesPerSecond)}–{frameOfTime(range.end, clip.start, framesPerSecond)}
                         </span>
@@ -424,7 +424,7 @@ export const ImportOptionsDialog: React.FC<ImportOptionsDialogProps> = ({ name, 
                   const located = found.has(image.file.toLowerCase());
                   return (
                     <li key={image.file} className="flex h-5 items-center gap-1.5 text-2xs">
-                      <span className="flex w-3 shrink-0 justify-center">{located && <Check size={12} className="text-accent" />}</span>
+                      <span className="flex w-3 shrink-0 justify-center">{located && <CheckIcon size={12} className="text-accent" />}</span>
                       <span className={`min-w-0 truncate ${located ? 'text-ink-2' : 'text-ink-3'}`} title={image.file}>{image.file}</span>
                     </li>
                   );

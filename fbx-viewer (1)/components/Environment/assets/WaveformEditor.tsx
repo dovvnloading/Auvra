@@ -1,6 +1,6 @@
 
 import React, { useRef, useEffect, useState } from 'react';
-import { Play, Square, Loader2 } from 'lucide-react';
+import { PlayIcon, SpinnerIcon, StopIcon } from '../../UI/Icons';
 import { frontendDiagnostics } from '../../../diagnostics/runtime';
 
 interface WaveformEditorProps {
@@ -268,7 +268,7 @@ export const WaveformEditor: React.FC<WaveformEditorProps> = ({
                     disabled={isLoading || !audioBuffer}
                     className={`flex items-center gap-1 px-2 py-1 rounded border text-2xs font-bold transition-colors ${isPlaying ? 'bg-amber-600 border-amber-500 text-white' : 'bg-gray-800 border-gray-700 text-gray-300 hover:text-white'}`}
                 >
-                    {isLoading ? <Loader2 size={10} className="animate-spin" /> : (isPlaying ? <Square size={10} fill="currentColor" /> : <Play size={10} fill="currentColor" />)}
+                    {isLoading ? <SpinnerIcon size={10} className="animate-spin" /> : (isPlaying ? <StopIcon size={10} fill="currentColor" /> : <PlayIcon size={10} fill="currentColor" />)}
                     {isPlaying ? 'STOP' : 'TEST LOOP'}
                 </button>
             </div>

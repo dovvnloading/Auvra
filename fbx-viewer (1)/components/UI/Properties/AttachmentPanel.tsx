@@ -1,5 +1,5 @@
 import React, { useMemo, useState, useEffect, useRef } from 'react';
-import { Paperclip, Upload, Trash2, Crosshair, Component, Swords, X, Search } from 'lucide-react';
+import { ComponentsIcon, CrossIcon, CrosshairIcon, PaperclipIcon, SearchIcon, SwordsIcon, TrashIcon, UploadIcon } from '../Icons';
 import { useScene } from '../../../context/SceneContext';
 import { LoadedModelData } from '../../../types';
 import { Select } from '../Select';
@@ -52,7 +52,7 @@ export const AttachmentPanel: React.FC<AttachmentPanelProps> = ({ selectedModel 
   if (!selectedModel) {
     return (
       <div className="flex-1 flex flex-col items-center justify-center text-center p-6 text-gray-500">
-        <Component className="w-12 h-12 mb-3 opacity-20" />
+        <ComponentsIcon className="w-12 h-12 mb-3 opacity-20" />
         <p className="text-sm">Select a model from the Scene tab to manage its attachments.</p>
       </div>
     );
@@ -75,7 +75,7 @@ export const AttachmentPanel: React.FC<AttachmentPanelProps> = ({ selectedModel 
                 cursor-pointer transition-all duration-200 group
                 ${isLoading ? 'opacity-50 cursor-not-allowed' : ''}
             `}>
-                <Upload size={16} className="text-gray-400 group-hover:text-white" />
+                <UploadIcon size={16} className="text-gray-400 group-hover:text-white" />
                 <span className="text-2xs font-medium text-gray-400 group-hover:text-white">Upload File</span>
                 <input 
                     type="file" 
@@ -96,7 +96,7 @@ export const AttachmentPanel: React.FC<AttachmentPanelProps> = ({ selectedModel 
                     ${isLoading ? 'opacity-50 cursor-not-allowed' : ''}
                 `}
             >
-                <Swords size={16} className="text-gray-400 group-hover:text-white" />
+                <SwordsIcon size={16} className="text-gray-400 group-hover:text-white" />
                 <span className="text-2xs font-medium text-gray-400 group-hover:text-white">From Assets</span>
             </button>
         </div>
@@ -108,14 +108,14 @@ export const AttachmentPanel: React.FC<AttachmentPanelProps> = ({ selectedModel 
               {/* Header */}
               <div className="flex items-center justify-between p-3 bg-gray-800 border-b border-gray-700">
                 <div className="flex items-center gap-2 overflow-hidden">
-                  <Paperclip size={14} className="text-gray-400 shrink-0" />
+                  <PaperclipIcon size={14} className="text-gray-400 shrink-0" />
                   <span className="text-xs font-medium text-gray-200 truncate" title={att.name}>{att.name}</span>
                 </div>
                 <button 
                   onClick={() => removeAttachment(att.id)}
                   className="text-gray-500 hover:text-red-400 transition-colors"
                 >
-                  <Trash2 size={14} />
+                  <TrashIcon size={14} />
                 </button>
               </div>
 
@@ -124,7 +124,7 @@ export const AttachmentPanel: React.FC<AttachmentPanelProps> = ({ selectedModel 
                 {/* Bone Selector */}
                 <div className="space-y-1.5">
                   <label className="text-2xs text-gray-500 font-bold flex items-center gap-1.5">
-                     <Crosshair size={10} /> Target Bone
+                     <CrosshairIcon size={10} /> Target Bone
                   </label>
                   <Select
                     value={att.boneName || ''}
@@ -172,20 +172,20 @@ export const AttachmentPanel: React.FC<AttachmentPanelProps> = ({ selectedModel 
           <div className="absolute inset-0 bg-gray-900 z-20 flex flex-col animate-in fade-in zoom-in-95 duration-200">
               <div className="flex items-center justify-between p-3 border-b border-gray-800 bg-gray-850">
                   <span className="text-xs font-bold text-gray-200 flex items-center gap-2">
-                      <Swords size={14} className="text-gray-400" />
+                      <SwordsIcon size={14} className="text-gray-400" />
                       Select Attachment
                   </span>
                   <button 
                     onClick={() => setIsLibraryOpen(false)}
                     className="text-gray-500 hover:text-white transition-colors"
                   >
-                      <X size={14} />
+                      <CrossIcon size={14} />
                   </button>
               </div>
               
               <div className="p-2 border-b border-gray-800 bg-gray-800/50">
                    <div className="relative">
-                        <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-500" />
+                        <SearchIcon size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-500" />
                         <input 
                             type="text" 
                             placeholder="Search assets..." 
@@ -218,11 +218,11 @@ export const AttachmentPanel: React.FC<AttachmentPanelProps> = ({ selectedModel 
                                             <img src={asset.thumbnail} className="w-full h-full object-cover opacity-60 group-hover:opacity-100 transition-opacity" />
                                         ) : (
                                             <div className="w-full h-full flex items-center justify-center text-gray-700">
-                                                <Component size={20} />
+                                                <ComponentsIcon size={20} />
                                             </div>
                                         )}
                                         <div className="absolute top-1 right-1">
-                                             {asset.category === 'Weapon' && <Swords size={10} className="text-gray-400" />}
+                                             {asset.category === 'Weapon' && <SwordsIcon size={10} className="text-gray-400" />}
                                         </div>
                                   </div>
                                   <span className="text-2xs text-gray-400 group-hover:text-white truncate w-full block">

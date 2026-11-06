@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronDown, ChevronRight, Plus } from 'lucide-react';
+import { ChevronDownIcon, ChevronRightIcon, PlusIcon } from '../Icons';
 import * as THREE from 'three';
 import { useScene } from '../../../context/SceneContext';
 import type { LoadedModelData } from '../../../types';
@@ -179,7 +179,7 @@ const BoneTree: React.FC<{ model: LoadedModelData; playback: ClipPlayback }> = (
                       });
                     }}
                   >
-                    {isOpen ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
+                    {isOpen ? <ChevronDownIcon size={10} /> : <ChevronRightIcon size={10} />}
                   </button>
                 ) : <span className="w-3 shrink-0" />}
                 <span className="min-w-0 flex-1 truncate" title={entry.name}>{entry.name}</span>
@@ -213,7 +213,7 @@ const BoneTree: React.FC<{ model: LoadedModelData; playback: ClipPlayback }> = (
                 </div>
               )}
               {canEdit && (
-                <Button size="sm" icon={<Plus size={12} />} onClick={() => addSocket(model.id, `Socket_${picked.name}`, picked.name)}>Add a socket here</Button>
+                <Button size="sm" icon={<PlusIcon size={12} />} onClick={() => addSocket(model.id, `Socket_${picked.name}`, picked.name)}>Add a socket here</Button>
               )}
             </>
           )}

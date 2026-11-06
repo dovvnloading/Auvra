@@ -1,6 +1,6 @@
 import React, { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { ChevronDown, FilePlus } from 'lucide-react';
+import { ChevronDownIcon, FilePlusIcon } from './Icons';
 import type { ProjectTemplate } from '../../types';
 
 export interface ProjectTemplateOption {
@@ -162,7 +162,7 @@ export const NewProjectMenu: React.FC<NewProjectMenuProps> = ({ onCreate, disabl
         className={`flex h-6 items-center gap-1.5 rounded px-2 text-xs transition-colors duration-75 disabled:opacity-40 ${open ? 'bg-white/10 text-ink' : 'text-ink-2 hover:bg-white/5 hover:text-ink'}`}
         title="Create a new project from a template"
       >
-        <FilePlus size={13} className="text-ink-3" />New<ChevronDown size={11} className="text-ink-3" />
+        <FilePlusIcon size={13} className="text-ink-3" />New<ChevronDownIcon size={11} className="text-ink-3" />
       </button>
       {open && createPortal(
         <div

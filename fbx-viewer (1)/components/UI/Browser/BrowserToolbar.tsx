@@ -1,6 +1,6 @@
 
 import React, { useState } from 'react';
-import { Search, Plus, Component, FileCode, User, Image, Swords, Film, Shield, Skull, Palette, Music, FolderPlus } from 'lucide-react';
+import { BlueprintIcon, ComponentsIcon, FilmIcon, FolderPlusIcon, ImageIcon, MusicIcon, PaletteIcon, PlusIcon, SearchIcon, ShieldIcon, SkullIcon, SwordsIcon, UserIcon } from '../Icons';
 import { AssetCategory } from '../../../types';
 import { MODEL_FILE_ACCEPT } from './browserFolders';
 
@@ -74,13 +74,13 @@ export const BrowserToolbar: React.FC<BrowserToolbarProps> = ({
                         onClick={() => onTabChange('models')}
                         className={`flex items-center gap-1 px-3 py-1 text-2xs rounded font-bold transition-colors ${activeTab === 'models' ? 'bg-gray-700 text-white shadow-sm' : 'text-gray-400 hover:text-gray-200'}`}
                     >
-                        <Component size={12} /> Library
+                        <ComponentsIcon size={12} /> Library
                     </button>
                     <button
                         onClick={() => onTabChange('blueprints')}
                         className={`flex items-center gap-1 px-3 py-1 text-2xs rounded font-bold transition-colors ${activeTab === 'blueprints' ? 'bg-gray-700 text-white shadow-sm' : 'text-gray-400 hover:text-gray-200'}`}
                     >
-                        <FileCode size={12} /> Blueprints
+                        <BlueprintIcon size={12} /> Blueprints
                     </button>
                 </div>
 
@@ -99,7 +99,7 @@ export const BrowserToolbar: React.FC<BrowserToolbarProps> = ({
                                     ${isLoading ? 'opacity-50 cursor-not-allowed' : ''}
                                 `}
                             >
-                                <Plus size={14} /> Import
+                                <PlusIcon size={14} /> Import
                             </button>
                             
                             {isImportOpen && (
@@ -115,13 +115,13 @@ export const BrowserToolbar: React.FC<BrowserToolbarProps> = ({
                                                     title={animationUnavailable ? 'Select a skeletal model before importing animation clips.' : undefined}
                                                     className={`flex items-center gap-3 px-3 py-2 group transition-colors ${animationUnavailable ? 'opacity-45 cursor-not-allowed' : 'hover:bg-gray-700 hover:text-white cursor-pointer'}`}
                                                 >
-                                                {cat === 'Character' && <User size={14} className="text-gray-500 group-hover:text-white" />}
-                                                {cat === 'Prop' && <Component size={14} className="text-gray-500 group-hover:text-white" />}
-                                                {cat === 'Environment' && <Image size={14} className="text-gray-500 group-hover:text-white" />}
-                                                {cat === 'Weapon' && <Swords size={14} className="text-gray-500 group-hover:text-white" />}
-                                                {cat === 'Animation' && <Film size={14} className="text-gray-500 group-hover:text-white" />}
-                                                {cat === 'Texture' && <Palette size={14} className="text-gray-500 group-hover:text-white" />}
-                                                {cat === 'Audio' && <Music size={14} className="text-gray-500 group-hover:text-white" />}
+                                                {cat === 'Character' && <UserIcon size={14} className="text-gray-500 group-hover:text-white" />}
+                                                {cat === 'Prop' && <ComponentsIcon size={14} className="text-gray-500 group-hover:text-white" />}
+                                                {cat === 'Environment' && <ImageIcon size={14} className="text-gray-500 group-hover:text-white" />}
+                                                {cat === 'Weapon' && <SwordsIcon size={14} className="text-gray-500 group-hover:text-white" />}
+                                                {cat === 'Animation' && <FilmIcon size={14} className="text-gray-500 group-hover:text-white" />}
+                                                {cat === 'Texture' && <PaletteIcon size={14} className="text-gray-500 group-hover:text-white" />}
+                                                {cat === 'Audio' && <MusicIcon size={14} className="text-gray-500 group-hover:text-white" />}
                                                 <span className="text-sm text-gray-300 group-hover:text-white flex-1">{cat}</span>
                                                 {cat === 'Animation' && (
                                                     <span className="max-w-20 truncate text-2xs text-gray-500">
@@ -150,7 +150,7 @@ export const BrowserToolbar: React.FC<BrowserToolbarProps> = ({
                             title="New folder in the open folder"
                             className="flex items-center gap-1.5 px-2.5 py-1.5 rounded text-xs font-bold bg-gray-800 hover:bg-gray-700 text-gray-300 hover:text-white border border-gray-700 transition-colors shrink-0"
                         >
-                            <FolderPlus size={14} /> Folder
+                            <FolderPlusIcon size={14} /> Folder
                         </button>
 
                         <div className="flex bg-gray-900 rounded p-0.5 border border-gray-700 overflow-x-auto custom-scrollbar">
@@ -175,14 +175,14 @@ export const BrowserToolbar: React.FC<BrowserToolbarProps> = ({
                                 disabled={isCreatingPlayerBlueprint}
                                 className="flex items-center gap-2 px-3 py-1.5 rounded text-xs font-bold bg-blue-600 hover:bg-blue-500 text-accent-ink shadow transition-all"
                             >
-                                <Shield size={14} /> New Character
+                                <ShieldIcon size={14} /> New Character
                             </button>
                         )}
                         <button
                             onClick={() => onAddBlueprint('Enemy Controller')}
                             className="flex items-center gap-2 px-3 py-1.5 rounded text-xs font-bold bg-red-600 hover:bg-red-500 text-white shadow transition-all"
                         >
-                            <Skull size={14} /> New Enemy
+                            <SkullIcon size={14} /> New Enemy
                         </button>
                     </div>
                 )}
@@ -190,7 +190,7 @@ export const BrowserToolbar: React.FC<BrowserToolbarProps> = ({
 
             {/* Search Bar */}
             <div className="relative shrink-0 ml-4">
-                <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-500" />
+                <SearchIcon size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-500" />
                 <input
                     type="text"
                     placeholder="Search..."

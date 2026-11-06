@@ -1,7 +1,7 @@
 
 import React, { useState } from 'react';
 import * as THREE from 'three';
-import { ChevronDown, ChevronRight, Component, Crosshair, Paperclip, RotateCcw, Palette, Shield, Skull, FileCode, Target } from 'lucide-react';
+import { BlueprintIcon, ChevronDownIcon, ChevronRightIcon, ComponentsIcon, CrosshairIcon, PaletteIcon, PaperclipIcon, ResetIcon, ShieldIcon, SkullIcon, TargetIcon } from '../Icons';
 import { useScene } from '../../../context/SceneContext';
 import { AnimationControls } from '../Properties/AnimationControls';
 import { SourceFilePanel } from '../Properties/SourceFilePanel';
@@ -56,7 +56,7 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
                                 onMouseMove={(e) => setCursorPos({ x: e.clientX, y: e.clientY })}
                                 onMouseLeave={() => setHoveredModel(null)}
                             >
-                                <Component className="text-gray-500" />
+                                <ComponentsIcon className="text-gray-500" />
                             </div>
                             <div>
                                 <h3 className="text-sm font-bold text-white truncate max-w-[150px]">{selectedModel.name}</h3>
@@ -69,7 +69,7 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
                         {/* Blueprint Indicator */}
                         {controllingBlueprint && (
                             <div className="mt-3 p-2 bg-blue-900/20 border border-blue-800 rounded flex items-center gap-2">
-                                {controllingBlueprint.type === 'Player Character' ? <Shield size={14} className="text-blue-400" /> : <Skull size={14} className="text-red-400" />}
+                                {controllingBlueprint.type === 'Player Character' ? <ShieldIcon size={14} className="text-blue-400" /> : <SkullIcon size={14} className="text-red-400" />}
                                 <div className="flex-1 min-w-0">
                                     <div className="text-2xs text-gray-400 font-bold ">Controlled By</div>
                                     <div className="text-xs text-white truncate font-medium">{controllingBlueprint.name}</div>
@@ -80,7 +80,7 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
                         {/* Material / Texture Quick Actions */}
                         <div className="mt-3 pt-3 border-t border-gray-700/50 flex items-center justify-between">
                              <div className="text-2xs text-gray-500 font-semibold flex items-center gap-1.5">
-                                 <Palette size={12} />
+                                 <PaletteIcon size={12} />
                                  Materials
                              </div>
                              <button
@@ -89,7 +89,7 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
                                 className="flex items-center gap-1 text-2xs text-gray-400 hover:text-white bg-gray-800 hover:bg-gray-700 px-2 py-1 rounded transition-colors border border-gray-700"
                                 title="Reset to original FBX textures"
                              >
-                                 <RotateCcw size={10} className={isLoading ? 'animate-spin' : ''} />
+                                 <ResetIcon size={10} className={isLoading ? 'animate-spin' : ''} />
                                  Reset Textures
                              </button>
                         </div>
@@ -98,7 +98,7 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
                     {/* Animation Panel */}
                     {controllingBlueprint ? (
                          <div className="p-4 border-b border-gray-800 text-center">
-                             <FileCode size={24} className="mx-auto text-gray-600 mb-2" />
+                             <BlueprintIcon size={24} className="mx-auto text-gray-600 mb-2" />
                              <p className="text-xs text-gray-400">Animation driven by Blueprint Graph.</p>
                              <p className="text-2xs text-gray-600 mt-1">Manual clip control is disabled.</p>
                          </div>
@@ -125,8 +125,8 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
                                     aria-expanded={materialsOpen}
                                     className="w-full px-4 pb-2 pt-2 text-xs font-semibold text-gray-400 hover:text-gray-200 flex items-center gap-2 border-t border-gray-800"
                                 >
-                                    {materialsOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-                                    <Palette size={12} /> Material Overrides
+                                    {materialsOpen ? <ChevronDownIcon size={12} /> : <ChevronRightIcon size={12} />}
+                                    <PaletteIcon size={12} /> Material Overrides
                                 </button>
                                 {materialsOpen && (
                                     <div className="h-[420px] mx-2 mb-2 rounded-md border border-gray-800 overflow-hidden">
@@ -144,7 +144,7 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
 
                         <div className="mt-2">
                             <div className="px-4 pb-2 pt-2 text-xs font-semibold text-gray-400 flex items-center gap-2 border-t border-gray-800">
-                                <Target size={12} /> Muzzle & Sockets
+                                <TargetIcon size={12} /> Muzzle & Sockets
                             </div>
                             <SocketPanel 
                                 selectedModel={selectedModel}
@@ -155,7 +155,7 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
                         {/* Attachments Panel */}
                         <div className="mt-2 pb-4">
                              <div className="px-4 pb-2 pt-2 text-xs font-semibold text-gray-400 flex items-center gap-2 border-t border-gray-800">
-                                <Paperclip size={12} /> Attachments
+                                <PaperclipIcon size={12} /> Attachments
                              </div>
                              <AttachmentPanel selectedModel={selectedModel} />
                         </div>
@@ -163,7 +163,7 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
                 </>
             ) : (
                 <div className="flex-1 flex flex-col items-center justify-center text-gray-500 p-8 text-center">
-                    <Crosshair size={24} className="mb-2 opacity-20" />
+                    <CrosshairIcon size={24} className="mb-2 opacity-20" />
                     <p className="text-xs">Select an object from the Hierarchy to view properties.</p>
                 </div>
             )}

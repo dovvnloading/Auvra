@@ -1,6 +1,6 @@
 
 import React, { useState } from 'react';
-import { Brush, Grid, Network, FileCode, Gamepad2, LayoutTemplate, Trees, Save, Settings2, SlidersHorizontal, Languages, Palette, History } from 'lucide-react';
+import { BlueprintIcon, BrushIcon, GamepadIcon, GearIcon, GraphIcon, GridIcon, HistoryIcon, LanguagesIcon, LayoutIcon, MaterialIcon, RetextureIcon, SaveIcon, SlidersIcon, TreesIcon } from './Icons';
 import { useScene } from '../../context/SceneContext';
 import type { ProjectTemplate } from '../../types';
 import { NewProjectMenu } from './NewProjectMenu';
@@ -10,7 +10,7 @@ import { SettingsModal } from '../Settings/SettingsModal';
 import { GameSettingsPanel } from '../Settings/GameSettingsPanel';
 import { LocalizationPanel } from '../Settings/LocalizationPanel';
 
-type EditorTab = 'scene' | 'graph' | 'blueprint' | 'sandbox' | 'hud' | 'retexture' | 'materials' | 'environment';
+type EditorTab = 'scene' | 'graph' | 'blueprint' | 'sandbox' | 'hud' | 'retexture' | 'paint' | 'materials' | 'environment';
 
 interface HeaderProps {
   activeTab?: EditorTab;
@@ -18,14 +18,15 @@ interface HeaderProps {
 }
 
 const TABS: readonly { id: EditorTab; label: string; icon: React.ReactNode }[] = [
-  { id: 'scene', label: 'Scene', icon: <Grid size={13} /> },
-  { id: 'environment', label: 'Environment', icon: <Trees size={13} /> },
-  { id: 'graph', label: 'Graph', icon: <Network size={13} /> },
-  { id: 'blueprint', label: 'Blueprints', icon: <FileCode size={13} /> },
-  { id: 'sandbox', label: 'Sandbox', icon: <Gamepad2 size={13} /> },
-  { id: 'hud', label: 'HUD/UI', icon: <LayoutTemplate size={13} /> },
-  { id: 'retexture', label: 'Retexture', icon: <Brush size={13} /> },
-  { id: 'materials', label: 'Materials', icon: <Palette size={13} /> },
+  { id: 'scene', label: 'Scene', icon: <GridIcon size={13} /> },
+  { id: 'environment', label: 'Environment', icon: <TreesIcon size={13} /> },
+  { id: 'graph', label: 'Graph', icon: <GraphIcon size={13} /> },
+  { id: 'blueprint', label: 'Blueprints', icon: <BlueprintIcon size={13} /> },
+  { id: 'sandbox', label: 'Sandbox', icon: <GamepadIcon size={13} /> },
+  { id: 'hud', label: 'HUD/UI', icon: <LayoutIcon size={13} /> },
+  { id: 'retexture', label: 'Retexture', icon: <RetextureIcon size={13} /> },
+  { id: 'paint', label: 'Paint', icon: <BrushIcon size={13} /> },
+  { id: 'materials', label: 'Materials', icon: <MaterialIcon size={13} /> },
 ];
 
 export const Header: React.FC<HeaderProps> = ({ activeTab, onTabChange }) => {
@@ -101,19 +102,19 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, onTabChange }) => {
        <div className="ml-auto flex min-w-0 shrink-0 items-center gap-1">
          {typeof projectStatus.progress === 'number' && <div className="text-2xs tabular-nums text-accent">{Math.round(projectStatus.progress * 100)}%</div>}
          {projectStatus.recoveryAvailable && (recoveryItems.length > 0
-           ? <MenuButton label="Recovery" hideLabel icon={<History size={13} className="text-warn" />} title="This project can be put back to an earlier state" disabled={isLoading} items={recoveryItems} />
-           : <div className="flex h-6 items-center px-1 text-warn" title="Project recovery is available"><History size={13} /></div>)}
+           ? <MenuButton label="Recovery" hideLabel icon={<HistoryIcon size={13} className="text-warn" />} title="This project can be put back to an earlier state" disabled={isLoading} items={recoveryItems} />
+           : <div className="flex h-6 items-center px-1 text-warn" title="Project recovery is available"><HistoryIcon size={13} /></div>)}
          <div className="flex max-w-36 items-center gap-1.5 px-1 text-2xs text-ink-2" title={projectStatus.name || 'No project open'}>
            <span className="truncate">{projectStatus.name || 'No project'}{projectStatus.readOnly ? ' (read-only)' : ''}</span>
            {projectStatus.dirty && <span aria-label="Unsaved changes" title="Unsaved changes" className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent" />}
          </div>
          <IconButton label={projectStatus.readOnly ? 'Project is read-only' : 'Save project'} disabled={isLoading || cannotWrite} onClick={() => runProjectAction(saveProject)}>
-           <Save size={14} />
+           <SaveIcon size={14} />
          </IconButton>
          <span className="mx-0.5 h-4 w-px bg-line" />
-         <IconButton label="Game settings" onClick={() => setGameSettingsOpen(true)}><SlidersHorizontal size={14} /></IconButton>
-         <IconButton label="Localization: text translations for the game" onClick={() => setLocalizationOpen(true)}><Languages size={14} /></IconButton>
-         <IconButton label="Settings: AI providers" onClick={() => setSettingsOpen(true)}><Settings2 size={14} /></IconButton>
+         <IconButton label="Game settings" onClick={() => setGameSettingsOpen(true)}><SlidersIcon size={14} /></IconButton>
+         <IconButton label="Localization: text translations for the game" onClick={() => setLocalizationOpen(true)}><LanguagesIcon size={14} /></IconButton>
+         <IconButton label="Settings: AI providers" onClick={() => setSettingsOpen(true)}><GearIcon size={14} /></IconButton>
        </div>
        {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
        {gameSettingsOpen && <GameSettingsPanel onClose={() => setGameSettingsOpen(false)} />}

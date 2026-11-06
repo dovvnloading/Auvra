@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ChevronRight, HardDrive } from 'lucide-react';
+import { ChevronRightIcon, DriveIcon } from '../Icons';
 import { ROOT_FOLDER, ROOT_FOLDER_LABEL, folderAncestors, folderLeafName, hasAssetDrag } from './browserFolders';
 
 interface BreadcrumbBarProps {
@@ -18,7 +18,7 @@ export const BreadcrumbBar: React.FC<BreadcrumbBarProps> = ({ currentFolder, isS
                 const isLast = index === crumbs.length - 1;
                 return (
                     <React.Fragment key={path || '<root>'}>
-                        {index > 0 && <ChevronRight size={11} className="shrink-0 text-gray-600" />}
+                        {index > 0 && <ChevronRightIcon size={11} className="shrink-0 text-gray-600" />}
                         <button
                             type="button"
                             onClick={() => onNavigate(path)}
@@ -40,7 +40,7 @@ export const BreadcrumbBar: React.FC<BreadcrumbBarProps> = ({ currentFolder, isS
                                     : isLast ? 'text-white font-medium' : 'hover:bg-gray-800 hover:text-gray-200'
                             }`}
                         >
-                            {path === ROOT_FOLDER && <HardDrive size={11} />}
+                            {path === ROOT_FOLDER && <DriveIcon size={11} />}
                             {path === ROOT_FOLDER ? ROOT_FOLDER_LABEL : folderLeafName(path)}
                         </button>
                     </React.Fragment>

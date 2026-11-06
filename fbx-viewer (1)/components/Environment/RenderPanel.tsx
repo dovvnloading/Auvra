@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { AlertTriangle, Aperture, Check, Save, X } from 'lucide-react';
+import { ApertureIcon, CheckIcon, CrossIcon, SaveIcon, WarningIcon } from '../UI/Icons';
 import { useAssets } from '../../context/AssetContext';
 import { describeProviderFailure, hostProviderService } from '../../services/HostProviderService';
 import { textureService } from '../../services/TextureGenerationService';
@@ -133,7 +133,7 @@ export const RenderPanel: React.FC = () => {
   const chosen = QUALITIES.find((option) => option.value === quality)!;
   return (
     <>
-      <IconButton ref={trigger} label="Render this view" active={open || phase !== null} onClick={() => setOpen((value) => !value)}><Aperture size={14} /></IconButton>
+      <IconButton ref={trigger} label="Render this view" active={open || phase !== null} onClick={() => setOpen((value) => !value)}><ApertureIcon size={14} /></IconButton>
       <Popover anchor={trigger} open={open} onClose={() => setOpen(false)} width={340} label="Render this view">
         <div className="space-y-2 p-3">
           <h3 className="text-xs font-medium text-ink">Render this view</h3>
@@ -151,7 +151,7 @@ export const RenderPanel: React.FC = () => {
           )}
           {error && (
             <div role="alert" className="flex items-start gap-1.5 text-2xs text-ink">
-              <AlertTriangle size={12} className="mt-0.5 shrink-0 text-bad" />
+              <WarningIcon size={12} className="mt-0.5 shrink-0 text-bad" />
               <span className="selectable min-w-0">{error}</span>
             </div>
           )}
@@ -172,8 +172,8 @@ export const RenderPanel: React.FC = () => {
               <div className="flex items-center justify-between gap-2">
                 <span className="text-2xs tabular-nums text-ink-3">{finished.width} × {finished.height}, {finished.seconds} s</span>
                 {saved
-                  ? <span className="flex items-center gap-1 text-2xs text-ink-2"><Check size={12} className="text-accent" /> In the library</span>
-                  : <Button size="sm" icon={<Save size={12} />} onClick={() => void save()}>Save to library</Button>}
+                  ? <span className="flex items-center gap-1 text-2xs text-ink-2"><CheckIcon size={12} className="text-accent" /> In the library</span>
+                  : <Button size="sm" icon={<SaveIcon size={12} />} onClick={() => void save()}>Save to library</Button>}
               </div>
             </div>
           )}
@@ -188,7 +188,7 @@ export const RenderPanel: React.FC = () => {
       {large && finished && createPortal(
         <div role="dialog" aria-label="The finished render" className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/85 p-6" onClick={() => setLarge(false)}>
           <img src={finished.url} alt="The finished render" draggable={false} className="max-h-full max-w-full object-contain" />
-          <span className="absolute right-3 top-3"><IconButton label="Close" onClick={() => setLarge(false)}><X size={15} /></IconButton></span>
+          <span className="absolute right-3 top-3"><IconButton label="Close" onClick={() => setLarge(false)}><CrossIcon size={15} /></IconButton></span>
         </div>,
         document.body,
       )}

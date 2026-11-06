@@ -1,6 +1,6 @@
 
 import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react';
-import { BoxSelect, Network, Component, FileCode, Settings, ChevronRight } from 'lucide-react';
+import { BlueprintIcon, ChevronRightIcon, ComponentsIcon, GearIcon, GraphIcon, SelectBoxIcon } from '../UI/Icons';
 import type { AnimationGraphData } from '../../types';
 import { GraphPreview, type PreviewStatus } from './GraphPreview';
 import { BlackboardPanel } from './BlackboardPanel';
@@ -133,7 +133,7 @@ export const GraphEditor: React.FC<GraphEditorProps> = ({ visible }) => {
           {/* CONTEXT SELECTOR HEADER - Always Visible */}
           <div className="p-3 border-b border-gray-800 bg-gray-950 space-y-2">
               <label className="text-2xs font-bold text-gray-500 flex items-center gap-2">
-                  <Network size={12} /> Graph Context
+                  <GraphIcon size={12} /> Graph Context
               </label>
               
               <div className="flex bg-gray-900 rounded-lg border border-gray-800 p-0.5">
@@ -141,13 +141,13 @@ export const GraphEditor: React.FC<GraphEditorProps> = ({ visible }) => {
                     onClick={() => { setContextType('model'); setSelectedContextId(null); }}
                     className={`flex-1 flex items-center justify-center gap-2 py-1.5 text-2xs font-bold rounded transition-all ${contextType === 'model' ? 'bg-gray-800 text-white shadow' : 'text-gray-500 hover:text-gray-300'}`}
                   >
-                      <Component size={12} /> Models
+                      <ComponentsIcon size={12} /> Models
                   </button>
                   <button 
                     onClick={() => { setContextType('blueprint'); setSelectedContextId(null); }}
                     className={`flex-1 flex items-center justify-center gap-2 py-1.5 text-2xs font-bold rounded transition-all ${contextType === 'blueprint' ? 'bg-gray-800 text-white shadow' : 'text-gray-500 hover:text-gray-300'}`}
                   >
-                      <FileCode size={12} /> Blueprints
+                      <BlueprintIcon size={12} /> Blueprints
                   </button>
               </div>
 
@@ -169,13 +169,13 @@ export const GraphEditor: React.FC<GraphEditorProps> = ({ visible }) => {
                             onClick={() => setActiveSidebarTab('blackboard')}
                             className={`flex-1 py-3 text-2xs font-bold transition-colors border-b-2 flex items-center justify-center gap-2 ${activeSidebarTab === 'blackboard' ? 'border-blue-500 text-white bg-gray-900' : 'border-transparent text-gray-500 hover:text-gray-300 hover:bg-gray-900'}`}
                         >
-                            <BoxSelect size={12} /> Blackboard
+                            <SelectBoxIcon size={12} /> Blackboard
                         </button>
                         <button 
                             onClick={() => setActiveSidebarTab('inspector')}
                             className={`flex-1 py-3 text-2xs font-bold transition-colors border-b-2 flex items-center justify-center gap-2 ${activeSidebarTab === 'inspector' ? 'border-blue-500 text-white bg-gray-900' : 'border-transparent text-gray-500 hover:text-gray-300 hover:bg-gray-900'}`}
                         >
-                            <Settings size={12} /> Inspector
+                            <GearIcon size={12} /> Inspector
                         </button>
                 </div>
 
@@ -199,6 +199,7 @@ export const GraphEditor: React.FC<GraphEditorProps> = ({ visible }) => {
                             onDeleteState={handleDeleteState}
                             onDeleteTransition={handleDeleteTransition}
                             onOpenStateMachine={openStateMachine}
+                            previewObject={previewModel?.object ?? null}
                         />
                     )}
                 </div>
@@ -239,7 +240,7 @@ export const GraphEditor: React.FC<GraphEditorProps> = ({ visible }) => {
                         </button>
                         {crumbs.map((crumb, index) => (
                             <React.Fragment key={crumb.id}>
-                                <ChevronRight size={12} className="text-gray-600" />
+                                <ChevronRightIcon size={12} className="text-gray-600" />
                                 <button
                                     type="button"
                                     disabled={index === crumbs.length - 1}
@@ -275,7 +276,7 @@ export const GraphEditor: React.FC<GraphEditorProps> = ({ visible }) => {
             </>
           ) : (
             <div className="flex-1 flex flex-col items-center justify-center text-gray-500 gap-4">
-                <Network size={48} className="opacity-20" />
+                <GraphIcon size={48} className="opacity-20" />
                 <p>No Context Selected</p>
                 <span className="text-xs text-gray-600">Please select a Model or Blueprint from the sidebar.</span>
             </div>

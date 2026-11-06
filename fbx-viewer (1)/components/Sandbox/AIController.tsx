@@ -2,6 +2,7 @@
 import React, { useMemo, useCallback, useRef } from 'react';
 import * as THREE from 'three';
 import { useFrame } from '@react-three/fiber';
+import { LOCOMOTION_FRAME_PRIORITY } from '../AnimationGraph/hooks/useGraphAnimator';
 import { GraphRuntimeAPI } from '../AnimationGraph/GraphRuntime';
 import { AI_CONFIG, resolveAITuning } from './AI/AIConfig';
 import type { BehaviorTreeData, BlueprintStat } from '../../types';
@@ -154,7 +155,8 @@ export const AIController: React.FC<AIControllerProps> = ({
         enemyApi.current.setVariable('Speed', physicsState.graphSpeed); // For 1D blends or logic triggers
         enemyApi.current.setVariable('IsSprinting', physicsState.isSprinting);
         enemyApi.current.setVariable('Stamina', physicsState.stamina);
-    });
+    // Before animation, as the player's controller, so the pose answers this frame's movement.
+    }, LOCOMOTION_FRAME_PRIORITY);
 
     return null;
 };

@@ -1,6 +1,6 @@
 
 import React, { useId, useState } from 'react';
-import { GitCommit, ArrowRight, ToggleLeft, Plus, Trash2 } from 'lucide-react';
+import { ArrowRightIcon, PlusIcon, ToggleIcon, TransitionIcon, TrashIcon } from '../../UI/Icons';
 import { GraphTransition, GraphCondition, GraphVariable, AnimationGraphData, ConditionOperator } from '../../../types';
 import { Select } from '../../UI/Select';
 
@@ -10,6 +10,10 @@ const BOOLEAN_OPERATORS: ConditionOperator[] = ['==', '!='];
 const MATCH_OPTIONS = [
     { label: 'All', value: 'all' },
     { label: 'Any', value: 'any' },
+];
+const BLEND_OPTIONS = [
+    { label: 'Crossfade', value: 'crossfade' },
+    { label: 'Inertial', value: 'inertial' },
 ];
 
 const LABEL_CLASS = 'text-2xs text-gray-500 font-bold flex items-center gap-1.5';
@@ -85,13 +89,13 @@ export const TransitionInspector: React.FC<TransitionInspectorProps> = ({
             <div className="p-4 border-b border-gray-800 bg-gray-800/30 shrink-0">
                 <div className="flex items-start gap-3">
                     <div className="w-10 h-10 rounded bg-gray-900 border border-gray-700 flex items-center justify-center shrink-0">
-                         <GitCommit size={20} className="text-gray-400" />
+                         <TransitionIcon size={20} className="text-gray-400" />
                     </div>
                     <div className="min-w-0 flex-1">
                         <h3 className="text-sm font-bold text-white truncate">Transition</h3>
                         <div className="flex items-center gap-2 mt-1 text-2xs text-gray-400">
                             <span className="truncate max-w-[60px]">{transition.anyState ? 'Any State' : fromState?.name}</span>
-                            <ArrowRight size={10} />
+                            <ArrowRightIcon size={10} />
                             <span className="truncate max-w-[60px]">{toState?.name}</span>
                         </div>
                     </div>
@@ -101,7 +105,7 @@ export const TransitionInspector: React.FC<TransitionInspectorProps> = ({
             <div className="p-4 space-y-6 overflow-y-auto custom-scrollbar flex-1">
                  <div className="space-y-1.5">
                     <label htmlFor={`${fieldId}-duration`} className={LABEL_CLASS}>
-                        <ToggleLeft size={10} /> Blend Duration (s)
+                        <ToggleIcon size={10} /> Blend Duration (s)
                     </label>
                     <NumberField
                         id={`${fieldId}-duration`}
@@ -116,8 +120,23 @@ export const TransitionInspector: React.FC<TransitionInspectorProps> = ({
                 </div>
 
                 <div className="space-y-1.5">
+                    <span className={LABEL_CLASS}><ToggleIcon size={10} /> Blend</span>
+                    <Select
+                        value={transition.blendMode ?? 'crossfade'}
+                        onChange={(val) => updateTransition({ blendMode: val === 'inertial' ? 'inertial' : undefined })}
+                        options={BLEND_OPTIONS}
+                        placeholder="Blend"
+                    />
+                    <p className="text-2xs text-gray-600">
+                        {transition.blendMode === 'inertial'
+                            ? 'Switches at once and eases the pose across, keeping the motion’s momentum: crisper than a crossfade, for quick changes such as starts and stops.'
+                            : 'Blends the two states over the duration.'}
+                    </p>
+                </div>
+
+                <div className="space-y-1.5">
                     <label htmlFor={`${fieldId}-exit-time`} className={LABEL_CLASS}>
-                        <ToggleLeft size={10} /> Exit Time (0-1, empty = none)
+                        <ToggleIcon size={10} /> Exit Time (0-1, empty = none)
                     </label>
                     <NumberField
                         id={`${fieldId}-exit-time`}
@@ -185,7 +204,7 @@ export const TransitionInspector: React.FC<TransitionInspectorProps> = ({
                             }}
                             className="text-2xs px-2 py-1 bg-gray-800 hover:bg-gray-700 rounded border border-gray-700 text-gray-300 hover:text-white transition-colors flex items-center gap-1"
                         >
-                            <Plus size={10} /> Add
+                            <PlusIcon size={10} /> Add
                         </button>
                      </div>
 
@@ -247,7 +266,7 @@ export const TransitionInspector: React.FC<TransitionInspectorProps> = ({
                                         }}
                                         className="ml-auto text-gray-500 hover:text-red-400 p-1"
                                     >
-                                        <Trash2 size={12} />
+                                        <TrashIcon size={12} />
                                     </button>
                                  </div>
                              );
@@ -269,7 +288,7 @@ export const TransitionInspector: React.FC<TransitionInspectorProps> = ({
                         onClick={() => onDelete(transition.id)}
                         className="w-full py-2.5 rounded text-xs font-bold border border-gray-700 hover:border-red-900/50 bg-gray-900 hover:bg-red-950/50 text-gray-400 hover:text-red-400 transition-all flex items-center justify-center gap-2"
                     >
-                        <Trash2 size={14} /> Delete Transition
+                        <TrashIcon size={14} /> Delete Transition
                     </button>
                 </div>
             </div>

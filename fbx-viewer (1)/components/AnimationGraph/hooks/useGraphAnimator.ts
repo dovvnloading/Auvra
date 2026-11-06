@@ -6,12 +6,15 @@ import { animationEvents } from '../../../runtime/animationEvents';
 import { blendWeights1D, blendWeights2D, clampAnimationDelta, DEFAULT_BLEND_SECONDS, stepWeight } from '../utils/blending';
 import type { MontagePlayer } from '../utils/montage';
 import { crossedNotifies } from '../utils/notifies';
-import { rootMotionDelta, type RootMotion } from '../utils/rootMotion';
+import { extractRootMotion, rootMotionDelta, type RootMotion } from '../utils/rootMotion';
 import { actionPhase, syncBlendActions, syncLeader } from '../utils/syncGroups';
 import { curveVariableValue } from '../utils/curves';
 import { clipGroundSpeed, groundSpeedRate } from '../utils/groundSpeed';
-import { MotionMatcher } from '../../../runtime/motionMatching';
-import { motionDatabaseFor } from '../../../runtime/motionDatabase';
+import { HISTORY_TIMES, MotionMatcher, TRAJECTORY_TIMES, type MotionTrajectory, type Vec2 } from '../../../runtime/motionMatching';
+import { motionDatabaseWhenReady } from '../../../runtime/motionDatabase';
+import { findCharacterMotion, toCharacterSpace, type TrajectoryPoint } from '../../../runtime/locomotion/characterMotion';
+import { DEFAULT_INERTIAL_HALF_LIFE, Inertializer } from '../../../runtime/locomotion/inertialization';
+import { findBone } from '../../../runtime/ik';
 
 /**
  * Animation runs before every other frame callback (priority -1), so IK, sockets and attachments
@@ -19,6 +22,16 @@ import { motionDatabaseFor } from '../../../runtime/motionDatabase';
  * render loop.
  */
 export const ANIMATION_FRAME_PRIORITY = -1;
+/**
+ * Character controllers (input, movement, the graph variables they set) run before animation, so a
+ * frame's pose answers that frame's input rather than the last one's.
+ */
+export const LOCOMOTION_FRAME_PRIORITY = ANIMATION_FRAME_PRIORITY - 0.5;
+/**
+ * Character IK runs after animation and timelines (TIMELINE_FRAME_PRIORITY), and before anything at the
+ * default priority that reads the posed bones (a shot leaving the muzzle).
+ */
+export const CHARACTER_IK_FRAME_PRIORITY = ANIMATION_FRAME_PRIORITY + 0.75;
 
 /**
  * Steps every action's weight linearly toward its target, then rescales the results so they add
@@ -121,6 +134,18 @@ export interface AnimatorExtras {
     lod?: boolean;
     /** The model's own clips by name (the mixer plays copies), so characters made from one model share what is built from them. */
     sourceClips?: Record<string, THREE.AnimationClip>;
+    /** How the transition just taken meets its state (beside blendDurationRef); crossfade when left out. */
+    blendModeRef?: React.MutableRefObject<'crossfade' | 'inertial'>;
+    /**
+     * The turn a Motion Match state's turn-in-place clip has made since last taken (radians, left
+     * positive), for the character to turn by on the spot; null while none is turning it.
+     */
+    matchedTurnOut?: React.MutableRefObject<number | null>;
+    /**
+     * Whether the matched clip playing now turns the character round (see MotionDatabase.turnsRound):
+     * its turn (in matchedTurnOut) is then the character's to follow while moving too.
+     */
+    matchedTurnRoundOut?: React.MutableRefObject<boolean>;
 }
 
 /** Roughly a character's size, for telling whether it is on screen. */
@@ -148,13 +173,38 @@ const _groundAt = new THREE.Vector3();
 const _modelScale = new THREE.Vector3();
 /** How quickly the measured ground speed follows the character's movement, per second. */
 const GROUND_SPEED_RATE = 10;
-/** Seconds a Motion Match state crossfades over when it jumps to another clip. */
-export const MOTION_MATCH_BLEND = 0.2;
-/** The name a Motion Match state's second copy of a clip plays under, so a jump within one clip crossfades too. */
-export const MOTION_MATCH_TWIN = '\u0000match';
-const matchedClipName = (name: string) => (name.endsWith(MOTION_MATCH_TWIN) ? name.slice(0, -MOTION_MATCH_TWIN.length) : name);
+/** An inertial transition's offset fades over this share of its duration (a spring half-life). */
+const INERTIAL_SHARE = 1 / 3;
+/** The furthest orientation warping turns the hips from the clip's way of travel (radians). */
+const MAX_WARP = THREE.MathUtils.degToRad(60);
+/** Below this speed (in hips heights a second) a clip or a character is not going anywhere to warp toward. */
+const WARP_SPEED = 0.2;
+/** How quickly the warp follows a change in the angle, a second. */
+const WARP_RATE = 12;
+const UP = new THREE.Vector3(0, 1, 0);
+const _warpBone = new THREE.Quaternion();
+const _warpTurn = new THREE.Quaternion();
+const _warpParent = new THREE.Quaternion();
+
+/** Turns `bone` by `angle` radians about the world's up axis, its parent staying where it is. */
+const turnAboutUp = (bone: THREE.Object3D, angle: number) => {
+    bone.updateWorldMatrix(true, false);
+    bone.getWorldQuaternion(_warpBone).premultiply(_warpTurn.setFromAxisAngle(UP, angle));
+    if (bone.parent) bone.parent.getWorldQuaternion(_warpParent).invert();
+    else _warpParent.identity();
+    bone.quaternion.copy(_warpParent.multiply(_warpBone));
+    bone.updateMatrixWorld(true);
+};
 const _groundVelocity = new THREE.Vector3();
 const _modelQuaternion = new THREE.Quaternion();
+const _future: TrajectoryPoint = { x: 0, z: 0, facing: 0 };
+const _past: TrajectoryPoint = { x: 0, z: 0, facing: 0 };
+const _trajectory: Required<MotionTrajectory> = {
+    positions: TRAJECTORY_TIMES.map((): Vec2 => ({ x: 0, z: 0 })),
+    facings: TRAJECTORY_TIMES.map(() => 0),
+    past: HISTORY_TIMES.map((): Vec2 => ({ x: 0, z: 0 })),
+};
+
 const _rootBasis = new THREE.Matrix3();
 
 const rootBoneParent = (modelObject: THREE.Object3D, motion: RootMotion): THREE.Object3D | null => {
@@ -198,7 +248,25 @@ export const useGraphAnimator = (
     // How fast the character is moving over the ground (world units a second), for states that match it.
     const ground = useRef({ speed: 0, last: null as THREE.Vector3 | null, velocity: new THREE.Vector3() });
     // A Motion Match state's matcher, made for its clips on this model when it is first played.
-    const matching = useRef({ stateId: null as string | null, key: '', matcher: null as MotionMatcher | null, showing: {} as Record<string, string> });
+    // `mirrored` are the database's mirrored clips; `actions` the action list their actions were added to.
+    const matching = useRef({
+        stateId: null as string | null,
+        key: '',
+        matcher: null as MotionMatcher | null,
+        own: [] as THREE.AnimationClip[],
+        mirrored: [] as THREE.AnimationClip[],
+        actions: null as Record<string, THREE.AnimationAction> | null,
+    });
+    // Switches without a crossfade (motion matching's jumps, inertial transitions) fade out offsets on the model's bones.
+    const inertia = useRef<{ model: THREE.Object3D | null; inertializer: Inertializer | null }>({ model: null, inertializer: null });
+    // Seconds since the current state was entered, and whether it was entered by crossfading.
+    const entry = useRef({ seconds: 0, crossfade: true });
+    // Orientation warping: the hips and spine it turns, and the angle it turns them by now.
+    const warp = useRef({ model: null as THREE.Object3D | null, hips: null as THREE.Object3D | null, spine: [] as THREE.Object3D[], angle: 0 });
+    // The hips a matched clip's own turn is taken out of (see takeOutClipFacing below), found once per model.
+    const facingHips = useRef({ model: null as THREE.Object3D | null, hips: null as THREE.Object3D | null });
+
+    const blendModeRef = () => extras.blendModeRef?.current ?? 'crossfade';
 
     // -- FRAME LOOP --
     useFrame((state, rawDelta) => {
@@ -222,6 +290,16 @@ export const useGraphAnimator = (
         }
         const blend = blendDurationRef?.current ?? DEFAULT_BLEND_SECONDS;
         const variables = variablesRef.current;
+        if (modelObject && inertia.current.model !== modelObject) {
+            inertia.current.model = modelObject;
+            inertia.current.inertializer = new Inertializer(modelObject);
+        }
+        const inertializer = inertia.current.inertializer;
+        // Bones no clip moves would keep last frame's offset: they go back to the animation's own pose first.
+        inertializer?.restore();
+        // A switch this frame that the inertializer eases (none crossfades), and over how long.
+        let switchHalfLife = 0;
+        entry.current.seconds += delta;
 
         // 1. State entry: restart the entering state's clips with the transition's crossfade. A
         // state in the leaving state's sync group starts at its phase (a run picks up the walk's
@@ -229,6 +307,9 @@ export const useGraphAnimator = (
         if (activeStateRef.current !== previousStateRef.current) {
             // Entering a Motion Match state searches afresh.
             if (matching.current.matcher) matching.current.matcher.clip = -1;
+            const inertial = blendModeRef() === 'inertial' && !!inertializer && previousStateRef.current !== null;
+            entry.current = { seconds: 0, crossfade: !inertial };
+            if (inertial) switchHalfLife = Math.max(1e-3, blend * INERTIAL_SHARE);
             const enteringState = graph.states.find(s => s.id === activeStateRef.current);
             const leavingState = graph.states.find(s => s.id === previousStateRef.current);
             if (enteringState) {
@@ -239,7 +320,7 @@ export const useGraphAnimator = (
                     if (action) {
                         action.reset();
                         action.time = startPhase * action.getClip().duration;
-                        action.fadeIn(blend);
+                        if (!switchHalfLife) action.fadeIn(blend);
                         action.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce, loop ? Infinity : 1);
                         action.play();
                     }
@@ -258,6 +339,8 @@ export const useGraphAnimator = (
 
         // 2. Target weights and playback speed of the current state; a blend's samples run in step.
         const currentState = graph.states.find(s => s.id === activeStateRef.current);
+        // A character a controller moves knows its own velocity and where it is going.
+        const locomotion = modelObject ? findCharacterMotion(modelObject) : undefined;
         if (modelObject) {
             modelObject.getWorldPosition(_groundAt);
             const last = ground.current.last;
@@ -271,10 +354,19 @@ export const useGraphAnimator = (
             } else {
                 ground.current.last = _groundAt.clone();
             }
+            if (locomotion) {
+                // Exact rather than measured: no lag, and no jitter from uneven frames.
+                ground.current.speed = locomotion.speed;
+                ground.current.velocity.set(locomotion.body.vx, 0, locomotion.body.vz);
+            }
         }
         // A Motion Match state picks the moment of its clips that best carries on the character's movement.
         let matched: string | null = null;
+        if (locomotion) locomotion.matched = null;
+        if (extras.matchedTurnRoundOut) extras.matchedTurnRoundOut.current = false;
         let matchedScale = 1;
+        // Set when the action list was made anew under a playing match: its clip starts again where the matcher is.
+        let resumeMatched = false;
         if (currentState?.stateType === 'MotionMatch' && modelObject) {
             const names = currentState.blendSamples.map(sample => sample.clipName).filter((name): name is string => !!name && !!actionsMap[name]);
             const key = `${currentState.id}|${names.join('|')}`;
@@ -282,10 +374,33 @@ export const useGraphAnimator = (
             if (match.key !== key) {
                 match.key = key;
                 match.stateId = currentState.id;
-                const clips = names.map(name => actionsMap[name].getClip());
-                const sources = names.map((name, i) => extras.sourceClips?.[name]?.uuid ?? clips[i].uuid);
-                const database = names.length ? motionDatabaseFor(modelObject, clips, sources) : null;
-                match.matcher = database ? new MotionMatcher(database) : null;
+                match.matcher = null;
+                match.mirrored = [];
+                match.actions = null;
+                // Read from the model's own clips: the mixer plays copies with their travel taken out.
+                match.own = names.map(name => extras.sourceClips?.[name] ?? actionsMap[name].getClip());
+            }
+            if (!match.matcher && match.own.length) {
+                // Built in the background with each clip's mirrored copy; until then the state plays its first clip.
+                const built = motionDatabaseWhenReady(modelObject, match.own);
+                if (built?.database) {
+                    match.mirrored = built.mirrored;
+                    match.matcher = new MotionMatcher(built.database);
+                }
+            }
+            if (match.matcher && match.actions !== actionsMap) {
+                // A mirrored clip plays in place like the state's own clips. The action list is made anew when
+                // the character's clips change (another model loading during play), so its mirrored actions are
+                // added again, and the playing clip picks up where the matcher has got to.
+                for (const clip of match.mirrored) {
+                    if (actionsMap[clip.name]) continue;
+                    const action = mixer.clipAction(extractRootMotion(clip, { root: modelObject })?.clip ?? clip);
+                    action.enabled = false;
+                    action.setEffectiveWeight(0);
+                    actionsMap[clip.name] = action;
+                }
+                resumeMatched = match.actions !== null;
+                match.actions = actionsMap;
             }
             if (match.matcher) {
                 // The character's velocity in its own space and in its model's units (the database's).
@@ -293,33 +408,57 @@ export const useGraphAnimator = (
                 matchedScale = modelObject.getWorldScale(_modelScale).x / (modelObject.scale.x || 1) || 1;
                 _groundVelocity.copy(ground.current.velocity).applyQuaternion(_modelQuaternion).divideScalar(matchedScale);
                 const velocity = { x: _groundVelocity.x, z: _groundVelocity.z };
-                const choice = match.matcher.step(delta, velocity, velocity, 0);
+                // Where the character's movement says it is going, seen from where it stands and faces now.
+                let trajectory: typeof _trajectory | undefined;
+                if (locomotion) {
+                    TRAJECTORY_TIMES.forEach((time, i) => {
+                        locomotion.predict(time, _future);
+                        const at = toCharacterSpace(_future.x, _future.z, locomotion.body.x, locomotion.body.z, locomotion.facing.x, matchedScale);
+                        _trajectory.positions[i].x = at.x;
+                        _trajectory.positions[i].z = at.z;
+                        _trajectory.facings[i] = _future.facing - locomotion.facing.x;
+                    });
+                    HISTORY_TIMES.forEach((time, i) => {
+                        locomotion.past(time, _past);
+                        const at = toCharacterSpace(_past.x, _past.z, locomotion.body.x, locomotion.body.z, locomotion.facing.x, matchedScale);
+                        _trajectory.past[i].x = at.x;
+                        _trajectory.past[i].z = at.z;
+                    });
+                    trajectory = _trajectory;
+                }
+                const wasClip = match.matcher.clip, wasTime = match.matcher.time;
+                const choice = match.matcher.step(delta, velocity, velocity, 0, trajectory);
+                // A clip turning on the spot, or turning the character round, turns it by its own turn, so its feet
+                // step round with it (just after a jump, by the turn the new clip made over this step).
+                const turnsRound = choice.clip >= 0 && match.matcher.database.turnsRound[choice.clip];
+                if (extras.matchedTurnRoundOut) extras.matchedTurnRoundOut.current = turnsRound;
+                if (extras.matchedTurnOut && choice.clip >= 0) {
+                    const db = match.matcher.database;
+                    const travel = db.travelAt(choice.clip, choice.time);
+                    const from = !choice.jumped && choice.clip === wasClip ? wasTime : Math.max(0, choice.time - delta);
+                    if (turnsRound || Math.hypot(travel.x, travel.z) < WARP_SPEED * db.body) {
+                        let turn = db.facingAt(choice.clip, choice.time) - db.facingAt(choice.clip, from);
+                        // Across a loop's end the facing goes back to the start: that step is not turned.
+                        if (Math.abs(turn) > Math.PI / 2) turn = 0;
+                        extras.matchedTurnOut.current = (extras.matchedTurnOut.current ?? 0) + turn;
+                    }
+                }
                 const clipName = choice.clip >= 0 ? match.matcher.database.clips[choice.clip].name : null;
-                if (clipName) {
-                    // Each clip plays as itself or as its copy, whichever the last jump to it started.
-                    const showing = match.showing[clipName];
-                    matched = showing && actionsMap[showing] ? showing : clipName;
-                    if (choice.jumped) {
-                        let action = actionsMap[matched];
-                        if (mixer && action.getEffectiveWeight() >= 0.01) {
-                            // The clip is on show (playing, or fading out): the jump starts its other copy where the
-                            // match is and crossfades to it, instead of snapping the pose.
-                            const other = matched === clipName ? clipName + MOTION_MATCH_TWIN : clipName;
-                            if (!actionsMap[other]) {
-                                const twin = mixer.clipAction(action.getClip().clone());
-                                twin.clampWhenFinished = true;
-                                twin.enabled = false;
-                                twin.setEffectiveWeight(0);
-                                actionsMap[other] = twin;
-                            }
-                            matched = other;
-                            match.showing[clipName] = other;
-                            action = actionsMap[other];
-                        }
+                if (clipName && actionsMap[clipName]) {
+                    matched = clipName;
+                    if (locomotion) locomotion.matched = clipName;
+                    if (choice.jumped || resumeMatched) {
+                        // The jump cuts to the match at once; the inertializer eases the pose across (or,
+                        // without one, it shows as a cut). A new action list starts the same way.
+                        const action = actionsMap[clipName];
+                        // A clip that plays once (a start, a stop, a turn round) holds its last pose until the next search.
+                        const loops = match.matcher.database.loops(clipName);
                         action.reset();
-                        action.setLoop(THREE.LoopRepeat, Infinity);
+                        action.setLoop(loops ? THREE.LoopRepeat : THREE.LoopOnce, loops ? Infinity : 1);
+                        action.clampWhenFinished = !loops;
                         action.time = choice.time;
                         action.play();
+                        switchHalfLife = DEFAULT_INERTIAL_HALF_LIFE;
                     }
                 }
             }
@@ -332,8 +471,9 @@ export const useGraphAnimator = (
                 const scale = modelObject.getWorldScale(_modelScale).x;
                 // A Motion Match state has its clips' speeds in its database, where a clip standing still has none.
                 const database = matched ? matching.current.matcher?.database : undefined;
+                // A clip that plays once (a start, a stop) keeps its own pace: its speed changes along it.
                 rate *= groundSpeedRate(ground.current.speed, targetWeights, name => (database
-                    ? database.clipSpeed(matchedClipName(name)) * matchedScale
+                    ? (database.loops(name) ? database.clipSpeed(name) * matchedScale : 0)
                     : clipGroundSpeed(modelObject, actionsMap[name].getClip()) * scale));
             }
             if (currentState.stateType === 'Single' || currentState.stateType === 'MotionMatch') {
@@ -349,7 +489,11 @@ export const useGraphAnimator = (
         Object.keys(actionsMap).forEach((name) => {
             currentWeights[name] = actionsMap[name].getEffectiveWeight();
         });
-        const nextWeights = stepActionWeights(currentWeights, targetWeights, delta, matched ? MOTION_MATCH_BLEND : blend);
+        // A Motion Match state's clips take over at once (once a crossfade into the state has run), as does
+        // a switch the inertializer eases.
+        const instant = switchHalfLife > 0 || (currentState?.stateType === 'MotionMatch' && !!inertializer
+            && (!entry.current.crossfade || entry.current.seconds >= blend));
+        const nextWeights = stepActionWeights(currentWeights, targetWeights, delta, instant ? 0 : blend);
 
         Object.keys(actionsMap).forEach((name) => {
             const action = actionsMap[name];
@@ -368,9 +512,80 @@ export const useGraphAnimator = (
         const tracked = currentState?.stateType === 'Single' && currentState.clipName ? actionsMap[currentState.clipName] : undefined;
         const before = tracked ? tracked.time : 0;
 
+        // A matched clip plays with its travel taken out, and its turn is taken out the same way: the movement
+        // turns the character, so a clip that turns round (or drifts off its line) would otherwise turn the body
+        // a second time, away from where the character faces. Its steps and the sway of its hips stay. Done
+        // after every pose the mixer makes, so the inertializer only ever sees the turned-back pose.
+        const matchedAction = matched ? actionsMap[matched] : undefined;
+        const matchedClip = matched ? matching.current.matcher?.clip ?? -1 : -1;
+        const takeOutClipFacing = () => {
+            const matcher = matching.current.matcher;
+            if (!matchedAction || !matcher || matchedClip < 0 || !modelObject) return;
+            const f = facingHips.current;
+            if (f.model !== modelObject) {
+                f.model = modelObject;
+                f.hips = findBone(modelObject, 'Hips');
+            }
+            const weight = matchedAction.getEffectiveWeight();
+            const facing = matcher.database.facingAt(matchedClip, matchedAction.time) * weight;
+            if (f.hips && Math.abs(facing) > 1e-4) turnAboutUp(f.hips, -facing);
+        };
+
         extras.montage?.current?.update(delta);
         mixer.update(delta);
         extras.montage?.current?.applyMeshSpaceRotation();
+        takeOutClipFacing();
+        if (inertializer) {
+            if (switchHalfLife > 0) {
+                // How fast the new pose moves: the clips a moment earlier, then back to now.
+                if (delta > 0) {
+                    const playing = Object.values(actionsMap).filter(action => action.enabled && action.getEffectiveWeight() > 0);
+                    const times = playing.map(action => action.time);
+                    playing.forEach(action => { action.time -= delta * action.timeScale; });
+                    mixer.update(0);
+                    extras.montage?.current?.applyMeshSpaceRotation();
+                    takeOutClipFacing();
+                    inertializer.noteBefore(delta);
+                    playing.forEach((action, i) => { action.time = times[i]; });
+                    mixer.update(0);
+                    extras.montage?.current?.applyMeshSpaceRotation();
+                    takeOutClipFacing();
+                }
+                inertializer.halfLife = switchHalfLife;
+                inertializer.switchNow(delta);
+            }
+            inertializer.apply(delta);
+        }
+
+        // Orientation warping: a matched clip travelling another way than the character (a forward walk
+        // played while moving diagonally) has its hips and legs turned toward the way the character goes,
+        // and its spine turned back, so the steps fall where the character goes and the chest keeps its facing.
+        if (modelObject) {
+            const w = warp.current;
+            if (w.model !== modelObject) {
+                w.model = modelObject;
+                w.hips = findBone(modelObject, 'Hips');
+                w.spine = ['Spine', 'Spine1', 'Spine2'].map(name => findBone(modelObject, name)).filter((bone): bone is THREE.Object3D => !!bone);
+                w.angle = 0;
+            }
+            let wanted = 0;
+            const matcher = matching.current.matcher;
+            // Only while the character faces somewhere other than its way (aiming): turning, it faces where it goes.
+            if (currentState?.stateType === 'MotionMatch' && locomotion?.strafing && matcher && matcher.clip >= 0) {
+                const clipWay = matcher.database.travelAt(matcher.clip, matcher.time);
+                const body = matcher.database.body * matchedScale;
+                const going = toCharacterSpace(locomotion.body.x + locomotion.body.vx, locomotion.body.z + locomotion.body.vz, locomotion.body.x, locomotion.body.z, locomotion.facing.x);
+                if (Math.hypot(clipWay.x, clipWay.z) * matchedScale > WARP_SPEED * body && Math.hypot(going.x, going.z) > WARP_SPEED * body) {
+                    const turn = Math.atan2(going.x, going.z) - Math.atan2(clipWay.x, clipWay.z);
+                    wanted = THREE.MathUtils.clamp(Math.atan2(Math.sin(turn), Math.cos(turn)), -MAX_WARP, MAX_WARP);
+                }
+            }
+            w.angle += (wanted - w.angle) * (1 - Math.exp(-WARP_RATE * delta));
+            if (w.hips && Math.abs(w.angle) > 1e-4) {
+                turnAboutUp(w.hips, w.angle);
+                for (const bone of w.spine) turnAboutUp(bone, -w.angle / w.spine.length);
+            }
+        }
         // The matcher keeps to the time the chosen clip has really reached.
         if (matched && matching.current.matcher && actionsMap[matched]) matching.current.matcher.time = actionsMap[matched].time;
 

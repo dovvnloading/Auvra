@@ -1,4 +1,6 @@
 
+import { UV_LAYOUT_FILE_NAME, UV_LAYOUT_MIME } from '../texturing/uv/uvLayout';
+import type { UvLayoutReference } from '../types';
 import { AssetCategory, AssetInfoUpdate, Blueprint, SocketData, LevelObject, LevelData, TerrainData, PrefabData } from '../types';
 import { changeBatches } from './projectChangeBatches';
 import { AssetTransferOptions, ProjectChange, projectService } from './projectService';
@@ -11,8 +13,8 @@ import { terrainLayersReferenceTexture, withoutTerrainLayerTexture } from '../co
 import { frontendDiagnostics } from '../diagnostics/runtime';
 import { editorSession, type EditorSessionLease } from './editorSession';
 import { sortByHierarchy } from './sceneGraph';
-import { normalizeMaterialOverrides, setMaterialOverrideField, type MaterialOverrides } from './materialOverrides';
-import { MATERIALS_DOMAIN, materialAssetDocument, readMaterialAsset, withoutGraphTexture } from '../runtime/materials/materialLibrary';
+import { normalizeMaterialOverrides, setMaterialOverrideField, withPaintedBaseMap, type MaterialOverrides } from './materialOverrides';
+import { MATERIALS_DOMAIN, materialAssetDocument, readMaterialAsset, withoutAssetTexture } from '../runtime/materials/materialLibrary';
 import { SKIN_PAINT_ENCODING, SKIN_PAINT_FILE_NAME, SKIN_PAINT_MIME, type SkinPaintFile, type SkinPaintReference } from './skinPaint/skinPaintFile';
 
 const DB_NAME = 'OmniRenderDB';
@@ -357,12 +359,28 @@ class DBOperations {
       return skinPaint;
   }
 
+  async updateModelUvLayout(id: string, bytes: Uint8Array | null, meshes: number): Promise<UvLayoutReference | undefined> {
+      let uvLayout: UvLayoutReference | undefined;
+      await this.canonicalChange('models', 'upsert', { id }, id, undefined, async (value) => {
+          uvLayout = bytes
+              ? { assetId: await projectService.uploadAsset(new File([bytes as BlobPart], UV_LAYOUT_FILE_NAME, { type: UV_LAYOUT_MIME })), encoding: 'uv-layout-v1', count: Math.max(1, meshes) }
+              : undefined;
+          return { value: { ...(value as object), uvLayout } };
+      });
+      return uvLayout;
+  }
+
   /** Rename and/or move a model in the content browser; folder '' is the library root. */
   /** `clipNames` keeps the model's clip names when it is renamed (they would follow the new name). */
   async updateModelInfo(id: string, updates: AssetInfoUpdate, clipNames?: string[]): Promise<void> {
       await this.canonicalChange('models', 'upsert', { ...assetInfoDocument(id, updates), ...(clipNames?.length ? { clipNames } : {}) }, id);
   }
 
+  /**
+   * Keeps `file` as a texture and makes it the painted base map of the named materials, in their material
+   * overrides (`mapTextureId` with `paintedMap`), beside whatever else those hold. An older per-material
+   * texture override of theirs is let go of in the same change. Returns the texture's id.
+   */
   async addModelTextureOverride(modelId: string, materialNames: string[], file: File, dimensions: { width: number; height: number }): Promise<string> {
     this.requireNativeProject();
     const assetId = await projectService.uploadAsset(file);
@@ -370,11 +388,12 @@ class DBOperations {
     const model = nativeDomainRecords(snapshot, 'models').find((record) => record.id === modelId);
     if (!model) throw new Error('Model does not exist in the active project');
     const textureId = assetId;
-    const textureOverrides = { ...(model.textureOverrides || {}) } as Record<string, string>;
-    for (const materialName of materialNames) textureOverrides[materialName] = textureId;
+    const materialOverrides = withPaintedBaseMap(normalizeMaterialOverrides(model.materialOverrides), materialNames, textureId);
+    const textureOverrides = Object.fromEntries(Object.entries((model.textureOverrides || {}) as Record<string, string>)
+      .filter(([materialName]) => !materialNames.includes(materialName)));
     await projectService.applyChanges([
       { domain: 'textures', operation: 'upsert', id: textureId, value: { id: textureId, name: file.name, assetId, dimensions } },
-      { domain: 'models', operation: 'upsert', id: modelId, value: { ...model, textureOverrides } },
+      { domain: 'models', operation: 'upsert', id: modelId, value: { ...model, materialOverrides, textureOverrides } },
     ]);
     return textureId;
   }
@@ -719,10 +738,10 @@ class DBOperations {
     }
     for (const record of nativeDomainRecords(snapshot, 'materials')) {
       // A graph's texture nodes let go of it too, or the asset's next save would name it again.
-      const asset = record.graph ? readMaterialAsset(record) : null;
-      const graph = asset && withoutGraphTexture(asset.graph, id);
-      if (asset && graph && graph !== asset.graph) {
-        changes.push({ domain: 'materials', operation: 'upsert', id: record.id, value: { ...record, ...materialAssetDocument({ ...asset, graph }) } });
+      const asset = record.graph || record.textureGraph || record.paint ? readMaterialAsset(record) : null;
+      const cleared = asset && withoutAssetTexture(asset, id);
+      if (asset && cleared && cleared !== asset) {
+        changes.push({ domain: 'materials', operation: 'upsert', id: record.id, value: { ...record, ...materialAssetDocument(cleared) } });
         continue;
       }
       const textureIds = Array.isArray(record.textureIds) ? record.textureIds.filter((textureId: unknown) => textureId !== id) : [];

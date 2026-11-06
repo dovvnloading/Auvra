@@ -1,9 +1,10 @@
 import React, { useCallback, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import * as THREE from 'three';
-import { AlertTriangle, ChevronDown, ChevronRight, Palette, RotateCcw, Save, Search, Trash2, Undo2 } from 'lucide-react';
+import { ChevronDownIcon, ChevronRightIcon, MaterialIcon, ResetIcon, SaveIcon, SearchIcon, TrashIcon, UndoIcon, WarningIcon } from '../UI/Icons';
 import type { LoadedModelData, TextureData } from '../../types';
 import { Select } from '../UI/Select';
-import { materialLibrary } from '../../runtime/materials/materialLibrary';
+import { materialAssetUse, materialLibrary } from '../../runtime/materials/materialLibrary';
+import { isSmartMaterialAsset } from '../../texturing/paint/smartMaterials';
 import { materialGraphParameters, type MaterialParameter } from '../../runtime/materials/materialGraph';
 import {
   MAX_EMISSIVE_INTENSITY,
@@ -16,18 +17,26 @@ import {
   overrideTextureFlipY,
   setMaterialOverrideField,
   tagOverrideTexture,
+  withBaseMap,
   type MaterialOverride,
   type MaterialOverrideField,
   type MaterialOverrides,
   type MaterialTextureSlot,
   type ModelMaterialInfo,
+  type PhysicalOverrideColor,
+  type PhysicalOverrideNumber,
+  type PhysicalValues,
   type MaterialParameterSetting,
 } from '../../utils/materialOverrides';
+import { ColourField } from '../UI/ColourPicker';
+import { projectService } from '../../utils/projectService';
+import { nativeDomainRecords } from '../../utils/projectRecords';
+import { texturePicture } from './Retexture/parts';
 
 export interface MaterialEditorProps {
   /** The model whose materials are edited; changes preview live on `model.object`. */
   model: LoadedModelData & { materialOverrides?: unknown };
-  /** Library textures offered for the base-colour and normal map slots. */
+  /** Library textures offered for the map slots. */
   textures: TextureData[];
   /** Persists the overrides on the model document. Without it the panel only previews. */
   onSave?: (modelId: string, overrides: MaterialOverrides) => Promise<void> | void;
@@ -75,7 +84,7 @@ const FieldRow: React.FC<{
       aria-label={`Reset ${label.toLowerCase()}`}
       className="p-1 rounded text-gray-500 hover:text-white hover:bg-gray-800 disabled:opacity-0 disabled:pointer-events-none"
     >
-      <RotateCcw size={11} />
+      <ResetIcon size={11} />
     </button>
   </div>
 );
@@ -90,13 +99,7 @@ const ColorField: React.FC<{
   const id = useId();
   return (
     <FieldRow label={label} htmlFor={id} overridden={overridden} onReset={onReset}>
-      <input
-        id={id}
-        type="color"
-        value={value}
-        onChange={(event) => onChange(event.target.value.toLowerCase())}
-        className="w-8 h-6 rounded border border-gray-700 bg-gray-950 cursor-pointer p-0"
-      />
+      <ColourField id={id} value={value} onChange={onChange} label={label} className="h-6 w-8" />
       <span className="text-2xs font-mono text-gray-400">{value}</span>
     </FieldRow>
   );
@@ -109,9 +112,11 @@ const SliderField: React.FC<{
   max: number;
   step: number;
   overridden: boolean;
+  /** What the value reads as, where a number would not say it (no absorption at all). */
+  display?: string;
   onChange: (value: number) => void;
   onReset: () => void;
-}> = ({ label, value, min, max, step, overridden, onChange, onReset }) => {
+}> = ({ label, value, min, max, step, overridden, display, onChange, onReset }) => {
   const id = useId();
   return (
     <FieldRow label={label} htmlFor={id} overridden={overridden} onReset={onReset}>
@@ -125,9 +130,128 @@ const SliderField: React.FC<{
         onChange={(event) => onChange(Number(event.target.value))}
         className="flex-1 min-w-0 accent-blue-500"
       />
-      <span className="w-9 text-right text-2xs font-mono text-gray-400">{formatNumber(value)}</span>
+      <span className="w-9 text-right text-2xs font-mono text-gray-400">{display ?? formatNumber(value)}</span>
     </FieldRow>
   );
+};
+
+type PhysicalField = PhysicalOverrideNumber | PhysicalOverrideColor;
+
+/** One physical value: a slider for a number, a colour field for a colour. */
+interface PhysicalFieldDef {
+  field: PhysicalField;
+  label: string;
+  min?: number;
+  max?: number;
+  step?: number;
+}
+
+/** A physical material's values in Material Overrides, by group, in the order a surface is built up. */
+const PHYSICAL_GROUPS: ReadonlyArray<{ title: string; fields: readonly PhysicalFieldDef[]; inUse: (values: PhysicalValues) => boolean }> = [
+  {
+    title: 'Coat',
+    fields: [{ field: 'coat', label: 'Coat', min: 0, max: 1, step: 0.01 }, { field: 'coatRoughness', label: 'Coat roughness', min: 0, max: 1, step: 0.01 }],
+    inUse: (values) => values.coat > 0,
+  },
+  {
+    title: 'Sheen',
+    fields: [{ field: 'sheenColor', label: 'Sheen colour' }, { field: 'sheenRoughness', label: 'Sheen roughness', min: 0, max: 1, step: 0.01 }],
+    inUse: (values) => values.sheenColor !== '#000000',
+  },
+  {
+    title: 'Specular',
+    fields: [
+      { field: 'specularWeight', label: 'Specular strength', min: 0, max: 1, step: 0.01 },
+      { field: 'specularColor', label: 'Specular colour' },
+      { field: 'ior', label: 'Index of refraction', min: 1, max: 2.5, step: 0.01 },
+      { field: 'anisotropy', label: 'Anisotropy', min: 0, max: 1, step: 0.01 },
+      { field: 'anisotropyRotation', label: 'Anisotropy direction', min: 0, max: 360, step: 1 },
+    ],
+    inUse: (values) => values.specularWeight !== 1 || values.specularColor !== '#ffffff' || Math.abs(values.ior - 1.5) > 1e-3 || values.anisotropy > 0,
+  },
+  {
+    title: 'Thin film',
+    fields: [{ field: 'thinFilm', label: 'Thin film', min: 0, max: 1, step: 0.01 }, { field: 'thinFilmThickness', label: 'Thin film thickness (nm)', min: 0, max: 1200, step: 10 }],
+    inUse: (values) => values.thinFilm > 0,
+  },
+  {
+    title: 'Transmission',
+    fields: [
+      { field: 'transmission', label: 'Transmission', min: 0, max: 1, step: 0.01 },
+      { field: 'thickness', label: 'Thickness', min: 0, max: 2, step: 0.005 },
+      { field: 'attenuationColor', label: 'Absorption colour' },
+      { field: 'attenuationDistance', label: 'Absorption distance', min: 0.01, max: 10, step: 0.01 },
+      { field: 'dispersion', label: 'Dispersion', min: 0, max: 1, step: 0.01 },
+    ],
+    inUse: (values) => values.transmission > 0,
+  },
+];
+
+const isColorField = (field: PhysicalField): field is PhysicalOverrideColor => field === 'sheenColor' || field === 'attenuationColor' || field === 'specularColor';
+
+/**
+ * A physical material's coat, sheen, specular, thin film and transmission values (glTF's material
+ * extensions), each group under a header of its own that opens when the material uses it.
+ */
+const PhysicalFields: React.FC<{
+  values: PhysicalValues;
+  override: MaterialOverride;
+  onChange: (field: PhysicalField, value: number | string | undefined) => void;
+}> = ({ values, override, onChange }) => {
+  const [toggled, setToggled] = useState<Record<string, boolean>>({});
+  // What the material shows: its own values, with this override's on top.
+  const shown = { ...values, ...Object.fromEntries(Object.entries(override).filter(([key]) => key in values)) } as PhysicalValues;
+  return (
+    <div className="space-y-1">
+      {PHYSICAL_GROUPS.map((group) => {
+        const overridden = group.fields.some(({ field }) => override[field] !== undefined);
+        const open = toggled[group.title] ?? (group.inUse(shown) || overridden);
+        return (
+          <div key={group.title} className="border-t border-gray-800/80 pt-1">
+            <button type="button" aria-expanded={open} onClick={() => setToggled((current) => ({ ...current, [group.title]: !open }))}
+              className="flex w-full items-center gap-1 text-left text-2xs font-semibold text-gray-300 hover:text-white">
+              {open ? <ChevronDownIcon size={11} /> : <ChevronRightIcon size={11} />}
+              {group.title}
+              {!open && (group.inUse(shown) || overridden) && <span className="ml-auto text-2xs font-normal text-gray-500">In use</span>}
+            </button>
+            {open && (
+              <div className="mt-1 space-y-1">
+                {group.fields.map(({ field, label, min = 0, max = 1, step = 0.01 }) => (isColorField(field)
+                  ? <ColorField key={field} label={label} value={shown[field]} overridden={override[field] !== undefined}
+                    onChange={(value) => onChange(field, value)} onReset={() => onChange(field, undefined)} />
+                  : <SliderField key={field} label={label} value={shown[field]} min={min} max={max} step={step} overridden={override[field] !== undefined}
+                    display={field === 'attenuationDistance' && !Number.isFinite(shown[field]) ? 'none' : undefined}
+                    onChange={(value) => onChange(field, value)} onReset={() => onChange(field, undefined)} />))}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+};
+
+/**
+ * A texture an override names that the texture library list does not hold yet (the mask tool's pictures
+ * until the project opens again): its name in the project, or what it is, and a picture of it when the
+ * model wears it.
+ */
+interface TextureFound {
+  name: string;
+  thumbnail: string | null;
+}
+
+/** Pixels across a map's thumbnail. */
+const THUMBNAIL_EDGE = 48;
+const thumbnails = new WeakMap<THREE.Texture, string>();
+
+/** A small picture of a texture a model wears, drawn once. */
+const thumbnailOf = (texture: THREE.Texture, flipY: boolean): string | null => {
+  const known = thumbnails.get(texture);
+  if (known) return known;
+  const picture = texturePicture(texture, THUMBNAIL_EDGE, 'image/png', flipY)?.url ?? null;
+  if (picture) thumbnails.set(texture, picture);
+  return picture;
 };
 
 const TextureField: React.FC<{
@@ -135,15 +259,21 @@ const TextureField: React.FC<{
   value: string | undefined;
   textures: TextureData[];
   status: string | null;
+  /** The value when the library list does not hold it; null when it cannot be found anywhere. */
+  found?: TextureFound | null;
   onChange: (textureId: string | undefined) => void;
-}> = ({ label, value, textures, status, onChange }) => {
+}> = ({ label, value, textures, status, found, onChange }) => {
+  const known = value ? textures.find((texture) => texture.id === value) : undefined;
+  const foundName = found?.name;
   const options = useMemo(() => {
     const list = [{ label: 'Imported', value: '' }, ...textures.map((texture) => ({ label: texture.name, value: texture.id }))];
-    if (value && !textures.some((texture) => texture.id === value)) list.push({ label: 'Missing texture', value });
+    if (value && !known) list.push({ label: foundName ?? 'Missing texture', value });
     return list;
-  }, [textures, value]);
+  }, [textures, value, known, foundName]);
+  const thumbnail = known?.url || found?.thumbnail || null;
   return (
     <FieldRow label={label} overridden={Boolean(value)} onReset={() => onChange(undefined)}>
+      {value && thumbnail && <img src={thumbnail} alt="" className="h-6 w-6 shrink-0 rounded border border-gray-700 object-cover" />}
       <div className="flex-1 min-w-0" aria-label={label}>
         <Select value={value ?? ''} options={options} onChange={(next: string) => onChange(next || undefined)} className="w-full" />
       </div>
@@ -153,24 +283,48 @@ const TextureField: React.FC<{
 };
 
 /**
- * Lists a model's materials and edits per-material overrides (colour, PBR
- * values, emissive, opacity and texture maps). Every edit previews live on the
- * model; unsaved edits are reverted when the panel closes or the model changes.
+ * A material asset (Materials tab) whose node graph shades this material instead of the fields below.
+ * Only assets that draw are offered: a texture graph whose pictures are not made yet, or a painting not
+ * yet put on a model, would shade it plain grey, and a graph made for other graphs is no material.
  */
-/** A material asset (Materials tab) whose node graph shades this material instead of the fields below. */
-const MaterialAssetField: React.FC<{ value: string | undefined; onChange: (value: string | undefined) => void }> = ({ value, onChange }) => {
-  const id = useId();
+const MaterialAssetField: React.FC<{
+  value: string | undefined;
+  /** Whether this kind of material can be shaded by a graph (standard materials only). */
+  takesAsset: boolean;
+  materialType: string;
+  onChange: (value: string | undefined) => void;
+}> = ({ value, takesAsset, materialType, onChange }) => {
   const version = useSyncExternalStore((listener) => materialLibrary.subscribe(listener), () => materialLibrary.version);
   const assets = useMemo(() => materialLibrary.list(), [version]);
+  const drawing = useMemo(() => assets.filter((asset) => !isSmartMaterialAsset(asset) && materialAssetUse(asset) === 'material'), [assets]);
+  const waiting = useMemo(() => assets.filter((asset) => !isSmartMaterialAsset(asset) && materialAssetUse(asset) === 'needsPictures'), [assets]);
+  const options = useMemo(() => {
+    const list = [{ label: 'Its own', value: '' }, ...drawing.map((asset) => ({ label: asset.name, value: asset.id }))];
+    if (value && !drawing.some((asset) => asset.id === value)) {
+      const chosen = assets.find((asset) => asset.id === value);
+      list.push({ label: chosen ? chosen.name + ' (has no pictures yet)' : 'Missing material', value });
+    }
+    return list;
+  }, [assets, drawing, value]);
+  const unlit = materialType === 'MeshBasicMaterial';
   return (
-    <FieldRow label="Material asset" htmlFor={id} overridden={Boolean(value)} onReset={() => onChange(undefined)}>
-      <select id={id} value={value ?? ''} onChange={(event) => onChange(event.target.value || undefined)}
-        className="flex-1 min-w-0 bg-gray-950 border border-gray-700 rounded px-1.5 py-1 text-2xs text-gray-200">
-        <option value="">(its own)</option>
-        {assets.map((asset) => <option key={asset.id} value={asset.id}>{asset.name}</option>)}
-        {value && !assets.some((asset) => asset.id === value) && <option value={value}>(missing material)</option>}
-      </select>
-    </FieldRow>
+    <>
+      <FieldRow label="Material asset" overridden={Boolean(value)} onReset={() => onChange(undefined)}>
+        <div className="flex-1 min-w-0" aria-label="Material asset">
+          <Select value={value ?? ''} options={options} onChange={(next: string) => onChange(next || undefined)} disabled={!takesAsset} className="w-full" />
+        </div>
+      </FieldRow>
+      {!takesAsset && (
+        <p className="text-2xs leading-snug text-amber-400/90">
+          A material asset can&apos;t shade this material: it is {unlit ? 'drawn without lighting' : 'an older kind of shaded material'}, and material assets need the standard lit material. Its own colour and maps below still apply.
+        </p>
+      )}
+      {takesAsset && waiting.length > 0 && (
+        <p className="text-2xs leading-snug text-gray-500">
+          Not offered until they have pictures: {waiting.map((asset) => asset.name).join(', ')}. Choose Update material on a texture graph in Materials, or Put on the model in Paint.
+        </p>
+      )}
+    </>
   );
 };
 
@@ -214,7 +368,7 @@ const ParameterField: React.FC<{ parameter: MaterialParameter; value: number | n
   return (
     <FieldRow label={name} overridden={overridden} onReset={reset}>
       {components.map((component, index) => (
-        <NumberInput key={index} label={`${name} ${'XYZ'[index]}`} value={component} step={0.05}
+        <NumberInput key={index} label={`${name} ${'XYZW'[index]}`} value={component} step={0.05}
           onChange={(next) => onChange(components.map((old, at) => (at === index ? next : old)))} />
       ))}
     </FieldRow>
@@ -255,6 +409,12 @@ export const MaterialEditor: React.FC<MaterialEditorProps> = (props) => (
   <MaterialEditorSession key={`${props.model.id}:${props.model.object.uuid}`} {...props} />
 );
 
+/**
+ * Lists a model's materials and edits per-material overrides (colour, PBR
+ * values, emissive, opacity, texture maps and a material asset). Every edit
+ * previews live on the model; unsaved edits are reverted when the panel closes
+ * or the model changes.
+ */
 const MaterialEditorSession: React.FC<MaterialEditorProps> = ({ model, textures, onSave, className = '' }) => {
   const stored = useMemo(() => normalizeMaterialOverrides(model.materialOverrides), [model.materialOverrides]);
   const [saved, setSaved] = useState<MaterialOverrides>(stored);
@@ -315,6 +475,48 @@ const MaterialEditorSession: React.FC<MaterialEditorProps> = ({ model, textures,
 
   const textureUrls = useMemo(() => new Map(textures.map((texture) => [texture.id, texture.url])), [textures]);
 
+  // Names, from the project, of textures the overrides name that the library list does not hold yet.
+  const [projectNames, setProjectNames] = useState<Record<string, string>>({});
+  const askedNames = useRef(new Set<string>());
+  const unlisted = useMemo(() => {
+    const ids = new Set<string>();
+    for (const entry of Object.values(draft)) {
+      for (const id of [entry.mapTextureId, entry.normalTextureId, entry.roughnessTextureId, entry.metalnessTextureId]) if (id && !textureUrls.has(id)) ids.add(id);
+    }
+    return [...ids].sort().join('\n');
+  }, [draft, textureUrls]);
+  useEffect(() => {
+    const wanted = unlisted ? unlisted.split('\n').filter((id) => !askedNames.current.has(id)) : [];
+    if (!wanted.length || !projectService.getStatus().projectId) return;
+    for (const id of wanted) askedNames.current.add(id);
+    let current = true;
+    projectService.getSnapshotAll('textures').then((snapshot) => {
+      if (!current) return;
+      const names: Record<string, string> = {};
+      for (const record of nativeDomainRecords(snapshot, 'textures')) {
+        if (wanted.includes(record.id) && typeof record.name === 'string' && record.name) names[record.id] = record.name;
+      }
+      if (Object.keys(names).length) setProjectNames((previous) => ({ ...previous, ...names }));
+    }, () => undefined);
+    return () => { current = false; };
+  }, [unlisted]);
+
+  /**
+   * A texture an override names that the library list does not hold: found when the model wears it or the
+   * project keeps it, named as the project names it or by what it is; null when it is nowhere at all.
+   */
+  const foundTexture = (textureId: string | undefined, slot: MaterialTextureSlot, painted = false): TextureFound | null => {
+    if (!textureId || textureUrls.has(textureId)) return null;
+    const key = overrideTextureCacheKey(textureId, slot);
+    const worn = textureCache.current.get(key) ?? collectOverrideTextures(model.object).get(key);
+    const name = projectNames[textureId];
+    if (!worn && !name) return null;
+    return {
+      name: name ?? (painted ? 'Painted picture' : 'Picture on the model'),
+      thumbnail: worn ? thumbnailOf(worn, overrideTextureFlipY(model.object)) : null,
+    };
+  };
+
   const resolveTexture = useCallback((textureId: string, slot: MaterialTextureSlot) => {
     const key = overrideTextureCacheKey(textureId, slot);
     const cached = textureCache.current.get(key);
@@ -350,13 +552,18 @@ const MaterialEditorSession: React.FC<MaterialEditorProps> = ({ model, textures,
     setDraft((current) => setMaterialOverrideField(current, name, field, value));
   };
 
+  const editBaseMap = (name: string, textureId: string | undefined) => {
+    setError(null);
+    setDraft((current) => withBaseMap(current, name, textureId));
+  };
+
   const textureStatus = (textureId: string | undefined, slot: MaterialTextureSlot): string | null => {
     if (!textureId) return null;
     const key = overrideTextureCacheKey(textureId, slot);
     if (textureCache.current.has(key)) return null;
     if (failedTextures.current.has(key)) return 'Failed';
     if (pendingTextures.current.has(key)) return 'Loading';
-    return textureUrls.has(textureId) ? null : 'Missing';
+    return textureUrls.has(textureId) || projectNames[textureId] ? null : 'Missing';
   };
 
   const handleSave = async () => {
@@ -390,7 +597,7 @@ const MaterialEditorSession: React.FC<MaterialEditorProps> = ({ model, textures,
     const { base } = material;
     return (
       <div className="px-3 pb-3 pt-1 space-y-1 border-t border-gray-800/80">
-        <MaterialAssetField value={override.materialId} onChange={(value) => editField(material.name, 'materialId', value)} />
+        <MaterialAssetField value={override.materialId} takesAsset={material.takesAsset} materialType={material.type} onChange={(value) => editField(material.name, 'materialId', value)} />
         {override.materialId && (
           <MaterialParameterFields materialId={override.materialId} values={override.parameters}
             onChange={(value) => editField(material.name, 'parameters', value)} />
@@ -421,11 +628,26 @@ const MaterialEditorSession: React.FC<MaterialEditorProps> = ({ model, textures,
           onChange={(value) => editField(material.name, 'opacity', value)} onReset={() => editField(material.name, 'opacity', undefined)} />
         {base.hasMapSlot && (
           <TextureField label="Base map" value={override.mapTextureId} textures={textures} status={textureStatus(override.mapTextureId, 'map')}
-            onChange={(value) => editField(material.name, 'mapTextureId', value)} />
+            found={foundTexture(override.mapTextureId, 'map', override.paintedMap === true)} onChange={(value) => editBaseMap(material.name, value)} />
+        )}
+        {base.hasMapSlot && override.mapTextureId && override.paintedMap && (
+          <p className="pl-[6.5rem] text-2xs leading-snug text-gray-500">A painted picture: it shows its own colours, is cut out where it is see-through, and draws from both sides.</p>
         )}
         {base.hasNormalSlot && (
           <TextureField label="Normal map" value={override.normalTextureId} textures={textures} status={textureStatus(override.normalTextureId, 'normal')}
-            onChange={(value) => editField(material.name, 'normalTextureId', value)} />
+            found={foundTexture(override.normalTextureId, 'normal')} onChange={(value) => editField(material.name, 'normalTextureId', value)} />
+        )}
+        {base.hasRoughnessSlot && (
+          <TextureField label="Roughness map" value={override.roughnessTextureId} textures={textures} status={textureStatus(override.roughnessTextureId, 'roughness')}
+            found={foundTexture(override.roughnessTextureId, 'roughness')} onChange={(value) => editField(material.name, 'roughnessTextureId', value)} />
+        )}
+        {base.hasMetalnessSlot && (
+          <TextureField label="Metalness map" value={override.metalnessTextureId} textures={textures} status={textureStatus(override.metalnessTextureId, 'metalness')}
+            found={foundTexture(override.metalnessTextureId, 'metalness')} onChange={(value) => editField(material.name, 'metalnessTextureId', value)} />
+        )}
+        {base.physical && (
+          <PhysicalFields values={base.physical} override={override}
+            onChange={(field, value) => editField(material.name, field, value as MaterialOverride[typeof field])} />
         )}
         {material.instanceCount > 1 && (
           <p className="text-2xs text-gray-600 pt-1">Applies to {material.instanceCount} materials named “{material.name}”.</p>
@@ -438,14 +660,14 @@ const MaterialEditorSession: React.FC<MaterialEditorProps> = ({ model, textures,
     <div className={`flex flex-col h-full min-h-0 bg-gray-900 text-gray-200 ${className}`}>
       <div className="p-3 border-b border-gray-800 shrink-0 space-y-2">
         <div className="flex items-center gap-2">
-          <Palette size={14} className="text-blue-400 shrink-0" />
+          <MaterialIcon size={14} className="text-blue-400 shrink-0" />
           <h2 className="text-xs font-bold ">Materials</h2>
           <span className="text-2xs text-gray-500 truncate" title={model.name}>{model.name}</span>
           <span className="ml-auto text-2xs text-gray-600 shrink-0">{materials.length}</span>
         </div>
         {materials.length > 6 && (
           <div className="relative">
-            <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-500" />
+            <SearchIcon size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-500" />
             <input
               type="text"
               placeholder="Filter materials..."
@@ -466,7 +688,8 @@ const MaterialEditorSession: React.FC<MaterialEditorProps> = ({ model, textures,
           const editable = !unnamed && !reserved;
           const isOpen = editable && expanded === material.name;
           const override = draft[material.name];
-          const fieldCount = override ? Object.keys(override).length : 0;
+          // How a base map draws is part of the base map, not a field of its own.
+          const fieldCount = override ? Object.keys(override).filter((field) => field !== 'paintedMap').length : 0;
           const swatch = override?.color ?? material.base.color ?? '#000000';
           return (
             <div key={material.name || '(unnamed)'} className={`rounded-md border ${isOpen ? 'border-blue-500/30 bg-gray-950/60' : 'border-gray-800 bg-gray-950/30'}`}>
@@ -478,7 +701,7 @@ const MaterialEditorSession: React.FC<MaterialEditorProps> = ({ model, textures,
                 className="w-full flex items-center gap-2 px-2 py-2 text-left disabled:cursor-not-allowed"
                 title={editable ? undefined : reserved ? reservedNameTooltip(material.name) : 'Unnamed materials cannot be overridden.'}
               >
-                {isOpen ? <ChevronDown size={12} className="text-gray-500 shrink-0" /> : <ChevronRight size={12} className="text-gray-500 shrink-0" />}
+                {isOpen ? <ChevronDownIcon size={12} className="text-gray-500 shrink-0" /> : <ChevronRightIcon size={12} className="text-gray-500 shrink-0" />}
                 <span className="w-4 h-4 rounded border border-gray-700 shrink-0" style={{ backgroundColor: swatch }} aria-hidden />
                 <span className={`flex-1 min-w-0 truncate text-xs ${editable ? 'text-gray-200' : reserved ? 'text-gray-500' : 'text-gray-600 italic'}`}>
                   {unnamed ? 'Unnamed material' : material.name}
@@ -496,7 +719,7 @@ const MaterialEditorSession: React.FC<MaterialEditorProps> = ({ model, textures,
         {staleNames.length > 0 && (
           <div className="mt-3 rounded-md border border-amber-900/50 bg-amber-900/10 p-2 space-y-1">
             <div className="text-2xs font-bold text-amber-400 flex items-center gap-1.5">
-              <AlertTriangle size={11} /> Overrides for materials not in this model
+              <WarningIcon size={11} /> Overrides for materials not in this model
             </div>
             {staleNames.map((name) => (
               <div key={name} className="flex items-center gap-2 text-2xs text-gray-400">
@@ -507,7 +730,7 @@ const MaterialEditorSession: React.FC<MaterialEditorProps> = ({ model, textures,
                   aria-label={`Remove overrides for ${name}`}
                   className="p-1 rounded hover:bg-gray-800 hover:text-white"
                 >
-                  <Trash2 size={11} />
+                  <TrashIcon size={11} />
                 </button>
               </div>
             ))}
@@ -518,7 +741,7 @@ const MaterialEditorSession: React.FC<MaterialEditorProps> = ({ model, textures,
       <div className="p-3 border-t border-gray-800 shrink-0 space-y-2">
         {error && (
           <div role="alert" className="text-2xs text-red-400 bg-red-900/20 p-2 rounded border border-red-900/50 flex gap-2">
-            <AlertTriangle size={12} className="shrink-0 mt-0.5" /> <span className="flex-1">{error}</span>
+            <WarningIcon size={12} className="shrink-0 mt-0.5" /> <span className="flex-1">{error}</span>
           </div>
         )}
         <div className="flex gap-2">
@@ -528,7 +751,7 @@ const MaterialEditorSession: React.FC<MaterialEditorProps> = ({ model, textures,
             disabled={!dirty || saving}
             className="flex-1 py-2 rounded-md bg-gray-800 hover:bg-gray-700 text-gray-300 text-xs font-bold flex items-center justify-center gap-1.5 border border-gray-700 disabled:opacity-40 disabled:cursor-not-allowed"
           >
-            <Undo2 size={12} /> Revert
+            <UndoIcon size={12} /> Revert
           </button>
           {onSave ? (
             <button
@@ -537,7 +760,7 @@ const MaterialEditorSession: React.FC<MaterialEditorProps> = ({ model, textures,
               disabled={!dirty || saving}
               className="flex-1 py-2 rounded-md bg-blue-600 hover:bg-blue-500 text-accent-ink text-xs font-bold flex items-center justify-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
             >
-              <Save size={12} /> {saving ? 'Saving…' : 'Save'}
+              <SaveIcon size={12} /> {saving ? 'Saving…' : 'Save'}
             </button>
           ) : (
             <span className="flex-1 text-2xs text-gray-600 self-center text-center">Preview only — not saved</span>

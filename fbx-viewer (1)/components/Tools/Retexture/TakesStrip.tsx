@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { AlertTriangle, Check, Image as ImageIcon } from 'lucide-react';
+import { CheckIcon, ImageIcon, WarningIcon } from '../../UI/Icons';
 import { Spinner, Tooltip } from '../../UI/kit';
 import { startingLookName, type SessionPart, type Take } from './retextureSession';
 
@@ -36,7 +36,7 @@ const Tile: React.FC<{ selected: boolean; saved: boolean; label: string; tip: Re
       {children}
       {saved && (
         <span title="On the model" className="absolute right-0.5 top-0.5 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-accent text-accent-ink">
-          <Check size={9} strokeWidth={3} />
+          <CheckIcon size={9} strokeWidth={3} />
         </span>
       )}
     </button>
@@ -78,7 +78,7 @@ export const TakesStrip: React.FC<{
             onClick={() => onFocus(take)}
           >
             {take.state === 'ready' && take.url && <img src={take.url} alt="" draggable={false} className="h-full w-full object-cover" />}
-            {take.state === 'failed' && <span className="flex h-full w-full items-center justify-center text-bad"><AlertTriangle size={15} /></span>}
+            {take.state === 'failed' && <span className="flex h-full w-full items-center justify-center text-bad"><WarningIcon size={15} /></span>}
             {take.state !== 'ready' && take.state !== 'failed' && (
               <span className="flex h-full w-full flex-col items-center justify-center gap-1 text-ink-2">
                 <Spinner className="text-accent" />

@@ -54,6 +54,14 @@ export interface MaterialGraphNode {
      * nodes): each model material using the asset may set its own value (see withMaterialParameters).
      */
     parameter?: string;
+    /** A name of the user's own, shown on the canvas instead of the node's kind. The shader never sees it. */
+    name?: string;
+    /** The header's colour on the canvas (#rrggbb). The shader never sees it. */
+    color?: string;
+    /** Shown on the canvas as its header only. The shader never sees it. */
+    collapsed?: boolean;
+    /** Passes its main input straight through instead of doing its work (bypassInput). */
+    bypass?: boolean;
 }
 
 export interface MaterialGraphLink {
@@ -109,12 +117,73 @@ const DEFINITIONS = new Map(MATERIAL_NODE_DEFINITIONS.map(definition => [definit
 
 export const getMaterialNodeDefinition = (type: string): MaterialNodeDef | undefined => DEFINITIONS.get(type);
 
-/** Material Output inputs each stage computes. */
+/** Material Output inputs each stage computes (the fragment stage's physical inputs too, where a graph uses them: physicalOutputs). */
 export const STAGE_OUTPUTS: Record<MaterialStage, readonly string[]> = {
-    fragment: ['baseColor', 'opacity', 'metalness', 'roughness', 'normal', 'emissive', 'occlusion'],
+    fragment: ['baseColor', 'opacity', 'metalness', 'roughness', 'normal', 'emissive', 'emissiveStrength', 'occlusion'],
     vertex: ['worldPositionOffset'],
     shadow: ['opacity'],
 };
+
+// ---------------------------------------------------------------------------
+// The physical surface
+// ---------------------------------------------------------------------------
+
+/**
+ * Parts of the physical surface a graph can use. A graph using none is drawn by the standard material;
+ * one using any is drawn by the physical material, with only the parts it uses switched on.
+ */
+export type PhysicalFeature = 'specular' | 'anisotropy' | 'coat' | 'sheen' | 'thinFilm' | 'transmission' | 'dispersion';
+
+export const PHYSICAL_FEATURES: readonly PhysicalFeature[] = ['specular', 'anisotropy', 'coat', 'sheen', 'thinFilm', 'transmission', 'dispersion'];
+
+/** The Material Output inputs each part reads. */
+export const PHYSICAL_FEATURE_OUTPUTS: Record<PhysicalFeature, readonly string[]> = {
+    specular: ['specularWeight', 'specularColor', 'ior'],
+    anisotropy: ['anisotropy', 'anisotropyRotation'],
+    coat: ['coat', 'coatRoughness', 'coatNormal'],
+    sheen: ['sheenColor', 'sheenRoughness'],
+    thinFilm: ['thinFilm', 'thinFilmThickness'],
+    transmission: ['transmission', 'thickness', 'attenuationColor', 'attenuationDistance'],
+    dispersion: ['dispersion'],
+};
+
+/** The inputs that switch each part on, when wired or set away from their default (a coat's roughness alone makes no coat). */
+const FEATURE_SWITCHES: Record<PhysicalFeature, readonly string[]> = {
+    specular: ['specularWeight', 'specularColor', 'ior'],
+    anisotropy: ['anisotropy'],
+    coat: ['coat'],
+    sheen: ['sheenColor'],
+    thinFilm: ['thinFilm'],
+    transmission: ['transmission'],
+    dispersion: ['dispersion'],
+};
+
+const sameValue = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
+
+/**
+ * The parts of the physical surface a (normalised) graph uses: those whose switching input is wired into
+ * the Material Output or set there away from its default. Dispersion only shows through transmission.
+ */
+export const materialGraphFeatures = (graph: MaterialGraph): PhysicalFeature[] => {
+    const output = graph.nodes.find(node => node.type === OUTPUT_NODE_TYPE);
+    if (!output) return [];
+    const definition = DEFINITIONS.get(OUTPUT_NODE_TYPE)!;
+    const wired = new Set(graph.links.filter(link => link.toNode === output.id).map(link => link.toInput));
+    const used = (key: string): boolean => {
+        if (wired.has(key)) return true;
+        const param = definition.params.find(candidate => candidate.key === key);
+        return !!param && !sameValue(readParam(param, output.params[key]), param.default);
+    };
+    const features = PHYSICAL_FEATURES.filter(feature => FEATURE_SWITCHES[feature].some(used));
+    return features.includes('transmission') ? features : features.filter(feature => feature !== 'dispersion');
+};
+
+/**
+ * The Material Output inputs a physical material's fragment stage computes beyond the standard ones: the
+ * specular values always (a physical material reads them), and the inputs of each part in use.
+ */
+export const physicalOutputs = (features: readonly PhysicalFeature[]): string[] =>
+    [...new Set(['specular' as PhysicalFeature, ...features].flatMap(feature => PHYSICAL_FEATURE_OUTPUTS[feature]))];
 
 // ---------------------------------------------------------------------------
 // Params
@@ -254,6 +323,16 @@ export const createMaterialGraph = (): MaterialGraph => ({
 
 export const MAX_COMMENT_LENGTH = 500;
 const COMMENT_COLOR = /^#[0-9a-f]{6}$/i;
+/** Longest name of a node's own. */
+export const MAX_NODE_NAME_LENGTH = 64;
+
+/** How a stored node is shown on the canvas, and whether it is bypassed: what it keeps of each, made safe. */
+const readNodeLook = (node: Partial<MaterialGraphNode>): Pick<MaterialGraphNode, 'name' | 'color' | 'collapsed' | 'bypass'> => ({
+    ...(typeof node.name === 'string' && node.name.trim() ? { name: node.name.trim().slice(0, MAX_NODE_NAME_LENGTH) } : {}),
+    ...(typeof node.color === 'string' && COMMENT_COLOR.test(node.color) ? { color: node.color.toLowerCase() } : {}),
+    ...(node.collapsed === true ? { collapsed: true } : {}),
+    ...(node.bypass === true ? { bypass: true } : {}),
+});
 
 const readComments = (value: unknown): MaterialGraphComment[] => {
     if (!Array.isArray(value)) return [];
@@ -306,6 +385,7 @@ export const normalizeMaterialGraph = (value: unknown): MaterialGraph => {
             y: finiteNumber(node.y) ? node.y : 0,
             params: Object.fromEntries(definition.params.map(param => [param.key, readParam(param, params[param.key])])),
             ...(PARAMETER_NODE_PARAMS[definition.type] && normalizeParameterName(node.parameter) ? { parameter: normalizeParameterName(node.parameter) } : {}),
+            ...readNodeLook(node),
         });
     }
     if (!nodes.some(node => node.type === OUTPUT_NODE_TYPE)) nodes.unshift(createMaterialGraph().nodes[0]);
@@ -503,6 +583,16 @@ export interface CompileOptions {
 
 const glslName = (id: string) => id.replace(/[^A-Za-z0-9]/g, '_').slice(0, 40);
 
+/**
+ * The input a node passes straight through when bypassed: its main one (the first, unless its definition
+ * names another), converted to each output's type. Only a node with inputs and outputs can be bypassed,
+ * and never the Material Output.
+ */
+export const bypassInput = (definition: MaterialNodeDef): MaterialInputDef | null => {
+    if (definition.type === OUTPUT_NODE_TYPE || !definition.inputs.length || !definition.outputs.length) return null;
+    return definition.inputs.find(input => input.key === definition.main) ?? definition.inputs[0];
+};
+
 /** Compiles the part of a (normalised) graph a stage needs to GLSL for graphMaterial.ts. */
 export const compileMaterialGraph = (graph: MaterialGraph, options: CompileOptions = {}): CompiledMaterialGraph => {
     const stage = options.stage ?? 'fragment';
@@ -601,6 +691,23 @@ export const compileMaterialGraph = (graph: MaterialGraph, options: CompileOptio
         if (visiting.has(node.id)) return null;
         visiting.add(node.id);
         const definition = DEFINITIONS.get(node.type)!;
+        const passed = node.bypass ? bypassInput(definition) : null;
+        if (passed) {
+            // Bypassed: only its main input is read, and each output is that value as the output's type.
+            const value = inputValue(node, passed);
+            const from = resolvedPortType(passed.type, node.id, autoTypes);
+            const outputs: Record<string, string> = {};
+            for (const port of definition.outputs) {
+                const type = resolvedPortType(port.type, node.id, autoTypes);
+                const local = `mg_${glslName(node.id)}_out_${port.key}_${counter++}`;
+                statements.push(`${type} ${local} = ${convertValue(value, from, type)};`);
+                outputs[port.key] = local;
+            }
+            visiting.delete(node.id);
+            results.set(node.id, outputs);
+            shape.push(`${node.id}:${node.type}:${autoTypes.get(node.id)}:bypass`);
+            return outputs;
+        }
         const inputs: Record<string, string> = {};
         for (const input of definition.inputs) inputs[input.key] = inputValue(node, input);
         const context = contextFor(node);
@@ -642,6 +749,38 @@ export const compileMaterialGraph = (graph: MaterialGraph, options: CompileOptio
     });
     shape.push(`previews:${(options.previews ?? []).join(',')}`);
     return { stage, statements, globals, helpers: [...helpers], outputs, connected, uniforms, builtins, key: shape.join('|'), unused, previews };
+};
+
+/**
+ * A graph's shape: its nodes' kinds, the settings written into the shader (choices, switches, code), which
+ * nodes are bypassed and its wiring; not its values, where its nodes sit, their parameter names, how they
+ * are shown (names, colours, folding) or its comments. Graphs of one shape compile to the same shaders,
+ * and differ only in their uniforms' values.
+ */
+export const materialGraphShape = (graph: MaterialGraph): string => JSON.stringify([
+    graph.nodes.map((node) => {
+        const definition = DEFINITIONS.get(node.type);
+        const statics = definition ? definition.params.filter(param => STATIC_PARAM_KINDS.has(param.kind)).map(param => node.params[param.key] ?? null) : [];
+        return node.bypass ? [node.id, node.type, statics, 'bypass'] : [node.id, node.type, statics];
+    }),
+    graph.links.map(link => [link.fromNode, link.fromOutput, link.toNode, link.toInput]),
+]);
+
+const looks = new WeakMap<MaterialGraph, string>();
+
+/**
+ * What a graph draws with: everything but where its nodes sit, how they are shown (their names, colours
+ * and folding) and its comments. Two graphs alike here shade every material alike, so moving, naming,
+ * colouring or folding nodes changes nothing a material draws; bypassing one does. Graphs are never
+ * changed in place, so each is read once.
+ */
+export const materialGraphLook = (graph: MaterialGraph): string => {
+    let look = looks.get(graph);
+    if (look === undefined) {
+        look = JSON.stringify([graph.nodes.map(({ x: _x, y: _y, name: _name, color: _color, collapsed: _collapsed, ...rest }) => rest), graph.links]);
+        looks.set(graph, look);
+    }
+    return look;
 };
 
 // ---------------------------------------------------------------------------

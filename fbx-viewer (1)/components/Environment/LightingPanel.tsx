@@ -1,5 +1,5 @@
 import React, { useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { Lightbulb, Flashlight, Plus, Power, SunDim } from 'lucide-react';
+import { BulbIcon, PlusIcon, PowerIcon, SpotlightIcon, SunDimIcon } from '../UI/Icons';
 import { resolveSkyLight, skyModel } from '../../runtime/sky/skySettings';
 import { useScene } from '../../context/SceneContext';
 import type { LevelComponent, LevelObject, SkyConfig } from '../../types';
@@ -8,6 +8,7 @@ import { editorSession } from '../../utils/editorSession';
 import { frontendDiagnostics } from '../../diagnostics/runtime';
 import { ScrubbableInput } from '../UI/Properties/ScrubbableInput';
 import { BakedLightingSection } from './BakedLightingSection';
+import { ColourField } from '../UI/ColourPicker';
 
 type Vec3 = [number, number, number];
 
@@ -148,7 +149,7 @@ const SkyLightRow: React.FC<{
     const usable = skyModel(sky.skyConfig) !== 'classic';
     return (
         <div className="flex items-center gap-2 px-3 py-2 border-b border-gray-800">
-            <SunDim size={12} className={settings.enabled && usable ? 'text-cyan-400' : 'text-gray-600'} />
+            <SunDimIcon size={12} className={settings.enabled && usable ? 'text-cyan-400' : 'text-gray-600'} />
             <button
                 type="button"
                 onClick={() => onSelect(sky.id)}
@@ -231,7 +232,7 @@ export const LightingPanel: React.FC<LightingPanelProps> = ({ levelId, onSelect,
         >
             <div className="flex items-center justify-between p-3 border-b border-gray-800 bg-gray-950 shrink-0">
                 <span className="text-xs font-bold text-gray-300 flex items-center gap-2">
-                    <Lightbulb size={14} className="text-amber-400" /> Lights
+                    <BulbIcon size={14} className="text-amber-400" /> Lights
                     <span className="text-2xs font-normal text-gray-500">{lights.length}</span>
                 </span>
                 <div className="flex items-center gap-1">
@@ -246,7 +247,7 @@ export const LightingPanel: React.FC<LightingPanelProps> = ({ levelId, onSelect,
                                 : 'Open this level to add lights'}
                             aria-label={`Add ${LIGHT_LABELS[kind]}`}
                         >
-                            <Plus size={10} /> {kind === 'pointLight' ? 'Point' : 'Spot'}
+                            <PlusIcon size={10} /> {kind === 'pointLight' ? 'Point' : 'Spot'}
                         </button>
                     ))}
                 </div>
@@ -263,7 +264,7 @@ export const LightingPanel: React.FC<LightingPanelProps> = ({ levelId, onSelect,
                 {lights.map((light) => {
                     const { object, component } = light;
                     const kind = component.type as LightKind;
-                    const Icon = kind === 'spotLight' ? Flashlight : Lightbulb;
+                    const Icon = kind === 'spotLight' ? SpotlightIcon : BulbIcon;
                     const color = readColor(component);
                     const intensity = readIntensity(component);
                     const shared = (lightCountByObject.get(object.id) ?? 0) > 1;
@@ -292,22 +293,12 @@ export const LightingPanel: React.FC<LightingPanelProps> = ({ levelId, onSelect,
                                     aria-label={`${component.enabled ? 'Turn off' : 'Turn on'} ${name}`}
                                     aria-pressed={component.enabled}
                                 >
-                                    <Power size={11} />
+                                    <PowerIcon size={11} />
                                 </button>
                             </div>
                             <div className="flex items-center gap-2">
-                                <input
-                                    type="color"
-                                    value={color}
-                                    disabled={!isOpenLevel}
-                                    onChange={(e) => {
-                                        const next = e.target.value;
-                                        if (HEX_COLOR.test(next) && next.toLowerCase() !== color.toLowerCase()) setProp(light, 'color', next);
-                                    }}
-                                    className="w-8 h-5 bg-transparent border-none p-0 cursor-pointer shrink-0 disabled:cursor-not-allowed"
-                                    title="Light colour"
-                                    aria-label={`${name} colour`}
-                                />
+                                <ColourField value={color} disabled={!isOpenLevel} label={`${name} colour`} className="h-5 w-8"
+                                    onChange={(next) => { if (HEX_COLOR.test(next) && next.toLowerCase() !== color.toLowerCase()) setProp(light, 'color', next); }} />
                                 <div className="flex-1 min-w-0">
                                     <ScrubbableInput
                                         label="Int"

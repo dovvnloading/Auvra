@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Check, ChevronLeft, FolderInput, HardDrive, Pencil, RefreshCw, Folder, Scaling } from 'lucide-react';
+import { CheckIcon, ChevronLeftIcon, DriveIcon, FolderIcon, FolderMoveIcon, PencilIcon, RefreshIcon, ScaleIcon } from '../Icons';
 import { ROOT_FOLDER, ROOT_FOLDER_LABEL, depthFirstFolderOrder, folderDepth, folderLeafName, normalizeFolderPath } from './browserFolders';
 
 export interface AssetMenuAction {
@@ -96,10 +96,10 @@ export const AssetContextMenu: React.FC<AssetContextMenuProps> = ({
                 </div>
                 {mode === 'main' ? (
                     <>
-                        {item('Rename', <Pencil size={12} />, rename, onRename)}
-                        {item('Move to Folder', <FolderInput size={12} />, move, () => setMode('move'))}
-                        {reimport && item('Reimport...', <RefreshCw size={12} />, reimport, onReimport)}
-                        {importSize && onImportSize && item('Import Settings...', <Scaling size={12} />, importSize, onImportSize)}
+                        {item('Rename', <PencilIcon size={12} />, rename, onRename)}
+                        {item('Move to Folder', <FolderMoveIcon size={12} />, move, () => setMode('move'))}
+                        {reimport && item('Reimport...', <RefreshIcon size={12} />, reimport, onReimport)}
+                        {importSize && onImportSize && item('Import Settings...', <ScaleIcon size={12} />, importSize, onImportSize)}
                     </>
                 ) : (
                     <>
@@ -108,7 +108,7 @@ export const AssetContextMenu: React.FC<AssetContextMenuProps> = ({
                             onClick={() => setMode('main')}
                             className="w-full flex items-center gap-1 px-2 py-1 text-2xs text-gray-400 hover:text-white"
                         >
-                            <ChevronLeft size={12} /> Back
+                            <ChevronLeftIcon size={12} /> Back
                         </button>
                         <div className="max-h-48 overflow-y-auto custom-scrollbar">
                             {[ROOT_FOLDER, ...depthFirstFolderOrder(folders)].map((folder) => {
@@ -124,9 +124,9 @@ export const AssetContextMenu: React.FC<AssetContextMenuProps> = ({
                                         className="w-full flex items-center gap-2 pr-3 py-1 text-left text-xs text-gray-300 hover:bg-gray-700 hover:text-white disabled:text-gray-500 disabled:hover:bg-transparent"
                                         style={{ paddingLeft: 12 + folderDepth(folder) * 10 }}
                                     >
-                                        {folder === ROOT_FOLDER ? <HardDrive size={11} /> : <Folder size={11} className="text-amber-300/60" />}
+                                        {folder === ROOT_FOLDER ? <DriveIcon size={11} /> : <FolderIcon size={11} className="text-amber-300/60" />}
                                         <span className="truncate flex-1">{folderLeafName(folder)}</span>
-                                        {isCurrent && <Check size={11} />}
+                                        {isCurrent && <CheckIcon size={11} />}
                                     </button>
                                 );
                             })}

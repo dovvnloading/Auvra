@@ -1,6 +1,6 @@
 
 import React, { useRef, useState, useMemo, useCallback } from 'react';
-import { Search } from 'lucide-react';
+import { SearchIcon } from '../UI/Icons';
 import { LogicConnection, LogicPin, LevelBlueprintData, LevelObject, PinDataType } from '../../types';
 import { LogicNodeComponent, PIN_COLORS } from './LogicNode';
 import { LogicConnection as LogicConnectionComponent } from './LogicConnection';
@@ -278,7 +278,7 @@ export const LogicCanvas: React.FC<LogicCanvasProps> = ({
         >
             <div className="absolute top-4 right-4 z-30">
                 <button onClick={resetViewport} className="p-2 bg-gray-800 hover:bg-gray-700 text-white rounded border border-gray-700 shadow-md">
-                    <Search size={14} />
+                    <SearchIcon size={14} />
                 </button>
             </div>
 

@@ -1,6 +1,6 @@
 import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { BookOpen, FileCode2, Save, Sparkles, X } from 'lucide-react';
+import { BookIcon, CrossIcon, SaveIcon, ScriptIcon, SparklesIcon } from '../UI/Icons';
 import { SCRIPT_LIMITS } from '../../runtime/scripting/protocol';
 import { frontendDiagnostics } from '../../diagnostics/runtime';
 import { ScriptAssistant } from './ScriptAssistant';
@@ -427,7 +427,7 @@ export const ScriptEditorModal: React.FC<ScriptEditorModalProps> = ({ title, sou
             <div ref={panelRef} className="relative flex h-[85vh] w-full max-w-6xl flex-col overflow-hidden rounded-xl border border-gray-700 bg-gray-900 shadow-2xl">
                 <div className="flex items-center justify-between gap-3 border-b border-gray-800 bg-gray-950 px-5 py-3">
                     <div className="flex min-w-0 items-center gap-3">
-                        <FileCode2 size={18} className="shrink-0 text-blue-400" />
+                        <ScriptIcon size={18} className="shrink-0 text-blue-400" />
                         <div className="min-w-0">
                             <h2 id={titleId} className="text-sm font-bold text-white">Edit Script</h2>
                             <p className="truncate text-2xs text-gray-500" title={title}>{title} · JavaScript or TypeScript · runs during play</p>
@@ -440,7 +440,7 @@ export const ScriptEditorModal: React.FC<ScriptEditorModalProps> = ({ title, sou
                             aria-expanded={assistantOpen}
                             className={`flex items-center gap-1.5 rounded px-2 py-1 text-2xs transition-colors ${assistantOpen ? 'bg-gray-800 text-white' : 'text-gray-400 hover:bg-gray-800 hover:text-white'}`}
                         >
-                            <Sparkles size={12} /> AI
+                            <SparklesIcon size={12} /> AI
                         </button>
                         <button
                             type="button"
@@ -449,9 +449,9 @@ export const ScriptEditorModal: React.FC<ScriptEditorModalProps> = ({ title, sou
                             aria-controls={referenceId}
                             className={`flex items-center gap-1.5 rounded px-2 py-1 text-2xs transition-colors ${referenceOpen ? 'bg-gray-800 text-white' : 'text-gray-400 hover:bg-gray-800 hover:text-white'}`}
                         >
-                            <BookOpen size={12} /> API Reference
+                            <BookIcon size={12} /> API Reference
                         </button>
-                        <button type="button" onClick={requestClose} className="rounded p-1 text-gray-500 hover:bg-gray-800 hover:text-white" aria-label="Close script editor"><X size={16} /></button>
+                        <button type="button" onClick={requestClose} className="rounded p-1 text-gray-500 hover:bg-gray-800 hover:text-white" aria-label="Close script editor"><CrossIcon size={16} /></button>
                     </div>
                 </div>
 
@@ -576,7 +576,7 @@ export const ScriptEditorModal: React.FC<ScriptEditorModalProps> = ({ title, sou
                             title="Save (Ctrl+S)"
                             className="flex items-center gap-1.5 rounded border border-gray-700 px-3 py-1.5 text-xs text-gray-200 hover:bg-gray-800 disabled:opacity-50"
                         >
-                            <Save size={12} /> Save
+                            <SaveIcon size={12} /> Save
                         </button>
                         <button
                             type="button"

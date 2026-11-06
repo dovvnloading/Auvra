@@ -1,5 +1,5 @@
 import React from 'react';
-import { Layers } from 'lucide-react';
+import { LayersIcon } from '../UI/Icons';
 import { useScene } from '../../context/SceneContext';
 import type { ComponentInspectorProps } from '../../runtime/components/types';
 
@@ -10,7 +10,7 @@ export const LevelStreamingInspector: React.FC<ComponentInspectorProps> = ({ com
     const choices = levels.filter(level => level.id !== currentLevelId);
     return (
         <div className="space-y-1">
-            <label className="flex items-center gap-1 text-2xs text-gray-400"><Layers size={10} /> Level to load</label>
+            <label className="flex items-center gap-1 text-2xs text-gray-400"><LayersIcon size={10} /> Level to load</label>
             <select
                 aria-label="Level to load"
                 value={levelId}

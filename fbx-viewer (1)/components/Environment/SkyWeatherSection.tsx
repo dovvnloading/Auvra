@@ -1,5 +1,5 @@
 import React from 'react';
-import { CloudRain, Clock } from 'lucide-react';
+import { ClockIcon, RainIcon } from '../UI/Icons';
 import type { SkyConfig } from '../../types';
 import { ScrubbableInput } from '../UI/Properties/ScrubbableInput';
 import {
@@ -42,7 +42,7 @@ export const SkyWeatherSection: React.FC<SkyWeatherSectionProps> = ({ config, on
         <>
             <div className="space-y-2">
                 <div className="text-2xs font-bold text-gray-500 flex items-center gap-1.5">
-                    <Clock size={12} /> Day-Night Cycle
+                    <ClockIcon size={12} /> Day-Night Cycle
                 </div>
                 <div className="space-y-2 bg-gray-800 p-2 rounded border border-gray-700">
                     <div className="flex items-center justify-between">
@@ -76,7 +76,7 @@ export const SkyWeatherSection: React.FC<SkyWeatherSectionProps> = ({ config, on
 
             <div className="space-y-2">
                 <div className="text-2xs font-bold text-gray-500 flex items-center gap-1.5">
-                    <CloudRain size={12} /> Weather
+                    <RainIcon size={12} /> Weather
                 </div>
                 <div className="space-y-2 bg-gray-800 p-2 rounded border border-gray-700">
                     <div className="flex items-center justify-between gap-2">

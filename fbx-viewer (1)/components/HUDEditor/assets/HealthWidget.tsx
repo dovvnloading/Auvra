@@ -1,6 +1,6 @@
 
 import React from 'react';
-import { Heart } from 'lucide-react';
+import { HeartIcon } from '../../UI/Icons';
 
 interface HealthWidgetProps {
     value?: number;
@@ -24,7 +24,7 @@ export const HealthWidget: React.FC<HealthWidgetProps> = ({
     return (
         <div className="w-full h-full flex flex-col justify-center">
             <div className="flex items-center gap-2 mb-1">
-                {showIcon && <Heart size={16} color={barColor} fill={barColor} className="animate-pulse" />}
+                {showIcon && <HeartIcon size={16} color={barColor} fill={barColor} className="animate-pulse" />}
                 {showText && (
                     <span className="text-sm font-bold font-mono text-white">
                         {value}/{max}

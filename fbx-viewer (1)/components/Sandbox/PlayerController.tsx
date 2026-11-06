@@ -3,6 +3,7 @@ import React, { useEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import { useFrame, useThree } from '@react-three/fiber';
 import { GraphRuntimeAPI } from '../AnimationGraph/GraphRuntime';
+import { LOCOMOTION_FRAME_PRIORITY } from '../AnimationGraph/hooks/useGraphAnimator';
 import { ProjectileManagerHandle } from './ProjectileManager';
 import { SandboxEntityHandle } from './SandboxEntity';
 import { usePlayerControls } from './hooks/usePlayerControls';
@@ -66,7 +67,7 @@ interface PlayerControllerProps {
     enabled: boolean;
     levelObjects: LevelObject[]; // Collision source when there is no physics world
     /** The player's blueprint; its 'Walk Speed' / 'Run Speed' stats set the movement speeds. */
-    blueprint?: Pick<Blueprint, 'stats' | 'upperBody' | 'weapons' | 'aimView'>;
+    blueprint?: Pick<Blueprint, 'stats' | 'upperBody' | 'weapons' | 'aimView' | 'movement'>;
     onStaminaChange?: (val: number) => void;
     onAimChange?: (isAiming: boolean) => void;
     /** The held weapon and its ammunition, each time any of it changes. */
@@ -124,7 +125,7 @@ export const PlayerController: React.FC<PlayerControllerProps> = ({
     const { getInputState } = usePlayerControls(enabled);
 
     // 2. Physics & Locomotion System
-    const { updatePhysics, ride, hasPhysicsWorld } = usePlayerPhysics(modelObject, camera, onStaminaChange, levelObjects, blueprint?.stats);
+    const { updatePhysics, ride, hasPhysicsWorld } = usePlayerPhysics(modelObject, camera, onStaminaChange, levelObjects, blueprint?.stats, blueprint?.movement);
     // The vehicle the character rides in, while the player drives it.
     const riding = useRef<string | null>(null);
 
@@ -190,8 +191,13 @@ export const PlayerController: React.FC<PlayerControllerProps> = ({
     const upperBodyPlaying = useRef<string | null>(null);
     // A turn-in-place clip is playing on the legs.
     const turnPlaying = useRef(false);
+    // Shots this frame's input fired, taken once the pose is final (after animation and IK).
+    const pendingShots = useRef<{ weapon: ResolvedWeapon; shots: number; aiming: boolean } | null>(null);
 
+    // Input, weapons and movement run before the animation graph, so this frame's pose answers this
+    // frame's input and the graph reads where the character is now.
     useFrame((_, delta) => {
+        pendingShots.current = null;
         if (!enabled || !modelObject || !apiRef.current) return;
 
         // Disable controls if dead
@@ -275,9 +281,12 @@ export const PlayerController: React.FC<PlayerControllerProps> = ({
         const rootMotion = apiRef.current.getActiveState?.()?.rootMotion ? travel : null;
         // A turn clip on the legs turns the character by its own turn (taken every frame so none piles up).
         const clipYaw = apiRef.current.consumeRootYaw?.() ?? 0;
-        const {
+        // Or a matched turn-in-place clip's turn, when one is turning the character.
+        const matchedTurn = apiRef.current.consumeMatchedTurn?.() ?? null;
+        // A matched clip that turns the character round sets the pace of the turn while it moves, too.
+        const turnsRound = !turnPlaying.current && (apiRef.current.isMatchedTurnRound?.() ?? false);        const {
             isMoving, effectiveSprint, localInputX, localInputY, isAirborne, isFalling, verticalSpeed, turnStarted, turningInPlace,
-        } = updatePhysics(input, delta, rootMotion, turnPlaying.current ? clipYaw : null);
+        } = updatePhysics(input, delta, rootMotion, turnPlaying.current ? clipYaw : matchedTurn, turnsRound);
 
         // Turning in place: the held weapon's turn clip steps the feet round on the legs while the
         // upper body keeps its aim; without one the body turns on the spot.
@@ -298,8 +307,8 @@ export const PlayerController: React.FC<PlayerControllerProps> = ({
         }
 
         // --- Step C: Combat ---
-        // Over the shoulder the character is in view while aiming, so its muzzle flashes then too.
-        if (weapon && weaponStep.shots > 0) fireShots(weapon, weaponStep.shots, input.isAiming, camera, blueprint?.aimView === 'shoulder');
+        // Fired below, from the muzzle where this frame's animation and aim put it.
+        if (weapon && weaponStep.shots > 0) pendingShots.current = { weapon, shots: weaponStep.shots, aiming: input.isAiming };
 
         // --- Step D: Animation Graph Bridge ---
         apiRef.current.setVariable('Speed', isMoving ? 1 : 0);
@@ -315,6 +324,15 @@ export const PlayerController: React.FC<PlayerControllerProps> = ({
         apiRef.current.setVariable('IsFiring', firing && !reloading);
         apiRef.current.setVariable('IsAiming', input.isAiming);
         apiRef.current.setVariable('IsReloading', reloading);
+    }, LOCOMOTION_FRAME_PRIORITY);
+
+    // Shots leave the muzzle once animation and IK have posed the character for this frame.
+    useFrame(() => {
+        const pending = pendingShots.current;
+        if (!pending) return;
+        pendingShots.current = null;
+        // Over the shoulder the character is in view while aiming, so its muzzle flashes then too.
+        fireShots(pending.weapon, pending.shots, pending.aiming, camera, blueprint?.aimView === 'shoulder');
     });
 
 

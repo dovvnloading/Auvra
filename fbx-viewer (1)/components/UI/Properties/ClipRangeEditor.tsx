@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { ArrowLeftToLine, ArrowRightToLine, Pause, Play, Plus, Repeat, Scissors, SkipBack, StepBack, StepForward, Trash2, X } from 'lucide-react';
+import { CrossIcon, LoopIcon, PauseIcon, PlayIcon, PlusIcon, RangeEndIcon, RangeStartIcon, ScissorsIcon, SkipBackIcon, StepBackIcon, StepForwardIcon, TrashIcon } from '../Icons';
 import type { ClipRange } from '../../../types';
 import { frameOfTime, rangeRootShift, rootTravel, takeLabel, timeOfFrame, uniqueClipNames } from '../../../utils/clipRanges';
 import type { ClipTake, ClipTakeSource } from '../../../utils/clipTakes';
@@ -630,7 +630,7 @@ export const ClipRangeEditor: React.FC<ClipRangeEditorProps> = ({ name, load, ra
             <h2 className="text-xs font-semibold text-ink">Cut into clips</h2>
             <p className="truncate text-2xs text-ink-3" title={name}>{name}</p>
           </div>
-          <IconButton label="Cancel" onClick={onCancel}><X size={14} /></IconButton>
+          <IconButton label="Cancel" onClick={onCancel}><CrossIcon size={14} /></IconButton>
         </div>
 
         <div className="flex min-h-0 flex-1">
@@ -656,7 +656,7 @@ export const ClipRangeEditor: React.FC<ClipRangeEditorProps> = ({ name, load, ra
               <h3 className="truncate text-2xs font-medium text-ink-3">
                 {takeRanges.length ? `${takeRanges.length} ${takeRanges.length === 1 ? 'clip' : 'clips'} from this take` : 'Clips'}
               </h3>
-              <Button size="sm" icon={<Plus size={12} />} disabled={!take} onClick={addAtPlayhead}>Add clip</Button>
+              <Button size="sm" icon={<PlusIcon size={12} />} disabled={!take} onClick={addAtPlayhead}>Add clip</Button>
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto">
               {take && !takeRanges.length && (
@@ -675,15 +675,15 @@ export const ClipRangeEditor: React.FC<ClipRangeEditorProps> = ({ name, load, ra
                       onFocus={(event) => { if (focusName) { event.target.select(); setFocusName(false); } }}
                       onChange={(event) => patch(range.key, { name: event.target.value })}
                     />
-                    <IconButton label="Remove this clip" onClick={() => remove(range.key)}><Trash2 size={13} /></IconButton>
+                    <IconButton label="Remove this clip" onClick={() => remove(range.key)}><TrashIcon size={13} /></IconButton>
                   </div>
                   <div className="mt-1.5 grid grid-cols-[1fr_auto_1fr_auto] items-center gap-x-1 gap-y-1">
                     <span className="col-span-2 text-2xs text-ink-3">Start</span>
                     <span className="col-span-2 text-2xs text-ink-3">End</span>
                     <TimeField label="Start" value={range.start} take={take} unit={unit} onCommit={(time) => setEnds(range.key, time, range.end)} />
-                    <IconButton label="Start at the playhead" shortcut="[" onClick={() => setEnds(range.key, playback.current.time, range.end)}><ArrowRightToLine size={13} /></IconButton>
+                    <IconButton label="Start at the playhead" shortcut="[" onClick={() => setEnds(range.key, playback.current.time, range.end)}><RangeStartIcon size={13} /></IconButton>
                     <TimeField label="End" value={range.end} take={take} unit={unit} onCommit={(time) => setEnds(range.key, range.start, time)} />
-                    <IconButton label="End at the playhead" shortcut="]" onClick={() => setEnds(range.key, range.start, playback.current.time)}><ArrowLeftToLine size={13} /></IconButton>
+                    <IconButton label="End at the playhead" shortcut="]" onClick={() => setEnds(range.key, range.start, playback.current.time)}><RangeEndIcon size={13} /></IconButton>
                   </div>
                   <div className="mt-1 flex items-center justify-between gap-2">
                     <Tick label="Loops" checked={range.loop} onChange={(loop) => patch(range.key, { loop })} />
@@ -707,7 +707,7 @@ export const ClipRangeEditor: React.FC<ClipRangeEditorProps> = ({ name, load, ra
                   title={range.loop ? 'Loops' : 'Plays once'}
                 >
                   <span className="min-w-0 flex-1 truncate" title={range.name}>{takeLabel(range.name) || 'Unnamed'}</span>
-                  {range.loop && <Repeat size={11} className="shrink-0 text-ink-3" aria-label="Loops" />}
+                  {range.loop && <LoopIcon size={11} className="shrink-0 text-ink-3" aria-label="Loops" />}
                   <span className="shrink-0 text-2xs text-ink-3 tabular-nums">{timeText(range.start, take, unit)}–{timeText(range.end, take, unit)}</span>
                 </button>
               )))}
@@ -729,12 +729,12 @@ export const ClipRangeEditor: React.FC<ClipRangeEditorProps> = ({ name, load, ra
         </div>
 
         <div className="flex h-9 shrink-0 items-center gap-1 border-t border-line px-2">
-          <IconButton label={playing ? 'Pause' : 'Play'} shortcut="Space" disabled={!take} onClick={togglePlay}>{playing ? <Pause size={13} /> : <Play size={13} />}</IconButton>
-          <IconButton label="Back to where this starts" disabled={!take} onClick={() => scrub(playback.current.from)}><SkipBack size={13} /></IconButton>
-          <IconButton label="A frame back" shortcut="←" disabled={!take} onClick={() => stepFrame(-1)}><StepBack size={13} /></IconButton>
-          <IconButton label="A frame on" shortcut="→" disabled={!take} onClick={() => stepFrame(1)}><StepForward size={13} /></IconButton>
+          <IconButton label={playing ? 'Pause' : 'Play'} shortcut="Space" disabled={!take} onClick={togglePlay}>{playing ? <PauseIcon size={13} /> : <PlayIcon size={13} />}</IconButton>
+          <IconButton label="Back to where this starts" disabled={!take} onClick={() => scrub(playback.current.from)}><SkipBackIcon size={13} /></IconButton>
+          <IconButton label="A frame back" shortcut="←" disabled={!take} onClick={() => stepFrame(-1)}><StepBackIcon size={13} /></IconButton>
+          <IconButton label="A frame on" shortcut="→" disabled={!take} onClick={() => stepFrame(1)}><StepForwardIcon size={13} /></IconButton>
           <span ref={readout} className="ml-1 w-20 shrink-0 text-2xs text-ink-2 tabular-nums" />
-          <Button size="sm" variant="ghost" icon={<Scissors size={12} />} disabled={!take || !takeRanges.length} onClick={splitAtPlayhead}>Split at playhead <Kbd className="ml-1">S</Kbd></Button>
+          <Button size="sm" variant="ghost" icon={<ScissorsIcon size={12} />} disabled={!take || !takeRanges.length} onClick={splitAtPlayhead}>Split at playhead <Kbd className="ml-1">S</Kbd></Button>
           <span className="min-w-0 flex-1 truncate px-2 text-right text-2xs text-ink-3">Scroll over the timeline to zoom in. Shift and scroll goes along it.</span>
           <Segmented label="Show times in" value={unit} onChange={setUnit} options={UNITS} />
         </div>

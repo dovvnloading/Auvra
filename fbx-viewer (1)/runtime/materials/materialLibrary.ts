@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { getMaterialNodeDefinition, normalizeMaterialGraph, textureSlot, withMaterialParameters, type MaterialGraph, type MaterialParameterValues, type TextureSlot } from './materialGraph';
+import { getMaterialNodeDefinition, materialGraphLook, normalizeMaterialGraph, textureSlot, withMaterialParameters, type MaterialGraph, type MaterialParameterValues, type TextureSlot } from './materialGraph';
 import { bindMaterialGraph, canBindMaterialGraph, unbindMaterialGraph, type MaterialTextureLookup } from './graphMaterial';
 
 /**
@@ -15,6 +15,10 @@ export interface MaterialAsset {
     id: string;
     name: string;
     graph: MaterialGraph;
+    /** The image graph the material's pictures are made from (texturing/graph), when it has one. */
+    textureGraph?: Record<string, unknown>;
+    /** The painted layers its pictures are made from (texturing/paint), when it has them. */
+    paint?: Record<string, unknown>;
 }
 
 export const MATERIALS_DOMAIN = 'materials';
@@ -26,7 +30,52 @@ export interface MaterialAssetDocument {
     graph: MaterialGraph;
     /** The textures the graph samples, so the project can keep them and check them. */
     textureIds: string[];
+    textureGraph?: Record<string, unknown>;
+    paint?: Record<string, unknown>;
 }
+
+/**
+ * Textures named inside a material's authoring documents (its texture graph or paint layers):
+ * strings under `texture` or `textureId`, and the values of a `textures` record. Read generically
+ * so the game build need not load the authoring code.
+ */
+const authoringTextureIds = (value: unknown, into: Set<string>, key = ''): void => {
+    if (typeof value === 'string') {
+        if ((key === 'texture' || key === 'textureId' || key === '#textures') && value) into.add(value);
+        return;
+    }
+    if (Array.isArray(value)) {
+        for (const item of value) authoringTextureIds(item, into, key === '#textures' ? '' : key);
+        return;
+    }
+    if (!value || typeof value !== 'object') return;
+    for (const [childKey, child] of Object.entries(value as Record<string, unknown>)) authoringTextureIds(child, into, key === 'textures' ? '#textures' : childKey);
+};
+
+/** The same authoring document with every mention of `textureId` cleared. */
+const withoutAuthoringTexture = <T>(value: T, textureId: string, key = ''): T => {
+    if (typeof value === 'string') return ((key === 'texture' || key === 'textureId' || key === '#textures') && value === textureId ? '' : value) as T;
+    if (Array.isArray(value)) return value.map((item) => withoutAuthoringTexture(item, textureId, key === '#textures' ? '' : key)) as T;
+    if (!value || typeof value !== 'object') return value;
+    const result: Record<string, unknown> = {};
+    for (const [childKey, child] of Object.entries(value as Record<string, unknown>)) result[childKey] = withoutAuthoringTexture(child, textureId, key === 'textures' ? '#textures' : childKey);
+    return result as T;
+};
+
+/** The asset with `textureId` gone from its graph and its authoring documents; the same asset when none names it. */
+export const withoutAssetTexture = (asset: MaterialAsset, textureId: string): MaterialAsset => {
+    const graph = withoutGraphTexture(asset.graph, textureId);
+    const named = new Set<string>();
+    authoringTextureIds(asset.textureGraph, named);
+    authoringTextureIds(asset.paint, named);
+    if (graph === asset.graph && !named.has(textureId)) return asset;
+    return {
+        ...asset,
+        graph,
+        ...(asset.textureGraph ? { textureGraph: withoutAuthoringTexture(asset.textureGraph, textureId) } : {}),
+        ...(asset.paint ? { paint: withoutAuthoringTexture(asset.paint, textureId) } : {}),
+    };
+};
 
 /** The textures a graph samples, and whether each holds colour, data or normals. */
 export const graphTextures = (graph: MaterialGraph): Array<{ textureId: string; slot: TextureSlot }> => {
@@ -54,23 +103,59 @@ export const withoutGraphTexture = (graph: MaterialGraph, textureId: string): Ma
     };
 };
 
-export const materialAssetDocument = (asset: MaterialAsset): MaterialAssetDocument => ({
-    id: asset.id,
-    name: asset.name,
-    graph: asset.graph,
-    textureIds: [...new Set(graphTextures(asset.graph).map(texture => texture.textureId))],
-});
+export const materialAssetDocument = (asset: MaterialAsset): MaterialAssetDocument => {
+    const textureIds = new Set(graphTextures(asset.graph).map(texture => texture.textureId));
+    authoringTextureIds(asset.textureGraph, textureIds);
+    authoringTextureIds(asset.paint, textureIds);
+    return {
+        id: asset.id,
+        name: asset.name,
+        graph: asset.graph,
+        textureIds: [...textureIds],
+        ...(asset.textureGraph ? { textureGraph: asset.textureGraph } : {}),
+        ...(asset.paint ? { paint: asset.paint } : {}),
+    };
+};
 
 /** A stored asset made safe, or null when it is not one. */
 export const readMaterialAsset = (value: unknown): MaterialAsset | null => {
     if (!value || typeof value !== 'object') return null;
     const document = value as Partial<MaterialAssetDocument>;
     if (typeof document.id !== 'string' || !document.id) return null;
-    return {
+    const asset: MaterialAsset = {
         id: document.id,
         name: typeof document.name === 'string' && document.name.trim() ? document.name.trim().slice(0, 128) : 'Material',
         graph: normalizeMaterialGraph(document.graph),
     };
+    if (document.textureGraph && typeof document.textureGraph === 'object' && !Array.isArray(document.textureGraph)) asset.textureGraph = document.textureGraph;
+    if (document.paint && typeof document.paint === 'object' && !Array.isArray(document.paint)) asset.paint = document.paint;
+    return asset;
+};
+
+/**
+ * What an asset is to a model's material:
+ * - 'material': it draws (a shader graph, or a texture graph or painting whose pictures have been made);
+ * - 'needsPictures': a texture graph not yet drawn into pictures, or a painting not yet put on a model,
+ *   whose graph would only shade grey;
+ * - 'forOtherGraphs': a texture graph made to be used as a node inside others, never a material.
+ * Read generically, as authoringTextureIds is, so the game build need not load the authoring code.
+ */
+export type MaterialAssetUse = 'material' | 'needsPictures' | 'forOtherGraphs';
+
+const recordOf = (value: unknown): Record<string, unknown> | null => (value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null);
+
+const madePictures = (record: Record<string, unknown> | null): boolean => {
+    const textures = recordOf(record?.textures);
+    return !!textures && Object.values(textures).some((textureId) => typeof textureId === 'string' && textureId.length > 0);
+};
+
+export const materialAssetUse = (asset: Pick<MaterialAsset, 'textureGraph' | 'paint'>): MaterialAssetUse => {
+    if (asset.textureGraph) {
+        if (asset.textureGraph.library === true) return 'forOtherGraphs';
+        return madePictures(recordOf(asset.textureGraph.baked)) ? 'material' : 'needsPictures';
+    }
+    if (asset.paint) return madePictures(recordOf(asset.paint.applied)) ? 'material' : 'needsPictures';
+    return 'material';
 };
 
 /** Where a texture id's image is, for loading it. */
@@ -87,6 +172,10 @@ interface Binding {
 class MaterialLibrary {
     /** Counts changes to the assets, for subscribers that compare snapshots. */
     version = 0;
+    /** Counts projects opened (replaceAll), for what is kept per project for the session. */
+    generation = 0;
+    /** Counts textures that finished loading, for what draws with them without being bound here (node previews). */
+    texturesLoaded = 0;
     private readonly assets = new Map<string, MaterialAsset>();
     private readonly listeners = new Set<() => void>();
     private readonly bound = new Map<THREE.MeshStandardMaterial, Binding>();
@@ -117,16 +206,23 @@ class MaterialLibrary {
 
     /** Replaces every asset (a project opened). */
     replaceAll(assets: readonly MaterialAsset[]): void {
+        this.generation++;
         this.assets.clear();
         for (const asset of assets) this.assets.set(asset.id, asset);
         this.rebindAll();
         this.emit();
     }
 
-    /** Adds or changes one asset; every material using it follows. */
+    /**
+     * Adds or changes one asset; every material using it follows. Moving nodes or comments changes
+     * nothing a material draws, so it touches no material; a change of values updates the materials'
+     * uniforms as they are (graphMaterial.ts), and only a change of shape compiles anything.
+     */
     upsert(asset: MaterialAsset): void {
+        const previous = this.assets.get(asset.id);
         this.assets.set(asset.id, asset);
-        for (const [material, binding] of this.bound) if (binding.materialId === asset.id) this.bindNow(material, binding);
+        const drawsTheSame = previous !== undefined && (previous.graph === asset.graph || materialGraphLook(previous.graph) === materialGraphLook(asset.graph));
+        if (!drawsTheSame) for (const [material, binding] of this.bound) if (binding.materialId === asset.id) this.bindNow(material, binding);
         this.emit();
     }
 
@@ -157,8 +253,8 @@ class MaterialLibrary {
             this.textures.delete(key);
         }
         for (const asset of [...this.assets.values()]) {
-            const graph = withoutGraphTexture(asset.graph, textureId);
-            if (graph !== asset.graph) this.upsert({ ...asset, graph });
+            const next = withoutAssetTexture(asset, textureId);
+            if (next !== asset) this.upsert(next);
         }
     }
 
@@ -218,6 +314,7 @@ class MaterialLibrary {
             texture.flipY = flipY;
             texture.needsUpdate = true;
             this.textures.set(key, texture);
+            this.texturesLoaded++;
             // Every graph sampling it picks it up.
             this.rebindAll();
             this.emit();

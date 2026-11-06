@@ -1,6 +1,6 @@
 
 import React, { useState } from 'react';
-import { Layers, Eye, EyeOff, Lock, Unlock, Trash2, Search, Component, Layout } from 'lucide-react';
+import { ComponentsIcon, EyeIcon, EyeOffIcon, LayersIcon, LayoutIcon, LockIcon, SearchIcon, TrashIcon, UnlockIcon } from '../UI/Icons';
 import { AVAILABLE_COMPONENTS } from './componentRegistry';
 import { HUDElement } from './types';
 
@@ -45,13 +45,13 @@ export const HUDLibrary: React.FC<HUDLibraryProps> = ({
                     onClick={() => setActiveTab('components')}
                     className={`flex-1 py-3 text-2xs font-bold flex items-center justify-center gap-2 border-b-2 transition-colors ${activeTab === 'components' ? 'border-blue-500 text-white' : 'border-transparent text-gray-500 hover:text-gray-300'}`}
                 >
-                    <Component size={12} /> Library
+                    <ComponentsIcon size={12} /> Library
                 </button>
                 <button 
                     onClick={() => setActiveTab('layers')}
                     className={`flex-1 py-3 text-2xs font-bold flex items-center justify-center gap-2 border-b-2 transition-colors ${activeTab === 'layers' ? 'border-blue-500 text-white' : 'border-transparent text-gray-500 hover:text-gray-300'}`}
                 >
-                    <Layers size={12} /> Layers
+                    <LayersIcon size={12} /> Layers
                 </button>
             </div>
 
@@ -59,7 +59,7 @@ export const HUDLibrary: React.FC<HUDLibraryProps> = ({
             {activeTab === 'components' && (
                 <div className="flex-1 flex flex-col p-2 space-y-2">
                     <div className="relative mb-2">
-                        <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-500" />
+                        <SearchIcon size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-500" />
                         <input 
                             type="text" 
                             placeholder="Filter widgets..." 
@@ -77,7 +77,7 @@ export const HUDLibrary: React.FC<HUDLibraryProps> = ({
                                 className="flex flex-col items-center justify-center gap-2 p-3 bg-gray-800 border border-gray-700 rounded-lg hover:bg-gray-700 hover:border-gray-500 transition-all group"
                             >
                                 <div className="text-gray-400 group-hover:text-blue-400">
-                                    {comp.icon || <Layout size={20} />}
+                                    {comp.icon || <LayoutIcon size={20} />}
                                 </div>
                                 <span className="text-2xs font-medium text-gray-300 text-center leading-tight">
                                     {comp.label}
@@ -115,7 +115,7 @@ export const HUDLibrary: React.FC<HUDLibraryProps> = ({
                                 aria-label={`${el.isVisible ? 'Hide' : 'Show'} ${el.name}`}
                                 className="text-gray-500 hover:text-white focus-visible:text-white"
                             >
-                                {el.isVisible ? <Eye size={12} /> : <EyeOff size={12} />}
+                                {el.isVisible ? <EyeIcon size={12} /> : <EyeOffIcon size={12} />}
                             </button>
                             
                             <span className={`text-xs flex-1 truncate ${selectedId === el.id ? 'text-white font-medium' : 'text-gray-400'}`}>
@@ -127,7 +127,7 @@ export const HUDLibrary: React.FC<HUDLibraryProps> = ({
                                 aria-label={`${el.isLocked ? 'Unlock' : 'Lock'} ${el.name}`}
                                 className={`text-gray-500 hover:text-white focus-visible:opacity-100 ${el.isLocked ? 'text-amber-500' : 'opacity-0 group-hover:opacity-100'}`}
                             >
-                                {el.isLocked ? <Lock size={12} /> : <Unlock size={12} />}
+                                {el.isLocked ? <LockIcon size={12} /> : <UnlockIcon size={12} />}
                             </button>
 
                             <button 
@@ -135,7 +135,7 @@ export const HUDLibrary: React.FC<HUDLibraryProps> = ({
                                 aria-label={`Delete ${el.name}`}
                                 className="text-gray-500 hover:text-red-400 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
                             >
-                                <Trash2 size={12} />
+                                <TrashIcon size={12} />
                             </button>
                         </div>
                     ))}

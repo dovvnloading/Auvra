@@ -1,6 +1,7 @@
 
 import React from 'react';
-import { MousePointer2 } from 'lucide-react';
+import type * as THREE from 'three';
+import { PointerIcon } from '../UI/Icons';
 import { AnimationGraphData } from '../../types';
 import { StateInspector } from './Inspectors/StateInspector';
 import { TransitionInspector } from './Inspectors/TransitionInspector';
@@ -22,6 +23,8 @@ interface InspectorPanelProps {
     onDeleteTransition: (id: string) => void;
     /** Shows a State Machine state's own states on the canvas. */
     onOpenStateMachine?: (id: string) => void;
+    /** The model the graph previews on, for what a Motion Match state's clips do on it. */
+    previewObject?: THREE.Object3D | null;
 }
 
 export const InspectorPanel: React.FC<InspectorPanelProps> = ({
@@ -32,7 +35,8 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
     availableClips,
     onDeleteState,
     onDeleteTransition,
-    onOpenStateMachine
+    onOpenStateMachine,
+    previewObject = null
 }) => {
     const selectedNode = graph.states.find(s => s.id === selectedNodeId);
     const selectedTransition = graph.transitions.find(t => t.id === selectedNodeId);
@@ -79,6 +83,8 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                         const clip = availableClips.find(item => item.name === name)?.clip;
                         return clip ? clipLoops(clip) : undefined;
                     }}
+                    previewObject={previewObject}
+                    clipByName={(name) => availableClips.find(item => item.name === name)?.clip ?? null}
                 />
              ) : selectedTransition ? (
                 <TransitionInspector 
@@ -89,7 +95,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                 />
              ) : (
                  <div className="flex-1 flex flex-col items-center justify-center text-center text-gray-500 p-6">
-                     <MousePointer2 size={32} className="mx-auto mb-3 opacity-20" />
+                     <PointerIcon size={32} className="mx-auto mb-3 opacity-20" />
                      <p className="text-xs">Select a state or transition<br/>to edit properties.</p>
                  </div>
              )}

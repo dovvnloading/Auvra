@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Check } from 'lucide-react';
+import { CheckIcon } from '../UI/Icons';
 import { Button } from '../UI/kit';
 import { applyKeptChanges, changesIn, diffScript, type ChangeBlock } from './scriptDiff';
 
@@ -26,7 +26,7 @@ const Change: React.FC<{ change: ChangeBlock; number: number; kept: boolean; onT
         onClick={onToggle}
         className={`flex h-3.5 w-3.5 items-center justify-center rounded-sm border transition-colors duration-75 ${kept ? 'border-accent bg-accent text-accent-ink' : 'border-gray-600 hover:border-ink-3'}`}
       >
-        {kept && <Check size={10} strokeWidth={3} />}
+        {kept && <CheckIcon size={10} strokeWidth={3} />}
       </button>
       Change {number}
       {!kept && <span className="text-ink-3">left as it is</span>}

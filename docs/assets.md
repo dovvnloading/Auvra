@@ -104,20 +104,24 @@ Change how a model's materials look without editing its source file:
 
 1. Open the **Scene** tab and select the model.
 2. In the **Properties** sidebar, open **Material Overrides**.
-3. Click a material to expand it and change **Color**, **Roughness**, **Metalness**, **Emissive**, **Glow** (emissive strength), **Opacity**, **Base map** or **Normal map**. Maps are picked from the project's textures. Edits show on the model straight away.
+3. Click a material to expand it and change **Color**, **Roughness**, **Metalness**, **Emissive**, **Glow** (emissive strength), **Opacity**, **Base map**, **Normal map**, **Roughness map** or **Metalness map**. Maps are picked from the project's textures; the reset button next to a map clears it. Edits show on the model straight away.
 4. Click **Save**. **Revert** discards unsaved edits; the reset button next to a field returns it to the imported value.
 
-Overrides are stored with the model, so every placed copy and every build uses them. They are matched by material name and survive **Reimport**; an override whose material no longer exists is flagged so you can remove it. Unnamed materials cannot be overridden, and Animation models have no overrides. Closing the section discards unsaved edits.
+Overrides are stored with the model, so every placed copy and every build uses them: all copies of a model share one set of values. They are matched by material name and survive **Reimport**; an override whose material no longer exists is flagged so you can remove it. Unnamed materials cannot be overridden, and Animation models have no overrides. Closing the section discards unsaved edits.
+
+Every map a model's material wears shows here, including those **Retexture** saves. A result Retexture saves is a painted picture: it shows its own colours, is cut out where it is see-through and draws from both sides, as the note under its **Base map** says. Picking another base map, or clearing it, draws the material as usual again. Base maps that older projects stored apart from the other overrides show here as painted pictures too. **Reset Textures** at the top of the model's properties takes every painted picture off, so the model wears the maps it was imported with; the other overrides stay.
+
+A physical material, as glTF files using the coat, sheen, transmission, specular, index of refraction, thin film or anisotropy extensions bring in, also lists those values under **Coat**, **Sheen**, **Specular**, **Thin film** and **Transmission** (what each does is under [Physical surfaces](#physical-surfaces)). The groups the material uses open on their own, and a closed group says when it is in use. They save with the override like the other fields, so a car paint's coat can be made glossier or a bottle's glass greener, and the reset button returns each to the imported value. While a material asset shades the material, the asset decides these values.
 
 ## Material graphs
 
 A material asset describes a surface as a graph of nodes, so one material can be shared by many models and can animate, tile, blend, cut out, move its vertices and react to the view angle.
 
-1. Open the **Materials** tab and click **New**. The asset starts with a **Material Output** node; rename it in the field above the preview.
+1. Open the **Materials** tab, click **New** and pick **Shader graph**. The asset starts with a **Material Output** node; rename it in the field above the preview. To start from a finished surface instead, pick one under **Start from a shader graph** in the same menu: **Car paint**, **Frosted glass**, **Velvet**, **Lacquered wood** or **Rubber**, each set to realistic values.
 2. Right-click the canvas (or press **Space** or **Tab**, or click **Add node**) and type to find a node by name or keyword; arrow keys and **Enter** pick it, and it lands where the pointer is. With nothing typed the palette lists every node by category:
    - **Input**: Number, Color, Vector 2, Vector, Time.
    - **Geometry**: UV, World Position, Local Position, Object Position, World Normal, Local Normal, View Direction, Camera Position, Camera Distance, Vertex Color, Fresnel.
-   - **UV**: Tiling and Offset, Panner, Rotate UV, Polar Coordinates, Flipbook, Parallax Offset.
+   - **UV**: Tiling and Offset, Panner, Rotate UV, Polar Coordinates, Flipbook, Parallax Offset, UDIM Atlas (reads a set of UDIM tiles from one picture, as Paint makes it).
    - **Texture**: Texture Sample, Normal Map, Triplanar Sample, Normal From Height, Normal Blend, Normal Strength. Set a Texture Sample or Triplanar Sample's **Read As** to **Data** for masks, roughness, metalness and height maps, so their values are not treated as sRGB colour; tick a Normal Map's **Flip Green (DirectX)** for maps baked with the green channel pointing down.
    - **Procedural**: Noise, Fractal Noise (gradient, simplex or value noise; fractal, turbulence or ridged), Voronoi, Checker, Brick, Gradient.
    - **Color**: Color Ramp, Blend (14 modes), Hue / Saturation / Value, RGB to HSV, HSV to RGB, Desaturate, Contrast, Posterize, Luminance.
@@ -127,25 +131,42 @@ A material asset describes a surface as a graph of nodes, so one material can be
 3. Drag from a pin to a pin of the other kind to wire them (outputs on the right, inputs on the left). Pin colours show the value type: grey a number, green a 2-vector, yellow a 3-vector or colour, purple a 4-vector. Math nodes take the widest type wired into them, so adding two colours gives a colour. A value of another type is converted (a single number fills every component, a longer vector is cut down). Each input takes one wire, so a new wire replaces the old one, and a wire that would make a loop is refused.
 4. Drop a wire on empty space to pick a node for it: the new node is wired to it. Drag a wire off an input to move it to another, or drop it on empty space. **Alt**-click or right-click a wire to cut it; double-click a wire to bend it through a **Reroute**.
 5. Every node shows its value as a small image as you edit (the eye button turns these previews off). Nodes that feed nothing the material reads are dimmed with a dashed border.
-6. Select nodes by clicking (**Shift** or **Ctrl** adds) or by dragging a box on empty space; drag a selected node to move them all. **Ctrl+C**, **Ctrl+X** and **Ctrl+V** copy, cut and paste nodes (between materials too, as text), **Ctrl+D** duplicates, **Delete** removes, **Ctrl+A** selects all, **Ctrl+Z** and **Ctrl+Y** undo and redo, **F** frames the selection (or everything) and **C** puts a comment box around the selection. A comment moves the nodes inside it; double-click its title to rename it and pick its colour in the inspector. Right- or middle-drag pans and the wheel zooms.
+6. Select nodes by clicking (**Shift** or **Ctrl** adds) or by dragging a box on empty space; drag a selected node to move them all. **Ctrl+C**, **Ctrl+X** and **Ctrl+V** copy, cut and paste nodes (between materials too, as text), **Ctrl+D** duplicates, **Delete** removes, **Ctrl+A** selects all, **Ctrl+Z** and **Ctrl+Y** undo and redo, **F** frames the view on the selection (or everything) and **C** puts a frame round the selection. A frame moves the nodes inside it; double-click its title to rename it, and pick its colour from its menu or in the inspector. Right- or middle-drag pans and the wheel zooms.
+
+   Right-click a node to rename it (**F2**), colour its header, fold it to its header (**H**) or bypass it (**B**). A bypassed node passes its main input straight through (the first, or a Step's and an Inverse Lerp's value, a Branch's True), so you can see the material without it. Names, colours and folding change nothing the material draws.
 7. Select a node to change its settings in the inspector. Drag a number's label sideways to change it (**Shift** for finer steps). A Color Ramp's stops are edited on its bar: drag a stop, double-click the bar to add one, pick its colour below. Custom GLSL is applied with **Apply** or **Ctrl+Enter**.
-8. Select nothing to set the material itself, on the Material Output:
-   - **Blend Mode**: **Opaque**; **Masked** (cut out where Opacity is below **Alpha Clip**, and the shadow has the same holes); **Translucent**; **Additive** (glows add to what is behind).
-   - **Two Sided** shades the back faces too; **Shading** **Unlit** shows the base colour and emissive without lighting.
-   - The values its unwired inputs take: Base Color, Opacity, Metalness, Roughness and Emissive.
-9. Connect the Material Output's **Base Color**, **Opacity**, **Metalness**, **Roughness**, **Normal (tangent space)**, **Emissive** and **Ambient Occlusion** inputs for the surface, and **World Position Offset** to move its vertices (in world units): the offset moves the shadow too, and works on skinned and instanced meshes.
+8. Select nothing to set the material itself, on the Material Output. Its settings come first:
+   - **Alpha mode**: **Opaque**; **Masked (cut-out)** (cut out where Opacity is below **Alpha clip**, and the shadow has the same holes); **Translucent**; **Additive** (glows add to what is behind).
+   - **Two-sided** shades the back faces too; **Shading** **Unlit** shows the base colour and emission without lighting.
 
-The preview shows the material on a sphere, cube, plane, cylinder or knot, lit by an environment that shows reflections and casting its shadow on a floor; drag it to turn it and scroll to zoom. A shader that does not compile (a mistake in Custom GLSL) is reported under the preview with the line it names. Changes save on their own. Time nodes run in every viewport, in play and in builds.
+   Below them are the values its unwired inputs take, in groups: **Base** (base colour, metalness, roughness), **Specular**, **Coat**, **Sheen**, **Thin film**, **Transmission**, **Emission** and **Opacity**. Click a group's header to open or close it. A group the material uses opens on its own, and an input with a wire into it says so instead of offering a value.
+9. Connect the Material Output's inputs for the surface: **Base colour**, **Metalness**, **Roughness**, **Normal** (tangent space), **Ambient occlusion**, **Emission colour** and **Emission strength**, **Opacity**, and the [physical layers](#physical-surfaces). **Vertex offset** moves its vertices (in world units): the offset moves the shadow too, and works on skinned and instanced meshes.
 
-To use a material asset on a model, open the model's **Material Overrides**, expand a material and pick the asset in **Material asset**, then click **Save**. The model's material is then shaded by the graph, in every placed copy and every build; its own colour, map and PBR fields apply again when you set **Material asset** back to **(its own)**. Deleting a material asset returns every model that used it to its own material, and deleting a texture clears it from the Texture Sample, Normal Map and Triplanar Sample nodes that read it.
+The preview shows the material on a sphere, cube, plane, cylinder or knot, casting its shadow on a floor; drag it to turn it and scroll to zoom. **Lighting** under it picks what lights it and shows in its reflections: **Studio** (soft panels), **Room** (a bright interior with windows), **Outdoor** (open sky and the sun) or **Night**. **Background** shows what surrounds the shape behind it: the room or the outdoors themselves, or a lit backdrop for Studio and Night. A see-through material always shows it, so glass has something to show through it. Both choices are remembered. A shader that does not compile (a mistake in Custom GLSL) is reported under the preview with the line it names. Changes save on their own, and undo keeps each material's steps while the project is open, across switching tabs. Changing a value updates every model using the asset at once; only changes to wiring, to a node's choices or to what is bypassed rebuild its shader. Time nodes run in every viewport, in play and in builds, counting seconds from when the editor or the game opened.
+
+To use a material asset on a model, open the model's **Material Overrides**, expand a material and pick the asset in **Material asset**, then click **Save**. The model's material is then shaded by the graph, in every placed copy and every build; its own colour, map and PBR fields apply again when you set **Material asset** back to **Its own**. Rain, snow and wind still reach a graph-shaded material, and bounced light takes its colour from the graph. Deleting a material asset returns every model that used it to its own material, and deleting a texture clears it from the Texture Sample, Normal Map and Triplanar Sample nodes that read it.
+
+**Material asset** offers only assets that draw. A texture graph is offered once its pictures are made (**Update material**), and a painting once it is put on a model; until then the field names them in a note. A graph for other graphs is never offered. A material drawn without lighting, or an older kind of shaded material, cannot be shaded by a graph: its **Material asset** field is turned off and says so.
 
 Materials made before blend modes keep their look: one whose opacity was set or wired is **Translucent**, any other **Opaque**.
+
+### Physical surfaces
+
+Beyond base colour, metalness and roughness, the Material Output builds a surface up in layers, as glTF's physical materials do:
+
+- **Specular**: **Specular strength** and **Specular colour** weaken and tint the reflection of a surface that is not metal. **Index of refraction** sets how strongly it reflects (1.33 for water, 1.5 for glass and most plastics, 2.4 for diamond). **Anisotropy** stretches highlights along one direction, as on brushed metal, turned by **Anisotropy direction**.
+- **Coat**: a clear layer over the surface (car paint, lacquer, varnish) with its own **Coat roughness** and **Coat normal**.
+- **Sheen**: the soft light at the edges of cloth such as velvet, in its own colour and roughness. Black is no sheen.
+- **Thin film**: rainbow colours like a soap bubble or oil on water; **Thin film thickness**, in nanometres, picks the colours.
+- **Transmission**: light passes through the surface (glass, water, thin plastic). **Thickness** is how deep the volume behind it is; light crossing it takes on the **Absorption colour** over the **Absorption distance**, and **Dispersion** splits it into colours.
+
+A material draws with the plainer, cheaper shader until one of these is wired or set away from its default. Only then does it draw as a physical surface, and only the layers it uses cost anything. Changing a value updates the material at once; turning a layer on or off rebuilds its shader. Rain and snow still lie on coated and see-through materials: rain makes a coat glossier, and snow covers glass rather than frosting it.
 
 ### Material parameters
 
 A material asset can leave some of its values to the models that use it, like a material instance. Select a **Number**, **Color** or **Vector** node and give it a **Parameter name** (the node shows the name in its title). Nodes with the same name share one value.
 
-In a model's **Material Overrides**, a material shaded by that asset lists its parameters under **Material parameters**. Set a value to give this material its own (a red tint on one crate, a blue one on another); the reset button returns it to the value in the graph. Parameters only change values, not wiring, so every material using the asset keeps sharing one shader.
+In a model's **Material Overrides**, a material shaded by that asset lists its parameters under **Material parameters**. Set a value to give this material its own (a red tint on one model's crates, a blue one on another model using the same asset); the reset button returns it to the value in the graph. Like all overrides, the values belong to the model, so every placed copy of it shares them. Number, Color, Vector and Vector 2 values can all be parameters. Parameters only change values, not wiring, so every material using the asset keeps sharing one shader.
 
 ## Textures and audio
 

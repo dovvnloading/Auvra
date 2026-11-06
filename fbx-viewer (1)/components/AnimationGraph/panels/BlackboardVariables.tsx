@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Trash2, Database } from 'lucide-react';
+import { DatabaseIcon, TrashIcon } from '../../UI/Icons';
 import { AnimationGraphData, GraphVariable } from '../../../types';
 import type { GraphRuntimeAPI } from '../GraphRuntime';
 
@@ -157,7 +157,7 @@ export const BlackboardVariables: React.FC<BlackboardVariablesProps> = ({ graph,
         <div>
             <div className="flex items-center justify-between mb-2 pb-1 border-b border-gray-800">
                 <span className="text-xs font-bold text-gray-200 flex items-center gap-2">
-                    <Database size={12} className="text-gray-400" /> Graph Variables
+                    <DatabaseIcon size={12} className="text-gray-400" /> Graph Variables
                     {liveValues && (
                         <span className="px-1.5 py-0.5 rounded bg-green-950/50 border border-green-900/60 text-2xs font-bold text-green-400" title="Live values from the running preview">
                             Watching
@@ -192,7 +192,7 @@ export const BlackboardVariables: React.FC<BlackboardVariablesProps> = ({ graph,
                         />
                         <span className="text-2xs text-gray-500 font-bold ">{v.type}</span>
                         <button onClick={() => updateGraph(modelId, { variables: graph.variables.filter(x => x.id !== v.id) })} className="text-gray-600 hover:text-gray-400">
-                            <Trash2 size={10} />
+                            <TrashIcon size={10} />
                         </button>
                     </div>
                     <div className="flex items-center justify-between text-2xs text-gray-500 bg-gray-900 px-2 py-1 rounded border border-gray-800">

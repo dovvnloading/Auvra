@@ -336,6 +336,31 @@ export interface FootIKOptions {
     weight: number;
     /** Colliders of this object are not ground (the character's own body). */
     excludeObjectId?: string;
+    /** Hold a planted foot where it landed until it lifts (see FootLock). */
+    lock?: boolean;
+    /** Lowers the pelvis by this much more (m, at most 0): a landing's dip, the legs bending to keep the feet down. */
+    pelvisDrop?: number;
+}
+
+/**
+ * A foot held where it was planted. A foot is planted when, as animated, it is down near its lowest and
+ * nearly still over the ground for two frames running; it lets go once it rises (the step's lift), or
+ * once the body has carried on or turned so far that the leg would have to stretch, and then eases back
+ * to its animated place. Its speed does not let it go: a body turning on the spot carries the animated
+ * foot round with it, and that is just when the foot should stay put.
+ */
+export interface FootLock {
+    /** Where the foot was planted (world). */
+    anchor: THREE.Vector3;
+    locked: boolean;
+    /** How much the foot keeps to the anchor: 1 while planted, easing to 0 after it lets go. */
+    weight: number;
+    /** The animated foot last frame, to tell how fast it moves. */
+    last: THREE.Vector3 | null;
+    /** How high the animated ankle sits above the ground when planted: the least seen lately (m). */
+    floor: number;
+    /** Frames in a row it has looked planted. */
+    planted: number;
 }
 
 /** What foot IK carries between frames, so feet, tilt and pelvis ease onto new ground instead of snapping. */
@@ -345,10 +370,59 @@ export interface FootIKState {
     offsets: number[];
     /** Per leg: the eased ground normal. */
     normals: THREE.Vector3[];
+    /** Per leg: the foot's lock (FootIKOptions.lock). */
+    locks: FootLock[];
+    /** The legs' length (thigh to ankle), what the lock thresholds are scaled by; 0 until measured. */
+    legLength: number;
 }
 
 /** Foot IK state before its first frame. */
-export const createFootIKState = (): FootIKState => ({ rig: null, offsets: [], normals: [] });
+export const createFootIKState = (): FootIKState => ({ rig: null, offsets: [], normals: [], locks: [], legLength: 0 });
+
+/** Lock thresholds, for a leg this long (a person's, in metres); they scale with the leg. */
+const LOCK_LEG_LENGTH = 0.85;
+/** A foot this close above its planted height (m)... */
+const PLANT_HEIGHT = 0.04;
+/** ...moving slower than this over the ground (m/s) is planted. */
+const PLANT_SPEED = 0.3;
+/** A planted foot lets go when it rises this far above its planted height (m)... */
+const UNPLANT_HEIGHT = 0.07;
+/** ...or the animated foot has gone this far from where it was planted (m). */
+const UNLOCK_DISTANCE = 0.2;
+/** Seconds (a time constant) a released foot takes to rejoin its animation. */
+const RELEASE_TIME = 0.08;
+/** How fast (m/s) the remembered planted height rises again, so it follows a clip that walks with feet higher. */
+const FLOOR_RELAX = 0.05;
+const _horizontal = (a: THREE.Vector3, b: THREE.Vector3) => Math.hypot(a.x - b.x, a.z - b.z);
+
+/**
+ * Decides whether a foot is planted this frame and returns how much it keeps to its anchor (0..1).
+ * `foot` is the animated foot (world), `ground` the height of the ground under it, `scale` the leg's
+ * length over a person's.
+ */
+export const stepFootLock = (lock: FootLock, foot: THREE.Vector3, ground: number, scale: number, delta: number): number => {
+    const height = foot.y - ground;
+    lock.floor = Math.min(lock.floor + FLOOR_RELAX * scale * delta, height);
+    const speed = lock.last && delta > 0 ? _horizontal(foot, lock.last) / delta : Infinity;
+    (lock.last ??= new THREE.Vector3()).copy(foot);
+    const above = height - lock.floor;
+    if (!lock.locked) {
+        lock.planted = above < PLANT_HEIGHT * scale && speed < PLANT_SPEED * scale ? lock.planted + 1 : 0;
+        if (lock.planted >= 2) {
+            lock.locked = true;
+            lock.anchor.copy(foot);
+            lock.weight = 1;
+        }
+    } else if (above > UNPLANT_HEIGHT * scale || _horizontal(foot, lock.anchor) > UNLOCK_DISTANCE * scale) {
+        lock.locked = false;
+        lock.planted = 0;
+    }
+    if (!lock.locked) lock.weight *= Math.exp(-Math.max(0, delta) / RELEASE_TIME);
+    return lock.weight > 1e-3 ? lock.weight : 0;
+};
+
+/** A foot lock before its first frame. */
+export const createFootLock = (): FootLock => ({ anchor: new THREE.Vector3(), locked: false, weight: 0, last: null, floor: Infinity, planted: 0 });
 
 const _floor = new THREE.Vector3();
 const _rayOrigin = new THREE.Vector3();
@@ -362,6 +436,7 @@ const _pelvisOffset = new THREE.Vector3();
 const _tiltNormal = new THREE.Vector3();
 const _tilt = new THREE.Quaternion();
 const _calfBefore = new THREE.Matrix4();
+const _held: number[] = [];
 
 /** A point ahead of the knee, where the toes point (else the host's +Z), so knees bend forward; null when neither gives a heading. */
 const kneePole = (host: THREE.Object3D, leg: FootIKLeg, out: THREE.Vector3): THREE.Vector3 | null => {
@@ -398,6 +473,8 @@ export const updateFootIK = (
         state.rig = rig;
         state.offsets = [];
         state.normals = [];
+        state.locks = [];
+        state.legLength = 0;
     }
     const weight = Math.min(1, options.weight);
     const maxStep = options.maxStep;
@@ -406,6 +483,17 @@ export const updateFootIK = (
     const rayOptions = { excludeObjectId: options.excludeObjectId };
     host.updateWorldMatrix(true, false);
     const floor = _floor.setFromMatrixPosition(host.matrixWorld).y;
+
+    if (!state.legLength && rig.legs.length) {
+        const leg = rig.legs[0];
+        leg.thigh.updateWorldMatrix(true, true);
+        state.legLength = _hip.setFromMatrixPosition(leg.thigh.matrixWorld).distanceTo(_knee.setFromMatrixPosition(leg.calf.matrixWorld))
+            + _knee.distanceTo(_goal.setFromMatrixPosition(leg.foot.matrixWorld));
+    }
+    const lockScale = state.legLength > 0 ? state.legLength / LOCK_LEG_LENGTH : 1;
+    // How much each foot keeps to where it was planted, this frame.
+    const held = _held;
+    held.length = rig.legs.length;
 
     // The ground under each animated foot, as a height above the floor the character stands on.
     let pelvis = 0;
@@ -425,10 +513,19 @@ export const updateFootIK = (
         if (normal.lengthSq() > 1e-12) normal.normalize();
         else normal.copy(UP);
         pelvis = Math.min(pelvis, state.offsets[i]);
+        const lock = state.locks[i] ??= createFootLock();
+        if (options.lock) {
+            held[i] = stepFootLock(lock, foot, floor + (grounded ? step : 0), lockScale, delta);
+        } else {
+            lock.locked = false;
+            lock.last = null;
+            lock.weight = 0;
+            held[i] = 0;
+        }
     }
 
     // Lower ground under one foot drops the pelvis so that leg reaches; higher ground only bends a knee.
-    const drop = pelvis * weight;
+    const drop = pelvis * weight + Math.min(0, options.pelvisDrop ?? 0);
     const dropped = rig.hips !== null && drop < -SETTLED;
     if (rig.hips && dropped) offsetBoneWorld(rig.hips, _pelvisOffset.set(0, drop, 0));
 
@@ -436,8 +533,15 @@ export const updateFootIK = (
         const leg = rig.legs[i];
         const offset = state.offsets[i];
         const normal = state.normals[i];
-        if (!dropped && Math.abs(offset) < SETTLED && normal.y > 1 - 1e-8) continue;
+        const hold = held[i] * weight;
+        if (!dropped && Math.abs(offset) < SETTLED && normal.y > 1 - 1e-8 && hold <= 0) continue;
         _goal.copy(_feet[i]).addScaledVector(UP, offset);
+        if (hold > 0) {
+            // A planted foot keeps its place on the ground while the body moves over it.
+            const anchor = state.locks[i].anchor;
+            _goal.x += (anchor.x - _goal.x) * hold;
+            _goal.z += (anchor.z - _goal.z) * hold;
+        }
         _calfBefore.copy(leg.calf.matrixWorld);
         solveTwoBoneIK(leg.thigh, leg.calf, leg.foot, _goal, kneePole(host, leg, _pole), weight);
         limitDirection(UP, normal, MAX_FOOT_TILT, _tiltNormal);

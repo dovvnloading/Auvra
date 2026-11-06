@@ -1,5 +1,5 @@
 import React from 'react';
-import { Layers, ChevronDown, EyeOff, User, Image, Component, Paperclip, Film } from 'lucide-react';
+import { ChevronDownIcon, ComponentsIcon, EyeOffIcon, FilmIcon, ImageIcon, LayersIcon, PaperclipIcon, UserIcon } from '../Icons';
 import { useScene } from '../../../context/SceneContext';
 import { viewerModel } from '../../../utils/viewerModel';
 
@@ -15,7 +15,7 @@ export const HierarchyPanel: React.FC = () => {
         <div className="p-2 space-y-1">
              {/* Scene Root */}
              <div className="flex items-center gap-1 text-xs text-gray-500 font-mono px-2 py-1">
-                <Layers size={12} />
+                <LayersIcon size={12} />
                 <span>Scene Root</span>
              </div>
 
@@ -41,13 +41,13 @@ export const HierarchyPanel: React.FC = () => {
                                 ${isSelected ? 'bg-gray-800 text-white' : 'text-gray-400 hover:bg-gray-800 hover:text-gray-200'}
                             `}
                          >
-                             {hasAttachments ? <ChevronDown size={12} /> : <div className="w-3" />}
+                             {hasAttachments ? <ChevronDownIcon size={12} /> : <div className="w-3" />}
                              
-                             {model.category === 'Character' ? <User size={14} className="text-gray-500" /> :
-                              model.category === 'Prop' ? <Component size={14} className="text-gray-500" /> :
-                              model.category === 'Environment' ? <Image size={14} className="text-gray-500" /> :
-                              model.category === 'Animation' ? <Film size={14} className="text-gray-500" /> :
-                              <Component size={14} className="text-gray-500" />}
+                             {model.category === 'Character' ? <UserIcon size={14} className="text-gray-500" /> :
+                              model.category === 'Prop' ? <ComponentsIcon size={14} className="text-gray-500" /> :
+                              model.category === 'Environment' ? <ImageIcon size={14} className="text-gray-500" /> :
+                              model.category === 'Animation' ? <FilmIcon size={14} className="text-gray-500" /> :
+                              <ComponentsIcon size={14} className="text-gray-500" />}
                              
                              <span className="text-xs truncate flex-1">{model.name}</span>
                              
@@ -57,7 +57,7 @@ export const HierarchyPanel: React.FC = () => {
                                 className="opacity-0 group-hover:opacity-100 text-gray-500 hover:text-white p-1"
                                 title="Remove from Scene (Keep in Library)"
                              >
-                                 <EyeOff size={12} />
+                                 <EyeOffIcon size={12} />
                              </button>
                          </div>
 
@@ -66,14 +66,14 @@ export const HierarchyPanel: React.FC = () => {
                              <div className="pl-6 border-l border-gray-800 ml-3 mt-1 space-y-0.5">
                                  {modelAttachments.map(att => (
                                      <div key={att.id} className="flex items-center gap-2 px-2 py-1 text-gray-500 hover:text-gray-300 rounded hover:bg-gray-800/50 cursor-default group">
-                                         <Paperclip size={10} className="-scale-y-100" />
+                                         <PaperclipIcon size={10} className="-scale-y-100" />
                                          <span className="text-2xs truncate flex-1">{att.name}</span>
                                          <span className="text-2xs text-gray-600 bg-gray-900 px-1 rounded">{att.boneName}</span>
                                          <button 
                                             onClick={() => removeAttachment(att.id)}
                                             className="opacity-0 group-hover:opacity-100 text-gray-600 hover:text-white p-1"
                                         >
-                                            <EyeOff size={10} />
+                                            <EyeOffIcon size={10} />
                                         </button>
                                      </div>
                                  ))}

@@ -1,6 +1,6 @@
 import { newSkyConfig } from '../../runtime/sky/skyPresets';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Search, Trees, Box, Image, MousePointer2, Layers, Trash2, Plus, ChevronDown, ChevronRight, Crosshair, CornerLeftUp, Skull, Music, Sun, PersonStanding, Axis3d, Spline } from 'lucide-react';
+import { AxesIcon, ChevronDownIcon, ChevronRightIcon, CornerLeftUpIcon, CrosshairIcon, CubeIcon, ImageIcon, LayersIcon, MusicIcon, PersonIcon, PlusIcon, PointerIcon, SearchIcon, SkullIcon, SplineIcon, SunIcon, TrashIcon, TreesIcon } from '../UI/Icons';
 import { useScene } from '../../context/SceneContext';
 import { LevelObject } from '../../types';
 import { editorSession } from '../../utils/editorSession';
@@ -525,7 +525,7 @@ export const EnvironmentSidebar: React.FC<EnvironmentSidebarProps> = ({
             <div className="p-3 border-b border-gray-800 shrink-0 bg-gray-950">
                 <div className="flex items-center justify-between mb-2">
                     <h1 className="text-sm font-bold text-gray-200 tracking-wide flex items-center gap-2">
-                        <Trees size={14} className="text-green-400" /> World editor
+                        <TreesIcon size={14} className="text-green-400" /> World editor
                     </h1>
                 </div>
 
@@ -537,7 +537,7 @@ export const EnvironmentSidebar: React.FC<EnvironmentSidebarProps> = ({
                         title="Switch Level"
                     >
                         <span className="truncate font-medium">{currentLevel ? currentLevel.name : 'Select Level'}</span>
-                        <ChevronDown size={12} className="text-gray-500" />
+                        <ChevronDownIcon size={12} className="text-gray-500" />
                     </button>
 
                     {showLevelMenu && (
@@ -563,7 +563,7 @@ export const EnvironmentSidebar: React.FC<EnvironmentSidebarProps> = ({
                                                     className="opacity-0 group-hover:opacity-100 p-1 hover:text-red-400"
                                                     title="Delete Level"
                                                 >
-                                                    <Trash2 size={10} />
+                                                    <TrashIcon size={10} />
                                                 </button>
                                             )}
                                         </div>
@@ -575,7 +575,7 @@ export const EnvironmentSidebar: React.FC<EnvironmentSidebarProps> = ({
                                         className="w-full flex items-center gap-2 px-2 py-1.5 text-xs text-gray-400 hover:text-white hover:bg-gray-700 rounded transition-colors"
                                         title="Create a new empty level"
                                     >
-                                        <Plus size={12} /> New Level
+                                        <PlusIcon size={12} /> New Level
                                     </button>
                                 </div>
                             </div>
@@ -605,7 +605,7 @@ export const EnvironmentSidebar: React.FC<EnvironmentSidebarProps> = ({
             {/* Search Toolbar */}
             <div className="p-2 border-b border-gray-800 bg-gray-900">
                 <div className="relative">
-                    <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-500" />
+                    <SearchIcon size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-500" />
                     <input
                         type="text"
                         placeholder={activeTab === 'assets' ? "Filter assets..." : "Search hierarchy..."}
@@ -638,7 +638,7 @@ export const EnvironmentSidebar: React.FC<EnvironmentSidebarProps> = ({
                             `}
                             title="Selection Mode (Q)"
                         >
-                            <MousePointer2 size={16} />
+                            <PointerIcon size={16} />
                             <div className="text-xs font-bold">Select / Edit Mode</div>
                         </div>
 
@@ -651,7 +651,7 @@ export const EnvironmentSidebar: React.FC<EnvironmentSidebarProps> = ({
                                 title="Add Player Start (one per level)"
                             >
                                 <div className="w-8 h-8 rounded bg-gray-800 border border-gray-700 flex items-center justify-center shrink-0 text-green-500 group-hover:bg-green-900/20 group-hover:border-green-500/50">
-                                    <PersonStanding size={16} />
+                                    <PersonIcon size={16} />
                                 </div>
                                 <div className="text-xs font-bold">Add Player Start</div>
                             </div>
@@ -661,7 +661,7 @@ export const EnvironmentSidebar: React.FC<EnvironmentSidebarProps> = ({
                                 title="Add Enemy Spawn Point"
                             >
                                 <div className="w-8 h-8 rounded bg-gray-800 border border-gray-700 flex items-center justify-center shrink-0 text-red-500 group-hover:bg-red-900/20 group-hover:border-red-500/50">
-                                    <Skull size={16} />
+                                    <SkullIcon size={16} />
                                 </div>
                                 <div className="text-xs font-bold">Enemy Spawner</div>
                             </div>
@@ -671,7 +671,7 @@ export const EnvironmentSidebar: React.FC<EnvironmentSidebarProps> = ({
                                 title="Add Audio Emitter"
                             >
                                 <div className="w-8 h-8 rounded bg-gray-800 border border-gray-700 flex items-center justify-center shrink-0 text-amber-500 group-hover:bg-amber-900/20 group-hover:border-amber-500/50">
-                                    <Music size={16} />
+                                    <MusicIcon size={16} />
                                 </div>
                                 <div className="text-xs font-bold">Audio Emitter</div>
                             </div>
@@ -681,7 +681,7 @@ export const EnvironmentSidebar: React.FC<EnvironmentSidebarProps> = ({
                                 title="Add an empty object, for components such as trigger colliders, timelines and level streaming, or to group objects"
                             >
                                 <div className="w-8 h-8 rounded bg-gray-800 border border-gray-700 flex items-center justify-center shrink-0 text-slate-300 group-hover:bg-slate-700/40 group-hover:border-slate-400/50">
-                                    <Axis3d size={16} />
+                                    <AxesIcon size={16} />
                                 </div>
                                 <div className="text-xs font-bold">Empty Object</div>
                             </div>
@@ -691,7 +691,7 @@ export const EnvironmentSidebar: React.FC<EnvironmentSidebarProps> = ({
                                 title="Add a spline: a curve to bend roads, rails and fences along (Spline Mesh), place copies along (Spline Scatter) or move objects along (Follow Spline)"
                             >
                                 <div className="w-8 h-8 rounded bg-gray-800 border border-gray-700 flex items-center justify-center shrink-0 text-fuchsia-400 group-hover:bg-fuchsia-900/20 group-hover:border-fuchsia-500/50">
-                                    <Spline size={16} />
+                                    <SplineIcon size={16} />
                                 </div>
                                 <div className="text-xs font-bold">Spline</div>
                             </div>
@@ -701,7 +701,7 @@ export const EnvironmentSidebar: React.FC<EnvironmentSidebarProps> = ({
                                 title="Add Sky Atmosphere System"
                             >
                                 <div className="w-8 h-8 rounded bg-gray-800 border border-gray-700 flex items-center justify-center shrink-0 text-cyan-500 group-hover:bg-cyan-900/20 group-hover:border-cyan-500/50">
-                                    <Sun size={16} />
+                                    <SunIcon size={16} />
                                 </div>
                                 <div className="text-xs font-bold">Sky Sphere</div>
                             </div>
@@ -732,7 +732,7 @@ export const EnvironmentSidebar: React.FC<EnvironmentSidebarProps> = ({
                                     {m.thumbnail ? (
                                         <img src={m.thumbnail} className="w-full h-full object-cover opacity-80" />
                                     ) : (
-                                        m.category === 'Environment' ? <Image size={16} className="text-gray-600" /> : <Box size={16} className="text-gray-600" />
+                                        m.category === 'Environment' ? <ImageIcon size={16} className="text-gray-600" /> : <CubeIcon size={16} className="text-gray-600" />
                                     )}
                                 </div>
                                 <div className="min-w-0 flex-1">
@@ -748,7 +748,7 @@ export const EnvironmentSidebar: React.FC<EnvironmentSidebarProps> = ({
                 {activeTab === 'outliner' && (
                     <>
                         <div className="flex items-center gap-2 px-2 py-1 text-2xs font-bold text-gray-500 ">
-                            <Layers size={10} />
+                            <LayersIcon size={10} />
                             <span>{searchTerm ? `${matchCount} of ${levelObjects.length}` : levelObjects.length} Objects</span>
                             {selectedIds.size > 1 && <span className="ml-auto text-blue-400 normal-case">{selectedIds.size} selected</span>}
                         </div>
@@ -814,18 +814,18 @@ export const EnvironmentSidebar: React.FC<EnvironmentSidebarProps> = ({
                                                 title={isCollapsed ? 'Expand' : 'Collapse'}
                                                 aria-label={isCollapsed ? 'Expand' : 'Collapse'}
                                             >
-                                                {isCollapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
+                                                {isCollapsed ? <ChevronRightIcon size={12} /> : <ChevronDownIcon size={12} />}
                                             </button>
                                         ) : (
                                             <span className="w-4 shrink-0" />
                                         )}
 
                                         <span className="shrink-0">
-                                            {isSpawner ? <Skull size={14} className="text-red-400" /> :
-                                             isAudio ? <Music size={14} className="text-amber-400" /> :
-                                             isSky ? <Sun size={14} className="text-cyan-400" /> :
-                                             isPlayerStart ? <PersonStanding size={14} className="text-green-400" /> :
-                                             <Box size={14} className={isSelected ? "text-blue-400" : "text-gray-600"} />}
+                                            {isSpawner ? <SkullIcon size={14} className="text-red-400" /> :
+                                             isAudio ? <MusicIcon size={14} className="text-amber-400" /> :
+                                             isSky ? <SunIcon size={14} className="text-cyan-400" /> :
+                                             isPlayerStart ? <PersonIcon size={14} className="text-green-400" /> :
+                                             <CubeIcon size={14} className={isSelected ? "text-blue-400" : "text-gray-600"} />}
                                         </span>
 
                                         {isEditing ? (
@@ -859,7 +859,7 @@ export const EnvironmentSidebar: React.FC<EnvironmentSidebarProps> = ({
                                             className={`p-1 rounded hover:text-white ${isPrimary ? 'text-blue-300' : 'text-gray-600 opacity-0 group-hover:opacity-100'}`}
                                             title="Focus Object"
                                         >
-                                            <Crosshair size={12} />
+                                            <CrosshairIcon size={12} />
                                         </button>
 
                                         <button
@@ -870,7 +870,7 @@ export const EnvironmentSidebar: React.FC<EnvironmentSidebarProps> = ({
                                             className="p-1 rounded text-gray-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"
                                             title="Delete Object"
                                         >
-                                            <Trash2 size={12} />
+                                            <TrashIcon size={12} />
                                         </button>
                                     </div>
                                 );
@@ -880,7 +880,7 @@ export const EnvironmentSidebar: React.FC<EnvironmentSidebarProps> = ({
                         {/* Root drop zone: dropping here (or on empty list space) unparents the dragged objects. */}
                         {draggingIds.length > 0 && (
                             <div className={`mt-1 flex items-center justify-center gap-1.5 rounded border border-dashed py-2 text-2xs ${isRootDropActive ? 'border-green-500/60 text-green-300' : 'border-gray-700 text-gray-500'}`}>
-                                <CornerLeftUp size={10} /> Drop here to move to root
+                                <CornerLeftUpIcon size={10} /> Drop here to move to root
                             </div>
                         )}
                     </>

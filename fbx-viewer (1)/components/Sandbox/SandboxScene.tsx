@@ -2,7 +2,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { AuvraCanvas } from '../../renderer/AuvraCanvas';
-import { AlertTriangle, User, Skull } from 'lucide-react';
+import { SkullIcon, UserIcon, WarningIcon } from '../UI/Icons';
 import { SandboxUI } from './SandboxUI';
 import { SandboxEntityHandle } from './SandboxEntity';
 import { useSandboxGame } from './hooks/useSandboxGame';
@@ -74,7 +74,7 @@ export const SandboxScene: React.FC<SandboxSceneProps> = ({ visible }) => {
     if (!config.isValid || !playerBlueprint || !enemyBlueprint) {
         return (
             <div className="w-full h-full flex flex-col items-center justify-center bg-gray-950 text-gray-500 p-8">
-                <AlertTriangle size={48} className="text-amber-500 mb-4" />
+                <WarningIcon size={48} className="text-amber-500 mb-4" />
                 <h2 className="text-xl font-bold text-gray-200 mb-2">Sandbox Configuration Incomplete</h2>
                 <p className="max-w-md text-center text-sm mb-6">
                     To use the Sandbox, you need at least one <strong>Player Character</strong> and one <strong>Enemy Controller</strong> blueprint, 
@@ -82,12 +82,12 @@ export const SandboxScene: React.FC<SandboxSceneProps> = ({ visible }) => {
                 </p>
                 <div className="grid grid-cols-2 gap-8 text-left text-xs bg-gray-900 p-6 rounded-lg border border-gray-800">
                     <div>
-                        <div className="font-bold text-blue-400 mb-2 flex items-center gap-2"><User size={14}/> Player Status</div>
+                        <div className="font-bold text-blue-400 mb-2 flex items-center gap-2"><UserIcon size={14}/> Player Status</div>
                         <div>Blueprint: {config.playerBlueprint ? <span className="text-green-400">Found</span> : <span className="text-red-400">Missing</span>}</div>
                         <div>Linked Mesh: {config.playerModel ? <span className="text-green-400">Found</span> : <span className="text-red-400">Missing</span>}</div>
                     </div>
                     <div>
-                        <div className="font-bold text-red-400 mb-2 flex items-center gap-2"><Skull size={14}/> Enemy Status</div>
+                        <div className="font-bold text-red-400 mb-2 flex items-center gap-2"><SkullIcon size={14}/> Enemy Status</div>
                          <div>Blueprint: {config.enemyBlueprint ? <span className="text-green-400">Found</span> : <span className="text-red-400">Missing</span>}</div>
                         <div>Linked Mesh: {config.enemyModel ? <span className="text-green-400">Found</span> : <span className="text-red-400">Missing</span>}</div>
                     </div>

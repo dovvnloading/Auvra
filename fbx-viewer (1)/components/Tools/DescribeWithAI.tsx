@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { AlertTriangle, Sparkles } from 'lucide-react';
+import { SparklesIcon, WarningIcon } from '../UI/Icons';
 import { describeProviderFailure, hostProviderService, type InferenceJob, type ProviderCapability, type ProviderModel } from '../../services/HostProviderService';
 import { estimateJobCost, formatCost } from '../../services/providerPricing';
 import { picksFor } from '../../services/providerPicks';
@@ -83,7 +83,7 @@ export const DescribeWithAI: React.FC<DescribeWithAIProps> = ({ capability, titl
 
   return (
     <>
-      <Button ref={trigger} size="sm" icon={<Sparkles size={12} />} aria-expanded={open} onClick={() => setOpen((value) => !value)}>Describe</Button>
+      <Button ref={trigger} size="sm" icon={<SparklesIcon size={12} />} aria-expanded={open} onClick={() => setOpen((value) => !value)}>Describe</Button>
       <Popover anchor={trigger} open={open} onClose={() => { if (!working) setOpen(false); }} width={320} label={title}>
         <div className="space-y-2 p-3">
           <h3 className="text-xs font-medium text-ink">{title}</h3>
@@ -100,7 +100,7 @@ export const DescribeWithAI: React.FC<DescribeWithAIProps> = ({ capability, titl
           <p className="text-2xs leading-4 text-ink-3">{hint}</p>
           {error && (
             <div role="alert" className="flex items-start gap-1.5 text-2xs text-ink">
-              <AlertTriangle size={12} className="mt-0.5 shrink-0 text-bad" />
+              <WarningIcon size={12} className="mt-0.5 shrink-0 text-bad" />
               <span className="selectable min-w-0">{error}</span>
             </div>
           )}

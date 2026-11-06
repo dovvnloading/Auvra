@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
-import { Pause, Play, Redo2, Undo2 } from 'lucide-react';
+import { PauseIcon, PlayIcon, RedoIcon, UndoIcon } from '../Icons';
 import { useScene } from '../../../context/SceneContext';
 import type { LoadedModelData } from '../../../types';
 import { isEditableTarget } from '../../../utils/history';
@@ -130,8 +130,8 @@ export const SkinPaintSection: React.FC<{ model: LoadedModelData; playback: Clip
       className="shrink-0 border-t border-line"
       actions={(
         <div className="flex items-center gap-0.5">
-          <IconButton label="Undo stroke" shortcut="Ctrl+Z" disabled={!status.canUndo} onClick={() => session.undo()}><Undo2 size={12} /></IconButton>
-          <IconButton label="Redo stroke" shortcut="Ctrl+Y" disabled={!status.canRedo} onClick={() => session.redo()}><Redo2 size={12} /></IconButton>
+          <IconButton label="Undo stroke" shortcut="Ctrl+Z" disabled={!status.canUndo} onClick={() => session.undo()}><UndoIcon size={12} /></IconButton>
+          <IconButton label="Redo stroke" shortcut="Ctrl+Y" disabled={!status.canRedo} onClick={() => session.redo()}><RedoIcon size={12} /></IconButton>
         </div>
       )}
     >
@@ -149,7 +149,7 @@ export const SkinPaintSection: React.FC<{ model: LoadedModelData; playback: Clip
               className="min-w-0 flex-1"
             />
             <IconButton label={isPlaying ? 'Pause' : 'Play'} disabled={!activeClip} onClick={onPlayPause}>
-              {isPlaying ? <Pause size={12} /> : <Play size={12} />}
+              {isPlaying ? <PauseIcon size={12} /> : <PlayIcon size={12} />}
             </IconButton>
           </div>
         )}

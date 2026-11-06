@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronDown, KeyRound } from 'lucide-react';
+import { ChevronDownIcon, KeyIcon } from '../UI/Icons';
 import { hostProviderService, ProviderCapability, ProviderDescriptor, ProviderModel } from '../../services/HostProviderService';
 import { formatModelPrice, formatShortPrice } from '../../services/providerPricing';
 import { Button, Popover, type PopoverPlacement } from '../UI/kit';
@@ -119,7 +119,7 @@ export const AiRouteBar: React.FC<AiRouteBarProps> = ({ capability, label, onMod
       >
         <span className={`min-w-0 flex-1 truncate text-xs ${name ? 'text-ink' : 'text-accent'}`}>{shortName ?? 'Choose a model'}</span>
         {price && <span className="shrink-0 whitespace-nowrap text-2xs tabular-nums text-ink-3">{price}</span>}
-        <ChevronDown size={12} className="shrink-0 text-ink-3" />
+        <ChevronDownIcon size={12} className="shrink-0 text-ink-3" />
       </button>
       {message && <div role="alert" className="mt-1 text-2xs text-bad">{message}</div>}
       <Popover anchor={trigger} open={open} onClose={close} placement={placement} width={380} label={label}>
@@ -127,7 +127,7 @@ export const AiRouteBar: React.FC<AiRouteBarProps> = ({ capability, label, onMod
           <span className="shrink-0 text-2xs text-ink-3">Provider</span>
           <Select className="min-w-0 flex-1" placeholder="Provider" value={providerId} onChange={setProviderId} options={providers.map((item) => ({ value: item.id, label: item.name || item.id }))} />
           {needsKey && (
-            <Button variant="primary" size="sm" disabled={busy} onClick={() => void addKey()} icon={<KeyRound size={11} />}>Add key</Button>
+            <Button variant="primary" size="sm" disabled={busy} onClick={() => void addKey()} icon={<KeyIcon size={11} />}>Add key</Button>
           )}
         </div>
         {message && <div role="alert" className="shrink-0 px-3 pt-2 text-2xs text-bad">{message}</div>}

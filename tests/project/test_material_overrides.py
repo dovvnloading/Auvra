@@ -31,11 +31,24 @@ class MaterialOverrideSchemaTests(unittest.TestCase):
     def test_accepts_every_override_field(self):
         override = {
             "color": "#FF8800", "roughness": 0, "metalness": 1, "emissive": "#00ff00",
-            "emissiveIntensity": 4.5, "opacity": 0.25, "mapTextureId": "tex-albedo", "normalTextureId": "tex-normal",
+            "emissiveIntensity": 4.5, "opacity": 0.25, "mapTextureId": "tex-albedo", "paintedMap": True, "normalTextureId": "tex-normal",
             "roughnessTextureId": "tex-rough", "metalnessTextureId": "tex-metal",
         }
         document = validate_domain("models", _models(_model({"Body": override})))
         self.assertEqual(document["documents"][0]["materialOverrides"], {"Body": override})
+
+    def test_accepts_a_physical_materials_values(self):
+        override = {
+            "coat": 1, "coatRoughness": 0.05, "sheenColor": "#cc6688", "sheenRoughness": 0.4, "thinFilm": 0.5,
+            "thinFilmThickness": 420, "transmission": 1, "thickness": 0.02, "attenuationColor": "#88ccff",
+            "attenuationDistance": 0.5, "dispersion": 0.2, "ior": 1.52, "specularWeight": 0.8, "specularColor": "#ffffff",
+            "anisotropy": 0.6, "anisotropyRotation": 90,
+        }
+        document = validate_domain("models", _models(_model({"Paint": override})))
+        self.assertEqual(document["documents"][0]["materialOverrides"], {"Paint": override})
+        for bad in ({"coat": 1.5}, {"ior": 0.5}, {"sheenColor": "pink"}, {"anisotropyRotation": 400}, {"attenuationDistance": 0}):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                validate_domain("models", _models(_model({"Paint": bad})))
 
     def test_material_names_are_not_mistaken_for_nested_records(self):
         # These names are also keys with their own nested-field rules (or free-form blobs).
@@ -64,13 +77,20 @@ class MaterialOverrideSchemaTests(unittest.TestCase):
         self.assertEqual(materials["documents"][0]["graph"], graph)
 
     def test_accepts_material_parameter_settings(self):
-        override = {"materialId": "mat-glow", "parameters": [{"name": "Tint", "value": [1, 0.5, 0]}, {"name": "token", "value": 2}]}
+        override = {"materialId": "mat-glow", "parameters": [
+            {"name": "Offset", "value": [0.25, -1]},
+            {"name": "Tint", "value": [1, 0.5, 0]},
+            {"name": "Wave", "value": [1, 2, 3, 4]},
+            {"name": "token", "value": 2},
+        ]}
         document = validate_domain("models", _models(_model({"Body": override})))
         self.assertEqual(document["documents"][0]["materialOverrides"]["Body"], override)
-        # A parameter is a name and a number or a triple, nothing more.
+        # A parameter is a name and a number or 2, 3 or 4 numbers (a Vector 2, a colour or Vector), nothing more.
         for bad in (
             [{"name": "Tint"}],
-            [{"name": "Tint", "value": [1, 2]}],
+            [{"name": "Tint", "value": [1]}],
+            [{"name": "Tint", "value": [1, 2, 3, 4, 5]}],
+            [{"name": "Tint", "value": [1, "2"]}],
             [{"name": "Tint", "value": "red"}],
             [{"name": "", "value": 1}],
             [{"name": "Tint", "value": 1, "unit": "m"}],
@@ -106,6 +126,7 @@ class MaterialOverrideSchemaTests(unittest.TestCase):
             {"mapTextureId": ""},
             {"normalTextureId": "n" * 129},
             {"metalness": "0.5"},
+            {"paintedMap": "yes"},
             {},
         ]
         for override in invalid:

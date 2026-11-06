@@ -7,7 +7,7 @@ import { HUDActionField, describeMenuAction } from './HUDActionField';
 import { bindablePropsFor, HUDBindingField, hudBindingPath, withHUDBinding } from './HUDBindingField';
 import { clampHUDPosition, HUD_REFERENCE_SIZE, HUDElement, normalizeHUDLayout } from './types';
 import { AVAILABLE_COMPONENTS } from './componentRegistry';
-import { Code, Settings2, Sliders, Palette, Type, Move, Scaling, Undo2, Redo2, AlertTriangle } from 'lucide-react';
+import { CodeIcon, MoveIcon, PaletteIcon, RedoIcon, ScaleIcon, SlidersIcon, TextIcon, UndoIcon, WarningIcon } from '../UI/Icons';
 import { ScrubbableInput } from '../UI/Properties/ScrubbableInput';
 import { useNativeProjectDocument } from '../../utils/useNativeProjectDocument';
 import { isEditableTarget, useEditorHistory } from '../../utils/history';
@@ -28,6 +28,7 @@ import {
     TITLE_MENU_REQUIRED_ACTIONS,
     type MenuActionKind,
 } from '../../player/menus';
+import { ColourField } from '../UI/ColourPicker';
 
 /** One authored HUD screen, stored as its own document in the project 'hud' domain. */
 export interface HUDDocument {
@@ -223,12 +224,7 @@ const PropertyInput: React.FC<{
                 <span className="text-2xs text-gray-400 font-medium truncate mr-2">{label}</span>
                 <div className="flex items-center gap-2">
                     <span className="text-2xs font-mono text-gray-500 ">{value}</span>
-                    <input 
-                        type="color" 
-                        value={value} 
-                        onChange={(e) => onChange(e.target.value)}
-                        className="w-6 h-6 rounded cursor-pointer bg-transparent border-0 p-0"
-                    />
+                    <ColourField value={String(value)} onChange={onChange} label={label} className="h-6 w-6" />
                 </div>
             </div>
         );
@@ -566,7 +562,7 @@ export const HUDEditor: React.FC = () => {
                                 aria-label="Undo"
                                 className="p-1 rounded text-gray-400 hover:text-white hover:bg-gray-800 disabled:opacity-30 disabled:pointer-events-none"
                             >
-                                <Undo2 size={12} />
+                                <UndoIcon size={12} />
                             </button>
                             <button
                                 type="button"
@@ -576,7 +572,7 @@ export const HUDEditor: React.FC = () => {
                                 aria-label="Redo"
                                 className="p-1 rounded text-gray-400 hover:text-white hover:bg-gray-800 disabled:opacity-30 disabled:pointer-events-none"
                             >
-                                <Redo2 size={12} />
+                                <RedoIcon size={12} />
                             </button>
                         </div>
                         <span className="text-2xs text-gray-500 font-bold ">Canvas: {Math.round(layout.width)} x {Math.round(layout.height)}</span>
@@ -585,7 +581,7 @@ export const HUDEditor: React.FC = () => {
                 </div>
                 {missingMenuActions && (
                     <div role="status" className="flex items-center gap-2 px-4 py-1.5 bg-amber-950/60 border-b border-amber-900/60 text-2xs text-amber-200 shrink-0">
-                        <AlertTriangle size={12} className="shrink-0" />
+                        <WarningIcon size={12} className="shrink-0" />
                         The player keeps its built-in {descriptor.label.toLowerCase()} until a visible element here has
                         a {listActions(missingMenuActions)} action.
                     </div>
@@ -610,7 +606,7 @@ export const HUDEditor: React.FC = () => {
                         onClick={() => setRightPanelTab('props')}
                         className={`flex-1 py-3 text-2xs font-bold flex items-center justify-center gap-2 border-b-2 transition-colors ${rightPanelTab === 'props' ? 'border-blue-500 text-white' : 'border-transparent text-gray-500 hover:text-gray-300'}`}
                     >
-                        <Settings2 size={12} /> Properties
+                        <SlidersIcon size={12} /> Properties
                     </button>
                     <button 
                         onClick={() => setRightPanelTab('ai')}
@@ -618,7 +614,7 @@ export const HUDEditor: React.FC = () => {
                         title={aiAvailable ? undefined : 'AI Coder edits the Game HUD only'}
                         className={`flex-1 py-3 text-2xs font-bold flex items-center justify-center gap-2 border-b-2 transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${rightPanelTab === 'ai' && aiAvailable ? 'border-blue-500 text-white' : 'border-transparent text-gray-500 hover:text-gray-300'}`}
                     >
-                        <Code size={12} /> AI Coder
+                        <CodeIcon size={12} /> AI Coder
                     </button>
                 </div>
 
@@ -642,7 +638,7 @@ export const HUDEditor: React.FC = () => {
                                     <div className="space-y-2">
                                         <div className="flex items-center gap-2 mb-2">
                                             <div className="p-1.5 bg-blue-600/20 rounded text-blue-400">
-                                                <Sliders size={14} />
+                                                <SlidersIcon size={14} />
                                             </div>
                                             <input 
                                                 value={selectedElement.name}
@@ -656,7 +652,7 @@ export const HUDEditor: React.FC = () => {
                                     <div className="space-y-3">
                                         <div className="flex items-center justify-between pb-1 border-b border-gray-800">
                                             <span className="text-2xs font-bold text-gray-500 flex items-center gap-1">
-                                                <Move size={10} /> Position
+                                                <MoveIcon size={10} /> Position
                                             </span>
                                         </div>
                                         <div className="grid grid-cols-2 gap-2">
@@ -676,7 +672,7 @@ export const HUDEditor: React.FC = () => {
 
                                         <div className="flex items-center justify-between pb-1 border-b border-gray-800 mt-2">
                                             <span className="text-2xs font-bold text-gray-500 flex items-center gap-1">
-                                                <Scaling size={10} /> Dimensions
+                                                <ScaleIcon size={10} /> Dimensions
                                             </span>
                                         </div>
                                         <div className="grid grid-cols-2 gap-2">
@@ -699,7 +695,7 @@ export const HUDEditor: React.FC = () => {
                                     <div className="space-y-3 pt-2">
                                         <div className="flex items-center justify-between pb-1 border-b border-gray-800">
                                             <span className="text-2xs font-bold text-gray-500 flex items-center gap-1">
-                                                {selectedElement.type === 'Text' ? <Type size={10} /> : <Palette size={10} />} 
+                                                {selectedElement.type === 'Text' ? <TextIcon size={10} /> : <PaletteIcon size={10} />} 
                                                 {selectedElement.type === 'Custom' ? 'Source Code' : 'Attributes'}
                                             </span>
                                         </div>
@@ -747,7 +743,7 @@ export const HUDEditor: React.FC = () => {
                                 </>
                             ) : (
                                 <div className="flex flex-col items-center justify-center h-full text-gray-500 gap-2">
-                                    <Sliders size={32} className="opacity-20" />
+                                    <SlidersIcon size={32} className="opacity-20" />
                                     <p className="text-xs italic">Select an element to edit properties.</p>
                                 </div>
                             )}

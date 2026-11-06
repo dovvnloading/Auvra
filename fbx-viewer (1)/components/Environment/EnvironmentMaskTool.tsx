@@ -1,9 +1,10 @@
 
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { Pipette, Check, RefreshCw, AlertTriangle, Layers, Image as ImageIcon, Box } from 'lucide-react';
+import { CheckIcon, CubeIcon, EyedropperIcon, LayersIcon, RefreshIcon, WarningIcon } from '../UI/Icons';
 import { useScene } from '../../context/SceneContext';
 import { extractAllTexturesFromModel, ExtractedTexture } from '../../utils/textureUtils';
 import { Select } from '../UI/Select';
+import { ColourField } from '../UI/ColourPicker';
 
 interface EnvironmentMaskToolProps {
     modelId: string | null;
@@ -132,8 +133,24 @@ export const EnvironmentMaskTool: React.FC<EnvironmentMaskToolProps> = ({ modelI
         }
 
         ctx.putImageData(imageData, 0, 0);
-        setPreviewUrl(canvas.toDataURL());
+        // A blob URL, not a data URL: the editor's security policy refuses to fetch data URLs,
+        // and Update Material fetches the preview to keep it with the project.
+        canvas.toBlob((blob) => {
+            if (!blob) return;
+            const url = URL.createObjectURL(blob);
+            setPreviewUrl((previous) => {
+                if (previous?.startsWith('blob:')) URL.revokeObjectURL(previous);
+                return url;
+            });
+        }, 'image/png');
     }, [activeTexture, keyColor, threshold, smoothness, inverted]);
+
+    // Let go of the last preview picture when the tool closes.
+    const previewUrlRef = useRef<string | null>(null);
+    previewUrlRef.current = previewUrl;
+    useEffect(() => () => {
+        if (previewUrlRef.current?.startsWith('blob:')) URL.revokeObjectURL(previewUrlRef.current);
+    }, []);
 
     // Auto-update preview
     useEffect(() => {
@@ -189,7 +206,7 @@ export const EnvironmentMaskTool: React.FC<EnvironmentMaskToolProps> = ({ modelI
             {/* Header / Model Select */}
             <div className="p-4 border-b border-gray-800 bg-gray-950">
                 <div className="text-2xs font-bold text-gray-500 mb-2 flex items-center gap-2" title="Select the object to mask">
-                    <Box size={12} /> Target Mesh
+                    <CubeIcon size={12} /> Target Mesh
                 </div>
                 <Select 
                     value={internalModelId || ''}
@@ -209,12 +226,12 @@ export const EnvironmentMaskTool: React.FC<EnvironmentMaskToolProps> = ({ modelI
                         {/* Texture Selector */}
                         <div className="space-y-2">
                             <label className="text-2xs font-bold text-gray-500 flex items-center gap-2">
-                                <Layers size={12} /> Select Texture Map
+                                <LayersIcon size={12} /> Select Texture Map
                             </label>
                             
                             {availableTextures.length === 0 ? (
                                 <div className="bg-red-900/20 border border-red-900/50 rounded p-3 text-center">
-                                    <AlertTriangle size={16} className="mx-auto text-red-400 mb-1" />
+                                    <WarningIcon size={16} className="mx-auto text-red-400 mb-1" />
                                     <p className="text-2xs text-red-300">No diffuse maps found on this model.</p>
                                 </div>
                             ) : (
@@ -281,15 +298,9 @@ export const EnvironmentMaskTool: React.FC<EnvironmentMaskToolProps> = ({ modelI
                                                 className={`p-1.5 rounded border transition-colors ${isPicking ? 'bg-blue-600 border-blue-500 text-accent-ink' : 'bg-gray-700 border-gray-600 text-gray-300 hover:text-accent-ink'}`}
                                                 title="Pick color from image"
                                             >
-                                                <Pipette size={12} />
+                                                <EyedropperIcon size={12} />
                                             </button>
-                                            <input 
-                                                type="color" 
-                                                value={keyColor}
-                                                onChange={(e) => setKeyColor(e.target.value)}
-                                                className="w-8 h-6 bg-transparent border-0 rounded cursor-pointer"
-                                                title="Select Key Color manually"
-                                            />
+                                            <ColourField value={keyColor} onChange={setKeyColor} label="Key colour" className="h-6 w-8" />
                                         </div>
                                     </div>
 
@@ -336,7 +347,7 @@ export const EnvironmentMaskTool: React.FC<EnvironmentMaskToolProps> = ({ modelI
                                     className="w-full py-2.5 rounded text-xs font-bold flex items-center justify-center gap-2 transition-all bg-green-600 hover:bg-green-500 text-white shadow-lg shadow-green-900/20"
                                     title="Generate new material texture"
                                 >
-                                    {isProcessing ? <RefreshCw size={12} className="animate-spin" /> : <Check size={12} />}
+                                    {isProcessing ? <RefreshIcon size={12} className="animate-spin" /> : <CheckIcon size={12} />}
                                     Update Material
                                 </button>
                             </div>

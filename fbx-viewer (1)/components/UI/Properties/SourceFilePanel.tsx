@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ChevronDown, ChevronRight, FileBox } from 'lucide-react';
+import { ChevronDownIcon, ChevronRightIcon, ModelFileIcon } from '../Icons';
 import type { ModelFileReport } from '../../../utils/fbxImport/nativeImporter';
 
 const number = (value: number): string => value.toLocaleString();
@@ -25,8 +25,8 @@ export const SourceFilePanel: React.FC<{ report: ModelFileReport }> = ({ report 
         aria-expanded={open}
         className="flex w-full items-center gap-2 border-t border-gray-800 px-4 pb-2 pt-2 text-xs font-semibold text-gray-400 hover:text-gray-200"
       >
-        {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-        <FileBox size={12} /> Source file
+        {open ? <ChevronDownIcon size={12} /> : <ChevronRightIcon size={12} />}
+        <ModelFileIcon size={12} /> Source file
         {report.warnings.length > 0 && <span className="ml-auto text-2xs font-normal text-amber-400">{report.warnings.length === 1 ? '1 note' : `${report.warnings.length} notes`}</span>}
       </button>
       {open && (

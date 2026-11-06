@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
-import { Brush, Copy, CircleDashed, Eraser, Lasso, MousePointer2, MousePointerClick, PaintBucket, Plus, RefreshCcw, Trash2, TreePine } from 'lucide-react';
+import { BrushIcon, BucketIcon, CircleDashedIcon, ClickIcon, CopyIcon, EraserIcon, LassoIcon, PlusIcon, PointerIcon, RefreshIcon, TrashIcon, TreeIcon } from '../../UI/Icons';
 import { useScene } from '../../../context/SceneContext';
 import type { LevelObject, LoadedModelData } from '../../../types';
 import { editorSession } from '../../../utils/editorSession';
@@ -24,13 +24,13 @@ interface FoliagePanelProps {
 }
 
 const TOOLS: { tool: FoliageToolName; label: string; icon: React.ReactNode; hint: string }[] = [
-    { tool: 'select', label: 'Select', icon: <MousePointer2 size={14} />, hint: 'Click an instance to select it, Ctrl-click to add. Move it with the gizmo; Delete removes it.' },
-    { tool: 'lasso', label: 'Lasso', icon: <Lasso size={14} />, hint: 'Drag the brush over instances to select them. Shift takes them off the selection.' },
-    { tool: 'paint', label: 'Paint', icon: <Brush size={14} />, hint: 'Hold to paint the ticked types, each at its own density. Shift erases.' },
-    { tool: 'erase', label: 'Erase', icon: <Eraser size={14} />, hint: 'Hold to erase the ticked types, thinning them to Erase density.' },
-    { tool: 'reapply', label: 'Reapply', icon: <RefreshCcw size={14} />, hint: 'Hold over painted instances to apply the types\' current rules to them: size, lean, offset, slope, height and spacing.' },
-    { tool: 'single', label: 'Single', icon: <MousePointerClick size={14} />, hint: 'Click to place one instance. With several types ticked, each click takes the next.' },
-    { tool: 'fill', label: 'Fill', icon: <PaintBucket size={14} />, hint: 'Click a terrain or mesh to fill the whole of it with the ticked types.' },
+    { tool: 'select', label: 'Select', icon: <PointerIcon size={14} />, hint: 'Click an instance to select it, Ctrl-click to add. Move it with the gizmo; Delete removes it.' },
+    { tool: 'lasso', label: 'Lasso', icon: <LassoIcon size={14} />, hint: 'Drag the brush over instances to select them. Shift takes them off the selection.' },
+    { tool: 'paint', label: 'Paint', icon: <BrushIcon size={14} />, hint: 'Hold to paint the ticked types, each at its own density. Shift erases.' },
+    { tool: 'erase', label: 'Erase', icon: <EraserIcon size={14} />, hint: 'Hold to erase the ticked types, thinning them to Erase density.' },
+    { tool: 'reapply', label: 'Reapply', icon: <RefreshIcon size={14} />, hint: 'Hold over painted instances to apply the types\' current rules to them: size, lean, offset, slope, height and spacing.' },
+    { tool: 'single', label: 'Single', icon: <ClickIcon size={14} />, hint: 'Click to place one instance. With several types ticked, each click takes the next.' },
+    { tool: 'fill', label: 'Fill', icon: <BucketIcon size={14} />, hint: 'Click a terrain or mesh to fill the whole of it with the ticked types.' },
 ];
 
 const SCALE_MODES = [
@@ -243,7 +243,7 @@ export const FoliagePanel: React.FC<FoliagePanelProps> = ({ settings, onSettings
         <div className="absolute right-0 top-12 bottom-0 z-20 pointer-events-auto flex" onPointerDownCapture={arm} onFocusCapture={arm}>
             <div className="flex h-full w-72 shrink-0 flex-col border-l border-line bg-gray-900">
                 <div className="flex h-8 shrink-0 items-center gap-2 border-b border-line bg-gray-950 px-3">
-                    <TreePine size={13} className="text-ink-2" />
+                    <TreeIcon size={13} className="text-ink-2" />
                     <h2 className="flex-1 truncate text-xs font-semibold text-ink">Foliage</h2>
                     <span className="text-2xs text-ink-3">{totalInstances.toLocaleString()} placed</span>
                 </div>
@@ -274,7 +274,7 @@ export const FoliagePanel: React.FC<FoliagePanelProps> = ({ settings, onSettings
                                 </div>
                                 <div className="mt-1.5 flex items-center justify-between gap-2">
                                     <span className="text-2xs text-ink-3">{selectedCount.toLocaleString()} selected</span>
-                                    <Button size="sm" variant="danger" disabled={selectedCount === 0} onClick={() => foliageToolStore.command({ kind: 'remove-selected' })}><Trash2 size={11} /> Remove</Button>
+                                    <Button size="sm" variant="danger" disabled={selectedCount === 0} onClick={() => foliageToolStore.command({ kind: 'remove-selected' })}><TrashIcon size={11} /> Remove</Button>
                                 </div>
                             </>
                         )}
@@ -325,7 +325,7 @@ export const FoliagePanel: React.FC<FoliagePanelProps> = ({ settings, onSettings
                                         <input type="checkbox" aria-label={`Paint ${model?.name ?? 'this type'}`} checked={type.active} onChange={() => toggleActive(type.id)} className="ml-0.5 h-3.5 w-3.5 shrink-0" />
                                         <button type="button" onClick={() => foliageToolStore.set({ focusedTypeId: type.id })} className="flex min-w-0 flex-1 items-center gap-2 text-left">
                                             <span className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded bg-gray-700">
-                                                {model?.thumbnail ? <img src={model.thumbnail} alt="" className="h-full w-full object-cover" draggable={false} /> : <CircleDashed size={13} className="text-ink-3" />}
+                                                {model?.thumbnail ? <img src={model.thumbnail} alt="" className="h-full w-full object-cover" draggable={false} /> : <CircleDashedIcon size={13} className="text-ink-3" />}
                                             </span>
                                             <span className="min-w-0 flex-1">
                                                 <span className="block truncate text-xs text-ink">{model?.name ?? 'Missing model'}</span>
@@ -342,7 +342,7 @@ export const FoliagePanel: React.FC<FoliagePanelProps> = ({ settings, onSettings
                         {legacy.length > 0 && (
                             <div className="mt-2 rounded border border-line p-2">
                                 <p className="text-2xs leading-relaxed text-ink-3">{legacy.length.toLocaleString()} copies here were painted as separate objects, so they fill the Outliner and slow saving.</p>
-                                <Button size="sm" className="mt-1.5 w-full" onClick={() => void convertLegacy()}><Plus size={11} /> Turn into palette instances</Button>
+                                <Button size="sm" className="mt-1.5 w-full" onClick={() => void convertLegacy()}><PlusIcon size={11} /> Turn into palette instances</Button>
                             </div>
                         )}
                     </Section>
@@ -353,8 +353,8 @@ export const FoliagePanel: React.FC<FoliagePanelProps> = ({ settings, onSettings
                                 title={`${modelById.get(focused.modelId)?.name ?? 'Type'}: Placement`}
                                 actions={(
                                     <div className="flex gap-0.5">
-                                        <Button size="sm" variant="ghost" title="Add another type with these rules" onClick={() => duplicateType(focused)}><Copy size={11} /></Button>
-                                        <Button size="sm" variant="danger" title="Take this type and its instances out of the level" onClick={() => removeType(focused.id)}><Trash2 size={11} /></Button>
+                                        <Button size="sm" variant="ghost" title="Add another type with these rules" onClick={() => duplicateType(focused)}><CopyIcon size={11} /></Button>
+                                        <Button size="sm" variant="danger" title="Take this type and its instances out of the level" onClick={() => removeType(focused.id)}><TrashIcon size={11} /></Button>
                                     </div>
                                 )}
                             >
@@ -413,7 +413,7 @@ export const FoliagePanel: React.FC<FoliagePanelProps> = ({ settings, onSettings
                                     <NumberRow label="Hidden beyond" unit="m" value={focused.cullDistance} step={5} min={0} hint="Beyond this they are not drawn. 0: never" onChange={(cullDistance) => updateFocused({ cullDistance })} />
                                     <Row label="Collision" hint="What the player and vehicles hit in play"><Select value={focused.collision} options={COLLISIONS} onChange={(collision: FoliageType['collision']) => updateFocused({ collision })} /></Row>
                                 </div>
-                                <Button size="sm" variant="danger" className="mt-2 w-full" disabled={foliageInstanceCount(focused) === 0} onClick={() => removeAllInstances(focused)}><Trash2 size={11} /> Remove All {foliageInstanceCount(focused).toLocaleString()} Instances</Button>
+                                <Button size="sm" variant="danger" className="mt-2 w-full" disabled={foliageInstanceCount(focused) === 0} onClick={() => removeAllInstances(focused)}><TrashIcon size={11} /> Remove All {foliageInstanceCount(focused).toLocaleString()} Instances</Button>
                             </Section>
                         </>
                     )}

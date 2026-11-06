@@ -1,6 +1,6 @@
 
 import React, { useState } from 'react';
-import { Palette, Trash2, Maximize2 } from 'lucide-react';
+import { ExpandIcon, PaletteIcon, TrashIcon } from '../Icons';
 import { TextureData } from '../../../types';
 
 interface TextureCardProps {
@@ -28,7 +28,7 @@ export const TextureCard: React.FC<TextureCardProps> = ({ texture, onDelete, nam
 
                 {/* Type Badge */}
                 <div className="absolute top-1 right-1 p-1 bg-gray-900/80 rounded text-gray-400">
-                    <Palette size={10} />
+                    <PaletteIcon size={10} />
                 </div>
 
                 {/* Resolution Badge */}
@@ -45,14 +45,14 @@ export const TextureCard: React.FC<TextureCardProps> = ({ texture, onDelete, nam
                         className="p-2 bg-gray-700 hover:bg-gray-600 text-white rounded-full transition-colors"
                         title="View Full Size"
                     >
-                        <Maximize2 size={14} />
+                        <ExpandIcon size={14} />
                     </button>
                     <button
                         onClick={(e) => { e.stopPropagation(); onDelete(); }}
                         className="p-2 bg-red-600 hover:bg-red-500 text-white rounded-full transition-colors"
                         title="Delete Texture"
                     >
-                        <Trash2 size={14} />
+                        <TrashIcon size={14} />
                     </button>
                 </div>
             </div>

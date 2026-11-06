@@ -135,6 +135,16 @@ export const useGraphRuntime = (
     }, []);
     const stopMontage = useCallback((blendOut?: number, slot?: string) => { montageRef.current?.stop(blendOut, slot); }, []);
     const consumeRootYaw = useCallback(() => montageRef.current?.consumeRootYaw() ?? 0, []);
+    // The turn a Motion Match state's turn-in-place clip has made, until the character takes it.
+    const matchedTurnRef = useRef<number | null>(null);
+    const consumeMatchedTurn = useCallback((): number | null => {
+        const turn = matchedTurnRef.current;
+        matchedTurnRef.current = null;
+        return turn;
+    }, []);
+    // Whether that clip turns the character round (a turn of 180 degrees): its turn is followed while moving too.
+    const matchedTurnRoundRef = useRef(false);
+    const isMatchedTurnRound = useCallback((): boolean => matchedTurnRoundRef.current, []);
 
     // -- Root motion: travel accumulates until the owner of the transform consumes it.
     const rootMotionRef = useRef(new THREE.Vector3());
@@ -147,7 +157,7 @@ export const useGraphRuntime = (
     // -- Logic: Handles State Machine Transitions
     // A fresh reader whenever the states or clips change, so a live edit's clip reset is not read as a loop wrap.
     const getNormalizedTime = useMemo(() => createNormalizedTimeReader(graph.states, actionsMap), [graph.states, actionsMap]);
-    const { activeStateRef, previousStateRef, blendDurationRef } = useGraphStateMachine(graph, variablesRef, onActiveStateChange, getNormalizedTime);
+    const { activeStateRef, previousStateRef, blendDurationRef, blendModeRef } = useGraphStateMachine(graph, variablesRef, onActiveStateChange, getNormalizedTime);
 
     // -- Inputs: Handles Keyboard -> Variable Mapping
     useInputHandler(graph, enableInputs, setVariable);
@@ -163,6 +173,9 @@ export const useGraphRuntime = (
         eventSource,
         lod,
         sourceClips: clipsByName,
+        blendModeRef,
+        matchedTurnOut: matchedTurnRef,
+        matchedTurnRoundOut: matchedTurnRoundRef,
     });
 
     // Without a character controller (the editor preview) the graph applies its own root motion.
@@ -184,5 +197,5 @@ export const useGraphRuntime = (
         return graph.states.find(state => state.id === id) ?? null;
     }, [activeStateRef, graph.states]);
 
-    return { setVariable, getVariable, getVariables, playMontage, stopMontage, consumeRootMotion, consumeRootYaw, getActiveState };
+    return { setVariable, getVariable, getVariables, playMontage, stopMontage, consumeRootMotion, consumeRootYaw, consumeMatchedTurn, isMatchedTurnRound, getActiveState };
 };

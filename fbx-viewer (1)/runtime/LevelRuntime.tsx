@@ -8,6 +8,7 @@ import { ToneMappingMode } from 'postprocessing';
 import { AuvraCanvas } from '../renderer/AuvraCanvas';
 import { isGpuRenderer } from '../renderer/gpu/frame';
 import { ProfilerPanel, ProfilerProbe, useProfilerToggle } from './ProfilerOverlay';
+import { MovementDebugPanel, MovementDebugProbe, useMovementDebugToggle } from './MovementDebug';
 import { levelVariables } from './levelVariables';
 import { NavMeshContext, useLevelNavMesh, type LevelNavMesh, type NavSettings } from './navigation';
 import { modelTriangles } from './navGeometry';
@@ -477,6 +478,8 @@ interface LevelSessionProps {
     paused: boolean;
     onGameOver: () => void;
     saveStateRef?: React.MutableRefObject<(() => RuntimeSaveState | null) | null>;
+    /** Draw the player's movement (F4). */
+    movementDebug?: boolean;
 }
 
 /**
@@ -492,7 +495,7 @@ const NavMeshUpdater: React.FC<{ navMesh: LevelNavMesh | null }> = ({ navMesh })
 // A model's triangles, gathered once per loaded model.
 const modelTriangleCache = new WeakMap<THREE.Object3D, HostGeometry | null>();
 
-const LevelSession: React.FC<LevelSessionProps> = ({ level, navigation, content, player, start, restore, host, sessionKey, isGameOver, paused, onGameOver, saveStateRef }) => {
+const LevelSession: React.FC<LevelSessionProps> = ({ level, navigation, content, player, start, restore, host, sessionKey, isGameOver, paused, onGameOver, saveStateRef, movementDebug = false }) => {
     const { models, audioAssets } = content;
     // Fixed for the session: a host that rebuilds these objects must not teleport the player mid-session.
     const [sessionStart] = useState(start);
@@ -857,6 +860,8 @@ const LevelSession: React.FC<LevelSessionProps> = ({ level, navigation, content,
                 );
             })}
 
+            <MovementDebugProbe enabled={movementDebug} target={runtimePlayerModel.object} />
+
             <PlayerController
                 apiRef={playerApiRef}
                 entityRef={playerEntityRef}
@@ -1037,6 +1042,7 @@ export const LevelRuntime: React.FC<LevelRuntimeProps> = ({ level, settings, pla
         }
     }, [projectScale]);
     const profilerVisible = useProfilerToggle();
+    const movementDebugVisible = useMovementDebugToggle();
     const postProcessQuality = useMemo(
         () => ({ antialias: settings.quality.antiAliasing, renderScale: projectScale * slowScale, temporalStacks }),
         [settings.quality.antiAliasing, projectScale, slowScale],
@@ -1113,6 +1119,7 @@ export const LevelRuntime: React.FC<LevelRuntimeProps> = ({ level, settings, pla
                                     paused={paused}
                                     onGameOver={handleGameOver}
                                     saveStateRef={saveStateRef}
+                                    movementDebug={movementDebugVisible}
                                 />
                             </group>
                         </PhysicsWorld>
@@ -1145,6 +1152,7 @@ export const LevelRuntime: React.FC<LevelRuntimeProps> = ({ level, settings, pla
             {!paused && !isGameOver && <DialogueOverlay input={touchInput} />}
             {!paused && !isGameOver && <VehicleOverlay input={touchInput} />}
             <ProfilerPanel visible={profilerVisible} />
+            <MovementDebugPanel visible={movementDebugVisible} />
         </div>
         </NetSessionProvider>
     );

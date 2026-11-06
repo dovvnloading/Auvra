@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Dices, Plus, Trash2 } from 'lucide-react';
+import { DiceIcon, PlusIcon, TrashIcon } from '../UI/Icons';
 import { useScene } from '../../context/SceneContext';
 import type { ComponentInspectorProps } from '../../runtime/components/types';
 import {
@@ -64,7 +64,7 @@ export const ScatterInspector: React.FC<ComponentInspectorProps> = ({ component,
     return (
         <div className="space-y-2">
             <button type="button" className={BUTTON} onClick={() => onChangeProps({ seed: Math.floor(Math.random() * 1e6) })}>
-                <Dices size={10} /> New seed (another placement)
+                <DiceIcon size={10} /> New seed (another placement)
             </button>
             {settings.layers.map((layer, index) => (
                 <div key={index} className="space-y-1 rounded border border-gray-800 bg-gray-900/60 p-1.5">
@@ -79,7 +79,7 @@ export const ScatterInspector: React.FC<ComponentInspectorProps> = ({ component,
                             {layer.modelId && !models.some(model => model.id === layer.modelId) && <option value={layer.modelId}>Missing model</option>}
                             {choices.map(model => <option key={model.id} value={model.id}>{model.name}</option>)}
                         </select>
-                        <button type="button" aria-label={`Remove layer ${index + 1}`} onClick={() => commit(settings.layers.filter((_, i) => i !== index))} className="text-gray-500 hover:text-red-400"><Trash2 size={11} /></button>
+                        <button type="button" aria-label={`Remove layer ${index + 1}`} onClick={() => commit(settings.layers.filter((_, i) => i !== index))} className="text-gray-500 hover:text-red-400"><TrashIcon size={11} /></button>
                     </div>
                     <Row label="Per 100 m²"><NumberInput label={`Layer ${index + 1} density`} value={layer.density} onCommit={(density) => update(index, { density })} /></Row>
                     <Row label="Spacing (m)"><NumberInput label={`Layer ${index + 1} spacing`} value={layer.spacing} onCommit={(spacing) => update(index, { spacing })} /></Row>
@@ -98,7 +98,7 @@ export const ScatterInspector: React.FC<ComponentInspectorProps> = ({ component,
                 </div>
             ))}
             {settings.layers.length < MAX_SCATTER_LAYERS && (
-                <button type="button" className={BUTTON} onClick={() => commit([...settings.layers, { ...DEFAULT_SCATTER_LAYER }])}><Plus size={10} /> Layer</button>
+                <button type="button" className={BUTTON} onClick={() => commit([...settings.layers, { ...DEFAULT_SCATTER_LAYER }])}><PlusIcon size={10} /> Layer</button>
             )}
             <p className="text-2xs text-gray-500">
                 Copies stand on the terrain and meshes in the area, keep each layer's spacing from every copy (place big things in the first layers),

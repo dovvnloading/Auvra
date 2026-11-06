@@ -1,0 +1,130 @@
+import React, { useRef, useState } from 'react';
+import { BrushIcon } from '../../UI/Icons';
+import { CHANNEL_IS_COLOR, CHANNEL_LABELS, type PaintChannel } from '../../../texturing/paint/paintTypes';
+import type { PreviewHost } from '../../../texturing/paint/previews';
+import { MAX_BRUSH_SIZE, type BrushSettings } from '../../../texturing/paint/strokes';
+import { Popover, Segmented } from '../../UI/kit';
+import { Select } from '../../UI/Select';
+import { ColourFieldRgb } from '../../UI/ColourPicker';
+import { MaterialPicker, type MaterialChoice, type MaterialSection } from './MaterialPicker';
+import { SliderRow } from './PaintFields';
+
+/** The brush: its size and feel, how it is cast onto the model, and what it lays down on each channel. */
+
+/** A setting dragged or typed (typed values keep to the slider's ends). */
+const Row: React.FC<{ label: string; value: number; min: number; max: number; step?: number; suffix?: string; onChange: (value: number) => void }> = (props) => <SliderRow labelWidth="w-24" {...props} />;
+
+const Toggle: React.FC<{ label: string; checked: boolean; onChange: (value: boolean) => void }> = ({ label, checked, onChange }) => (
+    <label className="flex items-center gap-1.5 text-2xs text-zinc-300">
+        <input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} className="accent-sky-500" />{label}
+    </label>
+);
+
+export const BrushPanel: React.FC<{
+    brush: BrushSettings;
+    onChange: (brush: BrushSettings) => void;
+    channels: readonly PaintChannel[];
+    paintingMask: boolean;
+    textures: ReadonlyArray<{ id: string; name: string }>;
+    /** Picks the base colour off the model (the paint tab's pick tool). */
+    onPick?: () => void;
+    /** Materials to paint on whole, and what picking one does. */
+    paintWith?: { sections: readonly MaterialSection[]; host: PreviewHost; onPick: (choice: MaterialChoice) => void; onMessage: (message: string) => void };
+}> = ({ brush, onChange, channels, paintingMask, textures, onPick, paintWith }) => {
+    const set = (patch: Partial<BrushSettings>) => onChange({ ...brush, ...patch });
+    const pickButton = useRef<HTMLButtonElement>(null);
+    const [picking, setPicking] = useState(false);
+    return (
+        <div className="space-y-4 p-3">
+            {paintWith && (
+                <section>
+                    <button ref={pickButton} onClick={() => setPicking(true)} className="flex w-full items-center gap-2 rounded border border-sky-800/70 bg-sky-950/40 px-2 py-1.5 text-left hover:bg-sky-900/40">
+                        <BrushIcon size={14} className="shrink-0 text-sky-400" />
+                        <span><span className="block text-xs text-zinc-100">Paint with a material</span><span className="block text-2xs leading-snug text-zinc-400">Steel, rust, a smart material, a picture: every channel in one stroke.</span></span>
+                    </button>
+                    <Popover anchor={pickButton} open={picking} onClose={() => setPicking(false)} width={340} label="Paint with a material">
+                        <MaterialPicker sections={paintWith.sections} host={paintWith.host} onPick={(choice) => { setPicking(false); paintWith.onPick(choice); }} onMessage={paintWith.onMessage} />
+                    </Popover>
+                </section>
+            )}
+            <section className="space-y-2">
+                <div className="text-2xs font-semibold text-zinc-300">{paintingMask ? 'Painting a mask' : 'What it paints'}</div>
+                {paintingMask ? (
+                    <Row label="Grey" value={brush.maskValue} min={0} max={1} onChange={(maskValue) => set({ maskValue })} />
+                ) : channels.map((channel) => {
+                    const on = brush.channels.includes(channel);
+                    const value = brush.values[channel];
+                    return (
+                        <div key={channel} className="flex items-center gap-2">
+                            <input type="checkbox" checked={on} aria-label={`Paint ${CHANNEL_LABELS[channel]}`} className="accent-sky-500"
+                                onChange={(event) => set({ channels: event.target.checked ? [...brush.channels, channel] : brush.channels.filter((item) => item !== channel) })} />
+                            <span className={`w-20 text-2xs ${on ? 'text-zinc-200' : 'text-zinc-500'}`}>{CHANNEL_LABELS[channel]}</span>
+                            {CHANNEL_IS_COLOR[channel] && channel !== 'normal' ? (
+                                <ColourFieldRgb value={value} label={/colour/i.test(CHANNEL_LABELS[channel]) ? CHANNEL_LABELS[channel] : `${CHANNEL_LABELS[channel]} colour`} disabled={!on} className="h-5 w-10" onPick={channel === 'baseColor' ? onPick : undefined}
+                                    onChange={(next) => set({ values: { ...brush.values, [channel]: next as [number, number, number] } })} />
+                            ) : channel === 'normal' ? (
+                                <span className="text-2xs text-zinc-500">Flat (smooths detail)</span>
+                            ) : (
+                                <SliderRow label={`${CHANNEL_LABELS[channel]} value`} hideLabel value={value[0]} min={0} max={1} disabled={!on}
+                                    onChange={(v) => set({ values: { ...brush.values, [channel]: [v, v, v] } })} />
+                            )}
+                        </div>
+                    );
+                })}
+            </section>
+            <section className="space-y-2">
+                <div className="text-2xs font-semibold text-zinc-300">Brush</div>
+                <Row label="Size" value={brush.size} min={1} max={MAX_BRUSH_SIZE} step={1} suffix="px" onChange={(size) => set({ size })} />
+                <Row label="Hardness" value={brush.hardness} min={0} max={1} onChange={(hardness) => set({ hardness })} />
+                <Row label="Flow" value={brush.flow} min={0.01} max={1} onChange={(flow) => set({ flow })} />
+                <Row label="Opacity" value={brush.opacity} min={0} max={1} onChange={(opacity) => set({ opacity })} />
+                <Row label="Spacing" value={brush.spacing} min={0.02} max={2} onChange={(spacing) => set({ spacing })} />
+                <Row label="Angle" value={brush.angle} min={-180} max={180} step={1} suffix="°" onChange={(angle) => set({ angle })} />
+                <div className="flex items-center gap-2">
+                    <span className="w-24 text-2xs text-zinc-400">Shape</span>
+                    <Segmented value={brush.shape} options={[{ value: 'round', label: 'Round' }, { value: 'square', label: 'Square' }, { value: 'picture', label: 'Picture' }]} onChange={(shape) => set({ shape })} label="Brush shape" />
+                </div>
+                {brush.shape === 'picture' && <Select value={brush.alphaTexture} placeholder="Pick a picture (its brightness)" options={textures.map((texture) => ({ value: texture.id, label: texture.name }))} onChange={(alphaTexture) => set({ alphaTexture: String(alphaTexture) })} className="w-full" />}
+                <div className="flex flex-wrap gap-x-3 gap-y-1">
+                    <Toggle label="Pressure sets size" checked={brush.pressureSize} onChange={(pressureSize) => set({ pressureSize })} />
+                    <Toggle label="Pressure sets flow" checked={brush.pressureFlow} onChange={(pressureFlow) => set({ pressureFlow })} />
+                    <Toggle label="Turn with the stroke" checked={brush.followStroke} onChange={(followStroke) => set({ followStroke })} />
+                </div>
+            </section>
+            <section className="space-y-2">
+                <div className="text-2xs font-semibold text-zinc-300">Jitter</div>
+                <Row label="Size" value={brush.sizeJitter} min={0} max={1} onChange={(sizeJitter) => set({ sizeJitter })} />
+                <Row label="Angle" value={brush.angleJitter} min={0} max={1} onChange={(angleJitter) => set({ angleJitter })} />
+                <Row label="Scatter" value={brush.scatter} min={0} max={2} onChange={(scatter) => set({ scatter })} />
+                <Row label="Flow" value={brush.flowJitter} min={0} max={1} onChange={(flowJitter) => set({ flowJitter })} />
+            </section>
+            <section className="space-y-2">
+                <div className="text-2xs font-semibold text-zinc-300">Laying it on</div>
+                <Segmented value={brush.projection} options={[{ value: 'screen', label: 'From the screen' }, { value: 'surface', label: 'On the surface' }]} onChange={(projection) => set({ projection })} label="Projection" />
+                <p className="text-2xs leading-snug text-zinc-500">{brush.projection === 'screen' ? 'Cast onto what you see; hidden and away-facing parts are left alone.' : 'A disc lying on the surface under the pointer: it wraps round edges.'}</p>
+                <Row label="Facing limit" value={brush.facingLimit} min={10} max={179} step={1} suffix="°" onChange={(facingLimit) => set({ facingLimit })} />
+                <div className="flex items-center gap-3">
+                    <span className="w-24 text-2xs text-zinc-400">Mirror across</span>
+                    {(['x', 'y', 'z'] as const).map((axis) => <Toggle key={axis} label={axis.toUpperCase()} checked={brush.symmetry[axis]} onChange={(on) => set({ symmetry: { ...brush.symmetry, [axis]: on } })} />)}
+                </div>
+            </section>
+            <section className="space-y-2">
+                <div className="flex items-center justify-between">
+                    <span className="text-2xs font-semibold text-zinc-300">Stencil</span>
+                    <Toggle label="Use" checked={brush.stencil.enabled} onChange={(enabled) => set({ stencil: { ...brush.stencil, enabled } })} />
+                </div>
+                {brush.stencil.enabled && (
+                    <>
+                        <Select value={brush.stencil.textureId} placeholder="Pick a picture" options={textures.map((texture) => ({ value: texture.id, label: texture.name }))} onChange={(textureId) => set({ stencil: { ...brush.stencil, textureId: String(textureId) } })} className="w-full" />
+                        <Row label="Size" value={brush.stencil.scale} min={0.1} max={3} onChange={(scale) => set({ stencil: { ...brush.stencil, scale } })} />
+                        <Row label="Turn" value={brush.stencil.rotation} min={-180} max={180} step={1} suffix="°" onChange={(rotation) => set({ stencil: { ...brush.stencil, rotation } })} />
+                        <Row label="Across" value={brush.stencil.offsetX} min={-0.5} max={0.5} onChange={(offsetX) => set({ stencil: { ...brush.stencil, offsetX } })} />
+                        <Row label="Down" value={brush.stencil.offsetY} min={-0.5} max={0.5} onChange={(offsetY) => set({ stencil: { ...brush.stencil, offsetY } })} />
+                        <Row label="Strength" value={brush.stencil.opacity} min={0} max={1} onChange={(opacity) => set({ stencil: { ...brush.stencil, opacity } })} />
+                        <p className="text-2xs leading-snug text-zinc-500">Shown faintly over the view, in its picture's proportions. It stays still on the screen while the model turns under it, whether the brush is laid on from the screen or on the surface.</p>
+                    </>
+                )}
+            </section>
+        </div>
+    );
+};

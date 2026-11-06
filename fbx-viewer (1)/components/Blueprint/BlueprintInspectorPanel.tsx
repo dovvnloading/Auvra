@@ -1,9 +1,10 @@
 
 import React, { useState, useMemo, useRef } from 'react';
 import type * as THREE from 'three';
-import { FileText, Database, Tag, Plus, Trash2, Zap, Scaling, Camera, Crosshair, Palette, Check, Box, Music, Play, Footprints, Brain } from 'lucide-react';
+import { BoltIcon, BrainIcon, CameraIcon, CheckIcon, CrosshairIcon, CubeIcon, DatabaseIcon, DocumentIcon, FootprintsIcon, MusicIcon, PaletteIcon, PlayIcon, PlusIcon, ScaleIcon, TagIcon, TrashIcon } from '../UI/Icons';
 import { BehaviorTreeEditor } from './BehaviorTreeEditor';
 import { WeaponsPanel, type WeaponFocus } from './WeaponsPanel';
+import { MovementSection } from './MovementSection';
 import { fitWeaponToHands, seatCarryOnBody } from '../../runtime/weaponFit';
 import { DEFAULT_HIT_REACT_AIMED } from '../Sandbox/hooks/useEntityHealth';
 import { findClipForRole } from '../AnimationGraph/utils/clipMatching';
@@ -148,26 +149,26 @@ export const BlueprintInspectorPanel: React.FC<BlueprintInspectorPanelProps> = (
                     onClick={() => setActiveTab('details')} 
                     className={`flex-1 py-3 text-2xs font-bold transition-colors border-b-2 flex items-center justify-center gap-1.5 min-w-[70px] ${activeTab === 'details' ? 'border-blue-500 text-white bg-gray-900' : 'border-transparent text-gray-500 hover:text-gray-300 hover:bg-gray-900'}`}
                 >
-                    <FileText size={12} /> Details
+                    <DocumentIcon size={12} /> Details
                 </button>
                 <button 
                     onClick={() => setActiveTab('materials')} 
                     className={`flex-1 py-3 text-2xs font-bold transition-colors border-b-2 flex items-center justify-center gap-1.5 min-w-[70px] ${activeTab === 'materials' ? 'border-blue-500 text-white bg-gray-900' : 'border-transparent text-gray-500 hover:text-gray-300 hover:bg-gray-900'}`}
                 >
-                    <Palette size={12} /> Skins
+                    <PaletteIcon size={12} /> Skins
                 </button>
                 <button 
                     onClick={() => setActiveTab('stats')} 
                     className={`flex-1 py-3 text-2xs font-bold transition-colors border-b-2 flex items-center justify-center gap-1.5 min-w-[70px] ${activeTab === 'stats' ? 'border-blue-500 text-white bg-gray-900' : 'border-transparent text-gray-500 hover:text-gray-300 hover:bg-gray-900'}`}
                 >
-                    <Database size={12} /> Stats
+                    <DatabaseIcon size={12} /> Stats
                 </button>
                 {blueprint.type === 'Player Character' && (
                     <button 
                         onClick={() => setActiveTab('audio')} 
                         className={`flex-1 py-3 text-2xs font-bold transition-colors border-b-2 flex items-center justify-center gap-1.5 min-w-[70px] ${activeTab === 'audio' ? 'border-blue-500 text-white bg-gray-900' : 'border-transparent text-gray-500 hover:text-gray-300 hover:bg-gray-900'}`}
                     >
-                        <Music size={12} /> Audio
+                        <MusicIcon size={12} /> Audio
                     </button>
                 )}
                 {blueprint.type === 'Enemy Controller' && (
@@ -175,14 +176,14 @@ export const BlueprintInspectorPanel: React.FC<BlueprintInspectorPanelProps> = (
                         onClick={() => setActiveTab('behavior')}
                         className={`flex-1 py-3 text-2xs font-bold transition-colors border-b-2 flex items-center justify-center gap-1.5 min-w-[70px] ${activeTab === 'behavior' ? 'border-blue-500 text-white bg-gray-900' : 'border-transparent text-gray-500 hover:text-gray-300 hover:bg-gray-900'}`}
                     >
-                        <Brain size={12} /> Behavior
+                        <BrainIcon size={12} /> Behavior
                     </button>
                 )}
                 <button 
                     onClick={() => setActiveTab('tags')} 
                     className={`flex-1 py-3 text-2xs font-bold transition-colors border-b-2 flex items-center justify-center gap-1.5 min-w-[70px] ${activeTab === 'tags' ? 'border-blue-500 text-white bg-gray-900' : 'border-transparent text-gray-500 hover:text-gray-300 hover:bg-gray-900'}`}
                 >
-                    <Tag size={12} /> Tags
+                    <TagIcon size={12} /> Tags
                 </button>
             </div>
             
@@ -203,7 +204,7 @@ export const BlueprintInspectorPanel: React.FC<BlueprintInspectorPanelProps> = (
 
                             <div className="space-y-2">
                                 <label className="text-2xs font-bold text-gray-500 flex items-center gap-2">
-                                    <Scaling size={12} /> Mesh Configuration
+                                    <ScaleIcon size={12} /> Mesh Configuration
                                 </label>
                                 <div className="bg-gray-800/50 rounded p-3 border border-gray-800 space-y-3">
                                     <div className="flex items-center justify-between gap-4">
@@ -228,7 +229,7 @@ export const BlueprintInspectorPanel: React.FC<BlueprintInspectorPanelProps> = (
                             {blueprint.type === 'Player Character' && (
                                 <div className="space-y-2">
                                     <label className="text-2xs font-bold text-gray-500 flex items-center gap-2">
-                                        <Camera size={12} /> Camera Settings
+                                        <CameraIcon size={12} /> Camera Settings
                                     </label>
                                     <div className="bg-gray-800/50 rounded p-3 border border-gray-800 space-y-3">
                                         <div className="flex items-center justify-between gap-4">
@@ -245,7 +246,7 @@ export const BlueprintInspectorPanel: React.FC<BlueprintInspectorPanelProps> = (
                                         </div>
                                         <div className="flex flex-col gap-2">
                                             <span className="text-2xs text-gray-400 flex items-center gap-1.5 font-bold">
-                                                <Crosshair size={10} /> Aim Camera Offset
+                                                <CrosshairIcon size={10} /> Aim Camera Offset
                                             </span>
                                             <TransformInputGroup 
                                                 label="Offset (X/Y/Z)"
@@ -261,9 +262,16 @@ export const BlueprintInspectorPanel: React.FC<BlueprintInspectorPanelProps> = (
                                 </div>
                             )}
 
+                            {blueprint.type === 'Player Character' && (
+                                <MovementSection
+                                    movement={blueprint.movement ?? {}}
+                                    onChange={(changes, coalesce) => onUpdate(blueprint.id, { movement: { ...(blueprint.movement ?? {}), ...changes } }, { coalesce })}
+                                />
+                            )}
+
                             <div className="space-y-2">
                                 <label className="text-2xs font-bold text-gray-500 flex items-center gap-2">
-                                    <Footprints size={12} /> Pose Adjustment (IK)
+                                    <FootprintsIcon size={12} /> Pose Adjustment (IK)
                                 </label>
                                 <div className="bg-gray-800/50 rounded p-3 border border-gray-800 space-y-3">
                                     {blueprint.type === 'Player Character' && (
@@ -286,6 +294,17 @@ export const BlueprintInspectorPanel: React.FC<BlueprintInspectorPanelProps> = (
                                             className="rounded bg-gray-800 border-gray-600 text-blue-500 focus:ring-0"
                                         />
                                     </label>
+                                    {ik.footIK && (
+                                        <label className="flex items-center justify-between gap-4 text-xs text-gray-400">
+                                            <span>Keep planted feet still</span>
+                                            <input
+                                                type="checkbox"
+                                                checked={ik.footLock !== false}
+                                                onChange={(e) => updateIK({ footLock: e.target.checked ? undefined : false })}
+                                                className="rounded bg-gray-800 border-gray-600 text-blue-500 focus:ring-0"
+                                            />
+                                        </label>
+                                    )}
                                     {ik.footIK && (
                                         <div className="flex items-center justify-between gap-4">
                                             <span className="text-xs text-gray-400 shrink-0">Max step (m)</span>
@@ -347,7 +366,7 @@ export const BlueprintInspectorPanel: React.FC<BlueprintInspectorPanelProps> = (
                             {blueprint.type === 'Player Character' && (
                                 <div className="space-y-2">
                                     <label className="text-2xs font-bold text-gray-500 flex items-center gap-2">
-                                        <Crosshair size={12} /> Upper Body (Fire & Aim)
+                                        <CrosshairIcon size={12} /> Upper Body (Fire & Aim)
                                     </label>
                                     <div className="bg-gray-800/50 rounded p-3 border border-gray-800 space-y-3">
                                         {([['fireClip', 'While firing'], ['aimClip', 'While aiming']] as const).map(([key, label]) => {
@@ -399,7 +418,7 @@ export const BlueprintInspectorPanel: React.FC<BlueprintInspectorPanelProps> = (
 
                             <div className="space-y-2">
                                 <label className="text-2xs font-bold text-gray-500 flex items-center gap-2">
-                                    <Zap size={12} /> Hit Reaction
+                                    <BoltIcon size={12} /> Hit Reaction
                                 </label>
                                 <div className="bg-gray-800/50 rounded p-3 border border-gray-800 space-y-3">
                                     <div className="flex items-center justify-between gap-4">
@@ -465,7 +484,7 @@ export const BlueprintInspectorPanel: React.FC<BlueprintInspectorPanelProps> = (
                         <div className="space-y-4">
                             <div className="bg-gray-800/50 rounded p-3 border border-gray-800 space-y-2">
                                 <div className="text-xs font-bold text-gray-300 flex items-center gap-2">
-                                    <Palette size={14} className="text-purple-400" /> Active Skin
+                                    <PaletteIcon size={14} className="text-purple-400" /> Active Skin
                                 </div>
                                 <div className="flex gap-3">
                                     <div className="w-12 h-12 rounded border border-gray-700 bg-black overflow-hidden shrink-0">
@@ -473,7 +492,7 @@ export const BlueprintInspectorPanel: React.FC<BlueprintInspectorPanelProps> = (
                                             <img src={activeTexture.url} className="w-full h-full object-cover" />
                                         ) : (
                                             <div className="w-full h-full bg-gray-800 flex items-center justify-center text-gray-600 text-2xs text-center p-1">
-                                                <Box size={24} />
+                                                <CubeIcon size={24} />
                                             </div>
                                         )}
                                     </div>
@@ -505,14 +524,14 @@ export const BlueprintInspectorPanel: React.FC<BlueprintInspectorPanelProps> = (
                                         `}
                                     >
                                         <div className="w-full h-full bg-gray-800 flex items-center justify-center text-gray-500">
-                                            <Box size={24} />
+                                            <CubeIcon size={24} />
                                         </div>
                                         <div className="absolute bottom-0 left-0 right-0 bg-black/60 p-1 truncate text-2xs text-gray-300 text-center">
                                             Original
                                         </div>
                                         {!blueprint.textureId && (
                                             <div className="absolute inset-0 bg-purple-500/20 flex items-center justify-center">
-                                                <Check size={16} className="text-white drop-shadow-md" />
+                                                <CheckIcon size={16} className="text-white drop-shadow-md" />
                                             </div>
                                         )}
                                     </div>
@@ -534,7 +553,7 @@ export const BlueprintInspectorPanel: React.FC<BlueprintInspectorPanelProps> = (
                                             
                                             {blueprint.textureId === tex.id && (
                                                 <div className="absolute inset-0 bg-purple-500/20 flex items-center justify-center">
-                                                    <Check size={16} className="text-white drop-shadow-md" />
+                                                    <CheckIcon size={16} className="text-white drop-shadow-md" />
                                                 </div>
                                             )}
                                             
@@ -557,7 +576,7 @@ export const BlueprintInspectorPanel: React.FC<BlueprintInspectorPanelProps> = (
                         <div className="space-y-4">
                             <div className="space-y-2">
                                 <label className="text-2xs font-bold text-gray-500 flex items-center gap-2">
-                                    <Zap size={12} /> Weapon Fire Sounds
+                                    <BoltIcon size={12} /> Weapon Fire Sounds
                                 </label>
                                 <div className="bg-gray-800/50 rounded p-3 border border-gray-800 space-y-3">
                                     
@@ -588,7 +607,7 @@ export const BlueprintInspectorPanel: React.FC<BlueprintInspectorPanelProps> = (
                                                             className="text-gray-400 hover:text-white transition-colors"
                                                             title="Preview Sound"
                                                         >
-                                                            <Play size={10} fill="currentColor" />
+                                                            <PlayIcon size={10} fill="currentColor" />
                                                         </button>
                                                         <span className="text-xs text-gray-300 truncate cursor-default" title={sound!.name}>{sound!.name}</span>
                                                     </div>
@@ -597,7 +616,7 @@ export const BlueprintInspectorPanel: React.FC<BlueprintInspectorPanelProps> = (
                                                         className="text-gray-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"
                                                         title="Remove Sound"
                                                     >
-                                                        <Trash2 size={10} />
+                                                        <TrashIcon size={10} />
                                                     </button>
                                                 </div>
                                             ))}
@@ -648,7 +667,7 @@ export const BlueprintInspectorPanel: React.FC<BlueprintInspectorPanelProps> = (
                                             onClick={() => onUpdate(blueprint.id, { traits: blueprint.traits.filter(t => t !== tag) })}
                                             className="text-gray-500 hover:text-white"
                                         >
-                                            <Trash2 size={10} />
+                                            <TrashIcon size={10} />
                                         </button>
                                     </div>
                                 ))}
@@ -659,7 +678,7 @@ export const BlueprintInspectorPanel: React.FC<BlueprintInspectorPanelProps> = (
                                     }}
                                     className="px-2 py-1 bg-gray-800 rounded border border-dashed border-gray-600 text-xs text-gray-500 hover:text-white hover:border-gray-400 flex items-center gap-1"
                                 >
-                                    <Plus size={10} /> Add Tag
+                                    <PlusIcon size={10} /> Add Tag
                                 </button>
                             </div>
                         </div>
@@ -670,7 +689,7 @@ export const BlueprintInspectorPanel: React.FC<BlueprintInspectorPanelProps> = (
                             <div className="flex justify-between items-center">
                                 <label className="text-2xs font-bold text-gray-500">Attributes</label>
                                 <button onClick={addStat} className="text-xs text-blue-400 hover:text-blue-300 flex items-center gap-1">
-                                    <Plus size={12} /> Add
+                                    <PlusIcon size={12} /> Add
                                 </button>
                             </div>
                             <div className="space-y-2">
@@ -683,7 +702,7 @@ export const BlueprintInspectorPanel: React.FC<BlueprintInspectorPanelProps> = (
                                                 className="bg-transparent text-xs font-bold text-gray-300 focus:outline-none border-b border-transparent focus:border-gray-500 w-24"
                                             />
                                             <button onClick={() => removeStat(stat.id)} className="text-gray-500 hover:text-red-400">
-                                                <Trash2 size={12} />
+                                                <TrashIcon size={12} />
                                             </button>
                                         </div>
                                         <div className="flex items-center gap-2">
