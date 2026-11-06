@@ -376,7 +376,9 @@ export class UvSession {
             for (const [key, byTile] of [...stack.pictures]) {
                 if (!used.has(pictureOwner(key))) continue;
                 const moved: Array<[number, GpuImage]> = [];
-                for (const tile of newTiles) moved.push([tile, await transferPicture(gpu, part, corner, (from) => byTile.get(from) ?? null, size, key.endsWith(':normal'), tile, picturePrecision(key))]);
+                for (const tile of newTiles) {
+                    moved.push([tile, await transferPicture(gpu, part, corner, (from) => byTile.get(from) ?? null, size, { normalMap: key.endsWith(':normal'), tile, precision: picturePrecision(key), coverage: true })]);
+                }
                 for (const [tile, image] of moved) {
                     gpu.copy(image, stack.picture(key, tile));
                     gpu.release(image);
@@ -414,7 +416,7 @@ export class UvSession {
                 // A picture of the model's own that an earlier layout here left in place no longer fits.
                 if (laidOutHere && !ownIds[channel]?.size) continue;
                 for (const tile of newTiles) {
-                    let image = await transferPicture(gpu, part, corner, texture, size, channel === 'normal', tile, picturePrecision(key));
+                    let image = await transferPicture(gpu, part, corner, texture, size, { normalMap: channel === 'normal', tile, precision: picturePrecision(key) });
                     if (read >= 0) {
                         const single = gpu.image(size, size, 'color', 8);
                         gpu.passNow(single, { fragment: `void main() { float v = texelFetch(src, ivec2(gl_FragCoord.xy), 0)[${read}]; outColor = vec4(v, v, v, 1.0); }`, inputs: { src: image } });
