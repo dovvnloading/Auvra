@@ -197,7 +197,7 @@ export const MATERIAL_NODE_DEFINITIONS: MaterialNodeDef[] = [
         type: 'time',
         label: 'Time',
         category: 'Input',
-        description: 'Seconds since play started, for animated materials.',
+        description: 'Seconds counted from when the editor or the game opened, for animated materials.',
         inputs: [],
         outputs: [{ key: 'out', label: 'Seconds', type: 'float' }],
         params: [],
