@@ -681,7 +681,7 @@ export function NodeGraphCanvas<S>(props: NodeGraphCanvasProps<S>): React.ReactE
             const frame = current.frames.find((candidate) => candidate.id === id);
             if (!frame) return;
             if (frameSelected !== id || selected.size) select([], id);
-            const contents = frameResize ? { nodes: [], frames: [] } : frameContents(frame, nodeRects(), current.frames);
+            const contents: { nodes: string[]; frames: string[] } = frameResize ? { nodes: [], frames: [] } : frameContents(frame, nodeRects(), current.frames);
             gesture.current = { kind: 'frame', id, start: at, nodes: new Set(contents.nodes), frames: new Set(contents.frames), resize: Boolean(frameResize), moved: false, offset: { x: 0, y: 0 } };
             return;
         }
@@ -1020,7 +1020,7 @@ export function NodeGraphCanvas<S>(props: NodeGraphCanvasProps<S>): React.ReactE
         },
         toggleGroup: (nodeId, group) => setOpenGroups((current) => {
             const nodeView = latest.current.views.get(nodeId);
-            const groups = new Map(current.get(nodeId) ?? []);
+            const groups = new Map<string, boolean>(current.get(nodeId) ?? []);
             const open = groups.get(group) ?? (nodeView ? groupOpenByDefault(nodeView, group) : false);
             groups.set(group, !open);
             return new Map(current).set(nodeId, groups);

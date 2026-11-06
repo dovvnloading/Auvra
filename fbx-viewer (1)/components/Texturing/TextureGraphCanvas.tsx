@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import {
-    CircleDashedIcon, CubeIcon, DropletsIcon, EyeIcon, GearIcon, GraphIcon, ImageIcon, MaterialIcon, MergeIcon, MountainIcon, MoveIcon, SelectBoxIcon,
+    CircleDashedIcon, CubeIcon, DropletsIcon, EyeIcon, GearIcon, GraphIcon, ImageIcon, MergeIcon, MountainIcon, MoveIcon, SelectBoxIcon,
     SlidersIcon, SparklesIcon, TilesIcon, WindIcon, type IconComponent,
 } from '../UI/Icons';
 import type { FinderEntry } from '../NodeGraph/finder';
