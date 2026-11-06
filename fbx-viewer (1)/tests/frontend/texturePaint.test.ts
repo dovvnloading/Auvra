@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import { buildPartMesh } from '../../texturing/mesh/partMesh';
 import { SurfacePicker } from '../../texturing/mesh/picker';
-import { allLayers, createPaintDocument, insertLayer, locateLayer, mapLayer, moveLayer, newFillLayer, newFolder, newPaintLayer, readPaintDocument } from '../../texturing/paint/paintTypes';
+import { allLayers, castsFromThreeSides, createPaintDocument, insertLayer, locateLayer, mapLayer, moveLayer, newFillLayer, newFolder, newPaintLayer, readPaintDocument } from '../../texturing/paint/paintTypes';
+import { BEFORE, pictureKey, pictureOwner, pictureOwners, picturePrecision } from '../../texturing/paint/paintStack';
+import { historyBytes, trimmedHistory, type HistoryEntry } from '../../texturing/paint/strokes';
 import { BUILTIN_GRAPHS, SMART_MASKS, SMART_MATERIALS } from '../../texturing/paint/smartLibrary';
 import { textureNodeDefinitionByType } from '../../texturing/graph/registry';
 
@@ -52,6 +54,57 @@ describe('texture set layers', () => {
         const stored = readPaintDocument({ modelId: 'm', materialNames: ['A'], layers: [], udim: true, before: { baseColor: { 1001: { assetId: 'a' }, 1002: { assetId: 'b' } }, emissive: { 1002: { assetId: 'c' } } } });
         expect(stored?.before?.baseColor).toEqual({ 1001: { assetId: 'a' }, 1002: { assetId: 'b' } });
         expect(stored?.before?.emissive?.['1002']).toEqual({ assetId: 'c' });
+    });
+
+    it('keeps the space 3D placement is measured in, and drops one that is not a space', () => {
+        const kept = readPaintDocument({ modelId: 'm', layers: [], space: { centre: [1, 2, 3], extent: 4 } });
+        expect(kept?.space).toEqual({ centre: [1, 2, 3], extent: 4 });
+        expect(readPaintDocument({ modelId: 'm', layers: [], space: { centre: [1, 2], extent: 4 } })?.space).toBeUndefined();
+        expect(readPaintDocument({ modelId: 'm', layers: [], space: { centre: [1, 2, 3], extent: 0 } })?.space).toBeUndefined();
+        // Bakes made before versions were kept read as they are (and so as older bakes).
+        expect(readPaintDocument({ modelId: 'm', layers: [], bake: { settings: {}, maps: {}, at: 1 } })?.bake?.version).toBeUndefined();
+    });
+
+    it('tells whether any fill is cast from three sides, folders included', () => {
+        const document = createPaintDocument('model', ['Surface']);
+        const plain = newFillLayer(document, 'Plain');
+        const cast = newFillLayer(document, 'Cast', { baseColor: { kind: 'texture', textureId: 't', projection: 'triplanar', scale: 4, rotation: 0, sharpness: 4 } });
+        expect(castsFromThreeSides([plain])).toBe(false);
+        expect(castsFromThreeSides([plain, newFolder('Wear', [cast])])).toBe(true);
+    });
+
+    it('finds whose pictures a set and its undo steps still use', () => {
+        const document = createPaintDocument('model', ['Surface']);
+        const paint = { ...newPaintLayer(document, 'Scratches'), mask: [{ id: 'mask1', kind: 'paint' as const, enabled: true, blend: 'replace' as const, opacity: 1 }] };
+        const owners = pictureOwners([{ ...document, layers: [newFolder('Wear', [paint])] }]);
+        expect(owners.has(paint.id)).toBe(true);
+        expect(owners.has('mask1')).toBe(true);
+        expect(owners.has(BEFORE)).toBe(true);
+        expect(pictureOwner(pictureKey(paint.id, 'height'))).toBe(paint.id);
+        expect(pictureOwner(pictureKey('mask1'))).toBe('mask1');
+        expect(picturePrecision(pictureKey(paint.id, 'height'))).toBe(16);
+        expect(picturePrecision(pictureKey(paint.id, 'normal'))).toBe(16);
+        expect(picturePrecision(pictureKey(paint.id, 'baseColor'))).toBe(8);
+        expect(picturePrecision(pictureKey('mask1'))).toBe(8);
+    });
+
+    it('keeps undo within its step count and its memory, oldest first, never the newest step', () => {
+        const step = (label: string, bytes: number, half = false): HistoryEntry => ({
+            label,
+            pixels: [{ key: 'l:baseColor', tile: 1001, rects: [{ x: 0, y: 0, width: 1, height: 1, before: half ? new Uint16Array(bytes / 2) : new Uint8Array(bytes), after: null }] }],
+        });
+        const past = [step('a', 40), step('b', 40, true), step('c', 40)];
+        expect(historyBytes(past[1])).toBe(40);
+        const labels = (entries: HistoryEntry[]) => entries.map((entry) => entry.label);
+        expect(labels(trimmedHistory(past, [], 80, 1000))).toEqual(['a', 'b', 'c']);
+        expect(labels(trimmedHistory(past, [], 2, 1000))).toEqual(['b', 'c']);
+        expect(labels(trimmedHistory(past, [], 80, 100))).toEqual(['b', 'c']);
+        // Steps that can be redone hold pixels too.
+        expect(labels(trimmedHistory(past, [step('redo', 60)], 80, 100))).toEqual(['c']);
+        // A step larger than the whole allowance is still kept when it is the newest.
+        expect(labels(trimmedHistory([...past, step('huge', 500)], [], 80, 100))).toEqual(['huge']);
+        // Steps that only change the layers hold no pixels.
+        expect(labels(trimmedHistory([{ label: 'Rename layer' }, ...past], [], 80, 120))).toEqual(['Rename layer', 'a', 'b', 'c']);
     });
 
     it('builds every smart material from layers whose smart masks exist', () => {
