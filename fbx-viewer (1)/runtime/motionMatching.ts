@@ -84,6 +84,8 @@ const SEARCH_BLOCK = 16;
  * this is the movement's to make; a sharper turn (turning round) is left to clips that turn.
  */
 export const STEER_TURN = (100 * Math.PI) / 180;
+/** A turn round that has this little (radians) left to turn of what is asked is let go to the next match. */
+const TURN_ROUND_DONE = (20 * Math.PI) / 180;
 /** A clip that travels and turns less than this over its length (radians) is steered by the movement. */
 const STEERED_CLIP_TURN = Math.PI / 4;
 /** A clip carrying the character slower than this many hips heights a second is standing still. */
@@ -143,14 +145,15 @@ const rootAt = (clip: MotionClipSamples, index: number, offset: number): { root:
     }
     if (!clip.loop) {
         // Past either end of a clip that does not loop, the character carries on as it was moving there:
-        // a stop that ends at rest stays put, a start that ends walking walks on.
+        // a stop that ends at rest stays put, a start that ends walking walks on. It keeps the facing it
+        // ends with: a turn round that ends while still turning has turned round, not gone on spinning.
         const end = at < 0 ? 0 : n - 1;
         const next = at < 0 ? Math.min(1, n - 1) : Math.max(0, n - 2);
         const edge = clip.samples[end], inner = clip.samples[next];
         // Per sample, outward from that end.
-        const dx = edge.root.x - inner.root.x, dz = edge.root.z - inner.root.z, turn = edge.facing - inner.facing;
+        const dx = edge.root.x - inner.root.x, dz = edge.root.z - inner.root.z;
         const reach = at < 0 ? -at : at - end;
-        return { root: { x: edge.root.x + dx * reach, y: edge.root.y, z: edge.root.z + dz * reach }, facing: edge.facing + turn * reach };
+        return { root: { x: edge.root.x + dx * reach, y: edge.root.y, z: edge.root.z + dz * reach }, facing: edge.facing };
     }
     const laps = Math.floor(at / n);
     const sample = clip.samples[((at % n) + n) % n];
@@ -227,6 +230,12 @@ export class MotionDatabase {
      * or turn round (on the spot, or a turn of 180 degrees) keep their turn, so they win when one is asked.
      */
     readonly steered: boolean[];
+    /**
+     * Per clip, whether it turns the character round as it plays: one that plays once and turns more than
+     * a right angle (a turn of 180 degrees, walking or running). While one plays, the character turns
+     * with it instead of by its movement, so the clip has the time it needs.
+     */
+    readonly turnsRound: boolean[];
 
     constructor(clips: MotionClipSamples[], weights: MotionWeights = DEFAULT_MOTION_WEIGHTS) {
         this.clips = clips.filter(clip => clip.samples.length > 1);
@@ -235,6 +244,8 @@ export class MotionDatabase {
         this.body = body;
         this.steered = this.clips.map(clip => this.clipSpeed(clip.name) > 0
             && Math.abs(clip.samples[clip.samples.length - 1].facing - clip.samples[0].facing) < STEERED_CLIP_TURN);
+        this.turnsRound = this.clips.map(clip => !clip.loop
+            && Math.abs(clip.samples[clip.samples.length - 1].facing - clip.samples[0].facing) > Math.PI / 2);
         const raw: Float32Array[] = [];
         const margin = Math.round(END_MARGIN * SAMPLE_RATE);
         this.clips.forEach((clip, c) => {
@@ -319,8 +330,13 @@ export class MotionDatabase {
     facingAt(clip: number, time: number): number {
         const entry = this.clips[clip];
         if (!entry) return 0;
-        const index = Math.max(0, Math.min(entry.samples.length - 1, Math.round(time * SAMPLE_RATE)));
-        return rootAt(entry, index, 0).facing;
+        // Between samples, blended: frames come faster than samples, and a turn read sample by sample
+        // would turn in steps (nothing one frame, twice as much the next).
+        const at = Math.max(0, Math.min(entry.samples.length - 1, time * SAMPLE_RATE));
+        const index = Math.floor(at);
+        const share = at - index;
+        const before = rootAt(entry, index, 0).facing;
+        return share > 0 ? before + (rootAt(entry, index, 1).facing - before) * share : before;
     }
 
     /** The database frame of a clip nearest a time, or -1. */
@@ -549,6 +565,17 @@ export class MotionMatcher {
         const sharp = !!asked && !!this.searchedFor && (
             Math.hypot(asked.x - this.searchedFor.x, asked.z - this.searchedFor.z) > SHARP_MOVE * db.body
             || Math.abs(asked.facing - this.searchedFor.facing) > SHARP_TURN);
+        // A turn round once begun plays through: the character turns with it (its movement follows the clip's
+        // turn), so a path predicted from the movement would always ask for a quicker turn and hop clips.
+        // It is let go when the turn asked for goes the other way or is all but done.
+        if (!ended && this.clip >= 0 && db.turnsRound[this.clip] && asked) {
+            const clip = db.clips[this.clip];
+            const left = db.facingAt(this.clip, clip.samples.length / SAMPLE_RATE) - db.facingAt(this.clip, this.time);
+            if (Math.sign(left) === Math.sign(asked.facing) && Math.abs(asked.facing) > TURN_ROUND_DONE) {
+                this.searchedFor = asked;
+                return { clip: this.clip, time: this.time, jumped: false };
+            }
+        }
         if (this.sinceSearch >= this.options.searchInterval || this.clip < 0 || sharp) {
             this.sinceSearch = 0;
             this.searchedFor = asked;
