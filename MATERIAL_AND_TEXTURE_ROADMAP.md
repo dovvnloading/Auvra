@@ -73,7 +73,7 @@
 - Web-first output: glTF with its material extensions plus KTX2. The leading painting tool has no glTF template.
 - A path-traced reference beside the live view.
 
-**First stages:** fix what is broken (§8), then bring graph editing to a professional level, then one material with one physical surface model across both renderers. See §6.
+**Next stages:** round 1 fixed most of §8's defects. Next comes professional graph editing, then one material with one physical surface model across both renderers. See §6.
 
 ## 1. What "rival, then lead" means
 
@@ -550,84 +550,82 @@ One family per pull request, each with picture tooltips and the wrap-edge tiling
 - **Tiling and precision.** Each new node passes the wrap-edge check, and height and normal paths stay 16-bit or float end to end.
 - **Speed.** Live edits at 2K stay interactive. A node that cannot is marked as slow on the canvas, with its cost shown.
 
-## 8. Known defects (Stage 0 list)
+## 8. Known defects
 
 File references are relative to `fbx-viewer (1)/`.
 
-### Texture graph
-1. "One picture per channel" makes separate roughness, metallic and AO pictures, but the generated material only reads the packed ORM picture. With that setting, the updated material loses all three (`texturing/materialOutput.ts:59-63`, `:163-185`; `components/Texturing/TextureGraphWorkspace.tsx:223,233`).
-2. Graph height is baked but never drives displacement or parallax, and the engine's copy is 8-bit (`texturing/materialOutput.ts:151-186`).
-3. Mesh-map nodes always show stand-ins in Materials, because `session.external` is never set. This affects Mesh map, Triplanar, Direction mask, Position gradient, Normal with mesh detail and 3D noise (`components/Texturing/textureGraphSession.ts:43`).
-4. Unknown node types are dropped silently on load, and the next edit saves the loss. Graphs over 1,500 nodes are cut short (`texturing/graph/document.ts:137-140`).
-5. Copies of one sub-graph run with the inner graph's seed, so they all look the same (`texturing/graph/evaluator.ts:374-382`).
-6. "Other" outputs are always colour, so grey masks from graphs made for other graphs show as colour pins (`texturing/graph/types.ts:131`).
-7. The pixel processor declares no cost, so a heavy shader at 8K draws in one pass and risks a GPU reset (`texturing/graph/nodes/io.ts:188`).
-8. Sharpen, Emboss, Normal from height and Edge detect step by the node's own size rather than the input's (`texturing/graph/nodes/transform.ts:355,394`; `texturing/graph/nodes/distance.ts:258,412`).
-9. Flood fill:
-   - labels islands on the CPU after a blocking read-back;
-   - stores its random value in half float, giving about 2,000 distinct values;
-   - needs about 1 GB at 8K (`texturing/graph/nodes/distance.ts:103-149,284,287-293`).
-10. Transform with rotation or fractional scale breaks tiling, and there is no safe transform (`texturing/graph/nodes/transform.ts:74-80`).
-11. The Bitmap node always loads as 8-bit sRGB and is stretched to the graph's square (`texturing/graph/nodes/io.ts:138`).
-12. The gradient map drops the ramp's alpha (`components/Texturing/TextureParamField.tsx:108-109`).
-13. Undo:
-    - it is lost when switching material;
-    - parameter values and output settings are never recorded;
-    - parameter label and range boxes add one undo step per keystroke, and can briefly store NaN (`components/Texturing/TextureGraphWorkspace.tsx:123-130,399,416-418`).
-14. Choice parameters have fixed First/Second options. Name, step, group and description are stored but have no UI. Typed values are not clamped (`components/Texturing/TextureParamField.tsx:147`).
-15. The size UI is narrower than the data: square only, relative −3 to +2 against −6 to +4 stored, fixed sizes from 256 against 16.
-16. Comments can't be titled or coloured (`components/Texturing/graphEditing.ts:134-146`). The 2D view's help promises pixel values but shows only coordinates (`components/Texturing/TextureView2D.tsx:10,127-140`). The node list can open partly off-canvas (`components/Texturing/NodePalette.tsx:125-131`).
-17. Seeds:
-    - graph and node seeds are combined linearly, so different pairs can collide;
-    - in formulas, unary minus binds tighter than `^`;
-    - Make it tile is a single cross-fade, so ghosting shows.
-18. Scaling:
-    - the canvas does a links × nodes lookup on every render (`components/Texturing/TextureGraphCanvas.tsx:394-399`);
-    - every node is redrawn after each edit (`components/Texturing/textureGraphSession.ts:123`);
-    - output re-renders the whole graph.
+### Fixed in round 1 (Stage 0)
+- **Texture graph:**
+  - Mesh-map nodes show real maps in the Materials tab: worked out for the preview shapes, or read from a model's Paint bake.
+  - Unknown node types are kept as placeholders, and large graphs are no longer cut.
+  - Copies of one sub-graph vary their seeds; named outputs can be grey.
+  - The pixel processor is drawn in bands.
+  - Kernels step by their input's pixel size.
+  - Flood fill keeps a distinct random value per island and needs far less memory at 8K.
+  - The gradient map keeps its alpha.
+  - Undo keeps its history per material, records parameters and picture settings, and never stores NaN.
+  - Values are clamped to their hard limits.
+  - The UI offers every node size, including non-square.
+  - Comments take titles and colours; the 2D view shows pixel values; the node list stays on the canvas.
+  - Seeds are hashed; `-2^2` is −4; only changed nodes redraw.
+  - On the shader graph canvas, right-drag pans and Tab moves focus.
+- **Painting, baking and UVs:**
+  - Soft strokes no longer show the UV triangles.
+  - Baked and painted normals, painted height, and saved AO and thickness are 16-bit.
+  - Position is measured in one even space per model, and older bakes are flagged.
+  - Deleted layers free their pictures.
+  - A relayout keeps coverage and the mesh's own tangents.
+  - "Pack the current islands" packs without unwrapping again.
+  - UV edits have their own undo, and islands can be kept in place.
+  - A lost GPU context can no longer cost painting work.
+  - The stencil is drawn and keeps its proportions.
+  - UV stretch shows the current layout, and the 2D UV view shows each tile.
+  - Colour picking wraps UVs.
+  - The paint view has smooth edges and mipmapped pictures.
+  - Mask effects can be reordered; undo has a memory cap.
+- **Material graph and engine materials:**
+  - Shader patches compose: graph-shaded materials and imported models with compressed normal maps take weather and wind.
+  - "One picture per channel" outputs draw correctly.
+  - UDIM atlases hold only the tiles in use, with gutters.
+  - Vector 2 parameters save.
+  - Only materials that can draw are offered.
+  - The empty list points to Material Overrides.
+  - Bounced light takes a graph-shaded material's colour.
+  - Undo survives switching tabs.
+  - Value edits update in place without recompiling.
+  - Unlit and Phong materials say why they can't take an asset.
+  - Material Overrides shows every map, and Retexture uses one base-map path.
+  - The Time node says what its clock counts, and vertex colours are applied once.
 
-### Painting, baking and UVs
-19. Soft strokes probably show faint UV triangle edges. Dabs blend with alpha, and every UV-space draw also draws each triangle's edges as lines, so edge texels take a dab two or three times. Check in the editor (`texturing/paint/strokes.ts:441`; `texturing/bake/uvRaster.ts:126-130,166`; `texturing/mesh/partMesh.ts:364-376`).
-20. Normals are 8-bit throughout:
-    - the bake writes 8-bit normals (`texturing/bake/meshBaker.ts:138`);
-    - the final normal is 8-bit (`texturing/paint/paintStack.ts:627`);
-    - so the 16-bit normal export holds 8-bit data;
-    - painted height is 8-bit per layer (`texturing/paint/paintStack.ts:387`).
-21. The position map is scaled separately on each axis, so 3D noise and scratches stretch on long parts and differ between sets. The graph's triplanar disagrees with the fill layer's (`texturing/bake/meshBaker.ts:341-346`).
-22. AO and thickness are baked at 16 bits but saved at 8 (`texturing/paint/paintStack.ts:217,503`).
-23. `dropPictures` is never called, so deleted layers' pictures stay on the GPU, and "Use this layout" uploads them again (`texturing/paint/paintStack.ts:398-404`; `components/Texturing/Paint/uvSession.ts:374-381`).
-24. Carrying pictures to a new layout ignores coverage, leaving dark fringes at stroke edges (`texturing/uv/transfer.ts:61`).
-25. "Pack the current islands" flattens every piece again instead of packing (`components/Texturing/Paint/uvSession.ts:166-170`).
-26. UV island edits can't be undone; Ctrl+Z undoes paint instead (`components/Texturing/Paint/PaintWorkspace.tsx:158`). Per-island lock and density are never set, and "lock" only stops rotation (`texturing/uv/pack.ts:146,171`).
-27. A lost GPU context in the paint stack can lead to blank-based pictures saved over kept work. Only the graph evaluator handles a lost context (`texturing/graph/evaluator.ts:93`).
-28. Unwrapping and packing run on the main thread and freeze the editor (`components/Texturing/Paint/uvSession.ts:174-190`).
-29. "Put on the model" saves a height picture the material never reads (`texturing/materialOutput.ts:58`).
-30. The UDIM atlas bleeds between tiles: no gaps between cells, 8-bit, and sparse tile sets waste width.
-31. The stencil isn't drawn on screen, is forced square, and does nothing with surface projection (`texturing/paint/strokes.ts:184-189,463`).
-32. "UV stretch" shows nothing for the current layout (`components/Texturing/Paint/PaintViewport.tsx:263`). The 2D UV background shows only tile 1001 at 512² (`components/Texturing/Paint/UvView2D.tsx:31-40`).
-33. Picking a colour fails on sets that aren't UDIM but whose UVs run past 0..1 (`components/Texturing/Paint/PaintViewport.tsx:344-345`).
-34. The viewport has no anti-aliasing and no mipmaps on live pictures, so models shimmer when zoomed out (`texturing/gpu/textureGpu.ts:195-206`).
-35. Each batch of dabs recombines all layers on every tile, and each stroke copies every channel first (`texturing/paint/strokes.ts:347-357,498`).
-36. Small ones:
-    - mask effects can't be reordered;
-    - undo has a step count but no memory limit;
-    - the brush size slider stops at 400 while `]` goes to 600;
-    - relayout can shift normals on meshes with their own tangents (`texturing/uv/transfer.ts:51-68`).
+### Still open
+**Texture graph**
+1. Graph and painted height are kept at 16 bits, but nothing draws with height yet (Stage 2).
+2. Flood fill still labels islands on the CPU, from a one-bit mask. Its full-float result takes about 1 GB of GPU memory at 8K. GPU labelling is in Stage 3 (`texturing/graph/nodes/distance.ts`).
+3. There is no safe transform: rotation or fractional scale breaks tiling (`texturing/graph/nodes/transform.ts`).
+4. The Bitmap node always loads as 8-bit sRGB and is stretched to the graph; there's no crop or linear option (`texturing/graph/nodes/io.ts`).
+5. Choice parameters have no option editor, and step, group and description have no UI (Stage 4).
+6. Make it tile is a single cross-fade, so ghosting shows (Stage 5, photo tools).
+7. Update material draws mesh-reading nodes with stand-ins, because a material can go on any model. Per-model results come with Stage 9.
+8. Ctrl+Z in the texture graph only works with the pointer over the canvas.
+9. `texturing/png.ts` reads 16-bit pictures into 32-bit floats: about 540 MB per 4K picture while a set opens. It should read into half floats.
+10. Now that position is measured in one cube per model, Position gradient and the "Grime from below" smart mask cover only part of 0..1 along a model's shorter axes. The node should normalise per axis.
 
-### Material graph and engine materials
-37. Binding a graph replaces the material's compile hook, so graph-shaded materials lose rain, snow and wind. The BC5 normal hook added at load probably does the same to every imported material with a compressed normal map, foliage included. Check in the engine (`runtime/materials/graphMaterial.ts:440`; `runtime/weatherSurfaces.ts:159-163`; `utils/textureCompression/compressTextures.ts:84-101`).
-38. Vector 2 parameters can't be saved: the stored value and the project schema keep exactly 3 numbers (`utils/materialOverrides.ts:86`; `project/v1/models.schema.json`).
-39. "Graph for other graphs" assets and texture graphs not yet rendered are offered as materials, and picking one turns the model grey (`components/Tools/MaterialEditor.tsx:159`).
-40. The empty Materials list says materials are assigned "in the Retexture tab". It is actually Properties > Material Overrides (`components/Materials/MaterialGraphEditor.tsx:314`).
-41. `docs/assets.md` promises per-object tints, but overrides are per model and shared by every placed copy.
-42. Bounced light ignores the graph and uses the material's own colour (`runtime/raytracing/rayScene.ts:303-329`).
-43. Undo is lost when switching tabs (`components/Materials/MaterialGraphEditor.tsx:123`).
-44. Every node drag or slider step re-binds and recompiles every material using the asset (`components/Materials/MaterialGraphEditor.tsx:156-170`).
-45. Assigning a graph to an unlit or Phong material silently does nothing (`runtime/materials/graphMaterial.ts:117-118`).
-46. Material Overrides hides the roughness and metal maps that Retexture writes, and there are two ways to set a base map.
-47. Material textures are never compressed (`runtime/materials/materialLibrary.ts:155`).
-48. Right-click on a wire cuts it on press, which clashes with right-drag panning, and Tab is captured by the canvas (`components/Materials/MaterialGraphCanvas.tsx:381,614-617`).
-49. The Time node says "since play started", but its clock runs from page load. Vertex colours are applied twice when a graph also uses the vertex colour node.
+**Painting, baking and UVs**
+
+11. Unwrapping and packing run on the main thread and freeze the editor (`components/Texturing/Paint/uvSession.ts`).
+12. Each batch of dabs recombines all layers on every tile, and each stroke copies every channel first (`texturing/paint/strokes.ts`).
+13. "Use this layout" changes pictures in memory before the layout is saved. A failure in between could let autosave keep new-layout pictures under the old layout.
+14. The paint view's smoothing draws into a render target marked as an XR target. Recheck this when three.js is upgraded (`components/Texturing/Paint/PaintViewport.tsx`).
+15. A triangle that crosses a UDIM tile edge can pick a too-coarse mip at that edge.
+
+**Material graph and engine materials**
+
+16. Material textures are never compressed (`runtime/materials/materialLibrary.ts`, Stage 8).
+17. Unlit and Phong materials can't take a material asset (a message says so). Converting them is a later step.
+18. For the WebGPU renderer (#154):
+    - its graph surface ignores weather and wind;
+    - it caches translated shaders per graph object, so every value edit translates again; it should key by graph shape;
+    - it should skip the vertex-colour multiply when a graph reads Vertex Color.
 
 ## 9. Sources and references
 
