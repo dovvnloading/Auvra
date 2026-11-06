@@ -33,6 +33,21 @@ export interface PreviewSet {
 
 const MATERIAL_CHANNELS: readonly MaterialChannel[] = ['baseColor', 'normal', 'roughness', 'metallic', 'height', 'ambientOcclusion', 'emissive', 'opacity'];
 
+/**
+ * What a graph opened inside another (from a node using it) is drawn with there: the images wired
+ * into that node, its settings for the graph's parameters, and the seed and size it runs at.
+ */
+export interface GraphContext {
+    /** Images for the graph's Input nodes, by name. */
+    inputs: Record<string, ExternalImage | null>;
+    /** Values for the graph's parameters. */
+    parameters: Record<string, unknown>;
+    seed?: number;
+    size?: { w: number; h: number };
+    /** Changes whenever any of the above does. */
+    version: string;
+}
+
 export class TextureGraphSession {
     readonly gpu: TextureGpu;
     readonly evaluator: TextureGraphEvaluator;
@@ -56,6 +71,10 @@ export class TextureGraphSession {
     private scheduled = false;
     private emitQueued = false;
     private disposed = false;
+    /** Held while a graph opened inside this one is being edited: nothing is drawn until it is let go. */
+    private paused = false;
+    private wanted = false;
+    private context: GraphContext | null = null;
     private previewSignature = '';
     /** Draws the material's pictures at sizes other than the editing size; kept between uses. */
     private output: TextureGraphEvaluator | null = null;
@@ -148,8 +167,32 @@ export class TextureGraphSession {
         this.schedule();
     }
 
+    /** Draws the graph as it is where it is used (null: as it is on its own). */
+    setContext(context: GraphContext | null): void {
+        if (context?.version === this.context?.version && Boolean(context) === Boolean(this.context)) return;
+        this.context = context;
+        this.schedule();
+    }
+
+    /**
+     * Holds the session while a graph inside it is open (its pictures stay as they are, for that graph
+     * to be drawn with); letting go draws what changed meanwhile.
+     */
+    setPaused(paused: boolean): void {
+        if (paused === this.paused) return;
+        this.paused = paused;
+        if (!paused && this.wanted) {
+            this.wanted = false;
+            this.schedule();
+        }
+    }
+
     private schedule(): void {
         if (this.disposed) return;
+        if (this.paused) {
+            this.wanted = true;
+            return;
+        }
         this.controller?.abort();
         if (this.scheduled) return;
         this.scheduled = true;
@@ -179,11 +222,14 @@ export class TextureGraphSession {
             this.evaluator.prune(graph);
             // Every node is wanted, for its thumbnail; only those whose result changed are drawn, and only
             // they get a new thumbnail.
+            const context = this.context;
             await this.evaluator.evaluate({
                 graph,
-                parameters: this.parameters,
-                external: this.external,
-                externalVersion: this.externalVersion,
+                parameters: context?.parameters ?? this.parameters,
+                external: context ? { ...this.external, ...context.inputs } : this.external,
+                externalVersion: context ? `${this.externalVersion}|${context.version}` : this.externalVersion,
+                ...(context?.seed !== undefined ? { seed: context.seed } : {}),
+                ...(context?.size ? { size: context.size } : {}),
                 targets: graph.nodes.map((node) => node.id),
                 signal: controller.signal,
                 onNode: (nodeId, state) => {
