@@ -53,9 +53,8 @@ const groovedBall = (): THREE.Object3D => {
     return root;
 };
 
+// The pass prelude declares `uSize` (the picture's size in pixels) and the shared library defines PI.
 const SPHERE = /* glsl */ `
-uniform float uSize;
-const float PI = 3.14159265;
 vec3 sky(vec3 d) {
     vec3 ground = vec3(0.09, 0.085, 0.08);
     vec3 horizon = vec3(0.55, 0.55, 0.53);
@@ -78,7 +77,7 @@ vec3 light(vec3 n, vec3 v, vec3 l, vec3 colour, vec3 diffuse, vec3 f0, float a) 
 void main() {
     vec2 q = gl_FragCoord.xy / uSize * 2.0 - 1.0;
     float r = length(q);
-    float cover = clamp((1.0 - r) * uSize * 0.5 + 0.5, 0.0, 1.0);
+    float cover = clamp((1.0 - r) * uSize.x * 0.5 + 0.5, 0.0, 1.0);
     if (cover <= 0.0) { outColor = vec4(0.0); return; }
     vec2 s = r > 0.999 ? q / r * 0.999 : q;
     vec3 p = vec3(s, sqrt(max(0.0, 1.0 - dot(s, s))));
@@ -221,7 +220,6 @@ class PaintPreviews {
                     occlusion: maps.ambientOcclusion ?? gpu.constant('white'),
                     glow: outputs.emissive ?? gpu.constant('black'),
                 },
-                uniforms: { uSize: PREVIEW_PIXELS },
             });
             const png = await gpu.toPng(image, PREVIEW_PIXELS, PREVIEW_PIXELS, 'raw', true);
             return URL.createObjectURL(png);
