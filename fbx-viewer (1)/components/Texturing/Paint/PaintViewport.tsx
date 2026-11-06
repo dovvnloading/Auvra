@@ -6,6 +6,7 @@ import { tileGeometry } from '../../../texturing/mesh/partMesh';
 import type { MeshMapName } from '../../../texturing/graph/nodes/io';
 import { MAX_BRUSH_SIZE, pictureAspect, renderDepth, stencilPlace, Stroke, type BrushSettings, type StrokeTarget } from '../../../texturing/paint/strokes';
 import type { PaintChannel } from '../../../texturing/paint/paintTypes';
+import { PICK_LABELS, type PickMode } from '../../../texturing/paint/selection';
 import type { PaintSession } from './paintSession';
 import type { UvSession } from './uvSession';
 
@@ -20,7 +21,10 @@ import type { UvSession } from './uvSession';
  * smoothed onto the screen, so its edges are clean.
  */
 
-export type PaintTool = 'paint' | 'erase' | 'island' | 'pick' | 'seam';
+export type PaintTool = 'paint' | 'erase' | 'island' | 'polygon' | 'pick' | 'seam';
+
+/** Where a click met the surface: its triangle, the place on the model and its texture coordinates. */
+export interface SurfaceHit { triangle: number; point: THREE.Vector3; uv: THREE.Vector2 }
 export type ViewMode = 'material' | PaintChannel | 'ambientOcclusion' | `mesh:${MeshMapName}` | 'mask' | 'uvChecker' | 'uvStretch';
 
 /** A tile's live pictures as the view draws them, each with its smaller versions, made when first needed. */
@@ -154,7 +158,14 @@ export const PaintViewport: React.FC<{
     frameSignal: number;
     /** The UV editing session, for seams and the layout views. */
     uv: UvSession | null;
-}> = ({ session, tool, brush, target, view, maskImage, onBrushSize, onPick, onMessage, frameSignal, uv }) => {
+    /** What a polygon fill takes in: a triangle, a quad, a mesh part, a UV piece or an edge loop. */
+    pickMode: PickMode;
+    /**
+     * A click on the surface with the polygon or pick tool, offered first to whatever is being picked for
+     * (a polygon or ID colour mask): true when it took the click. Shift takes away instead of adding.
+     */
+    onSurfacePick?: (hit: SurfaceHit, remove: boolean) => boolean;
+}> = ({ session, tool, brush, target, view, maskImage, onBrushSize, onPick, onMessage, frameSignal, uv, pickMode, onSurfacePick }) => {
     const uvVersion = useSyncExternalStore(uv?.subscribe ?? NO_SUBSCRIBE, uv?.getVersion ?? ZERO);
     const host = useRef<HTMLDivElement>(null);
     const canvas = useRef<HTMLCanvasElement>(null);
@@ -408,7 +419,7 @@ export const PaintViewport: React.FC<{
             return;
         }
         if (!target) {
-            onMessage(tool === 'island' ? 'Pick a paint layer or a painted mask to fill.' : 'Pick a paint layer, or a painted mask effect, to paint on. Fill layers take their values from their settings.');
+            onMessage(tool === 'island' || tool === 'polygon' ? 'Pick a paint layer or a painted mask to fill, or a polygon or ID colour mask effect to pick for.' : 'Pick a paint layer, or a painted mask effect, to paint on. Fill layers take their values from their settings.');
             return;
         }
         onMessage(null);
@@ -427,10 +438,11 @@ export const PaintViewport: React.FC<{
             depth,
             perspective,
         }, alpha, stencil);
-        if (tool === 'island') {
+        if (tool === 'island' || tool === 'polygon') {
             const hit = hitAt(x, y);
-            if (hit) stroke.fillIsland(session.part.triangleIsland[hit.triangle]);
-            const entry = stroke.finish('Fill island');
+            const mode: PickMode = tool === 'island' ? 'island' : pickMode;
+            if (hit) stroke.fillTriangles(session.selector.pick(mode, hit.triangle, [hit.point.x, hit.point.y, hit.point.z]));
+            const entry = stroke.finish(tool === 'island' ? 'Fill island' : `Fill ${PICK_LABELS[mode].toLowerCase()}`);
             gpu.release(depth);
             if (hit) session.record(entry);
             return;
@@ -464,6 +476,10 @@ export const PaintViewport: React.FC<{
             return;
         }
         if (event.button !== 0) return;
+        if (tool === 'polygon' || tool === 'pick') {
+            const hit = hitAt(x, y);
+            if (hit && onSurfacePick?.(hit, event.shiftKey)) return;
+        }
         if (tool === 'pick') { pickColour(x, y); return; }
         if (tool === 'seam') {
             const hit = hitAt(x, y);
@@ -546,7 +562,7 @@ export const PaintViewport: React.FC<{
         <div
             ref={host}
             className="relative min-h-0 min-w-0 flex-1 overflow-hidden"
-            style={{ cursor: tool === 'pick' ? 'crosshair' : showCursor ? 'none' : 'default' }}
+            style={{ cursor: tool === 'pick' || tool === 'polygon' ? 'crosshair' : showCursor ? 'none' : 'default' }}
             onPointerDown={onPointerDown}
             onPointerMove={onPointerMove}
             onPointerUp={onPointerUp}

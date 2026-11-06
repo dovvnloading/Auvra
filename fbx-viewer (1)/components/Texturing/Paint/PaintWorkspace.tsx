@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { BrushIcon, BucketIcon, EraserIcon, EyedropperIcon, FrameIcon, RedoIcon, ScissorsIcon, UndoIcon, WarningIcon } from '../../UI/Icons';
+import { BrushIcon, BucketIcon, EraserIcon, EyedropperIcon, FrameIcon, RedoIcon, ScissorsIcon, SelectBoxIcon, UndoIcon, WarningIcon } from '../../UI/Icons';
 import { useAssets } from '../../../context/AssetContext';
 import { useScene } from '../../../context/SceneContext';
 import { frontendDiagnostics } from '../../../diagnostics/runtime';
@@ -7,7 +7,9 @@ import { materialLibrary } from '../../../runtime/materials/materialLibrary';
 import { overrideTextureFlipY } from '../../../utils/materialOverrides';
 import { MESH_MAP_LABELS, MESH_MAPS } from '../../../texturing/graph/nodes/io';
 import { readStoredGraph } from '../../../texturing/graph/stored';
-import { CHANNEL_LABELS, allLayers, readPaintDocument } from '../../../texturing/paint/paintTypes';
+import { CHANNEL_LABELS, allLayers, mapLayer, readPaintDocument, type MaskEffect } from '../../../texturing/paint/paintTypes';
+import { MAX_ID_COLOURS } from '../../../texturing/paint/paintStack';
+import { PICK_LABELS, PICK_MODES, changeTriangles, matchesId, type PickMode } from '../../../texturing/paint/selection';
 import { DEFAULT_BRUSH, MAX_BRUSH_SIZE, type BrushSettings, type StrokeTarget } from '../../../texturing/paint/strokes';
 import { paintWithMaterial } from '../../../texturing/paint/materialPresets';
 import type { PreviewHost } from '../../../texturing/paint/previews';
@@ -20,7 +22,7 @@ import { LayerPanel, type LayerSelection } from './LayerPanel';
 import { useMaterialSections, type MaterialChoice } from './MaterialPicker';
 import { SliderRow } from './PaintFields';
 import { PaintSession, findPaintAsset, paintGraphResolver, type PaintTarget } from './paintSession';
-import { PaintViewport, type PaintTool, type ViewMode } from './PaintViewport';
+import { PaintViewport, type PaintTool, type SurfaceHit, type ViewMode } from './PaintViewport';
 import { SetPanel } from './SetPanel';
 import { UvPanel } from './UvPanel';
 import { UvSession } from './uvSession';
@@ -143,6 +145,7 @@ export const PaintWorkspace: React.FC = () => {
     void sessionVersion;
 
     const [tool, setTool] = useState<PaintTool>('paint');
+    const [pickMode, setPickMode] = useState<PickMode>('quad');
     const [brush, setBrushState] = useState<BrushSettings>(rememberedBrush);
     const setBrush = useCallback((next: BrushSettings) => { rememberedBrush = next; setBrushState(next); }, []);
     const [selection, setSelection] = useState<LayerSelection>({ layerId: null, effectId: null });
@@ -185,6 +188,33 @@ export const PaintWorkspace: React.FC = () => {
         setMessage(`Painting with ${choice.name}: strokes lay it on in every channel it has. Erase (E) takes it off again.`);
     }, [brush, selection.layerId, session, setBrush]);
 
+    // Clicks on the model while a polygon or ID colour mask is selected pick for it (Shift takes away).
+    const onSurfacePick = useCallback((hit: SurfaceHit, remove: boolean): boolean => {
+        if (!session || !layer || !effect || (effect.kind !== 'polygon' && effect.kind !== 'id')) return false;
+        if (session.locked) { setMessage(session.locked); return true; }
+        const update = (patch: Partial<MaskEffect>, label: string) => session.change({
+            ...session.document,
+            layers: mapLayer(session.document.layers, layer.id, (current) => ({ ...current, mask: (current.mask ?? []).map((candidate) => (candidate.id === effect.id ? { ...candidate, ...patch } : candidate)) })),
+        }, label);
+        if (effect.kind === 'polygon') {
+            const mode = effect.pick ?? 'mesh';
+            const triangles = session.selector.pick(mode, hit.triangle, [hit.point.x, hit.point.y, hit.point.z]);
+            update({ triangles: changeTriangles(effect.triangles, triangles, remove) }, `${remove ? 'Take away' : 'Pick'} ${PICK_LABELS[mode].toLowerCase()}`);
+            return true;
+        }
+        const colour = session.idColourAt(hit.triangle, hit.uv);
+        if (!colour) { setMessage('There is no baked ID map to pick from: bake the mesh maps in the Texture set panel first.'); return true; }
+        const colours = effect.colors ?? [];
+        const near = colours.findIndex((each) => matchesId(colour, [each], Math.max(effect.tolerance ?? 0.02, 1 / 255)));
+        if (remove) {
+            if (near >= 0) update({ colors: colours.filter((_, i) => i !== near) }, 'Take away an ID colour');
+        } else if (near < 0) {
+            if (colours.length >= MAX_ID_COLOURS) setMessage(`An ID colour mask takes up to ${MAX_ID_COLOURS} colours.`);
+            else update({ colors: [...colours, colour.map((value) => Math.round(value * 255) / 255) as [number, number, number]] }, 'Pick an ID colour');
+        }
+        return true;
+    }, [effect, layer, session]);
+
     const maskImage = useCallback((tile: number) => (session && layer ? session.stack.cachedMask(layer.id, tile) : null), [layer, session]);
     // The mask view's layer has its mask kept whole while it is shown.
     const layerId = layer?.id ?? null;
@@ -215,6 +245,7 @@ export const PaintWorkspace: React.FC = () => {
             if (key === 'b') setTool('paint');
             else if (key === 'e') setTool('erase');
             else if (key === 'g') setTool('island');
+            else if (key === 'q') setTool('polygon');
             else if (key === 'p') setTool('pick');
             else if (key === 's') setTool('seam');
         };
@@ -263,6 +294,8 @@ export const PaintWorkspace: React.FC = () => {
                     <IconButton label="Paint" shortcut="B" active={tool === 'paint'} onClick={() => setTool('paint')}><BrushIcon size={14} /></IconButton>
                     <IconButton label="Erase" shortcut="E" active={tool === 'erase'} onClick={() => setTool('erase')}><EraserIcon size={14} /></IconButton>
                     <IconButton label="Fill a UV island" shortcut="G" active={tool === 'island'} onClick={() => setTool('island')}><BucketIcon size={14} /></IconButton>
+                    <IconButton label="Fill polygons: a triangle, a quad, a mesh part, a UV piece or an edge loop" shortcut="Q" active={tool === 'polygon'} onClick={() => setTool('polygon')}><SelectBoxIcon size={14} /></IconButton>
+                    {tool === 'polygon' && <Select value={pickMode} options={PICK_MODES.map((mode) => ({ value: mode, label: PICK_LABELS[mode] }))} onChange={(mode) => setPickMode(mode as PickMode)} className="w-28" />}
                     <IconButton label="Pick a colour" shortcut="P" active={tool === 'pick'} onClick={() => setTool('pick')}><EyedropperIcon size={14} /></IconButton>
                     <IconButton label="Mark or clear seams (Shift clears)" shortcut="S" active={tool === 'seam'} onClick={() => setTool('seam')}><ScissorsIcon size={14} /></IconButton>
                     <span className="mx-1 h-4 w-px bg-zinc-800" />
@@ -284,7 +317,7 @@ export const PaintWorkspace: React.FC = () => {
                         <PaintViewport session={session} tool={tool} brush={brush} target={target} view={view === 'uv2d' ? 'material' : view} maskImage={maskImage}
                             onBrushSize={(size) => setBrush({ ...brush, size })}
                             onPick={(color) => { setBrush({ ...brush, values: { ...brush.values, baseColor: color } }); setTool('paint'); }}
-                            onMessage={setMessage} frameSignal={frameSignal} uv={uv} />
+                            onMessage={setMessage} frameSignal={frameSignal} uv={uv} pickMode={pickMode} onSurfacePick={onSurfacePick} />
                     ) : (
                         <div className="flex flex-1 items-center justify-center text-xs text-zinc-500">
                             {opening ? <span className="flex items-center gap-2"><Spinner /> Laying out the surface…</span> : message ?? (part ? '' : 'Pick a texture set on the left to paint it.')}
@@ -313,7 +346,7 @@ export const PaintWorkspace: React.FC = () => {
                     <Segmented value={panel} options={[{ value: 'layers', label: 'Layers' }, { value: 'brush', label: 'Brush' }, { value: 'set', label: 'Texture set' }, { value: 'uvs', label: 'UVs' }]} onChange={setPanel} label="Panel" />
                 </div>
                 {session ? (
-                    panel === 'layers' ? <LayerPanel session={session} selection={selection} onSelect={setSelection} resolve={resolve} graphs={graphs} textures={textures} onPaintWith={paintWith} onMessage={setMessage} />
+                    panel === 'layers' ? <LayerPanel session={session} selection={selection} onSelect={setSelection} resolve={resolve} graphs={graphs} textures={textures} onPaintWith={paintWith} onMessage={setMessage} onUseTool={setTool} />
                         : panel === 'brush' ? <div className="min-h-0 flex-1 overflow-y-auto"><BrushPanel brush={brush} onChange={setBrush} channels={session.document.channels} paintingMask={target?.kind === 'mask'} textures={textures} onPick={() => setTool('pick')}
                             paintWith={previewHost ? { sections: brushSections, host: previewHost, onPick: paintWith, onMessage: setMessage } : undefined} /></div>
                             : panel === 'uvs' && uv ? <div className="min-h-0 flex-1 overflow-y-auto"><UvPanel uv={uv} onSeamTool={() => setTool('seam')} onApplied={() => { if (!uv.proposal) { putOnAfterOpen.current = uv.putOnWhenOpen; setReopen((value) => value + 1); } }} /></div>
