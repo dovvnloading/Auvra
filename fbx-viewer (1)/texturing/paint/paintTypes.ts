@@ -1,4 +1,4 @@
-import type { BlendMode } from '../gpu/glslLibrary';
+import { BLEND_MODES, type BlendMode } from '../gpu/glslLibrary';
 import type { MeshMapName } from '../graph/nodes/io';
 import type { BakeSettings, PositionSpace } from '../bake/meshBaker';
 import type { ChannelTextureIds } from '../materialOutput';
@@ -54,9 +54,11 @@ export type FillSource =
      */
     | ({ kind: 'graph'; graphId: string; output: string; values: Record<string, unknown> } & Partial<FillProjection>)
     /** What the surface wore before painting began (its own picture for the channel). */
-    | { kind: 'current' };
+    | { kind: 'current' }
+    /** What the layers below this one make of a channel (its brightness, when a colour fills a grey channel). */
+    | { kind: 'below'; channel: PaintChannel };
 
-export type MaskEffectKind = 'paint' | 'fill' | 'generator' | 'levels' | 'blur' | 'invert';
+export type MaskEffectKind = 'paint' | 'fill' | 'generator' | 'levels' | 'blur' | 'invert' | 'below';
 export type MaskBlend = 'multiply' | 'add' | 'subtract' | 'replace' | 'max' | 'min';
 
 export interface MaskEffect {
@@ -67,7 +69,7 @@ export interface MaskEffect {
     opacity: number;
     /** Paint: the painted mask. */
     pictures?: TilePictures;
-    /** Fill: a value; levels: low, high, mid; blur: radius (share of the picture). */
+    /** Fill: a value; levels and below: low, high (and levels mid); blur: radius (share of the picture). */
     value?: number;
     low?: number;
     high?: number;
@@ -77,16 +79,51 @@ export interface MaskEffect {
     graphId?: string;
     output?: string;
     values?: Record<string, unknown>;
+    /** Below: the channel of the layers below read (its brightness), or where it changes fastest (`edges`). */
+    channel?: PaintChannel;
+    edges?: boolean;
 }
 
-export type LayerKind = 'paint' | 'fill' | 'folder';
+export type LayerKind = 'paint' | 'fill' | 'folder' | 'filter';
+
+/** What a filter layer does to the layers below it, in each channel it is on. */
+export type FilterKind = 'blur' | 'sharpen' | 'hsl' | 'levels' | 'warp' | 'invert';
+
+export const FILTER_LABELS: Record<FilterKind, string> = {
+    blur: 'Blur', sharpen: 'Sharpen', hsl: 'Hue, saturation and lightness', levels: 'Levels', warp: 'Warp', invert: 'Invert',
+};
+
+export interface FilterSettings {
+    kind: FilterKind;
+    /** Blur and sharpen: how far it reaches, as a share of the picture. Warp: how far it pushes. */
+    radius: number;
+    /** Sharpen: how strongly. Warp: how fine its swirls are (repeats across the picture). */
+    amount: number;
+    /** Hue turn (-0.5..0.5 of the wheel), saturation and lightness changes (-1..1). */
+    hue: number;
+    saturation: number;
+    lightness: number;
+    /** Levels: in black, in white, midtones. */
+    low: number;
+    high: number;
+    mid: number;
+}
+
+export const DEFAULT_FILTER: Record<FilterKind, FilterSettings> = {
+    blur: { kind: 'blur', radius: 0.004, amount: 1, hue: 0, saturation: 0, lightness: 0, low: 0, high: 1, mid: 0.5 },
+    sharpen: { kind: 'sharpen', radius: 0.002, amount: 1, hue: 0, saturation: 0, lightness: 0, low: 0, high: 1, mid: 0.5 },
+    hsl: { kind: 'hsl', radius: 0, amount: 1, hue: 0, saturation: 0, lightness: 0, low: 0, high: 1, mid: 0.5 },
+    levels: { kind: 'levels', radius: 0, amount: 1, hue: 0, saturation: 0, lightness: 0, low: 0, high: 1, mid: 0.5 },
+    warp: { kind: 'warp', radius: 0.004, amount: 8, hue: 0, saturation: 0, lightness: 0, low: 0, high: 1, mid: 0.5 },
+    invert: { kind: 'invert', radius: 0, amount: 1, hue: 0, saturation: 0, lightness: 0, low: 0, high: 1, mid: 0.5 },
+};
 
 export interface PaintLayer {
     id: string;
     name: string;
     kind: LayerKind;
     visible: boolean;
-    /** The channels it changes and how. */
+    /** The channels it changes and how (a filter layer: the channels it acts on, and how strongly). */
     channels: Partial<Record<PaintChannel, ChannelBlend>>;
     /** Fill layers: where each channel's value comes from. */
     fill?: Partial<Record<PaintChannel, FillSource>>;
@@ -94,8 +131,12 @@ export interface PaintLayer {
     pictures?: Partial<Record<PaintChannel, TilePictures>>;
     /** Folders: their layers, bottom first. */
     layers?: PaintLayer[];
-    /** Folders: how strongly the whole folder shows. */
+    /** How strongly the whole layer (or folder) shows, on top of each channel's own opacity. */
     opacity?: number;
+    /** Folders: how what the folder makes is laid over what is below it (each channel but normal). */
+    blend?: BlendMode;
+    /** Filter layers: what they do. */
+    filter?: FilterSettings;
     mask?: MaskEffect[];
     /** Set on layers made from a smart material, for the list to say so. */
     from?: string;
@@ -155,6 +196,24 @@ export const newFillLayer = (document: PaintDocument, name = 'Fill', fill: Parti
 };
 
 export const newFolder = (name = 'Folder', layers: PaintLayer[] = []): PaintLayer => ({ id: paintId('l'), name, kind: 'folder', visible: true, channels: {}, layers, opacity: 1 });
+
+/** Channels a filter of this kind works on: every one but the normal, which only blurs, sharpens and warps. */
+export const filterChannels = (kind: FilterKind, channels: readonly PaintChannel[]): PaintChannel[] =>
+    channels.filter((channel) => channel !== 'normal' || kind === 'blur' || kind === 'sharpen' || kind === 'warp');
+
+/** A filter layer acting on the colour, roughness and metallic of the layers below (the channels the set has). */
+export const newFilterLayer = (document: PaintDocument, kind: FilterKind): PaintLayer => {
+    const channels = filterChannels(kind, (['baseColor', 'roughness', 'metallic', 'height'] as PaintChannel[]).filter((channel) => document.channels.includes(channel)));
+    return {
+        id: paintId('l'),
+        name: FILTER_LABELS[kind],
+        kind: 'filter',
+        visible: true,
+        channels: Object.fromEntries(channels.map((channel) => [channel, { mode: 'normal' as const, opacity: 1 }])),
+        filter: { ...DEFAULT_FILTER[kind] },
+        opacity: 1,
+    };
+};
 
 /** Every layer, folders' layers included, bottom first. */
 export const allLayers = (layers: readonly PaintLayer[]): PaintLayer[] => layers.flatMap((layer) => [layer, ...allLayers(layer.layers ?? [])]);
@@ -248,35 +307,61 @@ export const readSpace = (value: unknown): PositionSpace | undefined => {
 export const castsFromThreeSides = (layers: readonly PaintLayer[]): boolean =>
     allLayers(layers).some((layer) => Object.values(layer.fill ?? {}).some((source) => (source?.kind === 'texture' || source?.kind === 'graph') && source.projection === 'triplanar'));
 
+const unit = (value: unknown, fallback: number): number => Math.min(1, Math.max(0, finite(value, fallback)));
+
+/** A stored filter made safe to use (its kind's defaults for anything missing). */
+const readFilter = (value: unknown): FilterSettings => {
+    const raw = (value ?? {}) as Partial<FilterSettings>;
+    const kind = (Object.keys(FILTER_LABELS) as FilterKind[]).includes(raw.kind as FilterKind) ? raw.kind as FilterKind : 'blur';
+    const base = DEFAULT_FILTER[kind];
+    return {
+        kind,
+        radius: Math.min(0.1, Math.max(0, finite(raw.radius, base.radius))),
+        amount: Math.min(64, Math.max(0, finite(raw.amount, base.amount))),
+        hue: Math.min(0.5, Math.max(-0.5, finite(raw.hue, base.hue))),
+        saturation: Math.min(1, Math.max(-1, finite(raw.saturation, base.saturation))),
+        lightness: Math.min(1, Math.max(-1, finite(raw.lightness, base.lightness))),
+        low: unit(raw.low, base.low),
+        high: unit(raw.high, base.high),
+        mid: Math.min(0.99, Math.max(0.01, finite(raw.mid, base.mid))),
+    };
+};
+
+/** Stored layers made safe to use (unknown kinds left out, at most 256 a list and 6 folders deep). */
+export const readPaintLayers = (list: unknown[], depth = 0): PaintLayer[] => list.slice(0, 256).flatMap((item) => {
+    const layer = item as Partial<PaintLayer> | null;
+    if (!layer || typeof layer.id !== 'string' || !['paint', 'fill', 'folder', 'filter'].includes(String(layer.kind))) return [];
+    const result: PaintLayer = {
+        id: layer.id,
+        name: typeof layer.name === 'string' ? layer.name.slice(0, 80) : 'Layer',
+        kind: layer.kind as LayerKind,
+        visible: layer.visible !== false,
+        channels: {},
+    };
+    for (const [channel, blend] of Object.entries(layer.channels ?? {})) {
+        if (!(PAINT_CHANNELS as readonly string[]).includes(channel) || !blend) continue;
+        result.channels[channel as PaintChannel] = { mode: (blend as ChannelBlend).mode ?? 'normal', opacity: unit((blend as ChannelBlend).opacity, 1) };
+    }
+    if (layer.fill) result.fill = layer.fill;
+    if (layer.pictures) result.pictures = layer.pictures;
+    if (layer.mask && Array.isArray(layer.mask)) result.mask = layer.mask.filter((effect) => effect && typeof effect.id === 'string');
+    if (layer.from) result.from = String(layer.from).slice(0, 80);
+    // Layers saved before they had an opacity of their own show fully.
+    if (layer.opacity !== undefined || layer.kind === 'folder') result.opacity = unit(layer.opacity, 1);
+    if (layer.kind === 'folder') {
+        result.layers = depth < 6 && Array.isArray(layer.layers) ? readPaintLayers(layer.layers, depth + 1) : [];
+        if (layer.blend && layer.blend !== 'normal' && (BLEND_MODES as readonly string[]).includes(layer.blend)) result.blend = layer.blend;
+    }
+    if (layer.kind === 'filter') result.filter = readFilter(layer.filter);
+    return [result];
+});
+
 /** A stored document made safe to use. */
 export const readPaintDocument = (value: unknown): PaintDocument | null => {
     const raw = value as Partial<PaintDocument> | null;
     if (!raw || typeof raw !== 'object' || typeof raw.modelId !== 'string' || !Array.isArray(raw.layers)) return null;
     const channels = Array.isArray(raw.channels) ? raw.channels.filter((channel): channel is PaintChannel => (PAINT_CHANNELS as readonly string[]).includes(channel)) : [];
-    const readLayers = (list: unknown[], depth: number): PaintLayer[] => list.slice(0, 256).flatMap((item) => {
-        const layer = item as Partial<PaintLayer> | null;
-        if (!layer || typeof layer.id !== 'string' || !['paint', 'fill', 'folder'].includes(String(layer.kind))) return [];
-        const result: PaintLayer = {
-            id: layer.id,
-            name: typeof layer.name === 'string' ? layer.name.slice(0, 80) : 'Layer',
-            kind: layer.kind as LayerKind,
-            visible: layer.visible !== false,
-            channels: {},
-        };
-        for (const [channel, blend] of Object.entries(layer.channels ?? {})) {
-            if (!(PAINT_CHANNELS as readonly string[]).includes(channel) || !blend) continue;
-            result.channels[channel as PaintChannel] = { mode: (blend as ChannelBlend).mode ?? 'normal', opacity: Math.min(1, Math.max(0, finite((blend as ChannelBlend).opacity, 1))) };
-        }
-        if (layer.fill) result.fill = layer.fill;
-        if (layer.pictures) result.pictures = layer.pictures;
-        if (layer.mask && Array.isArray(layer.mask)) result.mask = layer.mask.filter((effect) => effect && typeof effect.id === 'string');
-        if (layer.from) result.from = String(layer.from).slice(0, 80);
-        if (layer.kind === 'folder') {
-            result.layers = depth < 6 && Array.isArray(layer.layers) ? readLayers(layer.layers, depth + 1) : [];
-            result.opacity = Math.min(1, Math.max(0, finite(layer.opacity, 1)));
-        }
-        return [result];
-    });
+    const readLayers = (list: unknown[], depth: number): PaintLayer[] => readPaintLayers(list, depth);
     const space = readSpace(raw.space);
     return {
         version: 1,

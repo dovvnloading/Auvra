@@ -20,6 +20,7 @@ import {
 import { sampleCurve } from '../../texturing/graph/nodeKit';
 import { islandLabelRows, labelIslands, packMask } from '../../texturing/graph/nodes/distance';
 import { pixelProcessorCost } from '../../texturing/graph/nodes/io';
+import { mainInput } from '../../texturing/graph/evaluator';
 import { TEXTURE_NODE_DEFINITIONS, placeholderDefinition, textureNodeDefinition, textureNodeDefinitionByType } from '../../texturing/graph/registry';
 import { outputNodeKind, type TextureGraph } from '../../texturing/graph/types';
 import { GraphHistory, materialHistory } from '../../components/Texturing/graphEditing';
@@ -161,6 +162,26 @@ describe('texture graph documents', () => {
     it('lists the pictures a graph draws from', () => {
         const graph = normalizeTextureGraph({ nodes: [{ id: 'b', type: 'bitmap', x: 0, y: 0, params: { texture: 'tex-1' } }], links: [], parameters: [] });
         expect(graphTextureIds(graph)).toEqual(['tex-1']);
+    });
+
+    it('keeps a node\'s own name, colour, folding and bypass, and only bypass changes what it draws', () => {
+        const graph = normalizeTextureGraph({
+            nodes: [{ id: 'n', type: 'blur', x: 0, y: 0, params: {}, name: '  Soft edges ', color: '#AA3311', collapsed: true, bypass: true }, { id: 'm', type: 'blur', params: {}, name: 7, color: 'red', collapsed: 'yes' }],
+            links: [],
+            parameters: [],
+        });
+        expect(graph.nodes[0]).toMatchObject({ name: 'Soft edges', color: '#aa3311', collapsed: true, bypass: true });
+        expect(Object.keys(graph.nodes[1])).not.toEqual(expect.arrayContaining(['name', 'color', 'collapsed', 'bypass']));
+        const stored = readStoredGraph({ graph: createTextureGraph() });
+        const renamed = { ...stored, graph: { ...stored.graph, nodes: stored.graph.nodes.map((node) => ({ ...node, name: 'Mine', color: '#112233', collapsed: true })) } };
+        const bypassed = { ...stored, graph: { ...stored.graph, nodes: stored.graph.nodes.map((node, index) => (index === 0 ? { ...node, bypass: true } : node)) } };
+        expect(bakeSignature(renamed, () => undefined)).toBe(bakeSignature(stored, () => undefined));
+        expect(bakeSignature(bypassed, () => undefined)).not.toBe(bakeSignature(stored, () => undefined));
+        // A blend passes its background through; most nodes their first input; a generator cannot be bypassed.
+        expect(mainInput(textureNodeDefinitionByType('blend')!)).toBe('background');
+        expect(mainInput(textureNodeDefinitionByType('blur')!)).toBe('in');
+        expect(mainInput(textureNodeDefinitionByType('perlinNoise')!)).toBeNull();
+        expect(textureNodeDefinitionByType('reroute')!.inputs.map((port) => port.key)).toEqual(['in']);
     });
 
     it('signs what the pictures depend on, and not where nodes sit', () => {

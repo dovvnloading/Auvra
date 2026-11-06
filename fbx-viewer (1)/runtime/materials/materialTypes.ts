@@ -76,12 +76,19 @@ export interface MaterialParamDef {
     step?: number;
     /** A select's choices. */
     options?: ReadonlyArray<{ value: string; label: string }>;
+    /** The heading it is shown under, with the ports and params of the same group. */
+    group?: string;
 }
 
 export interface MaterialPortDef {
     key: string;
     label: string;
     type: MaterialPortType;
+    /**
+     * The heading a port is shown under on its node: ports of one group share a collapsible header, and a
+     * closed group shows only its wired ports.
+     */
+    group?: string;
 }
 
 /**
@@ -145,6 +152,8 @@ export interface MaterialNodeDef {
     params: MaterialParamDef[];
     /** The auto type from the node's own static params (a Swizzle's mask), instead of its inputs. */
     autoType?: (statics: Readonly<Record<string, unknown>>) => MaterialValueType;
+    /** The input a bypassed node passes through, where it is not the first (a Step's value, not its edge). */
+    main?: string;
     /**
      * GLSL statements computing the outputs, given each input as an expression of its type;
      * returns each output as an expression (of its type) the statements made available.

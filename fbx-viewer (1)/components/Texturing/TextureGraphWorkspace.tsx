@@ -1,24 +1,24 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { CheckCircleIcon, DiceIcon, DownloadIcon, ExternalLinkIcon, InfoIcon, RefreshIcon, TrashIcon, WarningIcon } from '../UI/Icons';
+import { ArrowLeftIcon, CheckCircleIcon, ChevronRightIcon, DiceIcon, DownloadIcon, ExternalLinkIcon, InfoIcon, LayersIcon, RefreshIcon, TrashIcon, WarningIcon } from '../UI/Icons';
 import { useAssets } from '../../context/AssetContext';
 import { useScene } from '../../context/SceneContext';
 import { frontendDiagnostics } from '../../diagnostics/runtime';
 import { materialLibrary, type MaterialAsset } from '../../runtime/materials/materialLibrary';
-import { AbortedError, unknownNodeMessage, type TextureGraphEvaluator } from '../../texturing/graph/evaluator';
-import { MAX_SIZE_LOG2, MIN_SIZE_LOG2, coerceParameter, readTextureGraph, unknownNodeTypes } from '../../texturing/graph/document';
-import { OUTPUT_NODE_TYPE, SUBGRAPH_NODE_TYPE } from '../../texturing/graph/nodes/io';
+import { AbortedError, unknownNodeMessage, type ExternalImage, type TextureGraphEvaluator } from '../../texturing/graph/evaluator';
+import { MAX_SIZE_LOG2, MIN_SIZE_LOG2, coerceParameter, formulaScope, parameterValues, readTextureGraph, resolveNodeParams, subgraphRunSeed, unknownNodeTypes } from '../../texturing/graph/document';
+import { OUTPUT_NODE_TYPE, SUBGRAPH_NODE_TYPE, SUBGRAPH_SEED_KEY, SUBGRAPH_VARY_KEY } from '../../texturing/graph/nodes/io';
 import { textureNodeDefinition, type GraphEntry, type GraphResolver } from '../../texturing/graph/registry';
 import { bakeSignature, readStoredGraph, type StoredTextureGraph } from '../../texturing/graph/stored';
 import { OUTPUT_CHANNELS, OUTPUT_CHANNEL_LABELS, type GraphParameter, type GraphParameterKind, type OutputChannel, type TexGraphNode, type TexParamDef, type TextureGraph } from '../../texturing/graph/types';
 import { DEEP_EXPORT, ROLE_LABELS, encodeChannels, materialGraphForTextures, type ChannelImages, type ChannelTextureIds, type MaterialChannel, type PictureLayout, materialReadsPicture } from '../../texturing/materialOutput';
 import { download, makeZip } from '../../texturing/zip';
-import { Button, Segmented, Spinner } from '../UI/kit';
+import { Button, IconButton, Segmented, Spinner } from '../UI/kit';
 import { Select } from '../UI/Select';
 import { COMMENT_COLORS, COMMENT_COLOR_NAMES, MAX_COMMENT_TITLE, addSubgraphNode, changeComment, materialHistory, type Point } from './graphEditing';
 import { usePreviewMeshMaps, type PreviewShape } from './previewMeshMaps';
 import { TextureGraphCanvas } from './TextureGraphCanvas';
 import { DraftNumber, DraftText, ParamControl, TextureParamField, exposedKind } from './TextureParamField';
-import { TextureGraphSession } from './textureGraphSession';
+import { TextureGraphSession, type GraphContext } from './textureGraphSession';
 import { TextureView2D } from './TextureView2D';
 import { TextureView3D } from './TextureView3D';
 import { useTextureStore } from './useTextureStore';
@@ -27,10 +27,12 @@ import { useTextureStore } from './useTextureStore';
  * THE TEXTURE GRAPH WORKSPACE (a texture graph material in the Materials tab)
  *
  * The graph's canvas, the 2D view of one node, the 3D view of the material, and an inspector for
- * the selected node or comment, the graph (its size, seed and exposed parameters) and the material
+ * the selected node or frame, the graph (its size, seed and exposed parameters) and the material
  * made from it. Every edit redraws at once; "Update material" makes the pictures the engine draws
- * with. Undo covers the graph, its parameter values and the picture settings, and is kept per
- * material while others are open and when the Materials tab is left.
+ * with. Undo covers the graph, its parameter values and the picture settings, works wherever the
+ * pointer is in the workspace, and is kept per material while others are open and when the Materials
+ * tab is left. A graph used as a node opens in place, drawn as it is where it is used, with a path
+ * back out.
  */
 
 const sizeLabel = (log2: number): string => `${2 ** log2}`;
@@ -81,15 +83,20 @@ const parameterDef = (parameter: GraphParameter): TexParamDef => ({
     options: parameter.options,
 });
 
+/** A graph open in the workspace: the material's own, or one opened in place from a node using it. */
+interface Level {
+    asset: MaterialAsset;
+    /** The node (in the level before) it was opened from. */
+    via: string | null;
+    key: string;
+}
+
 export const TextureGraphWorkspace: React.FC<{
     asset: MaterialAsset;
     assets: readonly MaterialAsset[];
     onSave: (next: MaterialAsset, immediately?: boolean) => void;
     onOpenAsset: (id: string) => void;
 }> = ({ asset, assets, onSave, onOpenAsset }) => {
-    const stored = useMemo(() => readStoredGraph(asset.textureGraph), [asset.textureGraph]);
-    const graph = stored.graph;
-
     // Other graph materials, usable as nodes.
     const entries = useMemo(() => {
         const map = new Map<string, GraphEntry>();
@@ -99,43 +106,152 @@ export const TextureGraphWorkspace: React.FC<{
     const resolve: GraphResolver = useCallback((id) => entries.get(id), [entries]);
     const textureLookup = useMemo(() => materialLibrary.textureLookup(false), []);
     const lookup = useCallback((id: string) => textureLookup(id, 'map'), [textureLookup]);
-
-    // One session per material, made and let go with the workspace; edits reach it through setGraph.
-    const [session, setSession] = useState<TextureGraphSession | null>(null);
-    const latest = useRef({ graph, resolve, lookup });
-    latest.current = { graph, resolve, lookup };
-    useEffect(() => {
-        const made = new TextureGraphSession(latest.current.graph, (id) => latest.current.resolve(id), (id) => latest.current.lookup(id));
-        setSession(made);
-        return () => {
-            made.dispose();
-            // Spare pictures kept for reuse are given back to the GPU once the graph is closed.
-            made.gpu.trimPool(0);
-        };
-    }, [asset.id]);
-    useEffect(() => { session?.setGraph(graph, stored.values); }, [graph, session, stored.values]);
     // A picture finishing loading, or a used graph changing, redraws what depends on it.
     const libraryVersion = useSyncExternalStore((listener) => materialLibrary.subscribe(listener), () => materialLibrary.version);
-    useEffect(() => { session?.refresh(); }, [libraryVersion, entries, session]);
-    if (!session) return <div className="flex-1 bg-[#121214]" />;
-    return <Workspace asset={asset} onSave={onSave} onOpenAsset={onOpenAsset} session={session} stored={stored} entries={entries} resolve={resolve} libraryVersion={libraryVersion} />;
+
+    // Graphs opened in place, outermost first, each with the node it was opened from. A step whose node
+    // is gone (or uses another graph now) closes it and those inside it.
+    const [trail, setTrail] = useState<ReadonlyArray<{ assetId: string; nodeId: string }>>([]);
+    const levels = useMemo(() => {
+        const list: Level[] = [{ asset, via: null, key: `0:${asset.id}` }];
+        for (const step of trail) {
+            const outer = readStoredGraph(list[list.length - 1].asset.textureGraph).graph;
+            const node = outer.nodes.find((candidate) => candidate.id === step.nodeId);
+            const inner = assets.find((candidate) => candidate.id === step.assetId && candidate.textureGraph);
+            if (!node || node.type !== SUBGRAPH_NODE_TYPE || node.params.graph !== step.assetId || !inner || list.some((level) => level.asset.id === inner.id)) break;
+            list.push({ asset: inner, via: step.nodeId, key: `${list.length}:${inner.id}:${step.nodeId}` });
+        }
+        return list;
+    }, [asset, assets, trail]);
+    const levelKeys = levels.map((level) => level.key).join('|');
+
+    // One session per open graph, made as it opens and let go as it closes; the ones outside the graph
+    // being edited are held, keeping the pictures it is drawn with.
+    const latest = useRef({ levels, resolve, lookup });
+    latest.current = { levels, resolve, lookup };
+    const made = useRef(new Map<string, TextureGraphSession>());
+    const [sessions, setSessions] = useState<ReadonlyMap<string, TextureGraphSession>>(new Map());
+    useEffect(() => {
+        const next = new Map<string, TextureGraphSession>();
+        for (const level of latest.current.levels) {
+            const session = made.current.get(level.key)
+                ?? new TextureGraphSession(readStoredGraph(level.asset.textureGraph).graph, (id) => latest.current.resolve(id), (id) => latest.current.lookup(id));
+            next.set(level.key, session);
+        }
+        for (const [key, session] of made.current) if (!next.has(key)) session.dispose();
+        made.current = next;
+        setSessions(next);
+    }, [levelKeys]);
+    useEffect(() => () => {
+        const gpu = made.current.values().next().value?.gpu;
+        for (const session of made.current.values()) session.dispose();
+        made.current = new Map();
+        // Spare pictures kept for reuse are given back to the GPU once the graph is closed.
+        gpu?.trimPool(0);
+    }, []);
+    useEffect(() => {
+        levels.forEach((level, depth) => sessions.get(level.key)?.setPaused(depth < levels.length - 1));
+    }, [levels, sessions]);
+
+    const close = useCallback((depth: number) => setTrail((current) => current.slice(0, depth)), []);
+    return (
+        <div data-workspace className="flex min-h-0 min-w-0 flex-1">
+            {levels.map((level, depth) => {
+                const session = sessions.get(level.key);
+                const shown = depth === levels.length - 1;
+                if (!session) return shown ? <div key={level.key} className="flex-1 bg-ground" /> : null;
+                const outer = depth ? levels[depth - 1] : null;
+                const outerSession = outer ? sessions.get(outer.key) : undefined;
+                return (
+                    <Workspace
+                        key={level.key}
+                        hidden={!shown}
+                        asset={level.asset}
+                        onSave={onSave}
+                        onOpenAsset={onOpenAsset}
+                        session={session}
+                        entries={entries}
+                        resolve={resolve}
+                        libraryVersion={libraryVersion}
+                        path={levels.slice(0, depth + 1).map((item) => item.asset.name)}
+                        onClose={close}
+                        outer={outer && outerSession && level.via ? { asset: outer.asset, session: outerSession, via: level.via } : undefined}
+                        onOpenGraph={(graphId, nodeId) => setTrail((current) => [...current.slice(0, depth), { assetId: graphId, nodeId }])}
+                    />
+                );
+            })}
+        </div>
+    );
 };
 
+/**
+ * What a graph opened from a node is drawn with: the images wired into the node, its settings for the
+ * graph's parameters, and the seed and size the node runs it at.
+ */
+const contextOf = (outerSession: TextureGraphSession, outer: StoredTextureGraph, via: string, inner: TextureGraph, resolve: GraphResolver): GraphContext | null => {
+    const node = outer.graph.nodes.find((candidate) => candidate.id === via);
+    const definition = node && textureNodeDefinition(node, resolve);
+    if (!node || !definition) return null;
+    const inputs: Record<string, ExternalImage | null> = {};
+    const version: string[] = [];
+    for (const link of outer.graph.links) {
+        if (link.to !== via) continue;
+        inputs[link.toInput] = outerSession.imageOf(link.from, link.fromOutput);
+        version.push(`${link.toInput}=${outerSession.state(link.from)?.signature ?? ''}`);
+    }
+    const state = outerSession.state(via);
+    const width = state?.width ?? 2 ** outer.graph.size.w;
+    const height = state?.height ?? 2 ** outer.graph.size.h;
+    const values = parameterValues(outer.graph, outer.values);
+    const params = resolveNodeParams(definition, node, values, formulaScope(outer.graph, values, width, height));
+    const parameters = Object.fromEntries(inner.parameters.map((parameter) => [parameter.name, params[parameter.name]]));
+    const seed = subgraphRunSeed(outer.graph.seed, via, Math.round(Number(params[SUBGRAPH_SEED_KEY]) || 0), params[SUBGRAPH_VARY_KEY] !== false, inner.seed);
+    const size = { w: Math.round(Math.log2(width)), h: Math.round(Math.log2(height)) };
+    return { inputs, parameters, seed, size, version: JSON.stringify([version, parameters, seed, size]) };
+};
+
+const noSubscribe = () => () => undefined;
+const noVersion = () => 0;
+
 const Workspace: React.FC<{
+    /** Shown only while it is the graph being edited (one opened inside it is not). */
+    hidden: boolean;
     asset: MaterialAsset;
     onSave: (next: MaterialAsset, immediately?: boolean) => void;
     onOpenAsset: (id: string) => void;
     session: TextureGraphSession;
-    stored: StoredTextureGraph;
     entries: Map<string, GraphEntry>;
     resolve: GraphResolver;
     libraryVersion: number;
-}> = ({ asset, onSave, onOpenAsset, session, stored, entries, resolve, libraryVersion }) => {
+    /** The names of the graphs open, the material's own first, this one last. */
+    path: readonly string[];
+    /** Closes the graphs opened inside the one at `depth` (0: the material's own). */
+    onClose: (depth: number) => void;
+    /** For a graph opened from a node: the graph it was opened from, that graph's session and the node. */
+    outer?: { asset: MaterialAsset; session: TextureGraphSession; via: string };
+    onOpenGraph: (graphId: string, nodeId: string) => void;
+}> = ({ hidden, asset, onSave, onOpenAsset, session, entries, resolve, libraryVersion, path, onClose, outer, onOpenGraph }) => {
     const { textures } = useAssets();
     const { models } = useScene();
     const textureStore = useTextureStore();
+    const stored = useMemo(() => readStoredGraph(asset.textureGraph), [asset.textureGraph]);
     const graph = stored.graph;
     const sessionVersion = useSyncExternalStore(session.subscribe, session.getVersion);
+    // Edits reach the session at once; a picture loading or a used graph changing redraws what depends on it.
+    useEffect(() => { session.setGraph(graph, stored.values); }, [graph, session, stored.values]);
+    useEffect(() => { session.refresh(); }, [libraryVersion, entries, session]);
+
+    // A graph opened from a node is drawn as it is there.
+    const outerDocument = outer?.asset.textureGraph;
+    const outerSession = outer?.session;
+    const via = outer?.via;
+    const outerStored = useMemo(() => (outerDocument ? readStoredGraph(outerDocument) : null), [outerDocument]);
+    const outerVersion = useSyncExternalStore(outerSession?.subscribe ?? noSubscribe, outerSession?.getVersion ?? noVersion);
+    const context = useMemo(() => {
+        void outerVersion;
+        return outerSession && outerStored && via ? contextOf(outerSession, outerStored, via, graph, resolve) : null;
+    }, [graph, outerSession, outerStored, outerVersion, resolve, via]);
+    useEffect(() => { session.setContext(context); }, [context, session]);
 
     const [selection, setSelection] = useState<string[]>([]);
     const [selectedComment, setSelectedComment] = useState<string | null>(null);
@@ -237,6 +353,15 @@ const Workspace: React.FC<{
         if (!used) return null;
         return addSubgraphNode(graph, graphId, used.graph, at).node;
     }, [asset.id, entries, graph]);
+
+    /** Opens the graph a sub-graph node uses, in place of this one. */
+    const openGraph = useCallback((nodeId: string) => {
+        const node = graph.nodes.find((candidate) => candidate.id === nodeId);
+        const graphId = node?.type === SUBGRAPH_NODE_TYPE ? node.params.graph : undefined;
+        if (typeof graphId === 'string' && graphId !== asset.id && entries.has(graphId)) onOpenGraph(graphId, nodeId);
+    }, [asset.id, entries, graph.nodes, onOpenGraph]);
+
+    const graphs = useMemo(() => [...entries.values()].filter((entry) => entry.id !== asset.id).map((entry) => ({ id: entry.id, name: entry.name })), [asset.id, entries]);
 
     // ---- nodes this build does not have, and what could not be opened ----
     const unknownTypes = useMemo(() => unknownNodeTypes(graph), [graph]);
@@ -358,8 +483,11 @@ const Workspace: React.FC<{
     };
 
     // ---- inspector parts ----
-    const nodes = new Set(graph.nodes.map((node) => node.id));
-    const selected = selection.filter((id) => nodes.has(id));
+    const selected = useMemo(() => {
+        const nodes = new Set(graph.nodes.map((node) => node.id));
+        return selection.filter((id) => nodes.has(id));
+    }, [graph.nodes, selection]);
+    const selectedSet = useMemo(() => new Set(selected), [selected]);
     const single = selected.length === 1 ? graph.nodes.find((node) => node.id === selected[0]) ?? null : null;
     const comment = !selected.length && selectedComment ? graph.comments?.find((candidate) => candidate.id === selectedComment) ?? null : null;
     void sessionVersion;
@@ -396,38 +524,38 @@ const Workspace: React.FC<{
 
     const commentInspector = (current: NonNullable<typeof comment>) => (
         <div className="space-y-3">
-            <div className="text-xs font-semibold text-zinc-100">Comment</div>
+            <div className="text-xs font-semibold text-ink">Frame</div>
             <label className="block space-y-1">
-                <span className="text-2xs text-zinc-400">Title</span>
-                <DraftText label="Comment title" value={current.text} maxLength={MAX_COMMENT_TITLE} allowEmpty placeholder="Comment" className="w-full"
+                <span className="text-2xs text-ink-2">Title</span>
+                <DraftText label="Frame title" value={current.text} maxLength={MAX_COMMENT_TITLE} allowEmpty placeholder="Frame" className="w-full"
                     onCommit={(text) => update(changeComment(graph, current.id, { text }), true)} />
             </label>
             <div className="space-y-1">
-                <span className="text-2xs text-zinc-400">Colour</span>
-                <div role="radiogroup" aria-label="Comment colour" className="flex flex-wrap gap-1.5">
+                <span className="text-2xs text-ink-2">Colour</span>
+                <div role="radiogroup" aria-label="Frame colour" className="flex flex-wrap gap-1.5">
                     {COMMENT_COLORS.map((color) => (
                         <button key={color} type="button" role="radio" aria-checked={current.color === color} aria-label={COMMENT_COLOR_NAMES[color] ?? color} title={COMMENT_COLOR_NAMES[color] ?? color}
                             onClick={() => update(changeComment(graph, current.id, { color }), true)}
-                            className={`h-5 w-5 rounded border ${current.color === color ? 'border-white ring-1 ring-white/60' : 'border-zinc-700 hover:border-zinc-500'}`} style={{ background: color }} />
+                            className={`h-5 w-5 rounded border ${current.color === color ? 'border-ink ring-1 ring-ink/50' : 'border-line hover:border-gray-600'}`} style={{ background: color }} />
                     ))}
                 </div>
             </div>
-            <p className="text-2xs leading-snug text-zinc-500">Double-click a comment's title on the canvas to rename it there. Dragging its title moves the nodes inside with it.</p>
+            <p className="text-2xs leading-snug text-ink-3">Double-click a frame's title on the canvas to rename it there. Dragging its title moves everything inside with it; nodes dragged in or out make it fit round them.</p>
         </div>
     );
 
     const nodeInspector = () => {
         if (comment) return commentInspector(comment);
         if (!single) {
-            return <p className="text-2xs leading-snug text-zinc-500">{selected.length > 1 ? `${selected.length} nodes selected. Delete removes them, C puts a comment round them.` : 'Select a node or a comment to change its settings. Double-click a node to look at it in the 2D view.'}</p>;
+            return <p className="text-2xs leading-snug text-ink-3">{selected.length > 1 ? `${selected.length} nodes selected. Delete removes them, C puts a frame round them, and the line-up button on the canvas aligns or spaces them.` : 'Select a node or a frame to change its settings. Double-click a node to look at it in the 2D view; right-click it for more.'}</p>;
         }
         const definition = textureNodeDefinition(single, resolve);
         if (!definition) {
             return (
                 <div className="space-y-2">
-                    <div className="text-xs font-semibold text-zinc-100">Not available: {single.type}</div>
-                    <div className="flex gap-1.5 rounded border border-amber-900 bg-amber-950/40 p-1.5 text-2xs text-amber-200"><WarningIcon size={12} className="mt-px shrink-0" /><span>{unknownNodeMessage(single.type)}</span></div>
-                    <p className="text-2xs leading-snug text-zinc-500">It draws nothing here, and nodes it feeds read their input as unwired. Delete it to take it out of the graph.</p>
+                    <div className="text-xs font-semibold text-ink">Not available: {single.type}</div>
+                    <div className="flex gap-1.5 rounded border border-warn/40 bg-warn/10 p-1.5 text-2xs text-warn"><WarningIcon size={12} className="mt-px shrink-0" /><span>{unknownNodeMessage(single.type)}</span></div>
+                    <p className="text-2xs leading-snug text-ink-3">It draws nothing here, and nodes it feeds read their input as unwired. Delete it to take it out of the graph.</p>
                 </div>
             );
         }
@@ -440,16 +568,35 @@ const Workspace: React.FC<{
         return (
             <div className="space-y-3">
                 <div>
-                    <div className="text-xs font-semibold text-zinc-100">{definition.label}</div>
-                    <p className="mt-0.5 text-2xs leading-snug text-zinc-500">{definition.description}</p>
+                    <div className="text-xs font-semibold text-ink">{single.name || definition.label}</div>
+                    {single.name && <div className="text-2xs text-ink-2">{definition.label}</div>}
+                    <p className="mt-0.5 text-2xs leading-snug text-ink-3">{definition.description}</p>
                 </div>
-                {state?.error && <div className="flex gap-1.5 rounded border border-red-900 bg-red-950/50 p-1.5 text-2xs text-red-200"><WarningIcon size={12} className="mt-px shrink-0" /><span className="whitespace-pre-wrap font-mono">{state.error}</span></div>}
+                <label className="flex items-center gap-2">
+                    <span className="w-12 shrink-0 text-2xs text-ink-2">Name</span>
+                    <DraftText label="Node name" value={single.name ?? ''} maxLength={64} allowEmpty placeholder={definition.label} className="min-w-0 flex-1"
+                        onCommit={(text) => {
+                            const name = text.trim().slice(0, 64);
+                            const { name: _old, ...rest } = single;
+                            changeNode(name ? { ...rest, name } : rest);
+                        }} />
+                </label>
+                {single.bypass && (
+                    <div className="flex items-center gap-1.5 rounded border border-warn/40 bg-warn/10 p-1.5 text-2xs text-warn">
+                        <span className="flex-1">Bypassed: its main input passes straight through.</span>
+                        <Button size="sm" variant="ghost" onClick={() => { const { bypass: _bypass, ...rest } = single; changeNode(rest); }}>Stop bypassing</Button>
+                    </div>
+                )}
+                {state?.error && <div className="flex gap-1.5 rounded border border-bad/40 bg-bad/10 p-1.5 text-2xs text-bad"><WarningIcon size={12} className="mt-px shrink-0" /><span className="whitespace-pre-wrap font-mono">{state.error}</span></div>}
                 {single.type === SUBGRAPH_NODE_TYPE && typeof single.params.graph === 'string' && entries.has(single.params.graph) && (
-                    <Button size="sm" icon={<ExternalLinkIcon size={12} />} onClick={() => onOpenAsset(single.params.graph as string)}>Open {entries.get(single.params.graph)!.name}</Button>
+                    <div className="flex flex-wrap gap-1.5">
+                        <Button size="sm" icon={<LayersIcon size={12} />} onClick={() => openGraph(single.id)}>Open the graph inside</Button>
+                        <Button size="sm" variant="ghost" icon={<ExternalLinkIcon size={12} />} onClick={() => onOpenAsset(single.params.graph as string)}>Go to {entries.get(single.params.graph)!.name}</Button>
+                    </div>
                 )}
                 {isOutput && (
                     <div className="space-y-1">
-                        <span className="text-2xs text-zinc-400">Channel</span>
+                        <span className="text-2xs text-ink-2">Channel</span>
                         <Select value={String(single.params.channel)} options={OUTPUT_CHANNELS.map((channel) => ({ value: channel, label: OUTPUT_CHANNEL_LABELS[channel] }))}
                             onChange={(value) => changeNode({ ...single, params: { ...single.params, channel: value } })} className="w-full" />
                     </div>
@@ -467,24 +614,24 @@ const Workspace: React.FC<{
                     />
                 ))}
                 {!isOutput && (
-                    <div className="space-y-1.5 border-t border-zinc-800 pt-2">
-                        <div className="text-2xs font-semibold text-zinc-400">Size and precision</div>
+                    <div className="space-y-1.5 border-t border-line pt-2">
+                        <div className="text-2xs font-semibold text-ink-2">Size and precision</div>
                         <Select value={sizeMode} options={[{ value: 'input', label: 'Follow its input' }, { value: 'graph', label: 'Follow the graph' }, { value: 'absolute', label: 'Fixed size' }]}
                             onChange={(mode) => changeNode({ ...single, size: { mode, w: mode === 'absolute' ? graph.size.w : 0, h: mode === 'absolute' ? graph.size.h : 0 } })} className="w-full" />
                         <div className="grid grid-cols-[auto_1fr_auto_1fr] items-center gap-1.5">
-                            <span className="text-2xs text-zinc-500">Width</span>
+                            <span className="text-2xs text-ink-3">Width</span>
                             <Select value={sizeW} options={fixed ? FIXED_SIZES : RELATIVE_SIZES} placeholder="Width" onChange={(value) => changeNode({ ...single, size: { mode: sizeMode, w: Number(value), h: sizeH } })} />
-                            <span className="text-2xs text-zinc-500">Height</span>
+                            <span className="text-2xs text-ink-3">Height</span>
                             <Select value={sizeH} options={fixed ? FIXED_SIZES : RELATIVE_SIZES} placeholder="Height" onChange={(value) => changeNode({ ...single, size: { mode: sizeMode, w: sizeW, h: Number(value) } })} />
                         </div>
                         <Segmented value={String(single.precision ?? 'auto')} options={[{ value: 'auto', label: 'Auto', hint: 'As its inputs keep it' }, { value: '8', label: '8-bit', hint: 'Steps of 1/255, as a picture keeps them' }, { value: '16', label: 'Half float', hint: '16-bit floating point: fine steps for heights and masks' }, { value: '32', label: 'Full float', hint: '32-bit floating point: exact, and four times the memory of 8-bit' }]}
                             onChange={(value) => changeNode({ ...single, precision: value === 'auto' ? undefined : Number(value) as 8 | 16 | 32 })} label="Precision" />
-                        {state && <p className="text-2xs text-zinc-500">{state.width} × {state.height}, drawn in {state.milliseconds < 1 ? 'under 1' : Math.round(state.milliseconds)} ms</p>}
+                        {state && <p className="text-2xs text-ink-3">{state.width} × {state.height}, drawn in {state.milliseconds < 1 ? 'under 1' : Math.round(state.milliseconds)} ms</p>}
                     </div>
                 )}
                 {definition.outputs.length > 1 && (
                     <div className="space-y-1">
-                        <span className="text-2xs text-zinc-400">Shown in 2D</span>
+                        <span className="text-2xs text-ink-2">Shown in 2D</span>
                         <Select value={viewedOutput ?? definition.outputs[0].key} options={definition.outputs.map((port) => ({ value: port.key, label: port.label }))}
                             onChange={(value) => { setViewed(single.id); setViewedOutput(String(value)); }} className="w-full" />
                     </div>
@@ -496,22 +643,22 @@ const Workspace: React.FC<{
     const graphInspector = () => (
         <div className="space-y-3">
             <div className="grid grid-cols-[1fr_auto] items-center gap-x-2 gap-y-1.5">
-                <span className="text-2xs text-zinc-400">Size while editing</span>
+                <span className="text-2xs text-ink-2">Size while editing</span>
                 <div className="flex items-center gap-1">
                     <Select value={graph.size.w} options={FIXED_SIZES} placeholder="Width" onChange={(value) => update({ ...graph, size: { w: Number(value), h: graph.size.h } }, true)} className="w-[68px]" />
-                    <span className="text-2xs text-zinc-500">×</span>
+                    <span className="text-2xs text-ink-3">×</span>
                     <Select value={graph.size.h} options={FIXED_SIZES} placeholder="Height" onChange={(value) => update({ ...graph, size: { w: graph.size.w, h: Number(value) } }, true)} className="w-[68px]" />
                 </div>
-                <span className="text-2xs text-zinc-400">Random seed</span>
+                <span className="text-2xs text-ink-2">Random seed</span>
                 <div className="flex items-center gap-1">
                     <DraftNumber label="Graph random seed" value={graph.seed} integer limit={(seed) => Math.max(0, Math.min(999, seed))} onCommit={(seed) => update({ ...graph, seed }, true)} className="w-16" />
-                    <button aria-label="Another seed" title="Another seed" onClick={() => update({ ...graph, seed: Math.floor(Math.random() * 1000) }, true)} className="rounded p-1 text-zinc-400 hover:bg-zinc-800 hover:text-white"><DiceIcon size={13} /></button>
+                    <button aria-label="Another seed" title="Another seed" onClick={() => update({ ...graph, seed: Math.floor(Math.random() * 1000) }, true)} className="rounded p-1 text-ink-2 hover:bg-white/5 hover:text-ink"><DiceIcon size={13} /></button>
                 </div>
             </div>
-            {Math.max(graph.size.w, graph.size.h) >= 12 && <p className="text-2xs leading-snug text-zinc-500">Large editing sizes redraw slowly; the material's pictures can be larger than the editing size.</p>}
-            <div className="space-y-2 border-t border-zinc-800 pt-2">
+            {Math.max(graph.size.w, graph.size.h) >= 12 && <p className="text-2xs leading-snug text-ink-3">Large editing sizes redraw slowly; the material's pictures can be larger than the editing size.</p>}
+            <div className="space-y-2 border-t border-line pt-2">
                 <div className="flex items-center">
-                    <span className="flex-1 text-2xs font-semibold text-zinc-300">Parameters</span>
+                    <span className="flex-1 text-2xs font-semibold text-ink-2">Parameters</span>
                     <Select value="" placeholder="Add…" options={[...PARAMETER_KINDS]} onChange={(kind) => {
                         let name = 'value';
                         for (let n = 2; graph.parameters.some((parameter) => parameter.name === name); n++) name = `value${n}`;
@@ -519,9 +666,9 @@ const Workspace: React.FC<{
                         change({ graph: { ...graph, parameters: [...graph.parameters, parameter] } });
                     }} className="w-24" />
                 </div>
-                {graph.parameters.length === 0 && <p className="text-2xs leading-snug text-zinc-500">None yet. Use the link button beside any node setting to expose it here; materials using this graph set them.</p>}
+                {graph.parameters.length === 0 && <p className="text-2xs leading-snug text-ink-3">None yet. Use the link button beside any node setting to expose it here; materials using this graph set them.</p>}
                 {graph.parameters.map((parameter, index) => (
-                    <div key={parameter.name} className="space-y-1.5 rounded border border-zinc-800 bg-zinc-900/60 p-2">
+                    <div key={parameter.name} className="space-y-1.5 rounded border border-line bg-well p-2">
                         <div className="flex items-center gap-1">
                             <DraftText label="Parameter label" value={parameter.label} className="min-w-0 flex-1" onCommit={(label) => changeParameter(index, { label: label.trim().slice(0, 64) || parameter.name })} />
                             <button aria-label={`Remove ${parameter.label}`} onClick={() => {
@@ -529,16 +676,16 @@ const Workspace: React.FC<{
                                 const value = stored.values[parameter.name] ?? parameter.default;
                                 const nextGraph = { ...graph, parameters: graph.parameters.filter((_, i) => i !== index), nodes: graph.nodes.map((node) => ({ ...node, params: Object.fromEntries(Object.entries(node.params).map(([key, v]) => [key, v && typeof v === 'object' && (v as { $bind?: string }).$bind === parameter.name ? structuredClone(value) : v])) })) };
                                 update(nextGraph, true);
-                            }} className="rounded p-1 text-zinc-500 hover:text-red-400"><TrashIcon size={12} /></button>
+                            }} className="rounded p-1 text-ink-3 hover:text-bad"><TrashIcon size={12} /></button>
                         </div>
-                        <div className="flex items-center gap-1 text-2xs text-zinc-500">
+                        <div className="flex items-center gap-1 text-2xs text-ink-3">
                             <span>Name in formulas</span>
-                            <span className="font-mono text-zinc-300">{parameter.name}</span>
+                            <span className="font-mono text-ink-2">{parameter.name}</span>
                             <span className="flex-1" />
                             <span>{PARAMETER_KINDS.find((kind) => kind.value === parameter.kind)?.label}</span>
                         </div>
                         {(parameter.kind === 'float' || parameter.kind === 'int') && (
-                            <div className="flex items-center gap-1 text-2xs text-zinc-500">
+                            <div className="flex items-center gap-1 text-2xs text-ink-3">
                                 <span>From</span>
                                 {/* Typed, then kept on Enter or on leaving the box: one undo step, never a half-typed number. */}
                                 <DraftNumber label="Lowest" value={parameter.min ?? 0} integer={parameter.kind === 'int'} className="w-14"
@@ -549,7 +696,7 @@ const Workspace: React.FC<{
                             </div>
                         )}
                         <div className="flex items-center gap-2">
-                            <span className="text-2xs text-zinc-400">Value</span>
+                            <span className="text-2xs text-ink-2">Value</span>
                             <div className="min-w-0 flex-1">
                                 <ParamControl param={parameterDef(parameter)} value={stored.values[parameter.name] ?? parameter.default} textures={textures}
                                     onChange={(value) => change({ values: { ...currentStored().values, [parameter.name]: coerceParameter(parameter.kind, value, parameter.options) } }, `value:${parameter.name}`)} />
@@ -558,9 +705,9 @@ const Workspace: React.FC<{
                     </div>
                 ))}
             </div>
-            <div className="space-y-1 border-t border-zinc-800 pt-2">
-                <label className="flex items-center gap-2 text-2xs text-zinc-400">
-                    <input type="checkbox" checked={Boolean(stored.library)} onChange={(event) => change({ library: event.target.checked || undefined })} className="accent-sky-500" />
+            <div className="space-y-1 border-t border-line pt-2">
+                <label className="flex items-center gap-2 text-2xs text-ink-2">
+                    <input type="checkbox" checked={Boolean(stored.library)} onChange={(event) => change({ library: event.target.checked || undefined })} className="accent-accent" />
                     Mainly for use inside other graphs
                 </label>
             </div>
@@ -569,7 +716,7 @@ const Workspace: React.FC<{
 
     const materialInspector = () => (
         <div className="space-y-3">
-            <div className={`flex items-start gap-1.5 rounded border p-2 text-2xs ${upToDate ? 'border-emerald-900 bg-emerald-950/40 text-emerald-200' : 'border-amber-900 bg-amber-950/40 text-amber-200'}`}>
+            <div className={`flex items-start gap-1.5 rounded border p-2 text-2xs ${upToDate ? 'border-ok/40 bg-ok/10 text-ok' : 'border-warn/40 bg-warn/10 text-warn'}`}>
                 {upToDate ? <CheckCircleIcon size={13} className="mt-px shrink-0" /> : <RefreshIcon size={13} className="mt-px shrink-0" />}
                 <span>{upToDate
                     ? `Models with this material show the graph as it is now (${2 ** madeSize.w} × ${2 ** madeSize.h} pixels).`
@@ -578,56 +725,76 @@ const Workspace: React.FC<{
             <Button variant="primary" className="w-full justify-center" disabled={Boolean(baking) || !hasOutputs} onClick={() => void updateMaterial()} icon={baking ? <Spinner /> : <RefreshIcon size={13} />}>
                 {baking ?? 'Update material'}
             </Button>
-            {!hasOutputs && <p className="text-2xs text-zinc-500">Add an Output node for a channel (base colour, normal...) to make a material.</p>}
+            {!hasOutputs && <p className="text-2xs text-ink-3">Add an Output node for a channel (base colour, normal...) to make a material.</p>}
             <div className="grid grid-cols-[1fr_auto] items-center gap-x-2 gap-y-1.5">
-                <span className="text-2xs text-zinc-400">{graph.size.w === graph.size.h ? 'Picture size' : 'Picture size (longest side)'}</span>
+                <span className="text-2xs text-ink-2">{graph.size.w === graph.size.h ? 'Picture size' : 'Picture size (longest side)'}</span>
                 <Select value={stored.bakeSize} options={PICTURE_SIZES} onChange={(value) => change({ bakeSize: Number(value) })} className="w-32" />
-                <span className="text-2xs text-zinc-400">Pictures</span>
+                <span className="text-2xs text-ink-2">Pictures</span>
                 <Select value={stored.layout} options={[{ value: 'engine', label: 'Packed (fewer)' }, { value: 'separate', label: 'One per channel' }]} onChange={(value) => change({ layout: value === 'separate' ? 'separate' : 'engine' })} className="w-32" />
             </div>
-            {graph.size.w !== graph.size.h && <p className="text-2xs text-zinc-500">The pictures keep the graph's proportions: {2 ** outSize.w} × {2 ** outSize.h}.</p>}
-            <p className="text-2xs leading-snug text-zinc-500">Packed keeps occlusion, roughness and metallic in one picture's red, green and blue, which the engine reads in one go.</p>
+            {graph.size.w !== graph.size.h && <p className="text-2xs text-ink-3">The pictures keep the graph's proportions: {2 ** outSize.w} × {2 ** outSize.h}.</p>}
+            <p className="text-2xs leading-snug text-ink-3">Packed keeps occlusion, roughness and metallic in one picture's red, green and blue, which the engine reads in one go.</p>
             {meshMaps.reads && (
-                <div className="flex gap-1.5 rounded border border-zinc-800 bg-zinc-900/60 p-2 text-2xs leading-snug text-zinc-400">
-                    <InfoIcon size={12} className="mt-px shrink-0 text-zinc-500" />
+                <div className="flex gap-1.5 rounded border border-line bg-well p-2 text-2xs leading-snug text-ink-2">
+                    <InfoIcon size={12} className="mt-px shrink-0 text-ink-3" />
                     <span>This graph reads mesh maps. The material's pictures are made with stand-ins for them, since the material can go on any model; the maps in the 3D view are for looking only. To draw it with a model's own maps, use the graph as a fill or a smart mask in the Paint tab.</span>
                 </div>
             )}
             <Button size="sm" className="w-full justify-center" disabled={Boolean(baking) || !hasOutputs} onClick={() => void downloadPictures()} icon={<DownloadIcon size={12} />}>Download pictures</Button>
             {stored.baked && (
-                <div className="space-y-1 border-t border-zinc-800 pt-2">
-                    <div className="text-2xs font-semibold text-zinc-400">Pictures the material draws with</div>
+                <div className="space-y-1 border-t border-line pt-2">
+                    <div className="text-2xs font-semibold text-ink-2">Pictures the material draws with</div>
                     {Object.entries(stored.baked.textures).map(([role, id]) => (
-                        <div key={role} className="flex justify-between text-2xs text-zinc-500"><span>{ROLE_LABELS[role as keyof typeof ROLE_LABELS] ?? role}</span><span className="truncate pl-2 text-zinc-400">{textures.find((texture) => texture.id === id)?.name ?? 'missing'}</span></div>
+                        <div key={role} className="flex justify-between text-2xs text-ink-3"><span>{ROLE_LABELS[role as keyof typeof ROLE_LABELS] ?? role}</span><span className="truncate pl-2 text-ink-2">{textures.find((texture) => texture.id === id)?.name ?? 'missing'}</span></div>
                     ))}
                 </div>
             )}
         </div>
     );
 
+    const depth = path.length - 1;
     return (
-        <div className="flex min-h-0 min-w-0 flex-1">
-            <TextureGraphCanvas
-                key={asset.id}
-                graph={graph}
-                session={session}
-                resolve={resolve}
-                graphs={[...entries.values()].filter((entry) => entry.id !== asset.id).map((entry) => ({ id: entry.id, name: entry.name }))}
-                selection={new Set(selected)}
-                selectedComment={selectedComment}
-                viewed={viewed}
-                canUndo={history.canUndo}
-                canRedo={history.canRedo}
-                notice={notice}
-                onSelect={select}
-                onView={view}
-                onChange={update}
-                onAddSubgraph={addSubgraph}
-                onUndo={() => travel('undo')}
-                onRedo={() => travel('redo')}
-            />
-            <div className="flex w-[360px] shrink-0 flex-col border-l border-zinc-800 bg-zinc-950">
-                <div className="flex min-h-0 flex-1 flex-col border-b border-zinc-800">
+        <div className={`min-h-0 min-w-0 flex-1 ${hidden ? 'hidden' : 'flex'}`}>
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+                {depth > 0 && (
+                    <nav aria-label="Graphs open" className="flex h-8 shrink-0 items-center gap-1 border-b border-line bg-panel px-1.5 text-2xs">
+                        <IconButton label={`Back out to ${path[depth - 1]}`} onClick={() => onClose(depth - 1)}><ArrowLeftIcon size={13} /></IconButton>
+                        {path.map((name, index) => (
+                            <React.Fragment key={`${index}:${name}`}>
+                                {index > 0 && <ChevronRightIcon size={11} className="shrink-0 text-ink-3" />}
+                                {index < depth
+                                    ? <button type="button" onClick={() => onClose(index)} className="max-w-[160px] truncate rounded px-1 py-0.5 text-ink-2 hover:bg-white/5 hover:text-ink">{name}</button>
+                                    : <span className="max-w-[200px] truncate px-1 font-semibold text-ink">{name}</span>}
+                            </React.Fragment>
+                        ))}
+                        <span className="ml-2 min-w-0 truncate text-ink-3" title={`Drawn with the images, settings and seed its node in ${path[depth - 1]} gives it. Edits change ${path[depth]} wherever it is used.`}>
+                            Drawn as it is inside {path[depth - 1]}. Edits change it wherever it is used.
+                        </span>
+                    </nav>
+                )}
+                <TextureGraphCanvas
+                    key={asset.id}
+                    graph={graph}
+                    session={session}
+                    resolve={resolve}
+                    graphs={graphs}
+                    selection={selectedSet}
+                    selectedComment={selectedComment}
+                    viewed={viewed}
+                    canUndo={history.canUndo}
+                    canRedo={history.canRedo}
+                    notice={notice}
+                    onSelect={select}
+                    onView={view}
+                    onChange={update}
+                    onAddSubgraph={addSubgraph}
+                    onOpenGraph={openGraph}
+                    onUndo={() => travel('undo')}
+                    onRedo={() => travel('redo')}
+                />
+            </div>
+            <div className="flex w-[360px] shrink-0 flex-col border-l border-line bg-panel">
+                <div className="flex min-h-0 flex-1 flex-col border-b border-line">
                     <TextureView2D session={session} nodeId={viewed} output={viewedOutput} label={(() => {
                         const node = graph.nodes.find((candidate) => candidate.id === viewed);
                         if (!node) return '2D';
@@ -640,12 +807,12 @@ const Workspace: React.FC<{
                         shape={shape} onShapeChange={setShape} meshMaps={meshMaps} onSurfaceChange={setSurfaceId} />
                 </div>
             </div>
-            <aside className="flex w-[300px] shrink-0 flex-col border-l border-zinc-800 bg-zinc-950">
-                <div className="border-b border-zinc-800 p-2">
+            <aside className="flex w-[300px] shrink-0 flex-col border-l border-line bg-panel">
+                <div className="border-b border-line p-2">
                     <Segmented value={tab} options={[{ value: 'node', label: 'Node' }, { value: 'graph', label: 'Graph' }, { value: 'material', label: 'Material' }]} onChange={setTab} label="Inspector" />
                 </div>
                 <div className="min-h-0 flex-1 overflow-y-auto p-3">
-                    {message && <p className={`mb-2 text-2xs ${message.tone === 'error' ? 'text-red-400' : 'text-sky-300'}`}>{message.text}</p>}
+                    {message && <p className={`mb-2 text-2xs ${message.tone === 'error' ? 'text-bad' : 'text-accent'}`}>{message.text}</p>}
                     {tab === 'node' ? nodeInspector() : tab === 'graph' ? graphInspector() : materialInspector()}
                 </div>
             </aside>

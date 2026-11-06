@@ -1,9 +1,11 @@
-import React, { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import * as THREE from 'three';
 import { useFrame, useThree } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
 import { AuvraCanvas } from '../../renderer/AuvraCanvas';
-import { LocalEnvironment } from '../Scene/LocalEnvironment';
+import { Select } from '../UI/Select';
+import { Button } from '../UI/kit';
+import { PREVIEW_LIGHTINGS, captureLighting, isPreviewLighting, previewBackdrop, previewSeesThrough, type PreviewLighting } from './previewLighting';
 import { materialLibrary } from '../../runtime/materials/materialLibrary';
 import { MaterialNodePreviewer, nodePreviewImages } from '../../runtime/materials/materialPreviews';
 import type { MaterialGraph } from '../../runtime/materials/materialGraph';
@@ -11,9 +13,11 @@ import { frontendDiagnostics } from '../../diagnostics/runtime';
 
 /**
  * The material editor's preview: the asset on a shape (sphere, cube, plane, cylinder or knot) under
- * an environment that shows off reflections, casting its shadow onto a floor so cut-outs and vertex
- * offsets show there too; drag to turn it, scroll to zoom. The same canvas draws every node's
- * preview (materialPreviews.ts) and reports a shader that does not compile.
+ * a choice of lighting (studio, room, outdoor or night: previewLighting.ts), shown behind it or not,
+ * casting its shadow onto a floor so cut-outs and vertex offsets show there too; drag to turn it,
+ * scroll to zoom. Glass shows what is behind it, so a see-through material always has its surroundings
+ * shown. The same canvas draws every node's preview (materialPreviews.ts) and reports a shader that
+ * does not compile.
  */
 
 export type PreviewShape = 'sphere' | 'cube' | 'plane' | 'cylinder' | 'knot';
@@ -105,6 +109,52 @@ const NodePreviewPass: React.FC<{ graph: MaterialGraph; nodeIds: readonly string
 };
 
 // ---------------------------------------------------------------------------
+// Lighting
+// ---------------------------------------------------------------------------
+
+/**
+ * The chosen lighting on the preview's scene, and behind the shape when `background` is on: the room and
+ * the outdoors themselves, the panel rigs' lit backdrop (previewBackdrop).
+ */
+const PreviewEnvironment: React.FC<{ lighting: PreviewLighting; background: boolean }> = ({ lighting, background }) => {
+    const gl = useThree(state => state.gl);
+    const scene = useThree(state => state.scene);
+    useLayoutEffect(() => {
+        const target = captureLighting(gl, lighting);
+        const backdrop = background ? previewBackdrop(lighting) : null;
+        const shown = background ? backdrop ?? target.texture : null;
+        const before = { environment: scene.environment, background: scene.background, blurriness: scene.backgroundBlurriness, intensity: scene.environmentIntensity };
+        scene.environment = target.texture;
+        scene.environmentIntensity = 1;
+        if (shown) {
+            scene.background = shown;
+            scene.backgroundBlurriness = 0;
+        }
+        return () => {
+            if (scene.environment === target.texture) {
+                scene.environment = before.environment;
+                scene.environmentIntensity = before.intensity;
+            }
+            if (shown && scene.background === shown) {
+                scene.background = before.background;
+                scene.backgroundBlurriness = before.blurriness;
+            }
+            target.dispose();
+            backdrop?.dispose();
+        };
+    }, [gl, scene, lighting, background]);
+    return null;
+};
+
+const readStored = (key: string): string | null => {
+    try { return localStorage.getItem(key); } catch { return null; }
+};
+
+const store = (key: string, value: string): void => {
+    try { localStorage.setItem(key, value); } catch { /* the choice just is not remembered */ }
+};
+
+// ---------------------------------------------------------------------------
 // Preview
 // ---------------------------------------------------------------------------
 
@@ -146,15 +196,33 @@ export const MaterialPreview: React.FC<{
         }
     });
     const [spin, setSpin] = useState(true);
+    const [lighting, setLighting] = useState<PreviewLighting>(() => {
+        const stored = readStored('auvra.materialPreviewLighting');
+        return isPreviewLighting(stored) ? stored : 'studio';
+    });
+    const [background, setBackground] = useState(() => readStored('auvra.materialPreviewBackground') === 'on');
     const pick = (next: PreviewShape) => {
         setShape(next);
-        try { localStorage.setItem('auvra.materialPreviewShape', next); } catch { /* the choice just is not remembered */ }
+        store('auvra.materialPreviewShape', next);
     };
+    const pickLighting = (next: PreviewLighting) => {
+        setLighting(next);
+        store('auvra.materialPreviewLighting', next);
+    };
+    const toggleBackground = () => {
+        setBackground((value) => {
+            store('auvra.materialPreviewBackground', value ? 'off' : 'on');
+            return !value;
+        });
+    };
+    // Glass shows what is behind it: without surroundings it would show the empty dark.
+    const seesThrough = useMemo(() => previewSeesThrough(graph), [graph]);
+    const backgroundShown = background || seesThrough;
     return (
         <div className="relative h-64 w-full shrink-0 overflow-hidden rounded border border-gray-800 bg-gradient-to-b from-gray-800 to-gray-950">
             <AuvraCanvas surfaceId="preview-material-graph" role="preview" shadows camera={{ position: [0, 0.35, 3.6], fov: 40 }}>
                 <ShaderErrorCatcher />
-                <LocalEnvironment intensity={1} />
+                <PreviewEnvironment lighting={lighting} background={backgroundShown} />
                 <hemisphereLight args={['#dfe9ff', '#2a2420', 0.35]} />
                 <directionalLight position={[3, 5, 2.5]} intensity={2.2} castShadow shadow-mapSize={[1024, 1024]} shadow-bias={-0.0004}>
                     <orthographicCamera attach="shadow-camera" args={[-2.5, 2.5, 2.5, -2.5, 0.5, 15]} />
@@ -180,6 +248,16 @@ export const MaterialPreview: React.FC<{
                 className={`absolute right-1.5 top-1.5 rounded px-1.5 py-0.5 text-2xs ${spin ? 'bg-gray-700 text-white' : 'bg-gray-900/80 text-gray-400'}`}>
                 Spin
             </button>
+            <div className="absolute bottom-1.5 left-1.5 right-1.5 flex items-center gap-1.5">
+                <div className="w-28" aria-label="Lighting">
+                    <Select value={lighting} options={PREVIEW_LIGHTINGS.map(option => ({ ...option }))} onChange={(next: string) => pickLighting(next as PreviewLighting)} className="w-full" />
+                </div>
+                <span className="flex-1" />
+                <Button size="sm" variant={backgroundShown ? 'primary' : 'default'} aria-pressed={backgroundShown} onClick={toggleBackground} disabled={seesThrough}
+                    title={seesThrough ? 'A see-through material always shows what is behind it' : 'Show the lighting\'s surroundings behind the shape'}>
+                    Background
+                </Button>
+            </div>
         </div>
     );
 };

@@ -228,8 +228,8 @@ export const TextureView3D: React.FC<{
 
     return (
         <div className="flex min-h-0 flex-1 flex-col">
-            <div className="flex items-center gap-1.5 border-b border-zinc-800 px-2 py-1">
-                <span className="text-2xs font-semibold text-zinc-300">3D</span>
+            <div className="flex items-center gap-1.5 border-b border-line px-2 py-1">
+                <span className="text-2xs font-semibold text-ink-2">3D</span>
                 <Select value={shape} options={shapes} onChange={(value) => onShapeChange(value as PreviewShape)} className="w-36" />
                 {meshMaps.surfaces.length > 1 && (
                     <Select value={meshMaps.surface?.id ?? ''} options={meshMaps.surfaces.map((surface) => ({ value: surface.id, label: surface.name }))}
@@ -257,22 +257,22 @@ export const TextureView3D: React.FC<{
             >
                 <canvas ref={canvas} className="absolute inset-0 h-full w-full" />
                 {meshMaps.note && (
-                    <div className={`pointer-events-none absolute inset-x-2 bottom-2 flex items-start gap-1.5 rounded border px-2 py-1 text-2xs leading-snug shadow ${meshMaps.tone === 'warning' ? 'border-amber-900 bg-zinc-950/90 text-amber-200' : 'border-zinc-800 bg-zinc-950/85 text-zinc-300'}`}>
-                        {meshMaps.tone === 'warning' ? <WarningIcon size={12} className="mt-px shrink-0" /> : <InfoIcon size={12} className="mt-px shrink-0 text-zinc-500" />}
+                    <div className={`pointer-events-none absolute inset-x-2 bottom-2 flex items-start gap-1.5 rounded border px-2 py-1 text-2xs leading-snug shadow ${meshMaps.tone === 'warning' ? 'border-warn/40 bg-panel/90 text-warn' : 'border-line bg-panel/85 text-ink-2'}`}>
+                        {meshMaps.tone === 'warning' ? <WarningIcon size={12} className="mt-px shrink-0" /> : <InfoIcon size={12} className="mt-px shrink-0 text-ink-3" />}
                         <span>{meshMaps.note}</span>
                     </div>
                 )}
             </div>
-            <div className="flex items-center gap-3 border-t border-zinc-800 px-2 py-1 text-2xs text-zinc-400">
+            <div className="flex items-center gap-3 border-t border-line px-2 py-1 text-2xs text-ink-2">
                 <label className="flex items-center gap-1" title={meshMaps.real ? 'Shown once: the mesh maps follow the surface' : 'How many times the picture repeats on the shape'}>Repeat
-                    <input type="range" min={1} max={8} step={1} value={repeat} disabled={meshMaps.real} onChange={(event) => setTiling(Number(event.target.value))} className="w-16 accent-sky-500 disabled:opacity-40" aria-label="Repeat on the shape" />
+                    <input type="range" min={1} max={8} step={1} value={repeat} disabled={meshMaps.real} onChange={(event) => setTiling(Number(event.target.value))} className="w-16 accent-accent disabled:opacity-40" aria-label="Repeat on the shape" />
                     <span className="w-3 tabular-nums">{repeat}</span>
                 </label>
                 <label className="flex items-center gap-1" title="How far height pushes the surface out (shapes only)">Height
-                    <input type="range" min={0} max={0.2} step={0.005} value={displace} onChange={(event) => setDisplace(Number(event.target.value))} className="w-16 accent-sky-500" aria-label="Height on the shape" />
+                    <input type="range" min={0} max={0.2} step={0.005} value={displace} onChange={(event) => setDisplace(Number(event.target.value))} className="w-16 accent-accent" aria-label="Height on the shape" />
                 </label>
                 <label className="flex items-center gap-1" title="How bright the light is; Shift-drag the view to turn it">Light
-                    <input type="range" min={0.25} max={3} step={0.05} value={light} onChange={(event) => setLight(Number(event.target.value))} className="w-16 accent-sky-500" aria-label="Light brightness" />
+                    <input type="range" min={0.25} max={3} step={0.05} value={light} onChange={(event) => setLight(Number(event.target.value))} className="w-16 accent-accent" aria-label="Light brightness" />
                 </label>
             </div>
         </div>

@@ -9,6 +9,8 @@ export const INPUT_NODE_TYPE = 'input';
 export const OUTPUT_NODE_TYPE = 'output';
 export const SUBGRAPH_NODE_TYPE = 'subgraph';
 export const MESH_MAP_NODE_TYPE = 'meshMap';
+/** A point a wire passes through on the canvas; it changes nothing. */
+export const REROUTE_NODE_TYPE = 'reroute';
 
 /**
  * A sub-graph node's own random seed and whether each copy varies, kept under names no graph
@@ -73,6 +75,37 @@ const imageFrom = async (context: NodeRunContext, source: GpuImage | THREE.Textu
 
 /** A world space normal or position: wired in, else the model's own map, else a stand-in. */
 const meshInput = (context: NodeRunContext, key: string, map: MeshMapName): GpuImage | THREE.Texture | null => context.input(key) ?? context.external(meshMapKey(map));
+
+/**
+ * The lowest and highest value of one axis (0, 1, 2 for x, y, z) of a position image, in the red and
+ * green of a 1×1 image: halved two by two on the GPU until one texel is left. A baked position map is
+ * padded past its islands with their own values, so the empty space adds nothing outside the model.
+ */
+const axisRange = async (context: NodeRunContext, source: GpuImage | THREE.Texture, axis: number): Promise<GpuImage> => {
+    const gpu = context.gpu;
+    const asImage = source as GpuImage;
+    const picture = (source as THREE.Texture).image as { width?: number; height?: number } | undefined;
+    const width = asImage.target ? asImage.width : Math.max(1, picture?.width ?? 1);
+    const height = asImage.target ? asImage.height : Math.max(1, picture?.height ?? 1);
+    const gather = (first: boolean) => `uniform int uAxis;
+float pick(vec4 v) { return uAxis == 0 ? v.x : uAxis == 1 ? v.y : v.z; }
+vec2 span(ivec2 at, ivec2 last) { vec4 v = texelFetch(source, min(at, last), 0); return ${first ? 'vec2(pick(v))' : 'v.rg'}; }
+void main() {
+    ivec2 p = ivec2(gl_FragCoord.xy) * 2;
+    ivec2 last = textureSize(source, 0) - 1;
+    vec2 a = span(p, last), b = span(p + ivec2(1, 0), last), c = span(p + ivec2(0, 1), last), d = span(p + ivec2(1, 1), last);
+    outColor = vec4(min(min(a.x, b.x), min(c.x, d.x)), max(max(a.y, b.y), max(c.y, d.y)), 0.0, 1.0);
+}`;
+    let range = gpu.image((width + 1) >> 1 || 1, (height + 1) >> 1 || 1, 'color', 32);
+    await gpu.pass(range, { fragment: gather(true), inputs: { source }, uniforms: { uAxis: axis } });
+    while (range.width > 1 || range.height > 1) {
+        const next = gpu.image(Math.max(1, (range.width + 1) >> 1), Math.max(1, (range.height + 1) >> 1), 'color', 32);
+        await gpu.pass(next, { fragment: gather(false), inputs: { source: range }, uniforms: { uAxis: axis } });
+        gpu.release(range);
+        range = next;
+    }
+    return range;
+};
 
 const DEFAULT_LOOKS: ReadonlyArray<[string, string]> = [['black', 'Black'], ['white', 'White'], ['mid', 'Mid grey'], ['normal', 'Flat normal']];
 
@@ -167,6 +200,25 @@ export const IO_NODES: TexNodeDef[] = [
         async run(context) {
             const image = context.image('color');
             await context.pass(image, 'void main() { vec4 c = p_texture_ok == 1 ? texture(p_texture, vUv) : vec4(0.0, 0.0, 0.0, 1.0); if (p_texture_srgb == 1) c.rgb = linearToSrgb(c.rgb); outColor = c; }');
+            return { out: image };
+        },
+    },
+    {
+        type: REROUTE_NODE_TYPE,
+        label: 'Reroute point',
+        category: 'Utility',
+        description: 'A point a wire passes through, to lead it round other nodes. It changes nothing.',
+        keywords: ['reroute', 'dot', 'elbow', 'wire point', 'knot'],
+        inputs: [anyIn('in', 'In')],
+        outputs: [out('any')],
+        params: [],
+        sizeFrom: 'input',
+        kindFrom: 'in',
+        async run(context) {
+            const input = context.input('in');
+            if (input) return { out: context.gpu.retain(input) };
+            const image = context.image(context.outputKind('out'));
+            context.gpu.clear(image, [0, 0, 0, 1]);
             return { out: image };
         },
     },
@@ -285,7 +337,7 @@ void main() {
         type: 'axisGradient',
         label: 'Position gradient',
         category: 'Mesh maps',
-        description: 'A gradient up (or across) the model from its position map: grime gathering low down, fading paint, wet edges.',
+        description: 'A gradient up (or across) the model from its position map, from the model\'s lowest point to its highest along the way chosen: grime gathering low down, fading paint, wet edges.',
         keywords: ['height gradient', 'world position', 'bottom up', 'top down'],
         inputs: [colorIn('position', 'Position')],
         outputs: [out('gray')],
@@ -294,13 +346,27 @@ void main() {
         async run(context) {
             const image = context.image('gray');
             const position = meshInput(context, 'position', 'position');
-            await context.pass(image, `uniform sampler2D posMap;
+            // Position is measured in one cube round the whole model, so a model's shorter sides fill only
+            // part of 0..1: the gradient runs from the lowest to the highest place along the axis instead.
+            const axis = context.params.axis === 'x' ? 0 : context.params.axis === 'z' ? 2 : 1;
+            const range = position ? await axisRange(context, position, axis) : null;
+            try {
+                await context.pass(image, `uniform sampler2D posMap;
+uniform sampler2D rangeMap;
+uniform int uNormalise;
 void main() {
     vec3 p = texture(posMap, vUv).xyz;
     float v = p_axis == 0 ? p.x : p_axis == 1 ? p.y : p.z;
+    if (uNormalise == 1) {
+        vec2 span = texelFetch(rangeMap, ivec2(0), 0).rg;
+        v = span.y - span.x > 1e-6 ? (v - span.x) / (span.y - span.x) : 0.5;
+    }
     float t = smoothstep(p_position - p_width * 0.5, p_position + p_width * 0.5, v);
     outColor = vec4(p_invert == 0 ? 1.0 - t : t);
-}`, { inputs: { posMap: position ?? context.gpu.constant('mid') } });
+}`, { inputs: { posMap: position ?? context.gpu.constant('mid'), rangeMap: range ?? context.gpu.constant('black') }, uniforms: { uNormalise: range ? 1 : 0 } });
+            } finally {
+                context.gpu.release(range);
+            }
             return { out: image };
         },
     },

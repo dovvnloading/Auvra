@@ -73,7 +73,7 @@
 - Web-first output: glTF with its material extensions plus KTX2. The leading painting tool has no glTF template.
 - A path-traced reference beside the live view.
 
-**Next stages:** round 1 fixed most of §8's defects. Next comes professional graph editing, then one material with one physical surface model across both renderers. See §6.
+**Where the work stands:** round 1 fixed most of §8's defects. Round 2 brought both graphs onto one canvas, the physical surface model in WebGL2, and painting with whole materials. Round 3 continues with the graph views and widgets, material wires, the brush engine, and instances with parallax. See §6.
 
 ## 1. What "rival, then lead" means
 
@@ -371,6 +371,8 @@ Fix the defects in §8 that lose work, give wrong results or mislead, before bui
 **Checked by:** each fix shown in the editor on the Khronos helmets and a Poly Haven model, before and after.
 
 ### Stage 1 — Professional graph editing
+
+**Landed in round 2:** both graphs on one canvas, with frames, reroute points, align, snap, bypass, folding, rename and colour, menus, find, an overview map, sub-graphs opened in place, pin groups, and a node finder with pictures, favourites and recent nodes. Undo works anywhere in the workspace. Still to come: the 2D and 3D views, widgets, a cost heat map, named links, and shader errors marked on their node.
 - **One canvas.** A single canvas, node finder and editing module for both the texture and the shader graph, fast with 1,000 nodes.
 - **The canvas tools in §5.** Pictures in the finder, insertion onto wires, named links, frames, align, bypass, collapse, find, minimap, editing sub-graphs in place, a cost heat map, and errors marked on the right node.
 - **2D view:** pixel values, histogram with range selection, colour pins, compare wipe, exposure, and handles for transforms, the tile sampler, gradients and shapes.
@@ -388,6 +390,8 @@ Fix the defects in §8 that lose work, give wrong results or mislead, before bui
 **Checked by:** a 300-node graph built and edited at an ordinary window size, judged as a user would judge it.
 
 ### Stage 2 — One material, one physical surface
+
+**Landed in round 2:** the physical surface on the shader graph's output (specular, coat, sheen, thin film, transmission and emission strength), drawn in WebGL2 and only when used. It also brought starter graphs, preview lighting, and physical values in Material Overrides. Still to come: WebGPU, one material asset, instances, parallax, triplanar normals and full decals.
 - **One material asset.** It holds the surface model, plus optional texture graphs, a paint stack and parameters. The Materials tab, Paint, Retexture and Material Overrides all edit that asset rather than writing side channels.
 - **A physical surface model** with an OpenPBR vocabulary, implemented in both renderers on one shader path that works alongside weather, wind and compressed normals:
   - base colour, metalness and diffuse roughness;
@@ -460,6 +464,8 @@ One family per pull request, each with picture tooltips and the wrap-edge tiling
 **Checked by:** each family's nodes drawn on real inputs, plus one finished material per family.
 
 ### Stage 6 — Painting at full depth
+
+**Landed in round 2:** painting with whole materials; filter layers; fills and masks that read the layers below; layer opacity and folder blends; saved smart materials, opened as texture graph copies, with rendered previews; recombining only changed areas; sparse pictures; and unwrapping in a worker. Still to come: new mask kinds, the brush engine (alphas, paths, clone, smudge, particles), projections, the 2D painting view and 8K.
 - **Paint with anything:** materials, textures and smart materials in every channel. Extended channels follow Stage 2.
 - **Layers:**
   - layers that read the stack below (anchors);
@@ -599,6 +605,14 @@ File references are relative to `fbx-viewer (1)/`.
   - Retexture, the mask tool and the host all use the one base-map path, and Reset Textures takes painted base maps off again.
   - The mask tool's Update Material works again. It fetched a data URL, which the editor's security policy refuses.
 
+### Fixed in round 2
+- Undo works anywhere in the texture graph workspace.
+- 16-bit pictures are read into half floats.
+- Position gradient runs along each axis of the model.
+- Unwrapping and packing run in a worker.
+- A stroke recombines only the area it touched.
+- "Use this layout" is all-or-nothing.
+
 ### Still open
 **Texture graph**
 1. Graph and painted height are kept at 16 bits, but nothing draws with height yet (Stage 2).
@@ -608,26 +622,24 @@ File references are relative to `fbx-viewer (1)/`.
 5. Choice parameters have no option editor, and step, group and description have no UI (Stage 4).
 6. Make it tile is a single cross-fade, so ghosting shows (Stage 5, photo tools).
 7. Update material draws mesh-reading nodes with stand-ins, because a material can go on any model. Per-model results come with Stage 9.
-8. Ctrl+Z in the texture graph only works with the pointer over the canvas.
-9. `texturing/png.ts` reads 16-bit pictures into 32-bit floats: about 540 MB per 4K picture while a set opens. It should read into half floats.
-10. Now that position is measured in one cube per model, Position gradient and the "Grime from below" smart mask cover only part of 0..1 along a model's shorter axes. The node should normalise per axis.
+8. Graphs made from smart materials are laid out in a cramped column. They need a tidy layout.
 
 **Painting, baking and UVs**
 
-11. Unwrapping and packing run on the main thread and freeze the editor (`components/Texturing/Paint/uvSession.ts`).
-12. Each batch of dabs recombines all layers on every tile, and each stroke copies every channel first (`texturing/paint/strokes.ts`).
-13. "Use this layout" changes pictures in memory before the layout is saved. A failure in between could let autosave keep new-layout pictures under the old layout.
-14. The paint view's smoothing draws into a render target marked as an XR target. Recheck this when three.js is upgraded (`components/Texturing/Paint/PaintViewport.tsx`).
-15. A triangle that crosses a UDIM tile edge can pick a too-coarse mip at that edge.
+9. The paint view's smoothing draws into a render target marked as an XR target. Recheck this when three.js is upgraded (`components/Texturing/Paint/PaintViewport.tsx`).
+10. A triangle that crosses a UDIM tile edge can pick a too-coarse mip at that edge.
+11. Long names are cut off in the layer Add menu and the material picker ("Hue and sat…", "Black rubb…").
 
 **Material graph and engine materials**
 
-16. Material textures are never compressed (`runtime/materials/materialLibrary.ts`, Stage 8).
-17. Unlit and Phong materials can't take a material asset (a message says so). Converting them is a later step.
-18. For the WebGPU renderer (#154):
+12. Material textures are never compressed (`runtime/materials/materialLibrary.ts`, Stage 8).
+13. Unlit and Phong materials can't take a material asset (a message says so). Converting them is a later step.
+14. The surface has no coat tint, and car paint has no metal flakes.
+15. For the WebGPU renderer (#154):
     - its graph surface ignores weather and wind;
     - it caches translated shaders per graph object, so every value edit translates again; it should key by graph shape;
-    - it should skip the vertex-colour multiply when a graph reads Vertex Color.
+    - it should skip the vertex-colour multiply when a graph reads Vertex Color;
+    - its graph translator doesn't know the physical surface inputs or emission strength yet, so physical graphs draw as plain surfaces there.
 
 ## 9. Sources and references
 

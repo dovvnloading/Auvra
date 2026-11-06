@@ -3,15 +3,14 @@ import { frontendDiagnostics } from '../../../diagnostics/runtime';
 import { ownMaps } from '../../../runtime/materials/graphMaterial';
 import { projectService } from '../../../utils/projectService';
 import type { GpuImage } from '../../../texturing/gpu/textureGpu';
-import { triangleStretch } from '../../../texturing/uv/lscm';
-import { overlappingTriangles } from '../../../texturing/uv/overlap';
-import { DEFAULT_PACK, packIslands, type Island, type PackSettings, type Placement } from '../../../texturing/uv/pack';
+import { DEFAULT_PACK, type Island, type PackSettings, type Placement } from '../../../texturing/uv/pack';
 import { newTriangleTiles, transferPicture } from '../../../texturing/uv/transfer';
-import { DEFAULT_UNWRAP, unwrap, type UnwrapSettings } from '../../../texturing/uv/unwrap';
-import { applyLayout, buildLayout, decodeLayout, encodeLayout, type UvLayoutFile } from '../../../texturing/uv/uvLayout';
+import { DEFAULT_UNWRAP, type UnwrapSettings } from '../../../texturing/uv/unwrap';
+import { UvWorkClient, measureLayout, type UvStats } from '../../../texturing/uv/uvWork';
+import { applyLayout, buildLayout, decodeLayout, encodeLayout, restoreLayout, type UvLayoutFile } from '../../../texturing/uv/uvLayout';
 import { buildCharts, buildTopology, chartCoordinates, edgeKey, existingSeams, type Chart, type UvTopology } from '../../../texturing/uv/uvTopology';
 import { BEFORE, GpuResetError, pictureKey, pictureOwner, pictureOwners, picturePrecision } from '../../../texturing/paint/paintStack';
-import { BLEND_FOR, type FillSource, type PaintChannel, type PaintDocument, type PaintLayer } from '../../../texturing/paint/paintTypes';
+import { BLEND_FOR, PAINT_CHANNELS, type FillSource, type PaintChannel, type PaintDocument, type PaintLayer, type TilePictures } from '../../../texturing/paint/paintTypes';
 import type { PaintSession } from './paintSession';
 
 /**
@@ -25,25 +24,7 @@ import type { PaintSession } from './paintSession';
  * the same.
  */
 
-export interface UvStats {
-    islands: number;
-    /** Share of the pictures (one per UDIM tile) the islands cover. */
-    coverage: number;
-    /** UDIM tiles the layout uses, a picture each. */
-    tiles: number;
-    /** Pixels per model unit at the set's picture size: lowest, mean, highest over islands. */
-    density: { low: number; mean: number; high: number };
-    stretch: { mean: number; worst: number };
-    /** Triangles facing against their island, or lying over other triangles: places that share texels. */
-    folded: number;
-}
-
-/** Corner numbers 0, 1, 2… for layouts kept two values per corner, in triangle order. */
-let inOrder = new Uint32Array(0);
-const cornersInOrder = (count: number): Uint32Array => {
-    if (inOrder.length < count) inOrder = Uint32Array.from({ length: count }, (_, i) => i);
-    return inOrder;
-};
+export type { UvStats } from '../../../texturing/uv/uvWork';
 
 export interface UvProposal {
     charts: Chart[];
@@ -102,13 +83,16 @@ export class UvSession {
     private readonly listeners = new Set<() => void>();
     private undoSteps: UvStep[] = [];
     private redoSteps: UvStep[] = [];
-    readonly current: UvStats;
+    /** The current layout's figures (overlaps counted once the worker has looked for them). */
+    current: UvStats;
     /** The current layout's seams, where its coordinates are cut. */
     private readonly currentSeams: Set<number>;
     /** Stretch per triangle of the current layout (0 kept shape … 1 badly stretched; −1 folded or overlapping). */
-    readonly currentStretch: Float32Array;
+    currentStretch: Float32Array;
     /** Whether the proposal is the current islands packed as they are (else an unwrap). */
     proposalKeepsShapes = false;
+    /** Unwrapping, packing and looking for overlaps, off the main thread. */
+    private readonly work: UvWorkClient;
 
     constructor(readonly paint: PaintSession, readonly host: UvSessionHost) {
         const part = paint.part;
@@ -119,9 +103,25 @@ export class UvSession {
         // Packing again keeps the grid of UDIM tiles the surface is laid over now.
         this.packSettings.tilesX = Math.max(...part.tiles.map((tile) => (tile - 1001) % 10)) + 1;
         this.packSettings.tilesY = Math.max(...part.tiles.map((tile) => Math.floor((tile - 1001) / 10))) + 1;
-        const measured = this.measure(Float32Array.from({ length: part.indices.length * 2 }, (_, i) => part.uvs[part.indices[i >> 1] * 2 + (i & 1)]), buildCharts(this.topology, this.seams), part.tiles.length);
-        this.current = measured.stats;
-        this.currentStretch = measured.triangleStretch;
+        this.work = new UvWorkClient(part.positions, part.indices);
+        // Stretch now; overlaps (slow on large models) once the worker has looked for them.
+        const cornerUv = Float32Array.from({ length: part.indices.length * 2 }, (_, i) => part.uvs[part.indices[i >> 1] * 2 + (i & 1)]);
+        const charts = buildCharts(this.topology, this.seams);
+        const quick = measureLayout(this.topology, cornerUv, charts.map((chart) => chart.faces), part.tiles.length, paint.stack.size, false);
+        this.current = quick.stats;
+        this.currentStretch = quick.triangleStretch;
+        this.work.measure(cornerUv, charts, part.tiles.length, paint.stack.size).then((measured) => {
+            this.current = measured.stats;
+            this.currentStretch = measured.triangleStretch;
+            this.emit();
+        }, () => undefined);
+    }
+
+    /** Stops the UV work (the set is closing). */
+    dispose(): void {
+        if (this.settleTimer) clearTimeout(this.settleTimer);
+        this.work.dispose();
+        this.listeners.clear();
     }
 
     // -----------------------------------------------------------------------
@@ -236,23 +236,23 @@ export class UvSession {
 
     /** Places seams automatically (keeping the ones marked by hand when asked) and flattens and packs. */
     unwrapAuto(keepSeams: boolean): void {
-        this.run('Unwrapping', () => {
-            const result = unwrap(this.topology, this.unwrapSettings, keepSeams ? this.seams : new Set());
+        this.run('Unwrapping', async () => {
+            const result = await this.work.unwrap(this.unwrapSettings, keepSeams ? this.seams : new Set());
             this.seams = result.seams;
             this.flat = result.flat;
             this.startIslands(false);
-            this.layOut(result.charts);
+            await this.layOut(result.charts);
         }, keepSeams ? 'Unwrap, keeping seams' : 'Unwrap afresh');
     }
 
     /** Flattens along exactly the seams there are now, and packs. */
     unwrapWithSeams(): void {
-        this.run('Unwrapping', () => {
-            const result = unwrap(this.topology, this.unwrapSettings, new Set(), this.seams);
+        this.run('Unwrapping', async () => {
+            const result = await this.work.unwrap(this.unwrapSettings, new Set(), this.seams);
             this.seams = result.seams;
             this.flat = result.flat;
             this.startIslands(false);
-            this.layOut(result.charts);
+            await this.layOut(result.charts);
         }, 'Unwrap these seams');
     }
 
@@ -273,12 +273,12 @@ export class UvSession {
      * the others, and is only moved and turned (no island is flattened again, and no seam is added).
      */
     packCurrent(): void {
-        this.run('Packing', () => {
+        this.run('Packing', async () => {
             const charts = buildCharts(this.topology, this.currentSeams);
             this.seams = new Set(this.currentSeams);
             this.flat = chartCoordinates(charts, this.paint.part.indices, this.paint.part.uvs).map((uv) => ({ uv }));
             this.startIslands(true);
-            this.layOut(charts);
+            await this.layOut(charts);
         }, 'Pack the current islands');
     }
 
@@ -289,15 +289,15 @@ export class UvSession {
         this.proposalKeepsShapes = keepsShapes;
     }
 
-    private run(label: string, work: () => void, step?: string): void {
+    /** Runs UV work (in the worker: the editor keeps answering meanwhile), kept for undo once it is done. */
+    private run(label: string, work: () => Promise<void>, step?: string): void {
+        if (this.busy) return;
         this.busy = label;
         this.emit();
-        // Let the panel show what is happening before the work holds the page.
-        setTimeout(() => {
-            // Kept for undo only once the work has changed something.
-            const before = step ? this.snapshot(step) : null;
+        const before = step ? this.snapshot(step) : null;
+        void (async () => {
             try {
-                work();
+                await work();
                 if (before) this.keep(before);
                 this.status = null;
             } catch (error) {
@@ -309,14 +309,14 @@ export class UvSession {
                 this.busy = null;
                 this.emit();
             }
-        }, 30);
+        })();
     }
 
     /**
      * Packs `charts` into a new proposal. Packing the same islands again keeps those kept in place where
      * they are, and gives islands made bigger or smaller their size against the rest.
      */
-    private layOut(charts: Chart[]): void {
+    private async layOut(charts: Chart[]): Promise<void> {
         const kept = this.proposal?.charts === charts ? this.proposal.placements : null;
         const islands: Island[] = charts.map((chart, i) => ({
             uv: this.flat[i].uv,
@@ -325,7 +325,7 @@ export class UvSession {
             densityScale: this.density.get(i) ?? 1,
             ...(kept && this.locked.has(i) ? { keepAt: kept[i].uv } : {}),
         }));
-        const placements = packIslands(islands, this.packSettings);
+        const placements = await this.work.pack(islands, this.packSettings);
         this.setProposal(charts, placements, { keepSelection: Boolean(kept) });
     }
 
@@ -350,84 +350,22 @@ export class UvSession {
             });
             firstKey += chart.vertexWeld.length;
         });
-        const measured = this.measure(cornerUv, charts, new Set(newTriangleTiles(cornerUv)).size, !edit.quick);
-        this.proposal = { charts, placements, cornerUv, cornerKey, triangleStretch: measured.triangleStretch, stats: measured.stats };
+        // Stretch at once; overlaps (slow on large models) looked for in the worker once the islands settle.
+        const tiles = new Set(newTriangleTiles(cornerUv)).size;
+        const measured = measureLayout(this.topology, cornerUv, charts.map((chart) => chart.faces), tiles, this.paint.stack.size, false);
+        const proposal: UvProposal = { charts, placements, cornerUv, cornerKey, triangleStretch: measured.triangleStretch, stats: measured.stats };
+        this.proposal = proposal;
         if (!edit.keepSelection) this.selected.clear();
         if (this.settleTimer) clearTimeout(this.settleTimer);
-        this.settleTimer = edit.quick ? setTimeout(() => {
+        this.settleTimer = setTimeout(() => {
             this.settleTimer = null;
-            const proposal = this.proposal;
-            if (!proposal) return;
-            const settled = this.measure(proposal.cornerUv, proposal.charts, proposal.stats.tiles, true);
-            this.proposal = { ...proposal, triangleStretch: settled.triangleStretch, stats: settled.stats };
-            this.emit();
-        }, 200) : null;
-    }
-
-    /**
-     * Stretch per triangle and the layout's figures; `tiles` is how many UDIM tiles (pictures) it uses.
-     * Without `overlaps`, triangles lying over others are not looked for (while islands are dragged).
-     */
-    private measure(cornerUv: Float32Array, charts: Chart[], tiles: number, overlaps = true): { triangleStretch: Float32Array; stats: UvStats } {
-        const { positions, faces, areas, faceCount } = this.topology;
-        const stretch = new Float32Array(faceCount);
-        const local = new Float64Array(6);
-        let folded = 0;
-        let weighted = 0;
-        let worst = 1;
-        let surface = 0;
-        let flat = 0;
-        // An island laid out mirrored as a whole (glTF counts texture rows from the top) is fine: a triangle is
-        // folded only when it faces against the rest of its own island.
-        const signedArea = (f: number) => ((cornerUv[f * 6 + 2] - cornerUv[f * 6]) * (cornerUv[f * 6 + 5] - cornerUv[f * 6 + 1]) - (cornerUv[f * 6 + 4] - cornerUv[f * 6]) * (cornerUv[f * 6 + 3] - cornerUv[f * 6 + 1])) / 2;
-        const orientation = new Float32Array(faceCount).fill(1);
-        for (const chart of charts) {
-            let sum = 0;
-            for (const f of chart.faces) sum += signedArea(f);
-            const sign = sum < 0 ? -1 : 1;
-            for (const f of chart.faces) orientation[f] = sign;
-        }
-        for (let f = 0; f < faceCount; f++) {
-            local.set(cornerUv.subarray(f * 6, f * 6 + 6));
-            const signed = signedArea(f) * orientation[f];
-            flat += Math.abs(signed);
-            surface += areas[f];
-            if (signed < 0) { folded++; stretch[f] = -1; continue; }
-            if (orientation[f] < 0) { local[0] = -local[0]; local[2] = -local[2]; local[4] = -local[4]; }
-            const s = triangleStretch(positions, faces, f, local, 0, 1, 2);
-            stretch[f] = Math.min(1, (s.ratio - 1) / 2);
-            worst = Math.max(worst, s.ratio);
-            // A sliver squashed to nothing would swamp the mean: count it as badly stretched, no worse.
-            weighted += Math.min(s.ratio, 20) * areas[f];
-        }
-        // An island wrapped round onto itself, or islands laid on each other: those places share texels
-        // (overlaps shallower than a quarter of a texel are rounding).
-        for (const f of overlaps ? overlappingTriangles(cornerUv, cornersInOrder(faceCount * 3), faceCount, false, 0.25 / this.paint.stack.size) : []) {
-            if (stretch[f] === -1) continue;
-            stretch[f] = -1;
-            folded++;
-        }
-        const size = this.paint.stack.size;
-        const densities = charts.map((chart) => {
-            let a3 = 0, a2 = 0;
-            for (const f of chart.faces) {
-                a3 += areas[f];
-                a2 += Math.abs(((cornerUv[f * 6 + 2] - cornerUv[f * 6]) * (cornerUv[f * 6 + 5] - cornerUv[f * 6 + 1]) - (cornerUv[f * 6 + 4] - cornerUv[f * 6]) * (cornerUv[f * 6 + 3] - cornerUv[f * 6 + 1])) / 2);
-            }
-            return a3 > 0 ? Math.sqrt(a2 / a3) * size : 0;
-        }).filter((value) => value > 0);
-        const mean = densities.length ? Math.sqrt(flat / Math.max(surface, 1e-12)) * size : 0;
-        return {
-            triangleStretch: stretch,
-            stats: {
-                islands: charts.length,
-                coverage: Math.min(1, flat / Math.max(1, tiles)),
-                tiles,
-                density: { low: densities.length ? Math.min(...densities) : 0, mean, high: densities.length ? Math.max(...densities) : 0 },
-                stretch: { mean: surface > 0 ? weighted / surface : 1, worst },
-                folded,
-            },
-        };
+            this.work.measure(cornerUv, charts, tiles, this.paint.stack.size).then((settled) => {
+                // Only for the layout it measured: islands moved meanwhile are measured again as they settle.
+                if (this.proposal?.cornerUv !== cornerUv) return;
+                this.proposal = { ...this.proposal, triangleStretch: settled.triangleStretch, stats: settled.stats };
+                this.emit();
+            }, () => undefined);
+        }, edit.quick ? 200 : 0);
     }
 
     /** Moves selected islands by (du, dv). A drag remembers the layout once, as it starts (see remember). */
@@ -513,8 +451,11 @@ export class UvSession {
     }
 
     /**
-     * Uses the proposal: carries every picture drawn on the surface over to it, splits the meshes, saves
-     * the layout with the model, and reopens painting on the new layout.
+     * Uses the proposal, all or nothing: every picture drawn on the surface is carried over to it as new
+     * pictures kept apart from the set's own, then the meshes are split and the layout saved with the model,
+     * then the set's document naming the new pictures is saved. Until that last step the set's own pictures
+     * and document are untouched (and nothing is saved from them), so a failure anywhere puts the model's
+     * meshes and saved layout back and leaves the set as it was. Painting reopens on the new layout.
      */
     async apply(): Promise<void> {
         const proposal = this.proposal;
@@ -530,27 +471,47 @@ export class UvSession {
         const part = paint.part;
         const object = paint.target.object;
         const size = stack.size;
-        this.busy = 'Carrying the pictures over';
+        this.busy = 'Saving the painting first';
         this.emit();
+        // What the set holds is kept first; nothing more is painted or saved until the switch is done or undone.
+        await paint.save();
+        paint.lock('The new UV layout is being put on: painting waits until it is done.');
+        let laidOut: { previous: UvLayoutFile | null; layout: UvLayoutFile; saved: boolean } | null = null;
         try {
+            this.busy = 'Carrying the pictures over';
+            this.emit();
             const corner = proposal.cornerUv;
             // The UDIM tiles the new layout uses (one for an ordinary layout): a picture each.
             const newTiles = [...new Set(newTriangleTiles(corner))].sort((a, b) => a - b);
             const spread = newTiles.length > 1;
-            // 1. Every picture of the set (painted layers, masks, what it wore before once carried): each tile
-            // of the new layout drawn from the current tiles' pictures. Pictures of layers deleted earlier
-            // are kept only for undo, which the set reopens without: they are not carried (nor kept again).
+            /** The new layout's pictures, kept as assets: by picture key, then tile. */
+            const carried = new Map<string, TilePictures>();
+            const keep = async (key: string, tile: number, image: GpuImage) => {
+                const assetId = await stack.storeImage(image);
+                carried.set(key, { ...(carried.get(key) ?? {}), [String(tile)]: { assetId } });
+            };
+            // 1. Every picture of the set (painted layers, masks, what it wore before once carried): each tile of
+            // the new layout drawn from whole copies of the current tiles' pictures. Pictures of layers deleted
+            // earlier are kept only for undo, which the set reopens without: they are not carried.
             const used = pictureOwners([stack.document]);
             for (const [key, byTile] of [...stack.pictures]) {
                 if (!used.has(pictureOwner(key))) continue;
-                const moved: Array<[number, GpuImage]> = [];
-                for (const tile of newTiles) {
-                    moved.push([tile, await transferPicture(gpu, part, corner, (from) => byTile.get(from) ?? null, size, { normalMap: key.endsWith(':normal'), tile, precision: picturePrecision(key), coverage: true })]);
-                }
-                for (const [tile, image] of moved) {
-                    gpu.copy(image, stack.picture(key, tile));
-                    gpu.release(image);
-                    stack.touch(key, tile);
+                const wholes = new Map<number, GpuImage>();
+                try {
+                    for (const tile of byTile.keys()) {
+                        const whole = stack.denseCopy(key, tile);
+                        if (whole) wholes.set(tile, whole);
+                    }
+                    for (const tile of newTiles) {
+                        const image = await transferPicture(gpu, part, corner, (from) => wholes.get(from) ?? null, size, { normalMap: key.endsWith(':normal'), tile, precision: picturePrecision(key), coverage: true });
+                        try {
+                            await keep(key, tile, image);
+                        } finally {
+                            gpu.release(image);
+                        }
+                    }
+                } finally {
+                    for (const whole of wholes.values()) gpu.release(whole);
                 }
             }
             // 2. The model's own pictures, which "what it wore before" fills read, fit only the layout it came
@@ -591,9 +552,11 @@ export class UvSession {
                         gpu.release(image);
                         image = single;
                     }
-                    gpu.copy(image, stack.picture(key, tile));
-                    gpu.release(image);
-                    stack.touch(key, tile);
+                    try {
+                        await keep(key, tile, image);
+                    } finally {
+                        gpu.release(image);
+                    }
                 }
             }
             // Such a layout also kept those pictures as textures of the set's own (named "<part> <channel> (relaid)"
@@ -606,16 +569,19 @@ export class UvSession {
             };
             const readsOwn = (channel: PaintChannel, source: FillSource | undefined): boolean => source?.kind === 'texture'
                 && source.projection === 'uv' && source.scale === 1 && source.rotation === 0 && Boolean(ownIds[channel]?.has(source.textureId) || keptBefore(channel, source.textureId));
-            const restore = (list: readonly PaintLayer[]): PaintLayer[] => list.map((layer) => ({
+            // 3. The set's document on the new layout: its layers name the new pictures (and only those).
+            const pictured = (list: readonly PaintLayer[]): PaintLayer[] => list.map((layer) => ({
                 ...layer,
                 ...(layer.fill ? { fill: Object.fromEntries(Object.entries(layer.fill).map(([channel, source]) => [channel, readsOwn(channel as PaintChannel, source) ? { kind: 'current' as const } : source])) } : {}),
-                ...(layer.layers ? { layers: restore(layer.layers) } : {}),
+                ...(layer.kind === 'paint' ? { pictures: Object.fromEntries(PAINT_CHANNELS.flatMap((channel) => { const tiles = carried.get(pictureKey(layer.id, channel)); return tiles ? [[channel, tiles] as const] : []; })) } : {}),
+                ...(layer.mask ? { mask: layer.mask.map((effect) => (effect.kind === 'paint' ? { ...effect, pictures: carried.get(pictureKey(effect.id)) ?? {} } : effect)) } : {}),
+                ...(layer.layers ? { layers: pictured(layer.layers) } : {}),
             }));
-            let layers = restore(stack.document.layers);
+            let layers = pictured(stack.document.layers);
             let channels = stack.document.channels;
             // The set goes on the model in place of its own material, glow and all: a glow it carried is drawn by
             // the layer that shows what the surface wore before.
-            if (stack.pictures.has(pictureKey(BEFORE, 'emissive')) && !channels.includes('emissive')) {
+            if (carried.has(pictureKey(BEFORE, 'emissive')) && !channels.includes('emissive')) {
                 const at = layers.findIndex((layer) => Object.values(layer.fill ?? {}).some((source) => source?.kind === 'current'));
                 if (at >= 0) {
                     channels = [...channels, 'emissive'];
@@ -624,8 +590,9 @@ export class UvSession {
                         : layer));
                 }
             }
-            let document: PaintDocument = { ...stack.document, layers, channels, bake: null, udim: spread || stack.document.udim };
-            // 3. The meshes themselves.
+            const before = Object.fromEntries(PAINT_CHANNELS.flatMap((channel) => { const tiles = carried.get(pictureKey(BEFORE, channel)); return tiles ? [[channel, tiles] as const] : []; }));
+            const document: PaintDocument = { ...stack.document, layers, channels, bake: null, udim: spread || stack.document.udim, ...(Object.keys(before).length ? { before } : {}) };
+            // 4. The meshes themselves, split and saved with the model.
             this.busy = 'Saving the layout';
             this.emit();
             let previous: UvLayoutFile | null = null;
@@ -642,31 +609,35 @@ export class UvSession {
             if (!paint.usable) throw new GpuResetError();
             const layout = buildLayout(object, part, corner, proposal.cornerKey, previous);
             applyLayout(object, layout);
+            laidOut = { previous, layout, saved: false };
             await this.host.saveLayout(paint.target.modelId, encodeLayout(layout), layout.meshes.length);
-            stack.setDocument(document);
-            document = await stack.keepPictures();
-            // Pictures of tiles the layout no longer uses are let go.
-            const keep = <T>(byTile: Record<string, T> | undefined): Record<string, T> => Object.fromEntries(Object.entries(byTile ?? {}).filter(([tile]) => newTiles.includes(Number(tile))));
-            const prune = (list: readonly PaintLayer[]): PaintLayer[] => list.map((layer) => ({
-                ...layer,
-                ...(layer.pictures ? { pictures: Object.fromEntries(Object.entries(layer.pictures).map(([channel, byTile]) => [channel, keep(byTile)])) } : {}),
-                ...(layer.mask ? { mask: layer.mask.map((effect) => (effect.kind === 'paint' && effect.pictures ? { ...effect, pictures: keep(effect.pictures) } : effect)) } : {}),
-                ...(layer.layers ? { layers: prune(layer.layers) } : {}),
-            }));
-            const before = document.before;
-            document = {
-                ...document,
-                layers: prune(document.layers),
-                ...(before ? { before: Object.fromEntries(Object.entries(before).map(([channel, byTile]) => [channel, keep(byTile)])) } : {}),
-            };
-            stack.setDocument(document);
-            await paint.save();
+            laidOut.saved = true;
+            // 5. The set's document naming the new pictures: once it is kept, the switch is done.
+            await paint.keepDocumentAs(document);
+            paint.retire();
             this.proposal = null;
             this.putOnWhenOpen = true;
             this.status = `The surface has its new layout${spread ? ` over ${newTiles.length} UDIM tiles` : ''}. Its pictures came with it and it goes on the model as it reopens; bake its mesh maps again for smart masks.`;
         } catch (error) {
             frontendDiagnostics.failure('uv_apply_failed', error);
-            this.status = error instanceof Error ? error.message : 'The new layout could not be used.';
+            // Undone: the meshes and the saved layout go back; the set still has its own pictures and document.
+            let undone = true;
+            if (laidOut) {
+                restoreLayout(object, laidOut.previous, laidOut.layout);
+                if (laidOut.saved) {
+                    try {
+                        await this.host.saveLayout(paint.target.modelId, laidOut.previous ? encodeLayout(laidOut.previous) : null, laidOut.previous?.meshes.length ?? 0);
+                    } catch (rollback) {
+                        frontendDiagnostics.failure('uv_apply_rollback_failed', rollback);
+                        undone = false;
+                    }
+                }
+            }
+            paint.unlock();
+            const reason = error instanceof Error ? error.message : 'The new layout could not be used.';
+            this.status = undone
+                ? `${reason} Nothing was changed: the model and the painting keep their layout.`
+                : `${reason} The model's saved layout could not be put back: open the project again before painting this set.`;
         } finally {
             this.busy = null;
             this.emit();

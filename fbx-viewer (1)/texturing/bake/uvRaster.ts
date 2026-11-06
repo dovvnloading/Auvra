@@ -138,16 +138,28 @@ export class UvRaster {
      * `fragment` (which declares its own uniforms and samplers and writes outColor). With edges, a texel
      * can be drawn more than once (by its triangle and by the lines along its and its neighbours' edges):
      * replacing or keeping the largest value is safe, but adding or laying over would count it twice.
+     * With `scissor` (texels, from the bottom left), only that rectangle is cleared and drawn.
      */
     draw(target: GpuImage | THREE.WebGLRenderTarget, tile: number, fragment: string, options: {
         uniforms?: Record<string, unknown>;
         blend?: 'none' | 'max' | 'add' | 'alpha';
         edges?: boolean;
         clear?: [number, number, number, number] | null;
+        scissor?: { x0: number; y0: number; x1: number; y1: number };
     } = {}): void {
         const meshes = this.tiles.get(tile);
         const renderTarget = (target as GpuImage).target ?? target as THREE.WebGLRenderTarget;
-        if (options.clear) this.gpu.clear(renderTarget, options.clear);
+        const area = options.scissor;
+        const limit = () => {
+            if (!area) return;
+            renderTarget.scissor.set(area.x0, area.y0, area.x1 - area.x0, area.y1 - area.y0);
+            renderTarget.scissorTest = true;
+        };
+        if (options.clear) {
+            limit();
+            this.gpu.clear(renderTarget, options.clear);
+            renderTarget.scissorTest = false;
+        }
         if (!meshes) return;
         const material = this.material(fragment, options.blend ?? 'none');
         const kept = material.uniforms;
@@ -160,8 +172,9 @@ export class UvRaster {
         material.uniformsNeedUpdate = true;
         const renderer = this.gpu.renderer;
         const previous = renderer.getRenderTarget();
-        renderer.setRenderTarget(renderTarget);
         renderTarget.viewport.set(0, 0, renderTarget.width, renderTarget.height);
+        limit();
+        renderer.setRenderTarget(renderTarget);
         meshes.triangles.material = material;
         meshes.edges.material = material;
         this.scene.add(meshes.triangles);
@@ -169,6 +182,7 @@ export class UvRaster {
         renderer.render(this.scene, this.camera);
         this.scene.remove(meshes.triangles);
         this.scene.remove(meshes.edges);
+        renderTarget.scissorTest = false;
         renderer.setRenderTarget(previous);
     }
 

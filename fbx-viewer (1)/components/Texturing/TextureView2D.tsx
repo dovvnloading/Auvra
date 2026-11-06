@@ -187,8 +187,8 @@ export const TextureView2D: React.FC<{ session: TextureGraphSession; nodeId: str
 
     return (
         <div className="flex min-h-0 flex-1 flex-col">
-            <div className="flex items-center gap-1 border-b border-zinc-800 px-2 py-1">
-                <span className="min-w-0 flex-1 truncate text-2xs font-semibold text-zinc-300">{label}</span>
+            <div className="flex items-center gap-1 border-b border-line px-2 py-1">
+                <span className="min-w-0 flex-1 truncate text-2xs font-semibold text-ink-2">{label}</span>
                 <Segmented value={channel} options={CHANNELS} onChange={setChannel} label="Channel shown" />
                 <IconButton label={tile ? 'Show once' : 'Show repeated, to check it tiles'} active={tile} onClick={() => setTile((value) => !value)}><TilesIcon size={13} /></IconButton>
                 <IconButton label="Fit" onClick={() => setView({ panX: 0, panY: 0, zoom: 0 })}><FrameIcon size={13} /></IconButton>
@@ -210,12 +210,12 @@ export const TextureView2D: React.FC<{ session: TextureGraphSession; nodeId: str
                 onPointerLeave={() => { wanted.current = null; setProbe(null); }}
             >
                 <canvas ref={canvas} className="absolute inset-0 h-full w-full" />
-                {!image && <div className="absolute inset-0 flex items-center justify-center text-2xs text-zinc-500">{nodeId ? (state?.error ?? 'Drawing…') : 'Double-click a node to look at it here.'}</div>}
+                {!image && <div className="absolute inset-0 flex items-center justify-center text-2xs text-ink-3">{nodeId ? (state?.error ?? 'Drawing…') : 'Double-click a node to look at it here.'}</div>}
             </div>
-            <div className="flex flex-wrap items-center gap-x-3 border-t border-zinc-800 px-2 py-1 text-2xs text-zinc-500">
+            <div className="flex flex-wrap items-center gap-x-3 border-t border-line px-2 py-1 text-2xs text-ink-3">
                 {image ? <span className="shrink-0">{image.width} × {image.height} · {image.kind === 'color' ? 'colour' : 'grey'} · {image.precision === 8 ? '8-bit' : image.precision === 16 ? 'half float' : 'full float'}</span> : <span>—</span>}
                 {state && <span className="shrink-0">{state.milliseconds < 1 ? '<1' : Math.round(state.milliseconds)} ms</span>}
-                {probeText && <span className="ml-auto whitespace-nowrap font-mono text-zinc-400" title="The pixel under the pointer, counted from the top left, and its values">{probeText}</span>}
+                {probeText && <span className="ml-auto whitespace-nowrap font-mono text-ink-2" title="The pixel under the pointer, counted from the top left, and its values">{probeText}</span>}
             </div>
         </div>
     );

@@ -2,16 +2,12 @@ import React, { useSyncExternalStore } from 'react';
 import { CheckIcon, CrossIcon, GridIcon, LockIcon, MinusIcon, PackageIcon, PlusIcon, RotateIcon, ScissorsIcon, UnlockIcon, WandIcon } from '../../UI/Icons';
 import { Button, Segmented, Spinner } from '../../UI/kit';
 import type { UvSession, UvStats } from './uvSession';
+import { SliderRow } from './PaintFields';
 
 /** Unwrapping, seams, packing and texel density of a texture set, with figures for the layout. */
 
-const Row: React.FC<{ label: string; value: number; min: number; max: number; step?: number; suffix?: string; onChange: (value: number) => void }> = ({ label, value, min, max, step = 1, suffix = '', onChange }) => (
-    <label className="flex items-center gap-2 text-2xs text-zinc-400">
-        <span className="w-28 shrink-0">{label}</span>
-        <input type="range" min={min} max={max} step={step} value={value} onChange={(event) => onChange(Number(event.target.value))} className="h-1 min-w-0 flex-1 accent-sky-500" aria-label={label} />
-        <span className="w-12 text-right tabular-nums text-zinc-300">{Number(value.toFixed(2))}{suffix}</span>
-    </label>
-);
+/** A setting dragged or typed (typed values keep to the slider's ends). */
+const Row: React.FC<{ label: string; value: number; min: number; max: number; step?: number; suffix?: string; onChange: (value: number) => void }> = ({ step = 1, ...props }) => <SliderRow labelWidth="w-28" step={step} {...props} />;
 
 const Figures: React.FC<{ title: string; stats: UvStats; size: number }> = ({ title, stats, size }) => (
     <div className="space-y-1 rounded border border-zinc-800 bg-zinc-900/60 p-2 text-2xs">
