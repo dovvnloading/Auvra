@@ -3,6 +3,7 @@ import type { MeshMapName } from '../graph/nodes/io';
 import type { BakeSettings, PositionSpace } from '../bake/meshBaker';
 import type { ChannelTextureIds } from '../materialOutput';
 import type { PickMode } from './selection';
+import { readPaths, type SurfacePath } from './paths';
 
 /**
  * PAINTED TEXTURE SETS: THE DOCUMENT
@@ -179,6 +180,8 @@ export interface PaintDocument {
      * which only fit the layout it came with.
      */
     before?: Partial<Record<PaintChannel, TilePictures>>;
+    /** Paths drawn on the surface, kept to be changed and laid on again. */
+    paths?: SurfacePath[];
 }
 
 export const BLEND_FOR: Record<PaintChannel, ChannelBlend['mode']> = {
@@ -383,5 +386,6 @@ export const readPaintDocument = (value: unknown): PaintDocument | null => {
         bake: raw.bake && typeof raw.bake === 'object' ? raw.bake as PaintDocument['bake'] : null,
         ...(raw.applied ? { applied: raw.applied } : {}),
         ...(raw.before && typeof raw.before === 'object' ? { before: raw.before } : {}),
+        ...(Array.isArray(raw.paths) ? { paths: readPaths(raw.paths) } : {}),
     };
 };

@@ -177,6 +177,8 @@ export interface Dab {
     /** Smudge and clone: where the dab lies in its tile's texels, and the tile. */
     texel?: [number, number];
     tile?: number;
+    /** Surface dabs laid along a path: the way across the dab (its shape's x), instead of the screen's. */
+    across?: THREE.Vector3;
 }
 
 /** Where the pointer meets the surface, for surface dabs (and the texel under smudge and clone dabs). */
@@ -658,6 +660,8 @@ export class Stroke {
     private cloneShift: [number, number] | null = null;
     private travelled = 0;
     private dabIndex = 0;
+    /** An alpha for the dabs being stamped (a letter, a stitch), instead of the brush's. */
+    private stampAlpha: THREE.Texture | null | undefined = undefined;
     private readonly seed = Math.floor(Math.random() * 1e9);
 
     constructor(
@@ -758,6 +762,16 @@ export class Stroke {
         if (dabs.length) this.draw(dabs);
     }
 
+    /** Lays dabs placed by the caller (along a path), with their own alpha if one is given. */
+    stamp(dabs: Dab[], alpha?: THREE.Texture | null): void {
+        this.stampAlpha = alpha;
+        try {
+            this.draw(dabs);
+        } finally {
+            this.stampAlpha = undefined;
+        }
+    }
+
     /** Fills a whole UV island with the brush. */
     fillIsland(island: number): void {
         const triangles: number[] = [];
@@ -786,6 +800,7 @@ export class Stroke {
             }
         }
         const copies = copiesOf(this.brush, stack.part.bounds);
+        const alpha = this.stampAlpha !== undefined ? this.stampAlpha : this.brush.shape === 'picture' ? this.alpha : null;
         const copyMatrices = Array.from({ length: MAX_COPIES }, (_, i) => (copies[i]?.matrix ? new THREE.Matrix4().fromArray(copies[i].matrix!) : new THREE.Matrix4()));
         const batches: Dab[][] = [];
         for (let i = 0; i < dabs.length; i += MAX_DABS) batches.push(dabs.slice(i, i + MAX_DABS));
@@ -811,7 +826,7 @@ export class Stroke {
                     d1[i].set(dab.point.x, dab.point.y, dab.point.z, dab.worldRadius ?? 0.01);
                     d2[i].set(dab.flow, dab.normal!.x, dab.normal!.y, dab.normal!.z);
                     // The disc's "across" direction: the screen's right, turned by the dab's angle, laid on the surface.
-                    const right = new THREE.Vector3().copy(view.cameraRight ?? new THREE.Vector3(1, 0, 0)).multiplyScalar(Math.cos(dab.angle))
+                    const right = dab.across ? dab.across.clone() : new THREE.Vector3().copy(view.cameraRight ?? new THREE.Vector3(1, 0, 0)).multiplyScalar(Math.cos(dab.angle))
                         .addScaledVector(view.cameraUp ?? new THREE.Vector3(0, 1, 0), Math.sin(dab.angle));
                     d3[i].set(right.x, right.y, right.z, dab.radius / Math.max(1e-6, dab.worldRadius ?? 1));
                 }
@@ -835,10 +850,10 @@ export class Stroke {
                             uDabs3: d3,
                             uCount: batch.length,
                             uProjection: this.brush.projection === 'screen' ? 0 : 1,
-                            uShape: this.brush.shape === 'square' ? 1 : this.brush.shape === 'picture' && this.alpha ? 2 : 0,
+                            uShape: alpha ? 2 : this.brush.shape === 'square' ? 1 : 0,
                             uHardness: this.brush.hardness,
-                            uAlpha: this.alpha ?? gpu.constant('white'),
-                            uAlphaSrgb: this.alpha?.colorSpace === THREE.SRGBColorSpace ? 1 : 0,
+                            uAlpha: alpha ?? gpu.constant('white'),
+                            uAlphaSrgb: alpha?.colorSpace === THREE.SRGBColorSpace ? 1 : 0,
                             uFacing: Math.cos((Math.min(179, this.brush.facingLimit) * Math.PI) / 180),
                             uCopies: copyMatrices,
                             uCopyCount: copies.length,
