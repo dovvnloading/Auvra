@@ -185,7 +185,16 @@ export const dragGradient = (key: string, to: Vec2): { angle: number } => {
 
 // Tile sampler: on a grid of columns by rows, a copy round its cell's middle reaches size * stretch / 2
 // cells each way, turned by its turn; every other row shifts by the row offset.
-export interface TileSettings { columns: number; rows: number; size: number; stretch: Vec2; rotation: number; offset: number }
+export interface TileSettings {
+    columns: number;
+    rows: number;
+    size: number;
+    stretch: Vec2;
+    rotation: number;
+    offset: number;
+    /** A cell's random shift (in cells), as the node gives it, so the handles sit on the copies where they are drawn. */
+    jitterAt?: (cell: Vec2) => Vec2;
+}
 
 /** The cell the handles sit on (near the middle) and the odd row the row offset shifts. */
 const tileCells = ({ columns, rows }: TileSettings) => {
@@ -194,17 +203,21 @@ const tileCells = ({ columns, rows }: TileSettings) => {
     return { cx, cy, odd: cy % 2 === 1 ? cy : cy + 1 };
 };
 
+const jitter = (settings: TileSettings, cell: Vec2): Vec2 => settings.jitterAt?.(cell) ?? [0, 0];
+
 export const tileFrame = (settings: TileSettings): HandleFrame => {
     const grid: Vec2 = [Math.max(1, settings.columns), Math.max(1, settings.rows)];
     const { cx, cy, odd } = tileCells(settings);
     const toUv = (point: Vec2): Vec2 => [point[0] / grid[0], point[1] / grid[1]];
-    const middle: Vec2 = [cx + 0.5 + (cy % 2 === 1 ? settings.offset : 0), cy + 0.5];
+    const shift = jitter(settings, [cx, cy]);
+    const oddShift = jitter(settings, [cx, odd]);
+    const middle: Vec2 = [cx + 0.5 + (cy % 2 === 1 ? settings.offset : 0) + shift[0], cy + 0.5 + shift[1]];
     const reach: Vec2 = [settings.size * settings.stretch[0] * 0.5, settings.size * settings.stretch[1] * 0.5];
     const corner = (sx: number, sy: number) => toUv(add(middle, turn([sx * reach[0], sy * reach[1]], settings.rotation)));
     return {
         outline: [corner(-1, -1), corner(1, -1), corner(1, 1), corner(-1, 1)],
         points: [
-            { key: 'offset', at: toUv([cx + 0.5 + settings.offset, odd + 0.5]), look: 'move' },
+            { key: 'offset', at: toUv([cx + 0.5 + settings.offset + oddShift[0], odd + 0.5 + oddShift[1]]), look: 'move' },
             { key: 'rotation', at: toUv(add(middle, turn([0, reach[1] + 0.3], settings.rotation))), look: 'turn' },
             { key: 'size', at: corner(1, 1), look: 'size' },
         ],
@@ -215,8 +228,10 @@ export const dragTile = (settings: TileSettings, key: string, to: Vec2): Partial
     const grid: Vec2 = [Math.max(1, settings.columns), Math.max(1, settings.rows)];
     const { cx, cy } = tileCells(settings);
     const at: Vec2 = [to[0] * grid[0], to[1] * grid[1]];
-    if (key === 'offset') return { offset: Math.round(clamp(at[0] - (cx + 0.5), 0, 1) * 1000) / 1000 };
-    const middle: Vec2 = [cx + 0.5 + (cy % 2 === 1 ? settings.offset : 0), cy + 0.5];
+    const { odd } = tileCells(settings);
+    if (key === 'offset') return { offset: Math.round(clamp(at[0] - (cx + 0.5) - jitter(settings, [cx, odd])[0], 0, 1) * 1000) / 1000 };
+    const shift = jitter(settings, [cx, cy]);
+    const middle: Vec2 = [cx + 0.5 + (cy % 2 === 1 ? settings.offset : 0) + shift[0], cy + 0.5 + shift[1]];
     const offset: Vec2 = [at[0] - middle[0], at[1] - middle[1]];
     if (key === 'rotation') return { rotation: wrapAngle(angleOf(offset) - 90) };
     const local = turn(offset, -settings.rotation);

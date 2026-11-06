@@ -197,7 +197,9 @@ export const readTextureGraph = (value: unknown): { graph: TextureGraph; problem
         const result: TexGraphNode = { id: node.id, type: node.type, x: finite(node.x, 0), y: finite(node.y, 0), params };
         const size = readSize(node.size);
         if (size) result.size = size;
-        if (node.precision === 8 || node.precision === 16 || node.precision === 32) result.precision = node.precision;
+        if (node.precision === 8 || node.precision === 16 || node.precision === 32 || node.precision === 'graph') result.precision = node.precision;
+        if (node.tiling === 'input' || node.tiling === 'graph' || node.tiling === 'none' || node.tiling === 'horizontal' || node.tiling === 'vertical' || node.tiling === 'both') result.tiling = node.tiling;
+        if (node.seedFrom === 'input' || node.seedFrom === 'fixed') result.seedFrom = node.seedFrom;
         if (typeof node.name === 'string' && node.name.trim()) result.name = node.name.trim().slice(0, 64);
         if (typeof node.color === 'string' && /^#[0-9a-f]{6}$/i.test(node.color)) result.color = node.color.toLowerCase();
         if (node.collapsed === true) result.collapsed = true;
@@ -252,6 +254,12 @@ export const readTextureGraph = (value: unknown): { graph: TextureGraph; problem
         parameters,
     };
     if (comments.length) graph.comments = comments;
+    if (raw.tiling === 'none' || raw.tiling === 'horizontal' || raw.tiling === 'vertical') graph.tiling = raw.tiling;
+    if (raw.precision === 8 || raw.precision === 16 || raw.precision === 32) graph.precision = raw.precision;
+    const metres = raw.physicalSize as { w?: unknown; h?: unknown } | undefined;
+    if (metres && typeof metres.w === 'number' && typeof metres.h === 'number' && metres.w > 0 && metres.h > 0 && (metres.w !== 1 || metres.h !== 1)) {
+        graph.physicalSize = { w: Math.min(10000, metres.w), h: Math.min(10000, metres.h) };
+    }
     return { graph, problems };
 };
 

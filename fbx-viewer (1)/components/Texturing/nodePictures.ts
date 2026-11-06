@@ -57,11 +57,18 @@ const draw = async (gpu: TextureGpu, evaluator: TextureGraphEvaluator, request: 
     const node = { ...createNode(request.type, 0, 0, request.params), id: 'picture' };
     const nodes = [node];
     const links: TexGraphLink[] = [];
-    const main = mainInput(definition);
+    const main = mainInput(definition) ?? (definition.type === 'makeMaterial' ? 'baseColor' : null);
     if (main) {
         const sample = sampleFor(definition);
         nodes.unshift({ ...createNode(sample, -200, 0), id: 'sample' });
-        links.push({ from: 'sample', fromOutput: 'out', to: 'picture', toInput: main });
+        if (definition.inputs.find((port) => port.key === main)?.kind === 'material') {
+            // A material node is shown changing a sample material: the noise as its colour and height.
+            nodes.unshift({ ...createNode('makeMaterial', -100, 0), id: 'sampleMaterial' });
+            links.push({ from: 'sample', fromOutput: 'out', to: 'sampleMaterial', toInput: 'baseColor' }, { from: 'sample', fromOutput: 'out', to: 'sampleMaterial', toInput: 'height' });
+            links.push({ from: 'sampleMaterial', fromOutput: 'out', to: 'picture', toInput: main });
+        } else {
+            links.push({ from: 'sample', fromOutput: 'out', to: 'picture', toInput: main });
+        }
     }
     const graph: TextureGraph = { version: 1, size: { w: 6, h: 6 }, seed: 11, nodes, links, parameters: [] };
     try {
