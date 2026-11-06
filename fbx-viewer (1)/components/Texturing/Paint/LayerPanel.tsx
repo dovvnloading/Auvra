@@ -2,6 +2,7 @@ import React, { useMemo, useRef, useState } from 'react';
 import { ArrowDownIcon, ArrowUpIcon, BrushIcon, BucketIcon, CopyIcon, EyeIcon, EyeOffIcon, FilterIcon, FolderIcon, FolderMoveIcon, GraphIcon, LayersIcon, PackagePlusIcon, PlusIcon, TrashIcon, WandIcon } from '../../UI/Icons';
 import { BLEND_MODES, BLEND_MODE_LABELS, type BlendMode } from '../../../texturing/gpu/glslLibrary';
 import { PICK_LABELS, PICK_MODES, countTriangles, type PickMode } from '../../../texturing/paint/selection';
+import { PROJECTION_LABELS, type ProjectionAxis, type ProjectionMode } from '../../../texturing/paint/projections';
 import type { PaintTool } from './PaintViewport';
 import { OUTPUT_NODE_TYPE } from '../../../texturing/graph/nodes/io';
 import { OUTPUT_CHANNEL_LABELS, type GraphParameter, type OutputChannel, type TexParamDef } from '../../../texturing/graph/types';
@@ -85,11 +86,24 @@ const ValueField: React.FC<{ channel: PaintChannel; value: [number, number, numb
 /** How a fill's picture is laid on: along the UVs or from three sides, its repeats, turn and side blending. */
 const ProjectionFields: React.FC<{ value: FillProjection; onChange: (value: FillProjection) => void }> = ({ value, onChange }) => (
     <>
-        <Select value={value.projection} options={[{ value: 'triplanar', label: 'From three sides (no seams)' }, { value: 'uv', label: 'Along the UVs' }]}
-            onChange={(projection) => onChange({ ...value, projection: projection as FillProjection['projection'], scale: projection === 'triplanar' ? 4 : 1 })} className="w-full" />
-        <Slider label={value.projection === 'triplanar' ? 'Repeats' : 'Scale'} value={value.scale} min={0.1} max={40} step={0.1} limits={[0.01, 400]} onChange={(scale) => onChange({ ...value, scale })} />
+        <Select value={value.projection} options={(Object.keys(PROJECTION_LABELS) as ProjectionMode[]).map((mode) => ({ value: mode, label: PROJECTION_LABELS[mode] }))}
+            onChange={(projection) => onChange({ ...value, projection: projection as ProjectionMode, scale: projection === 'uv' ? 1 : 4 })} className="w-full" />
+        {(value.projection === 'planar' || value.projection === 'spherical' || value.projection === 'cylindrical') && (
+            <div className="flex items-center gap-2 text-2xs text-zinc-400">
+                <span className="w-20 shrink-0">{value.projection === 'planar' ? 'Laid along' : 'Round the axis'}</span>
+                <Segmented value={value.axis ?? 'y'} options={[{ value: 'x', label: 'X' }, { value: 'y', label: 'Y' }, { value: 'z', label: 'Z' }]} onChange={(axis) => onChange({ ...value, axis: axis as ProjectionAxis })} label="Projection axis" />
+            </div>
+        )}
+        <Slider label={value.projection === 'uv' ? 'Scale' : 'Repeats'} value={value.scale} min={0.1} max={40} step={0.1} limits={[0.01, 400]} onChange={(scale) => onChange({ ...value, scale })} />
         <Slider label="Turn" value={value.rotation} min={-180} max={180} step={1} onChange={(rotation) => onChange({ ...value, rotation })} />
         {value.projection === 'triplanar' && <Slider label="Sharpness" value={value.sharpness} min={1} max={16} step={0.5} limits={[1, 64]} onChange={(sharpness) => onChange({ ...value, sharpness })} />}
+        {value.projection !== 'uv' && (
+            <div className="flex items-center gap-2 text-2xs text-zinc-400">
+                <span className="w-20 shrink-0">Mirrored</span>
+                <Segmented value={value.mirror ?? 'none'} options={[{ value: 'none', label: 'No' }, { value: 'x', label: 'X' }, { value: 'y', label: 'Y' }, { value: 'z', label: 'Z' }]}
+                    onChange={(mirror) => onChange({ ...value, mirror: mirror === 'none' ? undefined : mirror as ProjectionAxis })} label="Mirror the fill across" />
+            </div>
+        )}
     </>
 );
 
@@ -477,7 +491,7 @@ const LayerSettings: React.FC<{
                         <Select value={source.output} options={graphOutputs(resolve, source.graphId)} onChange={(output) => set({ ...source, output: String(output) })} className="w-full" />
                         {/* A material's channels move together: its settings and how it is laid on change every channel drawn from the same graph. */}
                         <GraphValues resolve={resolve} graphId={source.graphId} values={source.values} textures={textures} onChange={(values) => setSameGraph(source.graphId, { values }, 'Change graph settings')} />
-                        <ProjectionFields value={{ projection: source.projection ?? 'uv', scale: source.scale ?? 1, rotation: source.rotation ?? 0, sharpness: source.sharpness ?? 4 }}
+                        <ProjectionFields value={{ projection: source.projection ?? 'uv', scale: source.scale ?? 1, rotation: source.rotation ?? 0, sharpness: source.sharpness ?? 4, axis: source.axis, mirror: source.mirror }}
                             onChange={(projection) => setSameGraph(source.graphId, projection, 'Change how the graph is laid on')} />
                     </>
                 )}
@@ -631,7 +645,7 @@ const LayerSettings: React.FC<{
                         <div className="space-y-1.5 rounded border border-zinc-800 bg-zinc-900/40 p-1.5">
                             <div className="truncate text-xs text-zinc-200">Material: <span className="font-semibold">{resolve(materialSource.graphId)?.name ?? 'A texture graph'}</span></div>
                             <GraphValues resolve={resolve} graphId={materialSource.graphId} values={materialSource.values} textures={textures} onChange={(values) => setSameGraph(materialSource.graphId, { values }, 'Change graph settings')} />
-                            <ProjectionFields value={{ projection: materialSource.projection ?? 'uv', scale: materialSource.scale ?? 1, rotation: materialSource.rotation ?? 0, sharpness: materialSource.sharpness ?? 4 }}
+                            <ProjectionFields value={{ projection: materialSource.projection ?? 'uv', scale: materialSource.scale ?? 1, rotation: materialSource.rotation ?? 0, sharpness: materialSource.sharpness ?? 4, axis: materialSource.axis, mirror: materialSource.mirror }}
                                 onChange={(projection) => setSameGraph(materialSource.graphId, projection, 'Change how the graph is laid on')} />
                         </div>
                     )}

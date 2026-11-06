@@ -67,6 +67,7 @@ const EXEMPT = new Map(Object.entries({
   'texturing/paint/selection.ts': 'pure-utility',
   'texturing/paint/brushLibrary.ts': 'data-model',
   'texturing/paint/paths.ts': 'pure-utility',
+  'texturing/paint/projections.ts': 'pure-utility',
   'components/Texturing/Paint/openMaterial.ts': 'pure-utility',
   'texturing/uv/uvTopology.ts': 'pure-utility',
   'texturing/uv/lscm.ts': 'pure-utility',

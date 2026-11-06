@@ -277,7 +277,8 @@ export const smartMaterialGraph = (layer: PaintLayer, resolve: GraphResolver): T
             return below ? grey(below, CHANNEL_IS_COLOR[source.channel] && !CHANNEL_IS_COLOR[channel]) : null;
         }
         if (source.kind === 'current') return null;
-        const projected = (pattern: Ref, projection: 'uv' | 'triplanar' | undefined, scale: number, rotation: number, sharpness: number): Ref => (projection === 'triplanar'
+        // Graphs cast from three sides; flat, ball and tube projections are cast that way in the copy too.
+        const projected = (pattern: Ref, projection: string | undefined, scale: number, rotation: number, sharpness: number): Ref => (projection && projection !== 'uv'
             ? b.add('triplanar', { scale, sharpness, rotation }, { pattern, position: position(), normal: worldNormal() })
             : scale === 1 && rotation === 0 ? pattern : b.add('transform', { scale: [1 / scale, 1 / scale], rotation, repeat: true }, { in: pattern }));
         if (source.kind === 'texture') return projected(b.add('bitmap', { texture: source.textureId }), source.projection, source.scale, source.rotation, source.sharpness);

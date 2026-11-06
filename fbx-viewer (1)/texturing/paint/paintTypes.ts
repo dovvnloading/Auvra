@@ -3,6 +3,7 @@ import type { MeshMapName } from '../graph/nodes/io';
 import type { BakeSettings, PositionSpace } from '../bake/meshBaker';
 import type { ChannelTextureIds } from '../materialOutput';
 import type { PickMode } from './selection';
+import type { ProjectionAxis, ProjectionMode } from './projections';
 import { readPaths, type SurfacePath } from './paths';
 
 /**
@@ -45,7 +46,16 @@ export interface ChannelBlend {
  * and blended by how the surface faces, so it runs on across UV seams). Scale is repeats across the
  * model's longest side when cast from three sides, repeats per UV square along the UVs.
  */
-export interface FillProjection { projection: 'uv' | 'triplanar'; scale: number; rotation: number; sharpness: number }
+export interface FillProjection {
+    projection: ProjectionMode;
+    scale: number;
+    rotation: number;
+    sharpness: number;
+    /** Flat, ball and tube projections: the axis they are laid along (Y unless given). */
+    axis?: ProjectionAxis;
+    /** Symmetry: both halves of the model across this axis's middle read alike. */
+    mirror?: ProjectionAxis;
+}
 
 export type FillSource =
     | { kind: 'value'; value: [number, number, number] }
@@ -315,7 +325,7 @@ export const readSpace = (value: unknown): PositionSpace | undefined => {
 
 /** Whether any fill of the layers is cast from three sides (its placement follows the set's space). */
 export const castsFromThreeSides = (layers: readonly PaintLayer[]): boolean =>
-    allLayers(layers).some((layer) => Object.values(layer.fill ?? {}).some((source) => (source?.kind === 'texture' || source?.kind === 'graph') && source.projection === 'triplanar'));
+    allLayers(layers).some((layer) => Object.values(layer.fill ?? {}).some((source) => (source?.kind === 'texture' || source?.kind === 'graph') && Boolean(source.projection) && source.projection !== 'uv'));
 
 const unit = (value: unknown, fallback: number): number => Math.min(1, Math.max(0, finite(value, fallback)));
 
