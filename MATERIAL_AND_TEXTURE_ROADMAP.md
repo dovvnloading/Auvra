@@ -596,6 +596,8 @@ File references are relative to `fbx-viewer (1)/`.
   - Unlit and Phong materials say why they can't take an asset.
   - Material Overrides shows every map, and Retexture uses one base-map path.
   - The Time node says what its clock counts, and vertex colours are applied once.
+  - Retexture, the mask tool and the host all use the one base-map path, and Reset Textures takes painted base maps off again.
+  - The mask tool's Update Material works again. It fetched a data URL, which the editor's security policy refuses.
 
 ### Still open
 **Texture graph**
