@@ -337,6 +337,8 @@ export class PaintSession {
     }
 
     get canUndo(): boolean { return this.past.length > 0 && this.usable && !this.lockReason; }
+    /** The step undo would take back now, or null. */
+    get latest(): HistoryEntry | null { return this.past[this.past.length - 1] ?? null; }
     get canRedo(): boolean { return this.future.length > 0 && this.usable && !this.lockReason; }
     get undoLabel(): string | null { return this.past[this.past.length - 1]?.label ?? null; }
     get redoLabel(): string | null { return this.future[this.future.length - 1]?.label ?? null; }

@@ -5,7 +5,7 @@ import type { GpuImage, TextureGpu } from '../../../texturing/gpu/textureGpu';
 import { tileGeometry } from '../../../texturing/mesh/partMesh';
 import type { MeshMapName } from '../../../texturing/graph/nodes/io';
 import type { ExtraBakeMap } from '../../../texturing/bake/meshBaker';
-import { MAX_BRUSH_SIZE, lazyFollow, pictureAspect, renderDepth, stencilPlace, Stroke, type BrushSettings, type Dab, type StrokeTarget } from '../../../texturing/paint/strokes';
+import { MAX_BRUSH_SIZE, lazyFollow, pictureAspect, renderDepth, stencilPlace, Stroke, type BrushSettings, type Dab, type HistoryEntry, type StrokeTarget } from '../../../texturing/paint/strokes';
 import { builtInAlphaTexture } from '../../../texturing/paint/brushLibrary';
 import { layoutAlong, pathLength, sampleAt, samplePath, type SurfacePath, type Vec3 } from '../../../texturing/paint/paths';
 
@@ -664,9 +664,20 @@ export const PaintViewport: React.FC<{
         }
     };
 
+    /** The step each path was last laid on with (by path and how), to take it back when the path is laid on again. */
+    const laidPaths = useRef(new Map<string, HistoryEntry>());
+
     // Laying a path on: dabs along it (the brush, a ribbon, stitches from a texture graph, letters), or
-    // the brush through its outline as seen from here.
+    // the brush through its outline as seen from here. Laid on again straight after, it replaces its copy.
     const paintPath = async (path: SurfacePath, how: 'along' | 'fill') => {
+        const laidKey = `${path.id}:${how}`;
+        const replaces = laidPaths.current.get(laidKey);
+        if (replaces && session.latest === replaces) session.undo();
+        else if (replaces) onMessage('Laid on as a new copy: other changes came after the last one, so it was left as it is.');
+        const keep = (entry: HistoryEntry) => {
+            session.record(entry);
+            laidPaths.current.set(laidKey, entry);
+        };
         if (!session.usable || session.locked) { onMessage(session.locked ?? 'The graphics card was reset: wait until the set has opened again.'); return; }
         if (!target) { onMessage('Pick a paint layer or a painted mask to lay the path on.'); return; }
         if (path.points.length < (how === 'fill' ? 3 : 1)) { onMessage(how === 'fill' ? 'A path needs three points or more to fill inside it.' : 'Click the model to give the path points first.'); return; }
@@ -710,7 +721,7 @@ export const PaintViewport: React.FC<{
                 const fill: BrushSettings = { ...plain, projection: 'screen', shape: 'square', hardness: 1, stencil: { enabled: true, textureId: 'path', scale: 1, rotation: 0, offsetX: 0, offsetY: 0, opacity: 1 } };
                 const stroke = new Stroke(stack, target, 'paint', fill, view, null, stencil);
                 stroke.stamp([{ x: size.width / 2, y: size.height / 2, radius: Math.hypot(size.width, size.height) / 2 + 2, angle: 0, flow: 1 }], null);
-                session.record(stroke.finish(`Fill inside ${path.name}`));
+                keep(stroke.finish(`Fill inside ${path.name}`));
                 return;
             }
             const style = path.style;
@@ -760,7 +771,7 @@ export const PaintViewport: React.FC<{
                 const dabs = samples.map((sample) => dabOf(sample, 1, style === 'ribbon' || brush.followStroke));
                 for (let i = 0; i < dabs.length; i += 64) stroke.stamp(dabs.slice(i, i + 64), alpha);
             }
-            session.record(stroke.finish(`Paint ${path.name}`));
+            keep(stroke.finish(`Paint ${path.name}`));
         } finally {
             gpu.release(depth);
             for (const texture of disposables) texture.dispose();
