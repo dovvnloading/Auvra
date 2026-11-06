@@ -1,6 +1,6 @@
 import { BLEND_MODES, type BlendMode } from '../gpu/glslLibrary';
 import type { MeshMapName } from '../graph/nodes/io';
-import type { BakeSettings, PositionSpace } from '../bake/meshBaker';
+import type { BakeSettings, ExtraBakeMap, PositionSpace } from '../bake/meshBaker';
 import type { ChannelTextureIds } from '../materialOutput';
 import type { PickMode } from './selection';
 import type { ProjectionAxis, ProjectionMode } from './projections';
@@ -181,7 +181,7 @@ export interface PaintDocument {
      */
     space?: PositionSpace;
     /** The baked maps; `version` (BAKE_VERSION) and `space` are missing on bakes made before they were kept. */
-    bake: { settings: BakeSettings; maps: Partial<Record<MeshMapName, TilePictures>>; at: number; version?: number; space?: PositionSpace } | null;
+    bake: { settings: BakeSettings; maps: Partial<Record<MeshMapName, TilePictures>>; extras?: Partial<Record<ExtraBakeMap, TilePictures>>; at: number; version?: number; space?: PositionSpace } | null;
     /** The pictures the model last got from this set. */
     applied?: { textures: ChannelTextureIds; at: number };
     /**

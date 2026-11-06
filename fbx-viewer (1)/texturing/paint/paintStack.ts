@@ -6,7 +6,7 @@ import { TextureGraphEvaluator, type ExternalImage } from '../graph/evaluator';
 import { MESH_MAPS, OUTPUT_NODE_TYPE, meshMapKey, type MeshMapName } from '../graph/nodes/io';
 import { jumpFlood } from '../graph/nodes/distance';
 import type { GraphResolver } from '../graph/registry';
-import { BAKE_VERSION, padImage, releaseTileBake, spaceOfBox, type PositionSpace, type TileBake } from '../bake/meshBaker';
+import { BAKE_VERSION, padImage, releaseTileBake, spaceOfBox, type ExtraBakeMap, type PositionSpace, type TileBake } from '../bake/meshBaker';
 import { UvRaster } from '../bake/uvRaster';
 import type { PartMesh } from '../mesh/partMesh';
 import { SurfacePicker } from '../mesh/picker';
@@ -831,6 +831,36 @@ export class PaintStack {
                     }
                 }
             }
+            // Cavity, bent normals and what was carried over from a high-poly model, kept as baked.
+            for (const [name, pictures] of Object.entries(this.document.bake.extras ?? {})) {
+                for (const [tileName, picture] of Object.entries(pictures ?? {})) {
+                    const entry = bake.get(Number(tileName));
+                    if (!entry || !picture?.assetId) continue;
+                    try {
+                        const blob = await this.host.fetchPicture(picture.assetId);
+                        const gray = name === 'cavity' || name === 'opacity';
+                        const image = this.gpu.image(this.size, this.size, gray ? 'gray' : 'color', name === 'color' || name === 'material' ? 8 : 16);
+                        if (await pngBitDepth(blob) === 16) {
+                            const fine = await readPng16Half(blob);
+                            const texture = halfFloatTexture(fine, fine.width === this.size ? THREE.NearestFilter : THREE.LinearFilter);
+                            this.gpu.passNow(image, { fragment: fine.channels === 1 ? GREY_TO_COLOUR : 'void main() { outColor = texture(source, vUv); }', inputs: { source: texture } });
+                            texture.dispose();
+                        } else {
+                            const bitmap = await readPicture(blob);
+                            const texture = new THREE.Texture(bitmap);
+                            texture.flipY = false;
+                            texture.colorSpace = THREE.NoColorSpace;
+                            texture.needsUpdate = true;
+                            this.gpu.passNow(image, { fragment: 'void main() { outColor = texture(source, vUv); }', inputs: { source: texture } });
+                            texture.dispose();
+                            bitmap.close();
+                        }
+                        (entry.extras ??= {})[name as ExtraBakeMap] = image;
+                    } catch {
+                        // Re-baking brings a lost map back.
+                    }
+                }
+            }
             this.bake = bake;
         }
     }
@@ -1043,13 +1073,38 @@ export class PaintStack {
                 maps[name as MeshMapName] = { ...(maps[name as MeshMapName] ?? {}), [String(tile)]: { assetId } };
             }
         }
-        this.document = { ...this.document, ...(adopt ? { space } : {}), bake: { settings, maps, at: Date.now(), version: BAKE_VERSION, space } };
+        const extras: NonNullable<NonNullable<PaintDocument['bake']>['extras']> = {};
+        for (const [tile, result] of this.bake) {
+            for (const [name, image] of Object.entries(result.extras ?? {})) {
+                if (!image) continue;
+                this.assertUsable();
+                const gray = image.kind === 'gray';
+                let blob: Blob;
+                if (image.precision !== 8) {
+                    const samples = this.gpu.readUint16(image, image.width, image.height, gray ? 'gray' : 'color', false);
+                    this.assertUsable();
+                    blob = await encodePng16(samples, image.width, image.height, gray ? 1 : 4);
+                } else {
+                    const pixels = this.gpu.readRgba8(image, image.width, image.height, gray ? 'gray' : 'raw', false);
+                    this.assertUsable();
+                    blob = await encodePng(pixels, image.width, image.height);
+                }
+                const assetId = await this.host.storePicture(blob);
+                extras[name as ExtraBakeMap] = { ...(extras[name as ExtraBakeMap] ?? {}), [String(tile)]: { assetId } };
+            }
+        }
+        this.document = { ...this.document, ...(adopt ? { space } : {}), bake: { settings, maps, ...(Object.keys(extras).length ? { extras } : {}), at: Date.now(), version: BAKE_VERSION, space } };
         return this.document;
     }
 
     /** The mesh maps of a tile, for graphs and the 2D view. */
     meshMaps(tile: number): Partial<Record<MeshMapName, GpuImage>> {
         return this.bake?.get(tile)?.maps ?? {};
+    }
+
+    /** Cavity, bent normals and what was carried over from a high-poly model, for a tile. */
+    bakeExtras(tile: number): Partial<Record<ExtraBakeMap, GpuImage>> {
+        return this.bake?.get(tile)?.extras ?? {};
     }
 
     // -----------------------------------------------------------------------
