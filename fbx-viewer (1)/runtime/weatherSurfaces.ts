@@ -16,6 +16,10 @@ import { hasOwnCompileHook, setShaderStage, shaderStageNames } from './materials
  * graph and a compressed normal map's rebuild alike: a graph-shaded or compressed-normal material
  * gets wet and snowy, and sways, like any other.
  *
+ * On a physical material the weather lies on its top layer: rain makes a coat glossier, as water on a
+ * varnish does, and snow covers a coat and glass with white rather than turning glass frosted, as snow
+ * settles on top and does not let light through.
+ *
  * Foliage sways in the wind the same way: leaves, grass and the like (found by their materials'
  * names, or set on an object by a Wind Sway component) bend from the base, more toward the top,
  * gusting with the wind, leaves fluttering. A material's sway is part of its patch, so one program
@@ -138,6 +142,9 @@ float weatherOpen() {
 }`;
 
 const FRAGMENT_BODY = /* glsl */ `
+// How wet and how snowed on this point is, for the physical layers set up after this (WEATHER_ON_LAYERS).
+float weatherWetCover = 0.0;
+float weatherSnowCover = 0.0;
 if ( uWeatherWetness + uWeatherSnow > 0.001 ) {
     float weatherFacing = dot( normal, normalize( ( viewMatrix * vec4( 0.0, 1.0, 0.0, 0.0 ) ).xyz ) );
     float weatherSky = weatherOpen();
@@ -153,7 +160,26 @@ if ( uWeatherWetness + uWeatherSnow > 0.001 ) {
     diffuseColor.rgb = mix( diffuseColor.rgb, vec3( 0.86, 0.89, 0.93 ), weatherSnowAmount );
     roughnessFactor = mix( roughnessFactor, 0.75, weatherSnowAmount );
     metalnessFactor = mix( metalnessFactor, 0.0, weatherSnowAmount );
+    weatherWetCover = weatherWet;
+    weatherSnowCover = weatherSnowAmount;
 }`;
+
+/**
+ * The weather on a physical material's coat, once the material is set up (and, for a graph, set up again
+ * from the graph): glossier where wet, gone under snow.
+ */
+const WEATHER_ON_LAYERS = /* glsl */ `
+#ifdef USE_CLEARCOAT
+    material.clearcoatRoughness = mix( material.clearcoatRoughness, min( material.clearcoatRoughness, 0.08 ), weatherWetCover );
+    material.clearcoat *= 1.0 - weatherSnowCover;
+#endif
+`;
+
+/** Snow lets no light through: where it lies, glass shows it, white, instead of a frosted view of what is behind. */
+const snowOnTransmission = (source: string): string => {
+    const expanded = source.replace('#include <transmission_fragment>', THREE.ShaderChunk.transmission_fragment);
+    return expanded.replace(/material\.transmission = ([^;]+);/, 'material.transmission = ( $1 ) * ( 1.0 - weatherSnowCover );');
+};
 
 const PROGRAM_KEY = 'auvra-weather-1';
 const patched = new WeakSet<THREE.Material>();
@@ -193,9 +219,10 @@ const weatherStage = (material: THREE.Material) => ({
         shader.vertexShader = shader.vertexShader
             .replace('#include <common>', `#include <common>${VERTEX_HEAD}`)
             .replace('#include <project_vertex>', `#include <project_vertex>${VERTEX_BODY}`);
-        shader.fragmentShader = shader.fragmentShader
+        shader.fragmentShader = snowOnTransmission(shader.fragmentShader
             .replace('#include <common>', `#include <common>${FRAGMENT_HEAD}`)
-            .replace('#include <lights_physical_fragment>', `${FRAGMENT_BODY}\n#include <lights_physical_fragment>`);
+            .replace('#include <lights_physical_fragment>', `${FRAGMENT_BODY}\n#include <lights_physical_fragment>`)
+            .replace('#include <lights_fragment_begin>', `${WEATHER_ON_LAYERS}\n#include <lights_fragment_begin>`));
     },
     // Programs are shared by key: a material that sways must not share one with one that does not.
     key: () => `${PROGRAM_KEY}${windOf(material) ? '|wind' : ''}`,

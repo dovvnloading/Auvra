@@ -206,6 +206,7 @@ const EXEMPT = new Map(Object.entries({
   'runtime/materials/materialLibrary.ts': 'data-model',
   'runtime/materials/MaterialClock.tsx': 'hot-loop',
   'runtime/materials/shaderStages.ts': 'pure-utility',
+  'runtime/materials/physicalSurface.ts': 'pure-utility',
   'runtime/materials/bounceColour.ts': 'hot-loop',
   'runtime/navGeometry.ts': 'pure-utility',
   'runtime/levelObjectMotion.ts': 'pure-utility',
