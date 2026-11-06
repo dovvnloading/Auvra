@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { FileCode2, FilePlus2 } from 'lucide-react';
+import { FilePlusIcon, ScriptIcon } from '../UI/Icons';
 import type { ComponentInspectorProps } from '../../runtime/components/types';
 import { SCRIPT_LIMITS } from '../../runtime/scripting/protocol';
 import type { PrefabData } from '../../types';
@@ -84,7 +84,7 @@ export const ScriptInspector: React.FC<ComponentInspectorProps> = ({ object, com
                 onClick={() => setEditor({ draft: source })}
                 className="flex w-full items-center justify-center gap-2 rounded border border-gray-700 bg-gray-800 py-1.5 text-xs text-gray-200 transition-colors hover:bg-gray-700"
             >
-                <FileCode2 size={12} /> Edit Script
+                <ScriptIcon size={12} /> Edit Script
             </button>
 
             <div className="space-y-1">
@@ -105,7 +105,7 @@ export const ScriptInspector: React.FC<ComponentInspectorProps> = ({ object, com
                         className="flex h-7 shrink-0 items-center gap-1 rounded border border-gray-700 bg-gray-800 px-2 text-2xs text-gray-200 transition-colors hover:bg-gray-700"
                         title={hasScript ? 'Open this template in the editor; the current script is replaced only when you save' : 'Open this template in the editor'}
                     >
-                        <FilePlus2 size={12} /> New from Template
+                        <FilePlusIcon size={12} /> New from Template
                     </button>
                 </div>
                 <div className="text-2xs leading-snug text-gray-500">

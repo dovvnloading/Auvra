@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Crosshair, Plus, Trash2 } from 'lucide-react';
+import { CrosshairIcon, PlusIcon, TrashIcon } from '../UI/Icons';
 import type { AttachmentData, SocketData, WeaponCarry, WeaponSettings } from '../../types';
 import { DEFAULT_WEAPON } from '../../runtime/weapons';
 import { TransformInputGroup } from '../UI/Properties/TransformInputGroup';
@@ -92,7 +92,7 @@ export const WeaponsPanel: React.FC<WeaponsPanelProps> = ({ weapons, attachments
     return (
         <div className="space-y-2">
             <label className="text-2xs font-bold text-gray-500 flex items-center gap-2">
-                <Crosshair size={12} /> Weapons
+                <CrosshairIcon size={12} /> Weapons
             </label>
             <div className="bg-gray-800/50 rounded p-3 border border-gray-800 space-y-3">
                 {weapons.map((weapon, index) => (
@@ -111,7 +111,7 @@ export const WeaponsPanel: React.FC<WeaponsPanelProps> = ({ weapons, attachments
                                 onClick={() => onChange(weapons.filter(other => other.id !== weapon.id))}
                                 className="p-1 text-gray-500 hover:text-red-400"
                             >
-                                <Trash2 size={12} />
+                                <TrashIcon size={12} />
                             </button>
                         </div>
                         <div className="flex items-center justify-between gap-4">
@@ -248,7 +248,7 @@ export const WeaponsPanel: React.FC<WeaponsPanelProps> = ({ weapons, attachments
                                                         onClick={() => update(weapon.id, { [field]: null })}
                                                         className="text-gray-500 hover:text-red-400"
                                                     >
-                                                        <Trash2 size={11} />
+                                                        <TrashIcon size={11} />
                                                     </button>
                                                 )}
                                             </div>
@@ -322,7 +322,7 @@ export const WeaponsPanel: React.FC<WeaponsPanelProps> = ({ weapons, attachments
                     onClick={addWeapon}
                     className="w-full flex items-center justify-center gap-1.5 py-1.5 text-2xs font-bold text-gray-300 bg-gray-900 hover:bg-gray-800 border border-gray-700 rounded"
                 >
-                    <Plus size={12} /> Add Weapon
+                    <PlusIcon size={12} /> Add Weapon
                 </button>
                 <p className="text-2xs text-gray-500 leading-tight">
                     {weapons.length

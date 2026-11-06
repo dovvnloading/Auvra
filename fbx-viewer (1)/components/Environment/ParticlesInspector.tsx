@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Plus, Sparkles, Trash2 } from 'lucide-react';
+import { PlusIcon, SparklesIcon, TrashIcon } from '../UI/Icons';
 import { useScene } from '../../context/SceneContext';
 import type { ComponentInspectorProps } from '../../runtime/components/types';
 import {
@@ -127,12 +127,12 @@ const GradientEditor: React.FC<{ label: string; value: Gradient; onCommit: (valu
                     <NumberInput label={`${label} stop ${index + 1} position`} value={stop.t} step={0.05} onCommit={(t) => set(index, { t: Math.min(1, Math.max(0, t)) })} />
                     <ColorInput label={`${label} stop ${index + 1} colour`} value={stop.color} onCommit={(color) => set(index, { color })} />
                     <NumberInput label={`${label} stop ${index + 1} alpha`} value={stop.alpha} step={0.05} onCommit={(alpha) => set(index, { alpha: Math.min(1, Math.max(0, alpha)) })} />
-                    <button type="button" aria-label={`Remove ${label} stop ${index + 1}`} disabled={stops.length <= 1} onClick={() => onCommit({ stops: stops.filter((_, i) => i !== index) })} className="text-gray-500 hover:text-red-400 disabled:opacity-30"><Trash2 size={11} /></button>
+                    <button type="button" aria-label={`Remove ${label} stop ${index + 1}`} disabled={stops.length <= 1} onClick={() => onCommit({ stops: stops.filter((_, i) => i !== index) })} className="text-gray-500 hover:text-red-400 disabled:opacity-30"><TrashIcon size={11} /></button>
                 </div>
             ))}
             {stops.length < 8 && (
                 <button type="button" className={BUTTON} onClick={() => onCommit({ stops: [...stops, { t: 1, color: stops[stops.length - 1]?.color ?? '#ffffff', alpha: 1 }].sort((a, b) => a.t - b.t) })}>
-                    <Plus size={10} /> Stop
+                    <PlusIcon size={10} /> Stop
                 </button>
             )}
         </div>
@@ -157,12 +157,12 @@ const CurveEditor: React.FC<{ label: string; value: Curve; onCommit: (value: Cur
                 <div key={index} className="grid grid-cols-[1fr_1fr_20px] items-center gap-1">
                     <NumberInput label={`${label} point ${index + 1} position`} value={t} step={0.05} onCommit={(next) => set(index, [Math.min(1, Math.max(0, next)), v])} />
                     <NumberInput label={`${label} point ${index + 1} value`} value={v} step={0.1} onCommit={(next) => set(index, [t, Math.max(0, next)])} />
-                    <button type="button" aria-label={`Remove ${label} point ${index + 1}`} disabled={points.length <= 1} onClick={() => onCommit({ points: points.filter((_, i) => i !== index) })} className="text-gray-500 hover:text-red-400 disabled:opacity-30"><Trash2 size={11} /></button>
+                    <button type="button" aria-label={`Remove ${label} point ${index + 1}`} disabled={points.length <= 1} onClick={() => onCommit({ points: points.filter((_, i) => i !== index) })} className="text-gray-500 hover:text-red-400 disabled:opacity-30"><TrashIcon size={11} /></button>
                 </div>
             ))}
             {points.length < 8 && (
                 <button type="button" className={BUTTON} onClick={() => onCommit({ points: [...points, [1, points[points.length - 1]?.[1] ?? 1] as [number, number]].sort((a, b) => a[0] - b[0]) })}>
-                    <Plus size={10} /> Point
+                    <PlusIcon size={10} /> Point
                 </button>
             )}
         </div>
@@ -196,7 +196,7 @@ export const ParticlesInspector: React.FC<ComponentInspectorProps> = ({ object, 
                     {PARTICLE_PRESET_IDS.map(id => <option key={id} value={id}>{PARTICLE_PRESET_LABELS[id]}</option>)}
                 </select>
             </Row>
-            <p className="flex items-center gap-1 text-2xs text-gray-500"><Sparkles size={10} /> A preset sets every module below; change any of them from there.</p>
+            <p className="flex items-center gap-1 text-2xs text-gray-500"><SparklesIcon size={10} /> A preset sets every module below; change any of them from there.</p>
 
             <Section title="Emission" open>
                 <Row label="Simulation"><Select label="Simulation" value={effect.simulation} options={PARTICLE_SIMULATION_MODES} labels={{ cpu: 'CPU (every feature)', gpu: 'GPU (up to a million)' }} onChange={(simulation) => update({ simulation })} /></Row>
@@ -213,10 +213,10 @@ export const ParticlesInspector: React.FC<ComponentInspectorProps> = ({ object, 
                     <div key={index} className="grid grid-cols-[1fr_1fr_20px] items-center gap-1">
                         <NumberInput label={`Burst ${index + 1} time`} value={burst.time} onCommit={(time) => update({ bursts: effect.bursts.map((entry, i) => (i === index ? { ...entry, time } : entry)) })} />
                         <NumberInput label={`Burst ${index + 1} count`} value={burst.count} step={1} onCommit={(count) => update({ bursts: effect.bursts.map((entry, i) => (i === index ? { ...entry, count } : entry)) })} />
-                        <button type="button" aria-label={`Remove burst ${index + 1}`} onClick={() => update({ bursts: effect.bursts.filter((_, i) => i !== index) })} className="text-gray-500 hover:text-red-400"><Trash2 size={11} /></button>
+                        <button type="button" aria-label={`Remove burst ${index + 1}`} onClick={() => update({ bursts: effect.bursts.filter((_, i) => i !== index) })} className="text-gray-500 hover:text-red-400"><TrashIcon size={11} /></button>
                     </div>
                 ))}
-                {effect.bursts.length < 8 && <button type="button" className={BUTTON} onClick={() => update({ bursts: [...effect.bursts, { time: 0, count: 20 }] })}><Plus size={10} /> Burst</button>}
+                {effect.bursts.length < 8 && <button type="button" className={BUTTON} onClick={() => update({ bursts: [...effect.bursts, { time: 0, count: 20 }] })}><PlusIcon size={10} /> Burst</button>}
             </Section>
 
             <Section title="Shape">
@@ -280,11 +280,11 @@ export const ParticlesInspector: React.FC<ComponentInspectorProps> = ({ object, 
                         </Row>
                         <Row label="Count"><NumberInput label={`Sub-emitter ${index + 1} count`} value={sub.count} step={1} onCommit={(count) => update({ subEmitters: effect.subEmitters.map((entry, i) => (i === index ? { ...entry, count } : entry)) })} /></Row>
                         <Row label="Inherit motion"><NumberInput label={`Sub-emitter ${index + 1} inherit`} value={sub.inheritVelocity} step={0.1} onCommit={(inheritVelocity) => update({ subEmitters: effect.subEmitters.map((entry, i) => (i === index ? { ...entry, inheritVelocity } : entry)) })} /></Row>
-                        <button type="button" className={BUTTON} onClick={() => update({ subEmitters: effect.subEmitters.filter((_, i) => i !== index) })}><Trash2 size={10} /> Remove</button>
+                        <button type="button" className={BUTTON} onClick={() => update({ subEmitters: effect.subEmitters.filter((_, i) => i !== index) })}><TrashIcon size={10} /> Remove</button>
                     </div>
                 ))}
                 {siblings.length > 0 && effect.subEmitters.length < 4 && (
-                    <button type="button" className={BUTTON} onClick={() => update({ subEmitters: [...effect.subEmitters, { trigger: 'death', target: siblings[0].id, count: 5, inheritVelocity: 0.3 }] })}><Plus size={10} /> Sub-emitter</button>
+                    <button type="button" className={BUTTON} onClick={() => update({ subEmitters: [...effect.subEmitters, { trigger: 'death', target: siblings[0].id, count: 5, inheritVelocity: 0.3 }] })}><PlusIcon size={10} /> Sub-emitter</button>
                 )}
             </Section>
 

@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import { Pause } from 'lucide-react';
+import { PauseIcon } from '../components/UI/Icons';
 import type { InputState } from './input';
 import { uiActionLabelKey, useTranslation } from './localization';
 
@@ -322,7 +322,7 @@ const TouchOverlay: React.FC<{ input: InputState; weapons: boolean }> = ({ input
             ))}
             {input.hasAction(TOUCH_PAUSE_ACTION) && (
                 <TouchButton input={input} action={TOUCH_PAUSE_ACTION} label={actionLabel(TOUCH_PAUSE_ACTION)} className="right-4 top-4 h-11 w-11">
-                    <Pause size={18} aria-hidden />
+                    <PauseIcon size={18} aria-hidden />
                 </TouchButton>
             )}
         </div>

@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import * as THREE from 'three';
-import { AlertTriangle, ChevronDown, ChevronRight, Palette, RotateCcw, Save, Search, Trash2, Undo2 } from 'lucide-react';
+import { ChevronDownIcon, ChevronRightIcon, MaterialIcon, ResetIcon, SaveIcon, SearchIcon, TrashIcon, UndoIcon, WarningIcon } from '../UI/Icons';
 import type { LoadedModelData, TextureData } from '../../types';
 import { Select } from '../UI/Select';
 import { materialLibrary } from '../../runtime/materials/materialLibrary';
@@ -76,7 +76,7 @@ const FieldRow: React.FC<{
       aria-label={`Reset ${label.toLowerCase()}`}
       className="p-1 rounded text-gray-500 hover:text-white hover:bg-gray-800 disabled:opacity-0 disabled:pointer-events-none"
     >
-      <RotateCcw size={11} />
+      <ResetIcon size={11} />
     </button>
   </div>
 );
@@ -433,14 +433,14 @@ const MaterialEditorSession: React.FC<MaterialEditorProps> = ({ model, textures,
     <div className={`flex flex-col h-full min-h-0 bg-gray-900 text-gray-200 ${className}`}>
       <div className="p-3 border-b border-gray-800 shrink-0 space-y-2">
         <div className="flex items-center gap-2">
-          <Palette size={14} className="text-blue-400 shrink-0" />
+          <MaterialIcon size={14} className="text-blue-400 shrink-0" />
           <h2 className="text-xs font-bold ">Materials</h2>
           <span className="text-2xs text-gray-500 truncate" title={model.name}>{model.name}</span>
           <span className="ml-auto text-2xs text-gray-600 shrink-0">{materials.length}</span>
         </div>
         {materials.length > 6 && (
           <div className="relative">
-            <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-500" />
+            <SearchIcon size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-500" />
             <input
               type="text"
               placeholder="Filter materials..."
@@ -473,7 +473,7 @@ const MaterialEditorSession: React.FC<MaterialEditorProps> = ({ model, textures,
                 className="w-full flex items-center gap-2 px-2 py-2 text-left disabled:cursor-not-allowed"
                 title={editable ? undefined : reserved ? reservedNameTooltip(material.name) : 'Unnamed materials cannot be overridden.'}
               >
-                {isOpen ? <ChevronDown size={12} className="text-gray-500 shrink-0" /> : <ChevronRight size={12} className="text-gray-500 shrink-0" />}
+                {isOpen ? <ChevronDownIcon size={12} className="text-gray-500 shrink-0" /> : <ChevronRightIcon size={12} className="text-gray-500 shrink-0" />}
                 <span className="w-4 h-4 rounded border border-gray-700 shrink-0" style={{ backgroundColor: swatch }} aria-hidden />
                 <span className={`flex-1 min-w-0 truncate text-xs ${editable ? 'text-gray-200' : reserved ? 'text-gray-500' : 'text-gray-600 italic'}`}>
                   {unnamed ? 'Unnamed material' : material.name}
@@ -491,7 +491,7 @@ const MaterialEditorSession: React.FC<MaterialEditorProps> = ({ model, textures,
         {staleNames.length > 0 && (
           <div className="mt-3 rounded-md border border-amber-900/50 bg-amber-900/10 p-2 space-y-1">
             <div className="text-2xs font-bold text-amber-400 flex items-center gap-1.5">
-              <AlertTriangle size={11} /> Overrides for materials not in this model
+              <WarningIcon size={11} /> Overrides for materials not in this model
             </div>
             {staleNames.map((name) => (
               <div key={name} className="flex items-center gap-2 text-2xs text-gray-400">
@@ -502,7 +502,7 @@ const MaterialEditorSession: React.FC<MaterialEditorProps> = ({ model, textures,
                   aria-label={`Remove overrides for ${name}`}
                   className="p-1 rounded hover:bg-gray-800 hover:text-white"
                 >
-                  <Trash2 size={11} />
+                  <TrashIcon size={11} />
                 </button>
               </div>
             ))}
@@ -513,7 +513,7 @@ const MaterialEditorSession: React.FC<MaterialEditorProps> = ({ model, textures,
       <div className="p-3 border-t border-gray-800 shrink-0 space-y-2">
         {error && (
           <div role="alert" className="text-2xs text-red-400 bg-red-900/20 p-2 rounded border border-red-900/50 flex gap-2">
-            <AlertTriangle size={12} className="shrink-0 mt-0.5" /> <span className="flex-1">{error}</span>
+            <WarningIcon size={12} className="shrink-0 mt-0.5" /> <span className="flex-1">{error}</span>
           </div>
         )}
         <div className="flex gap-2">
@@ -523,7 +523,7 @@ const MaterialEditorSession: React.FC<MaterialEditorProps> = ({ model, textures,
             disabled={!dirty || saving}
             className="flex-1 py-2 rounded-md bg-gray-800 hover:bg-gray-700 text-gray-300 text-xs font-bold flex items-center justify-center gap-1.5 border border-gray-700 disabled:opacity-40 disabled:cursor-not-allowed"
           >
-            <Undo2 size={12} /> Revert
+            <UndoIcon size={12} /> Revert
           </button>
           {onSave ? (
             <button
@@ -532,7 +532,7 @@ const MaterialEditorSession: React.FC<MaterialEditorProps> = ({ model, textures,
               disabled={!dirty || saving}
               className="flex-1 py-2 rounded-md bg-blue-600 hover:bg-blue-500 text-accent-ink text-xs font-bold flex items-center justify-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
             >
-              <Save size={12} /> {saving ? 'Saving…' : 'Save'}
+              <SaveIcon size={12} /> {saving ? 'Saving…' : 'Save'}
             </button>
           ) : (
             <span className="flex-1 text-2xs text-gray-600 self-center text-center">Preview only — not saved</span>

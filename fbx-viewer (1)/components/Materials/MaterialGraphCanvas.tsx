@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Eye, EyeOff, Maximize, MessageSquarePlus, Plus, Redo2, Trash2, Undo2 } from 'lucide-react';
+import { CommentAddIcon, EyeIcon, EyeOffIcon, FrameIcon, PlusIcon, RedoIcon, TrashIcon, UndoIcon } from '../UI/Icons';
 import {
     OUTPUT_NODE_TYPE,
     REROUTE_NODE_TYPE,
@@ -547,7 +547,7 @@ export const MaterialGraphCanvas: React.FC<MaterialGraphCanvasProps> = (props) =
                         {node.parameter && <span className="ml-1 font-normal text-amber-300" title="Material parameter">· {node.parameter}</span>}
                     </span>
                     {!isOutput && (
-                        <button aria-label={`Remove ${definition.label}`} onMouseDown={(event) => event.stopPropagation()} onClick={() => { onChange(removeNodes(graph, [node.id]), true); onSelect([], null); }} className="text-gray-500 hover:text-red-400"><Trash2 size={11} /></button>
+                        <button aria-label={`Remove ${definition.label}`} onMouseDown={(event) => event.stopPropagation()} onClick={() => { onChange(removeNodes(graph, [node.id]), true); onSelect([], null); }} className="text-gray-500 hover:text-red-400"><TrashIcon size={11} /></button>
                     )}
                 </div>
                 {definition.outputs.map(output => (
@@ -638,14 +638,14 @@ export const MaterialGraphCanvas: React.FC<MaterialGraphCanvasProps> = (props) =
 
             <div className="absolute left-3 top-3 z-20 flex flex-wrap gap-1" onMouseDown={(event) => event.stopPropagation()}>
                 <button className={`${toolbarButton} bg-blue-600 font-bold text-accent-ink hover:bg-blue-500`} aria-label="Add node" onClick={(event) => openPalette(event.clientX, event.clientY + 24, null)}>
-                    <Plus size={12} /> Add node
+                    <PlusIcon size={12} /> Add node
                 </button>
-                <button className={toolbarButton} aria-label="Undo" title="Undo (Ctrl+Z)" disabled={!canUndo} onClick={onUndo}><Undo2 size={12} /></button>
-                <button className={toolbarButton} aria-label="Redo" title="Redo (Ctrl+Y)" disabled={!canRedo} onClick={onRedo}><Redo2 size={12} /></button>
-                <button className={toolbarButton} aria-label="Add comment" title="Comment the selection (C)" onClick={addComment}><MessageSquarePlus size={12} /></button>
-                <button className={toolbarButton} aria-label="Frame" title="Frame the selection, or everything (F)" onClick={() => frame(boundsOf(allRects(selection.size ? selection : undefined)))}><Maximize size={12} /></button>
+                <button className={toolbarButton} aria-label="Undo" title="Undo (Ctrl+Z)" disabled={!canUndo} onClick={onUndo}><UndoIcon size={12} /></button>
+                <button className={toolbarButton} aria-label="Redo" title="Redo (Ctrl+Y)" disabled={!canRedo} onClick={onRedo}><RedoIcon size={12} /></button>
+                <button className={toolbarButton} aria-label="Add comment" title="Comment the selection (C)" onClick={addComment}><CommentAddIcon size={12} /></button>
+                <button className={toolbarButton} aria-label="Frame" title="Frame the selection, or everything (F)" onClick={() => frame(boundsOf(allRects(selection.size ? selection : undefined)))}><FrameIcon size={12} /></button>
                 <button className={toolbarButton} aria-label={previews ? 'Hide node previews' : 'Show node previews'} title="Node previews" aria-pressed={previews} onClick={onTogglePreviews}>
-                    {previews ? <Eye size={12} /> : <EyeOff size={12} />}
+                    {previews ? <EyeIcon size={12} /> : <EyeOffIcon size={12} />}
                 </button>
             </div>
             <div className="pointer-events-none absolute bottom-2 left-3 text-2xs text-gray-600">

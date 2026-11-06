@@ -1,5 +1,5 @@
 import React from 'react';
-import { Users, WifiOff } from 'lucide-react';
+import { OfflineIcon, UsersIcon } from '../../components/UI/Icons';
 import { useNetChanges, useNetSession } from './NetSessionContext';
 
 /** A small corner badge in multiplayer games: connection state, player count and whether this player hosts. */
@@ -15,7 +15,7 @@ export const NetStatus: React.FC = () => {
             title={session.statusMessage() || undefined}
             role="status"
         >
-            {connected ? <Users size={11} /> : <WifiOff size={11} />}
+            {connected ? <UsersIcon size={11} /> : <OfflineIcon size={11} />}
             {connected
                 ? `${session.peers().length + 1} player${session.peers().length ? 's' : ''}${session.isHost() ? ' · host' : ''}`
                 : status === 'connecting' ? 'Connecting...' : session.statusMessage() || 'Offline'}

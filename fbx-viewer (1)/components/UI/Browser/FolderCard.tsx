@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Folder } from 'lucide-react';
+import { FolderIcon } from '../Icons';
 import { folderLeafName, hasAssetDrag } from './browserFolders';
 
 interface FolderCardProps {
@@ -39,7 +39,7 @@ export const FolderCard: React.FC<FolderCardProps> = ({ path, itemCount, onOpen,
             <div className={`aspect-square w-full rounded-md border flex items-center justify-center transition-all shadow-sm ${
                 isDropTarget ? 'bg-blue-600/30 border-blue-400' : 'bg-gray-800/60 border-gray-700 group-hover:border-white'
             }`}>
-                <Folder size={40} className={`transition-colors ${isDropTarget ? 'text-blue-200' : 'text-amber-300/60 group-hover:text-amber-200'}`} />
+                <FolderIcon size={40} className={`transition-colors ${isDropTarget ? 'text-blue-200' : 'text-amber-300/60 group-hover:text-amber-200'}`} />
                 <span className="absolute bottom-6 right-1.5 px-1.5 py-0.5 bg-black/60 rounded text-2xs text-gray-300 font-mono">{itemCount}</span>
             </div>
             <span className="text-2xs truncate px-0.5 text-center text-gray-400 group-hover:text-white">{name}</span>

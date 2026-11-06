@@ -1,6 +1,6 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, Box, Check, ChevronsLeftRight, Columns2, Grid3x3, Maximize, Palette, Plus, RotateCw, Save, Trash2, X } from 'lucide-react';
+import { CheckIcon, ChevronsLeftRightIcon, CompareIcon, CrossIcon, CubeIcon, FrameIcon, GridIcon, MaterialIcon, PlusIcon, RotateIcon, SaveIcon, TrashIcon, WarningIcon } from '../UI/Icons';
 import { useScene } from '../../context/SceneContext';
 import { useNotification } from '../../context/NotificationContext';
 import type { ProviderModel } from '../../services/HostProviderService';
@@ -266,13 +266,13 @@ export const RetextureEditor: React.FC = () => {
                 {part && <><span className="text-ink-3">/</span><span className="text-ink">{part.name}</span></>}
               </div>
               <div role="toolbar" aria-label="View" className="absolute right-2 top-2 flex items-center gap-0.5 rounded bg-ground/80 p-0.5">
-                <IconButton label={canCompare ? 'Compare before and after' : 'Compare appears once a result is on the model'} shortcut="B" active={Boolean(compare)} disabled={!canCompare} onClick={() => setCompareOn((value) => !value)}><Columns2 size={14} /></IconButton>
+                <IconButton label={canCompare ? 'Compare before and after' : 'Compare appears once a result is on the model'} shortcut="B" active={Boolean(compare)} disabled={!canCompare} onClick={() => setCompareOn((value) => !value)}><CompareIcon size={14} /></IconButton>
                 <span className="mx-0.5 h-4 w-px bg-line" />
                 <Segmented label="Lighting" value={lighting} onChange={setLighting} options={LIGHTING_OPTIONS} className="!bg-transparent" />
                 <span className="mx-0.5 h-4 w-px bg-line" />
-                <IconButton label="Floor" active={floor} onClick={() => setFloor((value) => !value)}><Grid3x3 size={14} /></IconButton>
-                <IconButton label="Turntable" shortcut="T" active={turntable} onClick={() => setTurntable((value) => !value)}><RotateCw size={14} /></IconButton>
-                <IconButton label="Frame the model" shortcut="F" onClick={() => setFrameSignal((value) => value + 1)}><Maximize size={14} /></IconButton>
+                <IconButton label="Floor" active={floor} onClick={() => setFloor((value) => !value)}><GridIcon size={14} /></IconButton>
+                <IconButton label="Turntable" shortcut="T" active={turntable} onClick={() => setTurntable((value) => !value)}><RotateIcon size={14} /></IconButton>
+                <IconButton label="Frame the model" shortcut="F" onClick={() => setFrameSignal((value) => value + 1)}><FrameIcon size={14} /></IconButton>
               </div>
               {compare && (
                 <div style={{ left: `${split * 100}%` }} className="absolute inset-y-0 z-10 w-px bg-accent">
@@ -284,14 +284,14 @@ export const RetextureEditor: React.FC = () => {
                     onPointerDown={startSplitDrag}
                     className="absolute left-0 top-1/2 flex h-6 w-6 -translate-x-1/2 -translate-y-1/2 cursor-ew-resize items-center justify-center rounded-full bg-accent text-accent-ink"
                   >
-                    <ChevronsLeftRight size={13} />
+                    <ChevronsLeftRightIcon size={13} />
                   </button>
                 </div>
               )}
             </>
           ) : (
             <div className="flex h-full flex-col items-center justify-center gap-2 bg-panel text-ink-3">
-              <Box size={28} strokeWidth={1.25} />
+              <CubeIcon size={28} strokeWidth={1.25} />
               <p className="text-xs">{isLoading ? 'Loading the project' : 'Import a model to paint it.'}</p>
             </div>
           )}
@@ -305,23 +305,23 @@ export const RetextureEditor: React.FC = () => {
             actions={
               focused === null ? (
                 part.saved === null
-                  ? <span className="flex items-center gap-1 pr-1 text-2xs text-ink-3"><Check size={12} /> On the model</span>
+                  ? <span className="flex items-center gap-1 pr-1 text-2xs text-ink-3"><CheckIcon size={12} /> On the model</span>
                   : <Button variant="primary" disabled={busy} onClick={() => saveOnModel(null)}>{startingLookName(part) === 'Original' ? 'Use original' : 'Use this'}</Button>
               ) : focused.state === 'ready' ? (
                 <>
-                  <IconButton label={part.saved === focused.id ? 'On the model: replace it first to remove it' : `Remove result ${focused.number}`} size="md" disabled={busy || part.saved === focused.id} onClick={() => session && void sessions.remove(session, part, focused)}><Trash2 size={14} /></IconButton>
-                  <Button icon={<Save size={13} />} disabled={busy || Boolean(focused.textureId)} onClick={() => keepInLibrary(focused)}>{focused.textureId ? 'In library' : 'Save to library'}</Button>
+                  <IconButton label={part.saved === focused.id ? 'On the model: replace it first to remove it' : `Remove result ${focused.number}`} size="md" disabled={busy || part.saved === focused.id} onClick={() => session && void sessions.remove(session, part, focused)}><TrashIcon size={14} /></IconButton>
+                  <Button icon={<SaveIcon size={13} />} disabled={busy || Boolean(focused.textureId)} onClick={() => keepInLibrary(focused)}>{focused.textureId ? 'In library' : 'Save to library'}</Button>
                   {part.saved === focused.id
-                    ? <span className="flex h-7 items-center gap-1 px-2 text-xs text-ink-2"><Check size={13} className="text-accent" /> On the model</span>
+                    ? <span className="flex h-7 items-center gap-1 px-2 text-xs text-ink-2"><CheckIcon size={13} className="text-accent" /> On the model</span>
                     : <Button variant="primary" disabled={busy || part.materialNames.length === 0} title={part.materialNames.length === 0 ? 'This part has no material name to save under' : undefined} onClick={() => saveOnModel(focused)}>Use on model</Button>}
                 </>
               ) : focused.state === 'failed' ? (
                 <>
-                  <IconButton label={`Remove result ${focused.number}`} size="md" onClick={() => session && void sessions.remove(session, part, focused)}><Trash2 size={14} /></IconButton>
+                  <IconButton label={`Remove result ${focused.number}`} size="md" onClick={() => session && void sessions.remove(session, part, focused)}><TrashIcon size={14} /></IconButton>
                   <Button disabled={!canGenerate} onClick={() => { setPrompt(focused.prompt); void generate(); }}>Try again</Button>
                 </>
               ) : (
-                <Button icon={<X size={13} />} disabled={!focused.jobId || focused.stopping} onClick={() => void sessions.cancel(focused)}>{focused.stopping ? 'Stopping' : 'Stop'}</Button>
+                <Button icon={<CrossIcon size={13} />} disabled={!focused.jobId || focused.stopping} onClick={() => void sessions.cancel(focused)}>{focused.stopping ? 'Stopping' : 'Stop'}</Button>
               )
             }
           />
@@ -330,16 +330,16 @@ export const RetextureEditor: React.FC = () => {
         <div className="shrink-0 bg-panel">
           {shadingName && (
             <div className="flex items-center gap-2 border-b border-line bg-warn/10 px-3 py-1 text-2xs text-ink">
-              <Palette size={13} className="shrink-0 text-warn" />
+              <MaterialIcon size={13} className="shrink-0 text-warn" />
               <span className="min-w-0 flex-1">{shadingName} shades this part, so a texture will not show on it.</span>
               <Button size="sm" disabled={busy} onClick={takeMaterialOff}>Take the material off</Button>
             </div>
           )}
           {shownError && (
             <div role="alert" className="flex items-start gap-2 border-b border-line bg-bad/10 px-3 py-1.5 text-2xs text-ink">
-              <AlertTriangle size={13} className="mt-px shrink-0 text-bad" />
+              <WarningIcon size={13} className="mt-px shrink-0 text-bad" />
               <span className="selectable min-w-0 flex-1">{shownError}</span>
-              {message && <button type="button" aria-label="Dismiss" onClick={() => setMessage(null)} className="text-ink-3 hover:text-ink"><X size={13} /></button>}
+              {message && <button type="button" aria-label="Dismiss" onClick={() => setMessage(null)} className="text-ink-3 hover:text-ink"><CrossIcon size={13} /></button>}
             </div>
           )}
           <div className="flex gap-2 p-2">
@@ -409,7 +409,7 @@ export const RetextureEditor: React.FC = () => {
                   className={`flex h-8 w-full items-center gap-2 px-3 text-left transition-colors duration-75 ${item.id === part?.id ? 'bg-accent/15 text-ink' : 'text-ink-2 hover:bg-white/5 hover:text-ink'}`}
                 >
                   <span className="flex h-6 w-6 shrink-0 items-center justify-center overflow-hidden rounded-sm bg-well">
-                    {item.thumbnail ? <img src={item.thumbnail} alt="" draggable={false} className="h-full w-full object-cover" /> : <Plus size={11} className="text-ink-3" />}
+                    {item.thumbnail ? <img src={item.thumbnail} alt="" draggable={false} className="h-full w-full object-cover" /> : <PlusIcon size={11} className="text-ink-3" />}
                   </span>
                   <span className="min-w-0 flex-1 truncate text-xs">{item.name}</span>
                   {item.worn !== item.saved && <span title="Being tried on, not saved" className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent" />}

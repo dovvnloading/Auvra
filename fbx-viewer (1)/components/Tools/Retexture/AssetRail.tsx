@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Box, Search } from 'lucide-react';
+import { CubeIcon, SearchIcon } from '../../UI/Icons';
 import type { LoadedModelData } from '../../../types';
 import { TextInput } from '../../UI/kit';
 
@@ -29,7 +29,7 @@ export const AssetRail: React.FC<{
     <>
       <div className="shrink-0 border-b border-line p-2">
         <div className="relative">
-          <Search size={12} className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-ink-3" />
+          <SearchIcon size={12} className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-ink-3" />
           <TextInput value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Filter models" aria-label="Filter models" className="pl-6" />
         </div>
       </div>
@@ -47,7 +47,7 @@ export const AssetRail: React.FC<{
                 className={`flex h-9 w-full items-center gap-2 px-3 text-left transition-colors duration-75 ${model.id === selectedId ? 'bg-accent/15 text-ink' : 'text-ink-2 hover:bg-white/5 hover:text-ink'}`}
               >
                 <span className="flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded-sm bg-well">
-                  {model.thumbnail ? <img src={model.thumbnail} alt="" draggable={false} className="h-full w-full object-cover" /> : <Box size={13} className="text-ink-3" />}
+                  {model.thumbnail ? <img src={model.thumbnail} alt="" draggable={false} className="h-full w-full object-cover" /> : <CubeIcon size={13} className="text-ink-3" />}
                 </span>
                 <span className="min-w-0 flex-1 truncate text-xs">{model.name}</span>
               </button>

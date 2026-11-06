@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { ChevronDown, ChevronRight, Folder, FolderOpen, HardDrive, Trash2 } from 'lucide-react';
+import { ChevronDownIcon, ChevronRightIcon, DriveIcon, FolderIcon, FolderOpenIcon, TrashIcon } from '../Icons';
 import {
     ROOT_FOLDER,
     ROOT_FOLDER_LABEL,
@@ -113,11 +113,11 @@ export const FolderTree: React.FC<FolderTreeProps> = ({
                         onClick={(event) => { event.stopPropagation(); toggle(path); }}
                         className={`w-3.5 h-3.5 flex items-center justify-center shrink-0 text-gray-500 hover:text-white ${hasChildren ? '' : 'invisible'}`}
                     >
-                        {isOpen ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
+                        {isOpen ? <ChevronDownIcon size={10} /> : <ChevronRightIcon size={10} />}
                     </button>
                     {isRoot
-                        ? <HardDrive size={12} className="shrink-0" />
-                        : isCurrent ? <FolderOpen size={12} className="shrink-0 text-amber-300/80" /> : <Folder size={12} className="shrink-0 text-amber-300/60" />}
+                        ? <DriveIcon size={12} className="shrink-0" />
+                        : isCurrent ? <FolderOpenIcon size={12} className="shrink-0 text-amber-300/80" /> : <FolderIcon size={12} className="shrink-0 text-amber-300/60" />}
                     <span className="truncate flex-1">{isRoot ? ROOT_FOLDER_LABEL : folderLeafName(path)}</span>
                     {removable && (
                         <button
@@ -127,7 +127,7 @@ export const FolderTree: React.FC<FolderTreeProps> = ({
                             onClick={(event) => { event.stopPropagation(); onRemoveFolder(path); }}
                             className="opacity-0 group-hover:opacity-100 p-0.5 rounded text-gray-500 hover:text-red-400 transition-opacity"
                         >
-                            <Trash2 size={10} />
+                            <TrashIcon size={10} />
                         </button>
                     )}
                 </div>

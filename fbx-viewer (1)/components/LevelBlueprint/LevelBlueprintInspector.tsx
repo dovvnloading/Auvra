@@ -1,6 +1,6 @@
 
 import React, { useState } from 'react';
-import { Settings2, MessageSquare, Box, Database, Trash2, Shield, Skull, Hash, Type, ToggleLeft, AlertTriangle, DoorOpen, Save, SlidersHorizontal, Link, Plus, Minus } from 'lucide-react';
+import { ChatIcon, CubeIcon, DatabaseIcon, DoorOpenIcon, HashIcon, LinkIcon, MinusIcon, PlusIcon, SaveIcon, ShieldIcon, SkullIcon, SlidersIcon, TextIcon, ToggleIcon, TrashIcon, WarningIcon } from '../UI/Icons';
 import { LogicNode, LogicPin, LevelObject } from '../../types';
 import { describeActor, isOverlapEvent, overlapEventName, overlapTargetData, overlapTargetWarning, resolveOverlapTarget, selectedOverlapActorId } from './overlapTargets';
 import { findLogicNodeDefinition, LogicNodeDefinition } from './LogicNode';
@@ -90,7 +90,7 @@ const groupDataInputs = (pins: LogicPin[]): PinFieldGroup[] => {
 
 const Warning: React.FC<{ children: React.ReactNode }> = ({ children }) => (
     <div role="alert" className="flex items-start gap-2 rounded border border-amber-700/60 bg-amber-950/40 p-2 text-2xs text-amber-300">
-        <AlertTriangle size={12} className="shrink-0 mt-px" />
+        <WarningIcon size={12} className="shrink-0 mt-px" />
         <span>{children}</span>
     </div>
 );
@@ -440,13 +440,13 @@ const RegistryNodeFields: React.FC<RegistryNodeFieldsProps> = ({
     };
 
     const connectedBadge = (
-        <span className="inline-flex items-center gap-1 text-2xs text-gray-500"><Link size={10} /> Connected</span>
+        <span className="inline-flex items-center gap-1 text-2xs text-gray-500"><LinkIcon size={10} /> Connected</span>
     );
 
     return (
         <div className="space-y-3">
             <div className="flex items-center gap-2 text-sky-400 text-xs font-bold">
-                <SlidersHorizontal size={14} /> {definition.title}
+                <SlidersIcon size={14} /> {definition.title}
             </div>
             {definition.description && <div className="text-2xs text-gray-400 leading-snug">{definition.description}</div>}
 
@@ -458,7 +458,7 @@ const RegistryNodeFields: React.FC<RegistryNodeFieldsProps> = ({
                             onClick={() => onUpdate({ outputs: [...node.outputs, { id: crypto.randomUUID(), ...sequenceThenPin(execOutputs.length) }] })}
                             className="flex-1 flex items-center justify-center gap-1 py-1.5 rounded bg-gray-800 border border-gray-700 hover:bg-gray-700 text-2xs text-gray-300"
                         >
-                            <Plus size={10} /> Add pin
+                            <PlusIcon size={10} /> Add pin
                         </button>
                         <button
                             onClick={() => {
@@ -468,7 +468,7 @@ const RegistryNodeFields: React.FC<RegistryNodeFieldsProps> = ({
                             disabled={execOutputs.length <= 1}
                             className="flex-1 flex items-center justify-center gap-1 py-1.5 rounded bg-gray-800 border border-gray-700 hover:bg-gray-700 text-2xs text-gray-300 disabled:opacity-40 disabled:hover:bg-gray-800"
                         >
-                            <Minus size={10} /> Remove pin
+                            <MinusIcon size={10} /> Remove pin
                         </button>
                     </div>
                 </div>
@@ -496,7 +496,7 @@ const RegistryNodeFields: React.FC<RegistryNodeFieldsProps> = ({
                                 return (
                                     <div key={pin.id} className="space-y-0.5">
                                         <label htmlFor={fieldId(pin)} className="text-2xs text-gray-500 flex items-center gap-1">
-                                            {axis} {connectedPinIds.has(pin.id) && <Link size={8} aria-label="Connected" />}
+                                            {axis} {connectedPinIds.has(pin.id) && <LinkIcon size={8} aria-label="Connected" />}
                                         </label>
                                         {connectedPinIds.has(pin.id) ? (
                                             <div className="p-2 text-2xs text-gray-500 bg-gray-900 border border-gray-800 rounded">wired</div>
@@ -562,7 +562,7 @@ export const LevelBlueprintInspector: React.FC<LevelBlueprintInspectorProps> = (
             {/* Header */}
             <div className="p-4 border-b border-gray-800 bg-gray-950 flex items-center gap-3">
                 <div className="w-8 h-8 rounded bg-gray-800 border border-gray-700 flex items-center justify-center text-gray-400">
-                    <Settings2 size={16} />
+                    <SlidersIcon size={16} />
                 </div>
                 <div>
                     <h2 className="text-xs font-bold text-gray-200 ">Node Details</h2>
@@ -589,9 +589,9 @@ export const LevelBlueprintInspector: React.FC<LevelBlueprintInspectorProps> = (
                 {node.type.startsWith('Literal') && (
                     <div className="space-y-3">
                         <div className="flex items-center gap-2 text-green-400 text-xs font-bold">
-                             {node.type === 'LiteralString' ? <Type size={14} /> : 
-                              node.type === 'LiteralBoolean' ? <ToggleLeft size={14} /> : 
-                              <Hash size={14} />} 
+                             {node.type === 'LiteralString' ? <TextIcon size={14} /> : 
+                              node.type === 'LiteralBoolean' ? <ToggleIcon size={14} /> : 
+                              <HashIcon size={14} />} 
                              <span>Constant Value</span>
                         </div>
                         <div className="space-y-1">
@@ -632,7 +632,7 @@ export const LevelBlueprintInspector: React.FC<LevelBlueprintInspectorProps> = (
                 {node.type === 'PrintString' && (
                     <div className="space-y-3">
                         <div className="flex items-center gap-2 text-pink-400 text-xs font-bold">
-                            <MessageSquare size={14} /> Message Configuration
+                            <ChatIcon size={14} /> Message Configuration
                         </div>
                         <div className="space-y-1">
                             <label className="text-2xs text-gray-400">Text to Print</label>
@@ -822,7 +822,7 @@ export const LevelBlueprintInspector: React.FC<LevelBlueprintInspectorProps> = (
                 {overlapTarget && (
                     <div className="space-y-3">
                         <div className="flex items-center gap-2 text-red-400 text-xs font-bold">
-                            <Box size={14} /> Trigger Settings
+                            <CubeIcon size={14} /> Trigger Settings
                         </div>
                         <div className="space-y-1">
                             <label className="text-2xs text-gray-400">Target Actor</label>
@@ -849,7 +849,7 @@ export const LevelBlueprintInspector: React.FC<LevelBlueprintInspectorProps> = (
                         </div>
                         {overlapWarning && (
                             <div role="alert" className="flex items-start gap-2 rounded border border-amber-700/60 bg-amber-950/40 p-2 text-2xs text-amber-300">
-                                <AlertTriangle size={12} className="shrink-0 mt-px" />
+                                <WarningIcon size={12} className="shrink-0 mt-px" />
                                 <span>{overlapWarning}</span>
                             </div>
                         )}
@@ -860,7 +860,7 @@ export const LevelBlueprintInspector: React.FC<LevelBlueprintInspectorProps> = (
                 {levelAction === 'OpenLevel' && (
                     <div className="space-y-3">
                         <div className="flex items-center gap-2 text-indigo-400 text-xs font-bold">
-                            <DoorOpen size={14} /> Level Travel
+                            <DoorOpenIcon size={14} /> Level Travel
                         </div>
                         <div className="space-y-1">
                             <label className="text-2xs text-gray-400">Target Level</label>
@@ -884,7 +884,7 @@ export const LevelBlueprintInspector: React.FC<LevelBlueprintInspectorProps> = (
                         </div>
                         {(openLevelMissing || !openLevelId) && (
                             <div role="alert" className="flex items-start gap-2 rounded border border-amber-700/60 bg-amber-950/40 p-2 text-2xs text-amber-300">
-                                <AlertTriangle size={12} className="shrink-0 mt-px" />
+                                <WarningIcon size={12} className="shrink-0 mt-px" />
                                 <span>{openLevelMissing ? 'Missing level: it was deleted.' : 'No level selected; this node does nothing.'}</span>
                             </div>
                         )}
@@ -895,7 +895,7 @@ export const LevelBlueprintInspector: React.FC<LevelBlueprintInspectorProps> = (
                 {(levelAction === 'SaveGame' || levelAction === 'LoadGame') && (
                     <div className="space-y-3">
                         <div className="flex items-center gap-2 text-indigo-400 text-xs font-bold">
-                            <Save size={14} /> Save Slot
+                            <SaveIcon size={14} /> Save Slot
                         </div>
                         <div className="space-y-1">
                             <label htmlFor={`save-slot-${node.id}`} className="text-2xs text-gray-400">Slot (blank for default)</label>
@@ -915,7 +915,7 @@ export const LevelBlueprintInspector: React.FC<LevelBlueprintInspectorProps> = (
                 {(node.type === 'VariableGet' || node.type === 'VariableSet') && (
                     <div className="space-y-3">
                         <div className="flex items-center gap-2 text-emerald-400 text-xs font-bold">
-                            <Database size={14} /> Target Variable
+                            <DatabaseIcon size={14} /> Target Variable
                         </div>
                         
                         {/* Target Scope Switcher */}
@@ -926,13 +926,13 @@ export const LevelBlueprintInspector: React.FC<LevelBlueprintInspectorProps> = (
                                     onClick={() => updateData('targetBlueprintType', 'Player')}
                                     className={`flex-1 flex items-center justify-center gap-2 py-1.5 rounded text-2xs transition-all ${node.data?.targetBlueprintType !== 'Enemy' ? 'bg-blue-900 text-blue-200 font-bold' : 'text-gray-500 hover:text-white'}`}
                                 >
-                                    <Shield size={10} /> Player
+                                    <ShieldIcon size={10} /> Player
                                 </button>
                                 <button
                                     onClick={() => updateData('targetBlueprintType', 'Enemy')}
                                     className={`flex-1 flex items-center justify-center gap-2 py-1.5 rounded text-2xs transition-all ${node.data?.targetBlueprintType === 'Enemy' ? 'bg-red-900 text-red-200 font-bold' : 'text-gray-500 hover:text-white'}`}
                                 >
-                                    <Skull size={10} /> Enemy
+                                    <SkullIcon size={10} /> Enemy
                                 </button>
                             </div>
                         </div>
@@ -985,7 +985,7 @@ export const LevelBlueprintInspector: React.FC<LevelBlueprintInspectorProps> = (
                     onClick={onDelete}
                     className="w-full flex items-center justify-center gap-2 py-2 rounded-md bg-red-950/30 border border-red-900/50 hover:bg-red-900/50 hover:border-red-500 text-red-400 hover:text-white transition-all text-xs font-bold"
                 >
-                    <Trash2 size={14} /> Delete Node
+                    <TrashIcon size={14} /> Delete Node
                 </button>
             </div>
         </div>

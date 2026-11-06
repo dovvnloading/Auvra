@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { AlertTriangle, Send, Sparkles } from 'lucide-react';
+import { SendIcon, SparklesIcon, WarningIcon } from '../UI/Icons';
 import { HUDElement } from './types';
 import { hostProviderService, CommandProposal, describeProviderFailure } from '../../services/HostProviderService';
 import { AiRouteBar } from '../Settings/AiRouteBar';
@@ -168,7 +168,7 @@ export const AIChatPanel: React.FC<AIChatPanelProps> = ({
                         <div key={index} className="selectable ml-6 rounded bg-raised px-2 py-1.5 text-xs leading-[18px] text-ink">{message.text}</div>
                     ) : (
                         <div key={index} className="selectable flex gap-2 text-xs leading-[18px] text-ink-2">
-                            <Sparkles size={12} className="mt-[3px] shrink-0 text-ink-3" />
+                            <SparklesIcon size={12} className="mt-[3px] shrink-0 text-ink-3" />
                             <span className="min-w-0">{message.text}</span>
                         </div>
                     )
@@ -201,7 +201,7 @@ export const AIChatPanel: React.FC<AIChatPanelProps> = ({
             )}
             {proposalError && (
                 <div role="alert" className="flex shrink-0 items-start gap-2 border-t border-line bg-bad/10 px-3 py-1.5 text-2xs text-ink">
-                    <AlertTriangle size={13} className="mt-px shrink-0 text-bad" />
+                    <WarningIcon size={13} className="mt-px shrink-0 text-bad" />
                     <span className="selectable min-w-0">{proposalError}</span>
                 </div>
             )}
@@ -220,7 +220,7 @@ export const AIChatPanel: React.FC<AIChatPanelProps> = ({
                     placeholder={activeContextId === 'create' ? 'What should be added?' : 'What should change?'}
                     className="h-[52px] flex-1"
                 />
-                <IconButton type="submit" label="Send" size="md" disabled={!input.trim() || working} className="!text-accent disabled:!text-ink-3"><Send size={14} /></IconButton>
+                <IconButton type="submit" label="Send" size="md" disabled={!input.trim() || working} className="!text-accent disabled:!text-ink-3"><SendIcon size={14} /></IconButton>
             </form>
         </div>
     );

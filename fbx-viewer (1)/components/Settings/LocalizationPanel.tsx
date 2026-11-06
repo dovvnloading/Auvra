@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Languages, Plus, RotateCcw, Save, Search, Star, Trash2, X } from 'lucide-react';
+import { CrossIcon, LanguagesIcon, PlusIcon, ResetIcon, SaveIcon, SearchIcon, StarIcon, TrashIcon } from '../UI/Icons';
 import { useScene } from '../../context/SceneContext';
 import { useNativeProjectDocument } from '../../utils/useNativeProjectDocument';
 import {
@@ -160,8 +160,8 @@ export const LocalizationPanel: React.FC<LocalizationPanelProps> = ({ onClose })
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/55 p-4" role="dialog" aria-modal="true" aria-label="Localization">
       <div className="flex w-full max-w-5xl max-h-[90vh] flex-col overflow-hidden rounded-xl border border-gray-700 bg-gray-900 shadow-2xl">
         <div className="flex items-center justify-between border-b border-gray-800 bg-gray-950 px-5 py-4">
-          <div className="flex items-center gap-3"><Languages size={18} className="text-blue-400" /><div><h2 className="text-sm font-bold text-white">Localization</h2><p className="text-2xs text-gray-500">String tables stored in the project · used by HUD text keys and t()</p></div></div>
-          <button type="button" onClick={onClose} className="rounded p-1 text-gray-500 hover:bg-gray-800 hover:text-white" aria-label="Close localization"><X size={16} /></button>
+          <div className="flex items-center gap-3"><LanguagesIcon size={18} className="text-blue-400" /><div><h2 className="text-sm font-bold text-white">Localization</h2><p className="text-2xs text-gray-500">String tables stored in the project · used by HUD text keys and t()</p></div></div>
+          <button type="button" onClick={onClose} className="rounded p-1 text-gray-500 hover:bg-gray-800 hover:text-white" aria-label="Close localization"><CrossIcon size={16} /></button>
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto p-5 space-y-4">
           {!hydrated && <div className="text-xs text-gray-500">Loading localization…</div>}
@@ -180,7 +180,7 @@ export const LocalizationPanel: React.FC<LocalizationPanelProps> = ({ onClose })
                 <label htmlFor="localization-new-locale">Add locale</label>
                 <div className="mt-1 flex gap-2">
                   <input id="localization-new-locale" type="text" value={newLocale} placeholder="fr, de, pt-BR…" disabled={disabled} onChange={(event) => setNewLocale(event.target.value)} className={inputClass} />
-                  <button type="submit" disabled={disabled || !trimmedLocale || Boolean(localeProblem)} className={smallButtonClass}><Plus size={13} /> Add</button>
+                  <button type="submit" disabled={disabled || !trimmedLocale || Boolean(localeProblem)} className={smallButtonClass}><PlusIcon size={13} /> Add</button>
                 </div>
               </form>
             </div>
@@ -192,13 +192,13 @@ export const LocalizationPanel: React.FC<LocalizationPanelProps> = ({ onClose })
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className={sectionTitleClass}>Strings · {keys.length} key{keys.length === 1 ? '' : 's'}{missing > 0 ? ` · ${missing} untranslated` : ''}</div>
               <label className="relative block w-full sm:w-56">
-                <Search size={12} className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-gray-500" />
+                <SearchIcon size={12} className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-gray-500" />
                 <input type="search" aria-label="Filter strings" value={filter} placeholder="Filter keys or text" onChange={(event) => setFilter(event.target.value)} className={`${inputClass} pl-7`} />
               </label>
             </div>
             <form className="flex gap-2" onSubmit={(event) => { event.preventDefault(); submitKey(); }}>
               <input type="text" aria-label="New string key" value={newKey} placeholder="New key, e.g. hud.score" disabled={disabled} onChange={(event) => setNewKey(event.target.value)} className={`${inputClass} font-mono`} />
-              <button type="submit" disabled={disabled || !trimmedKey || Boolean(keyProblem)} className={smallButtonClass}><Plus size={13} /> Add key</button>
+              <button type="submit" disabled={disabled || !trimmedKey || Boolean(keyProblem)} className={smallButtonClass}><PlusIcon size={13} /> Add key</button>
             </form>
             {keyProblem && <p className="text-2xs text-amber-400">{keyProblem}</p>}
             <p className="text-2xs text-gray-500">Use {'{name}'} in text for values passed to t(key, {'{ name }'}).</p>
@@ -214,10 +214,10 @@ export const LocalizationPanel: React.FC<LocalizationPanelProps> = ({ onClose })
                       {locales.map((locale) => (
                         <th key={locale} scope="col" className="min-w-[12rem] px-2 py-2 text-left font-bold">
                           <div className="flex items-center gap-1">
-                            {locale === draft.defaultLocale && <Star size={11} className="text-amber-400" aria-label="Default locale" />}
+                            {locale === draft.defaultLocale && <StarIcon size={11} className="text-amber-400" aria-label="Default locale" />}
                             <span className="normal-case text-gray-300">{locale}</span>
                             {locale !== draft.defaultLocale && (
-                              <button type="button" disabled={disabled} onClick={() => update((current) => removeLocale(current, locale))} className="ml-auto rounded p-0.5 text-gray-600 hover:bg-gray-800 hover:text-red-400 disabled:opacity-50" aria-label={`Remove locale ${locale}`} title={`Remove ${locale}`}><Trash2 size={12} /></button>
+                              <button type="button" disabled={disabled} onClick={() => update((current) => removeLocale(current, locale))} className="ml-auto rounded p-0.5 text-gray-600 hover:bg-gray-800 hover:text-red-400 disabled:opacity-50" aria-label={`Remove locale ${locale}`} title={`Remove ${locale}`}><TrashIcon size={12} /></button>
                             )}
                           </div>
                         </th>
@@ -247,7 +247,7 @@ export const LocalizationPanel: React.FC<LocalizationPanelProps> = ({ onClose })
                           );
                         })}
                         <td className="px-2 py-1.5 align-top">
-                          <button type="button" disabled={disabled} onClick={() => update((current) => removeKey(current, key))} className="rounded p-1 text-gray-600 hover:bg-gray-800 hover:text-red-400 disabled:opacity-50" aria-label={`Remove key ${key}`} title="Remove key from every locale"><Trash2 size={13} /></button>
+                          <button type="button" disabled={disabled} onClick={() => update((current) => removeKey(current, key))} className="rounded p-1 text-gray-600 hover:bg-gray-800 hover:text-red-400 disabled:opacity-50" aria-label={`Remove key ${key}`} title="Remove key from every locale"><TrashIcon size={13} /></button>
                         </td>
                       </tr>
                     ))}
@@ -263,10 +263,10 @@ export const LocalizationPanel: React.FC<LocalizationPanelProps> = ({ onClose })
           {(message || error) && <div className="rounded border border-gray-700 bg-gray-950 p-3 text-xs text-gray-300">{message || error?.message}</div>}
         </div>
         <div className="flex items-center justify-between gap-2 border-t border-gray-800 bg-gray-950 px-5 py-3">
-          <button type="button" disabled={disabled || !dirty} onClick={() => { setMessage(null); baselineRef.current = JSON.stringify(stored); setDraft(stored); }} className="flex items-center gap-2 rounded border border-gray-700 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-800 disabled:opacity-50"><RotateCcw size={13} /> Revert</button>
+          <button type="button" disabled={disabled || !dirty} onClick={() => { setMessage(null); baselineRef.current = JSON.stringify(stored); setDraft(stored); }} className="flex items-center gap-2 rounded border border-gray-700 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-800 disabled:opacity-50"><ResetIcon size={13} /> Revert</button>
           <div className="flex items-center gap-2">
             <button type="button" onClick={onClose} className="rounded px-3 py-1.5 text-xs text-gray-400 hover:bg-gray-800 hover:text-white">Close</button>
-            <button type="button" disabled={disabled || !dirty || !writable} onClick={() => void save()} className="flex items-center gap-2 rounded bg-blue-600 px-3 py-1.5 text-xs font-bold text-accent-ink hover:bg-blue-500 disabled:opacity-50" title={writable ? 'Save localization' : 'Open a writable project to save'}><Save size={13} /> {saving ? 'Saving…' : 'Save'}</button>
+            <button type="button" disabled={disabled || !dirty || !writable} onClick={() => void save()} className="flex items-center gap-2 rounded bg-blue-600 px-3 py-1.5 text-xs font-bold text-accent-ink hover:bg-blue-500 disabled:opacity-50" title={writable ? 'Save localization' : 'Open a writable project to save'}><SaveIcon size={13} /> {saving ? 'Saving…' : 'Save'}</button>
           </div>
         </div>
       </div>

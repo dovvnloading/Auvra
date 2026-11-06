@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useId } from 'react';
 import { createPortal } from 'react-dom';
-import { ChevronDown, Check } from 'lucide-react';
+import { CheckIcon, ChevronDownIcon } from './Icons';
 
 export interface SelectOption {
   label: string;
@@ -167,7 +167,7 @@ export const Select: React.FC<SelectProps> = ({
         <span className={`mr-2 truncate ${selectedOption ? 'text-ink' : 'text-ink-3'}`}>
           {displayLabel}
         </span>
-        <ChevronDown size={12} className="shrink-0 text-ink-3" />
+        <ChevronDownIcon size={12} className="shrink-0 text-ink-3" />
       </button>
 
       {isOpen && createPortal(
@@ -203,7 +203,7 @@ export const Select: React.FC<SelectProps> = ({
                     className={`flex h-6 w-full items-center justify-between px-2 text-left text-xs ${isSelected ? 'text-accent' : 'text-ink'} ${idx === activeIndex ? 'bg-white/5' : ''}`}
                   >
                     <span className="truncate">{opt.label}</span>
-                    {isSelected && <Check size={12} />}
+                    {isSelected && <CheckIcon size={12} />}
                   </button>
                  );
                })}

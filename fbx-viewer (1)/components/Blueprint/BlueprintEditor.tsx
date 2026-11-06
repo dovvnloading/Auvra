@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { FileCode } from 'lucide-react';
+import { BlueprintIcon } from '../UI/Icons';
 import { useScene } from '../../context/SceneContext';
 import { Blueprint } from '../../types';
 import { useEditorHistory } from '../../utils/history';
@@ -143,7 +143,7 @@ export const BlueprintEditor: React.FC<BlueprintEditorProps> = ({ visible }) => 
             ) : (
                 <div className="flex-1 flex flex-col items-center justify-center text-gray-500 bg-gray-950">
                     <div className="w-16 h-16 rounded-full bg-gray-900 flex items-center justify-center mb-4">
-                            <FileCode size={32} className="opacity-50" />
+                            <BlueprintIcon size={32} className="opacity-50" />
                     </div>
                     <h2 className="text-lg font-bold text-gray-300">No Blueprint Selected</h2>
                     <p className="text-sm mt-2 max-w-xs text-center">Select a blueprint from the list on the left or create a new one to start editing your character.</p>

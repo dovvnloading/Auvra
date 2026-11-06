@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import type * as THREE from 'three';
-import { AlertTriangle, CheckCircle2, Dices, Download, ExternalLink, RefreshCw, Trash2 } from 'lucide-react';
+import { CheckCircleIcon, DiceIcon, DownloadIcon, ExternalLinkIcon, RefreshIcon, TrashIcon, WarningIcon } from '../UI/Icons';
 import { useAssets } from '../../context/AssetContext';
 import { useScene } from '../../context/SceneContext';
 import { frontendDiagnostics } from '../../diagnostics/runtime';
@@ -322,9 +322,9 @@ const Workspace: React.FC<{
                     <div className="text-xs font-semibold text-zinc-100">{definition.label}</div>
                     <p className="mt-0.5 text-2xs leading-snug text-zinc-500">{definition.description}</p>
                 </div>
-                {state?.error && <div className="flex gap-1.5 rounded border border-red-900 bg-red-950/50 p-1.5 text-2xs text-red-200"><AlertTriangle size={12} className="mt-px shrink-0" /><span className="whitespace-pre-wrap font-mono">{state.error}</span></div>}
+                {state?.error && <div className="flex gap-1.5 rounded border border-red-900 bg-red-950/50 p-1.5 text-2xs text-red-200"><WarningIcon size={12} className="mt-px shrink-0" /><span className="whitespace-pre-wrap font-mono">{state.error}</span></div>}
                 {single.type === SUBGRAPH_NODE_TYPE && typeof single.params.graph === 'string' && entries.has(single.params.graph) && (
-                    <Button size="sm" icon={<ExternalLink size={12} />} onClick={() => onOpenAsset(single.params.graph as string)}>Open {entries.get(single.params.graph)!.name}</Button>
+                    <Button size="sm" icon={<ExternalLinkIcon size={12} />} onClick={() => onOpenAsset(single.params.graph as string)}>Open {entries.get(single.params.graph)!.name}</Button>
                 )}
                 {isOutput && (
                     <div className="space-y-1">
@@ -379,7 +379,7 @@ const Workspace: React.FC<{
                 <span className="text-2xs text-zinc-400">Random seed</span>
                 <div className="flex items-center gap-1">
                     <input aria-label="Graph random seed" type="number" min={0} max={999} value={graph.seed} onChange={(event) => update({ ...graph, seed: Math.max(0, Math.min(999, Math.round(Number(event.target.value) || 0))) }, true, 'seed')} className={`w-16 ${field}`} />
-                    <button aria-label="Another seed" title="Another seed" onClick={() => update({ ...graph, seed: Math.floor(Math.random() * 1000) }, true)} className="rounded p-1 text-zinc-400 hover:bg-zinc-800 hover:text-white"><Dices size={13} /></button>
+                    <button aria-label="Another seed" title="Another seed" onClick={() => update({ ...graph, seed: Math.floor(Math.random() * 1000) }, true)} className="rounded p-1 text-zinc-400 hover:bg-zinc-800 hover:text-white"><DiceIcon size={13} /></button>
                 </div>
             </div>
             <div className="space-y-2 border-t border-zinc-800 pt-2">
@@ -402,7 +402,7 @@ const Workspace: React.FC<{
                                 const value = stored.values[parameter.name] ?? parameter.default;
                                 const nextGraph = { ...graph, parameters: graph.parameters.filter((_, i) => i !== index), nodes: graph.nodes.map((node) => ({ ...node, params: Object.fromEntries(Object.entries(node.params).map(([key, v]) => [key, v && typeof v === 'object' && (v as { $bind?: string }).$bind === parameter.name ? structuredClone(value) : v])) })) };
                                 update(nextGraph, true);
-                            }} className="rounded p-1 text-zinc-500 hover:text-red-400"><Trash2 size={12} /></button>
+                            }} className="rounded p-1 text-zinc-500 hover:text-red-400"><TrashIcon size={12} /></button>
                         </div>
                         <div className="flex items-center gap-1 text-2xs text-zinc-500">
                             <span>Name in formulas</span>
@@ -443,12 +443,12 @@ const Workspace: React.FC<{
     const materialInspector = () => (
         <div className="space-y-3">
             <div className={`flex items-start gap-1.5 rounded border p-2 text-2xs ${upToDate ? 'border-emerald-900 bg-emerald-950/40 text-emerald-200' : 'border-amber-900 bg-amber-950/40 text-amber-200'}`}>
-                {upToDate ? <CheckCircle2 size={13} className="mt-px shrink-0" /> : <RefreshCw size={13} className="mt-px shrink-0" />}
+                {upToDate ? <CheckCircleIcon size={13} className="mt-px shrink-0" /> : <RefreshIcon size={13} className="mt-px shrink-0" />}
                 <span>{upToDate
                     ? `Models with this material show the graph as it is now (${2 ** (stored.baked?.size ?? stored.bakeSize)} pixels).`
                     : stored.baked ? 'The graph has changed since the material was last updated. Models still show the earlier pictures.' : 'Models with this material show nothing of the graph until the material is updated.'}</span>
             </div>
-            <Button variant="primary" className="w-full justify-center" disabled={Boolean(baking) || !hasOutputs} onClick={() => void updateMaterial()} icon={baking ? <Spinner /> : <RefreshCw size={13} />}>
+            <Button variant="primary" className="w-full justify-center" disabled={Boolean(baking) || !hasOutputs} onClick={() => void updateMaterial()} icon={baking ? <Spinner /> : <RefreshIcon size={13} />}>
                 {baking ?? 'Update material'}
             </Button>
             {!hasOutputs && <p className="text-2xs text-zinc-500">Add an Output node for a channel (base colour, normal...) to make a material.</p>}
@@ -459,7 +459,7 @@ const Workspace: React.FC<{
                 <Select value={stored.layout} options={[{ value: 'engine', label: 'Packed (fewer)' }, { value: 'separate', label: 'One per channel' }]} onChange={(value) => commitStored({ ...stored, layout: value === 'separate' ? 'separate' : 'engine' })} className="w-32" />
             </div>
             <p className="text-2xs leading-snug text-zinc-500">Packed keeps occlusion, roughness and metallic in one picture's red, green and blue, which the engine reads in one go.</p>
-            <Button size="sm" className="w-full justify-center" disabled={Boolean(baking) || !hasOutputs} onClick={() => void downloadPictures()} icon={<Download size={12} />}>Download pictures</Button>
+            <Button size="sm" className="w-full justify-center" disabled={Boolean(baking) || !hasOutputs} onClick={() => void downloadPictures()} icon={<DownloadIcon size={12} />}>Download pictures</Button>
             {stored.baked && (
                 <div className="space-y-1 border-t border-zinc-800 pt-2">
                     <div className="text-2xs font-semibold text-zinc-400">Pictures the material draws with</div>

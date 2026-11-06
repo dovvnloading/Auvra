@@ -1,6 +1,6 @@
 
 import React from 'react';
-import { Component, User, Image, Swords, Film, Eye } from 'lucide-react';
+import { ComponentsIcon, EyeIcon, FilmIcon, ImageIcon, SwordsIcon, UserIcon } from '../Icons';
 import { LoadedModelData, AssetCategory } from '../../../types';
 
 interface ModelCardProps {
@@ -29,12 +29,12 @@ export const ModelCard: React.FC<ModelCardProps> = ({
     // Helper to render correct icon
     const getIcon = (category: AssetCategory) => {
         switch (category) {
-            case 'Character': return <User size={10} />;
-            case 'Prop': return <Component size={10} />;
-            case 'Environment': return <Image size={10} />;
-            case 'Weapon': return <Swords size={10} />;
-            case 'Animation': return <Film size={10} />;
-            default: return <Component size={10} />;
+            case 'Character': return <UserIcon size={10} />;
+            case 'Prop': return <ComponentsIcon size={10} />;
+            case 'Environment': return <ImageIcon size={10} />;
+            case 'Weapon': return <SwordsIcon size={10} />;
+            case 'Animation': return <FilmIcon size={10} />;
+            default: return <ComponentsIcon size={10} />;
         }
     };
 
@@ -56,7 +56,7 @@ export const ModelCard: React.FC<ModelCardProps> = ({
                     />
                 ) : (
                     <div className="w-full h-full flex items-center justify-center text-gray-600 group-hover:text-gray-500 transition-colors">
-                        {model.category === 'Animation' ? <Film size={32} /> : <Component size={32} />}
+                        {model.category === 'Animation' ? <FilmIcon size={32} /> : <ComponentsIcon size={32} />}
                     </div>
                 )}
 
@@ -74,7 +74,7 @@ export const ModelCard: React.FC<ModelCardProps> = ({
                         onClick={(e) => { e.stopPropagation(); onRemoveFromScene?.(); }}
                         className="absolute top-1 left-1 z-10 p-1 bg-blue-900/80 rounded text-blue-400 border border-blue-800 hover:bg-blue-800 hover:text-white"
                     >
-                        <Eye size={10} />
+                        <EyeIcon size={10} />
                     </button>
                 )}
 

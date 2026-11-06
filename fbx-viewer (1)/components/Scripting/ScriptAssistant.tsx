@@ -1,5 +1,5 @@
 import React, { useRef, useState } from 'react';
-import { AlertTriangle, X } from 'lucide-react';
+import { CrossIcon, WarningIcon } from '../UI/Icons';
 import { hostProviderService } from '../../services/HostProviderService';
 import { AiRouteBar } from '../Settings/AiRouteBar';
 import { Button, Spinner, TextArea } from '../UI/kit';
@@ -54,9 +54,9 @@ export const ScriptAssistant: React.FC<ScriptAssistantProps> = ({ draft, referen
     <section aria-label="Script assistant" className="shrink-0 border-t border-line bg-panel">
       {error && (
         <div role="alert" className="flex items-start gap-2 border-b border-line bg-bad/10 px-3 py-1.5 text-2xs text-ink">
-          <AlertTriangle size={13} className="mt-px shrink-0 text-bad" />
+          <WarningIcon size={13} className="mt-px shrink-0 text-bad" />
           <span className="selectable min-w-0 flex-1">{error}</span>
-          <button type="button" aria-label="Dismiss" onClick={() => setError(null)} className="text-ink-3 hover:text-ink"><X size={13} /></button>
+          <button type="button" aria-label="Dismiss" onClick={() => setError(null)} className="text-ink-3 hover:text-ink"><CrossIcon size={13} /></button>
         </div>
       )}
       <div className="flex gap-2 p-2">

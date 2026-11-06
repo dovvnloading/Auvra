@@ -1,6 +1,6 @@
 
 import React, { useRef, useState } from 'react';
-import { Music, Trash2, Play, Pause } from 'lucide-react';
+import { MusicIcon, PauseIcon, PlayIcon, TrashIcon } from '../Icons';
 import { AudioData } from '../../../types';
 
 interface AudioCardProps {
@@ -37,12 +37,12 @@ export const AudioCard: React.FC<AudioCardProps> = ({ audio, onDelete, nameEdito
                 
                 {/* Audio Waveform Viz (Placeholder) */}
                 <div className="w-full h-full flex items-center justify-center opacity-30">
-                    <Music size={32} />
+                    <MusicIcon size={32} />
                 </div>
 
                 {/* Type Badge */}
                 <div className="absolute top-1 right-1 p-1 bg-gray-900/80 rounded text-gray-400">
-                    <Music size={10} />
+                    <MusicIcon size={10} />
                 </div>
 
                 {/* Duration Badge */}
@@ -57,14 +57,14 @@ export const AudioCard: React.FC<AudioCardProps> = ({ audio, onDelete, nameEdito
                         className="p-2 bg-blue-600 hover:bg-blue-500 text-accent-ink rounded-full transition-colors"
                         title={isPlaying ? "Pause" : "Play Preview"}
                     >
-                        {isPlaying ? <Pause size={14} /> : <Play size={14} />}
+                        {isPlaying ? <PauseIcon size={14} /> : <PlayIcon size={14} />}
                     </button>
                     <button
                         onClick={(e) => { e.stopPropagation(); onDelete(); }}
                         className="p-2 bg-red-600 hover:bg-red-500 text-white rounded-full transition-colors"
                         title="Delete Audio"
                     >
-                        <Trash2 size={14} />
+                        <TrashIcon size={14} />
                     </button>
                 </div>
             </div>

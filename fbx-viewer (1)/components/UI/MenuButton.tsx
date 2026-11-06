@@ -1,6 +1,6 @@
 import React, { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { ChevronDown } from 'lucide-react';
+import { ChevronDownIcon } from './Icons';
 
 export interface MenuButtonItem {
   label: string;
@@ -154,7 +154,7 @@ export const MenuButton: React.FC<MenuButtonProps> = ({ label, icon, title, item
         className={`flex h-6 items-center gap-1.5 rounded px-2 text-xs transition-colors duration-75 disabled:opacity-40 ${open ? 'bg-white/10 text-ink' : 'text-ink-2 hover:bg-white/5 hover:text-ink'}`}
         title={title}
       >
-        {icon}{!hideLabel && label}<ChevronDown size={11} className="text-ink-3" />
+        {icon}{!hideLabel && label}<ChevronDownIcon size={11} className="text-ink-3" />
       </button>
       {open && createPortal(
         <div

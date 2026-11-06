@@ -1,5 +1,5 @@
 import React from 'react';
-import { Gamepad2, Plus, Keyboard, Trash2, ArrowRight } from 'lucide-react';
+import { ArrowRightIcon, GamepadIcon, KeyboardIcon, PlusIcon, TrashIcon } from '../../UI/Icons';
 import { AnimationGraphData, InputBinding } from '../../../types';
 import { KeyRecorder } from '../KeyRecorder';
 import { Select } from '../../UI/Select';
@@ -42,20 +42,20 @@ export const BlackboardInputs: React.FC<BlackboardInputsProps> = ({ graph, model
         <div>
             <div className="flex items-center justify-between mb-2 pb-1 border-b border-gray-800">
                 <span className="text-xs font-bold text-gray-200 flex items-center gap-2">
-                    <Gamepad2 size={12} className="text-gray-400" /> Input Mappings
+                    <GamepadIcon size={12} className="text-gray-400" /> Input Mappings
                 </span>
                 <button 
                     onClick={addInput} 
                     className="px-2 py-1 bg-gray-800 hover:bg-gray-700 rounded border border-gray-700 text-2xs text-gray-400 hover:text-white transition-colors flex items-center gap-1"
                 >
-                    <Plus size={10} /> Add
+                    <PlusIcon size={10} /> Add
                 </button>
             </div>
             
             <div className="space-y-2">
                 {graph.inputs.length === 0 && (
                         <div className="text-center py-4 border border-dashed border-gray-800 rounded bg-gray-900/50">
-                            <Keyboard size={20} className="mx-auto text-gray-700 mb-1" />
+                            <KeyboardIcon size={20} className="mx-auto text-gray-700 mb-1" />
                             <p className="text-2xs text-gray-600">No input bindings defined.</p>
                         </div>
                 )}
@@ -88,13 +88,13 @@ export const BlackboardInputs: React.FC<BlackboardInputsProps> = ({ graph, model
                                     onClick={() => updateGraph(modelId, { inputs: graph.inputs.filter(x => x.id !== inp.id) })} 
                                     className="ml-auto text-gray-600 hover:text-gray-300 opacity-0 group-hover:opacity-100 transition-all"
                                 >
-                                    <Trash2 size={12} />
+                                    <TrashIcon size={12} />
                                 </button>
                             </div>
 
                             {/* Action Row: Set Variable */}
                             <div className="p-2 bg-gray-900/30 flex items-center gap-2">
-                                    <ArrowRight size={10} className="text-gray-600 shrink-0" />
+                                    <ArrowRightIcon size={10} className="text-gray-600 shrink-0" />
                                     
                                     <div className="flex items-center gap-2 flex-1 min-w-0">
                                         <span className="text-2xs text-gray-500 font-medium">Set</span>

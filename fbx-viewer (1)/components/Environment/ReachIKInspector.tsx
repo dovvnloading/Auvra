@@ -1,5 +1,5 @@
 import React from 'react';
-import { Crosshair } from 'lucide-react';
+import { CrosshairIcon } from '../UI/Icons';
 import { useScene } from '../../context/SceneContext';
 import type { ComponentInspectorProps } from '../../runtime/components/types';
 
@@ -11,7 +11,7 @@ export const ReachIKInspector: React.FC<ComponentInspectorProps> = ({ object, co
     const known = target === 'player' || choices.some(candidate => candidate.id === target);
     return (
         <div className="space-y-1">
-            <label className="flex items-center gap-1 text-2xs text-gray-400"><Crosshair size={10} /> Reach for</label>
+            <label className="flex items-center gap-1 text-2xs text-gray-400"><CrosshairIcon size={10} /> Reach for</label>
             <select
                 aria-label="Reach for"
                 value={target}

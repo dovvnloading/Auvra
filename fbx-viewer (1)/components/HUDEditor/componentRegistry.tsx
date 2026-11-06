@@ -1,6 +1,6 @@
 
 import React from 'react';
-import { Crosshair, Box, Type, Activity, Target, Code, MousePointerClick } from 'lucide-react';
+import { ClickIcon, CodeIcon, CrosshairIcon, PanelIcon, PulseIcon, TargetIcon, TextIcon } from '../UI/Icons';
 import { ScopeReticle } from './assets/ScopeReticle';
 import { HealthWidget } from './assets/HealthWidget';
 import { DynamicHUDComponent } from './DynamicHUDComponent';
@@ -111,7 +111,7 @@ export const AVAILABLE_COMPONENTS: HUDComponentDefinition[] = [
     {
         type: 'Custom',
         label: 'Custom Code',
-        icon: <Code size={14} />,
+        icon: <CodeIcon size={14} />,
         defaultProps: { 
             code: `// Write React code here\nreturn (\n  <div className="w-full h-full bg-blue-500/20 border border-blue-400 flex items-center justify-center text-blue-200 font-bold">\n    CUSTOM WIDGET\n  </div>\n);` 
         },
@@ -122,7 +122,7 @@ export const AVAILABLE_COMPONENTS: HUDComponentDefinition[] = [
     {
         type: 'Scope',
         label: 'Sniper Scope',
-        icon: <Target size={14} />,
+        icon: <TargetIcon size={14} />,
         defaultProps: { color: '#ef4444', opacity: 0.9, scale: 1.0, glowIntensity: 2 },
         defaultSize: { width: 400, height: 400 },
         bindableProps: ['opacity', 'scale']
@@ -130,7 +130,7 @@ export const AVAILABLE_COMPONENTS: HUDComponentDefinition[] = [
     {
         type: 'HealthBar',
         label: 'Health Widget',
-        icon: <Activity size={14} />,
+        icon: <PulseIcon size={14} />,
         defaultProps: { value: 85, max: 100, barColor: '#dc2626', backgroundColor: '#1f2937', showIcon: true, showText: true },
         defaultSize: { width: 250, height: 60 },
         bindableProps: ['value', 'max']
@@ -138,7 +138,7 @@ export const AVAILABLE_COMPONENTS: HUDComponentDefinition[] = [
     {
         type: 'Crosshair',
         label: 'Basic Crosshair',
-        icon: <Crosshair size={14} />,
+        icon: <CrosshairIcon size={14} />,
         defaultProps: { color: '#ffffff', size: 20, thickness: 2, gap: 4 },
         defaultSize: { width: 64, height: 64 },
         bindableProps: ['color']
@@ -146,7 +146,7 @@ export const AVAILABLE_COMPONENTS: HUDComponentDefinition[] = [
     {
         type: 'Text',
         label: 'Text Block',
-        icon: <Type size={14} />,
+        icon: <TextIcon size={14} />,
         defaultProps: { text: 'HUD ELEMENT', textKey: '', color: '#ffffff', fontSize: 16, fontWeight: 'bold', fontFamily: 'monospace', textAlign: 'left' },
         defaultSize: { width: 200, height: 40 },
         propOptions: { textAlign: ['left', 'center', 'right'] },
@@ -155,7 +155,7 @@ export const AVAILABLE_COMPONENTS: HUDComponentDefinition[] = [
     {
         type: 'Button',
         label: 'Button',
-        icon: <MousePointerClick size={14} />,
+        icon: <ClickIcon size={14} />,
         // `action` is edited with the Action field every element has, not as a free-text prop.
         defaultProps: { label: 'Button', labelKey: '', action: '', variant: 'primary', fontSize: 24 },
         defaultSize: { width: 320, height: 64 },
@@ -165,7 +165,7 @@ export const AVAILABLE_COMPONENTS: HUDComponentDefinition[] = [
     {
         type: 'Container',
         label: 'Container / Panel',
-        icon: <Box size={14} />,
+        icon: <PanelIcon size={14} />,
         defaultProps: { backgroundColor: 'rgba(0,0,0,0.5)', borderColor: '#ffffff', borderWidth: 1, borderRadius: 8 },
         defaultSize: { width: 300, height: 200 },
         bindableProps: ['backgroundColor', 'borderColor']

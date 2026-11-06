@@ -1,5 +1,5 @@
 import React, { useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { Lightbulb, Flashlight, Plus, Power, SunDim } from 'lucide-react';
+import { BulbIcon, PlusIcon, PowerIcon, SpotlightIcon, SunDimIcon } from '../UI/Icons';
 import { resolveSkyLight, skyModel } from '../../runtime/sky/skySettings';
 import { useScene } from '../../context/SceneContext';
 import type { LevelComponent, LevelObject, SkyConfig } from '../../types';
@@ -149,7 +149,7 @@ const SkyLightRow: React.FC<{
     const usable = skyModel(sky.skyConfig) !== 'classic';
     return (
         <div className="flex items-center gap-2 px-3 py-2 border-b border-gray-800">
-            <SunDim size={12} className={settings.enabled && usable ? 'text-cyan-400' : 'text-gray-600'} />
+            <SunDimIcon size={12} className={settings.enabled && usable ? 'text-cyan-400' : 'text-gray-600'} />
             <button
                 type="button"
                 onClick={() => onSelect(sky.id)}
@@ -232,7 +232,7 @@ export const LightingPanel: React.FC<LightingPanelProps> = ({ levelId, onSelect,
         >
             <div className="flex items-center justify-between p-3 border-b border-gray-800 bg-gray-950 shrink-0">
                 <span className="text-xs font-bold text-gray-300 flex items-center gap-2">
-                    <Lightbulb size={14} className="text-amber-400" /> Lights
+                    <BulbIcon size={14} className="text-amber-400" /> Lights
                     <span className="text-2xs font-normal text-gray-500">{lights.length}</span>
                 </span>
                 <div className="flex items-center gap-1">
@@ -247,7 +247,7 @@ export const LightingPanel: React.FC<LightingPanelProps> = ({ levelId, onSelect,
                                 : 'Open this level to add lights'}
                             aria-label={`Add ${LIGHT_LABELS[kind]}`}
                         >
-                            <Plus size={10} /> {kind === 'pointLight' ? 'Point' : 'Spot'}
+                            <PlusIcon size={10} /> {kind === 'pointLight' ? 'Point' : 'Spot'}
                         </button>
                     ))}
                 </div>
@@ -264,7 +264,7 @@ export const LightingPanel: React.FC<LightingPanelProps> = ({ levelId, onSelect,
                 {lights.map((light) => {
                     const { object, component } = light;
                     const kind = component.type as LightKind;
-                    const Icon = kind === 'spotLight' ? Flashlight : Lightbulb;
+                    const Icon = kind === 'spotLight' ? SpotlightIcon : BulbIcon;
                     const color = readColor(component);
                     const intensity = readIntensity(component);
                     const shared = (lightCountByObject.get(object.id) ?? 0) > 1;
@@ -293,7 +293,7 @@ export const LightingPanel: React.FC<LightingPanelProps> = ({ levelId, onSelect,
                                     aria-label={`${component.enabled ? 'Turn off' : 'Turn on'} ${name}`}
                                     aria-pressed={component.enabled}
                                 >
-                                    <Power size={11} />
+                                    <PowerIcon size={11} />
                                 </button>
                             </div>
                             <div className="flex items-center gap-2">

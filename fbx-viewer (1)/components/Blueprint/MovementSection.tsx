@@ -1,5 +1,5 @@
 import React from 'react';
-import { Footprints } from 'lucide-react';
+import { FootprintsIcon } from '../UI/Icons';
 import type { MovementTuning } from '../../types';
 import { DEFAULT_MOVEMENT_SETTINGS, SETTLE_HALF_LIVES } from '../../runtime/locomotion/characterMotion';
 import { ScrubbableInput } from '../UI/Properties/ScrubbableInput';
@@ -34,7 +34,7 @@ const Row: React.FC<{ title: string; label: string; value: number; step: number;
 export const MovementSection: React.FC<MovementSectionProps> = ({ movement, onChange }) => (
     <div className="space-y-2">
         <label className="text-2xs font-bold text-gray-500 flex items-center gap-2">
-            <Footprints size={12} /> Movement
+            <FootprintsIcon size={12} /> Movement
         </label>
         <div className="bg-gray-800/50 rounded p-3 border border-gray-800 space-y-3">
             <Row title="Reaches full speed in (s)" label="Time" value={movement.accelerate ?? DEFAULT_TIMES.accelerate} step={0.02} min={0} max={5} onChange={(accelerate) => onChange({ accelerate }, 'movementAccelerate')} />

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Crown, GitFork, Network, Play } from 'lucide-react';
+import { CrownIcon, ForkIcon, GraphIcon, PlayIcon } from '../UI/Icons';
 import { GraphState } from '../../types';
 import { innerStateCount } from './utils/stateMachines';
 
@@ -43,7 +43,7 @@ export const GraphNode: React.FC<GraphNodeProps> = ({
             {/* Header */}
             <div className={`px-3 py-2 border-b flex items-center justify-between gap-2 ${isSelected ? 'border-blue-900 bg-blue-900/20' : (state.isRoot ? 'border-amber-800 bg-amber-900/20' : 'border-gray-800 bg-gray-950/30')}`}>
                 <div className="flex items-center gap-2 min-w-0">
-                    {state.isRoot && <Crown size={12} className="text-amber-400 shrink-0" />}
+                    {state.isRoot && <CrownIcon size={12} className="text-amber-400 shrink-0" />}
                     <span className={`text-xs font-bold truncate ${state.isRoot ? 'text-amber-100' : 'text-gray-200'}`}>{state.name}</span>
                 </div>
                 {isActive && (
@@ -58,22 +58,22 @@ export const GraphNode: React.FC<GraphNodeProps> = ({
             <div className="p-3 text-2xs text-gray-400 space-y-2">
                 {conduit ? (
                     <div className="flex items-center gap-1.5 text-amber-200/80 bg-amber-950/20 px-2 py-1 rounded border border-dashed border-amber-800/40">
-                        <GitFork size={8} />
+                        <ForkIcon size={8} />
                         <span className="truncate">Conduit &middot; passes through</span>
                     </div>
                 ) : machine ? (
                     <div className="flex items-center gap-1.5 text-violet-300 bg-violet-950/30 px-2 py-1 rounded border border-violet-900/30">
-                        <Network size={8} />
+                        <GraphIcon size={8} />
                         <span className="truncate">State machine &middot; {innerStateCount(state)} {innerStateCount(state) === 1 ? 'state' : 'states'}</span>
                     </div>
                 ) : state.stateType === 'MotionMatch' ? (
                     <div className="flex items-center gap-1.5 text-emerald-300 bg-emerald-950/30 px-2 py-1 rounded border border-emerald-900/30">
-                        <Play size={8} />
+                        <PlayIcon size={8} />
                         <span className="truncate">Motion match &middot; {state.blendSamples.filter(sample => sample.clipName).length} clips</span>
                     </div>
                 ) : state.stateType === 'Single' && state.clipName ? (
                     <div className="flex items-center gap-1.5 text-blue-300 bg-blue-950/30 px-2 py-1 rounded border border-blue-900/30">
-                        <Play size={8} /> 
+                        <PlayIcon size={8} /> 
                         <span className="truncate">{state.clipName}</span>
                     </div>
                 ) : (

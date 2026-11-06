@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Cloud, Cpu, RefreshCw, X } from 'lucide-react';
+import { ChipIcon, CloudIcon, CrossIcon, RefreshIcon } from '../UI/Icons';
 import {
   hostProviderService,
   ProviderDescriptor,
@@ -155,7 +155,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
     const waitingForKey = keyWindowFor === provider.id;
     return (
       <li key={provider.id} className="flex h-10 items-center gap-2.5 px-4">
-        <span className="shrink-0 text-ink-3">{local ? <Cpu size={14} /> : <Cloud size={14} />}</span>
+        <span className="shrink-0 text-ink-3">{local ? <ChipIcon size={14} /> : <CloudIcon size={14} />}</span>
         <span className="w-28 shrink-0 truncate text-xs text-ink">{provider.name || provider.id}</span>
         <span className={`min-w-0 flex-1 truncate text-2xs ${waitingForKey ? 'text-ink' : local ? (running ? 'text-ok' : 'text-ink-3') : words?.good ? 'text-ok' : 'text-ink-3'}`}>
           {waitingForKey ? 'Paste the key in the window that opened' : local ? (running ? 'Running on this computer' : 'Not running on this computer') : words?.text}
@@ -176,8 +176,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
         <div className="flex h-10 shrink-0 items-center justify-between border-b border-line pl-4 pr-2">
           <h2 className="text-xs font-semibold text-ink">AI settings</h2>
           <div className="flex items-center gap-0.5">
-            <IconButton label="Check again" disabled={busy} onClick={() => void refresh()}><RefreshCw size={13} className={busy ? 'animate-spin' : ''} /></IconButton>
-            <IconButton label="Close settings" onClick={onClose}><X size={15} /></IconButton>
+            <IconButton label="Check again" disabled={busy} onClick={() => void refresh()}><RefreshIcon size={13} className={busy ? 'animate-spin' : ''} /></IconButton>
+            <IconButton label="Close settings" onClick={onClose}><CrossIcon size={15} /></IconButton>
           </div>
         </div>
         <div className="flex min-h-0 flex-1">

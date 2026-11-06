@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { AlertTriangle, MessageSquarePlus, Network, Plus, Trash2, Workflow } from 'lucide-react';
+import { CommentAddIcon, FlowIcon, GraphIcon, PlusIcon, TrashIcon, WarningIcon } from '../UI/Icons';
 import { useAssets } from '../../context/AssetContext';
 import { projectService } from '../../utils/projectService';
 import { frontendDiagnostics } from '../../diagnostics/runtime';
@@ -294,13 +294,13 @@ export const MaterialGraphEditor: React.FC = () => {
                     <span className="text-xs font-bold text-gray-400">Materials</span>
                     <span className="flex-1" />
                     <MaterialFromDescription onCreated={createFromDescription} />
-                    <button ref={newButton} onClick={() => setNewMenu(true)} aria-label="New material" className="flex items-center gap-1 rounded bg-gray-800 px-2 py-1 text-2xs text-gray-200 hover:bg-gray-700"><Plus size={12} /> New</button>
+                    <button ref={newButton} onClick={() => setNewMenu(true)} aria-label="New material" className="flex items-center gap-1 rounded bg-gray-800 px-2 py-1 text-2xs text-gray-200 hover:bg-gray-700"><PlusIcon size={12} /> New</button>
                     <Popover anchor={newButton} open={newMenu} onClose={() => setNewMenu(false)} width={280} label="New material">
                         <div className="p-1">
                             {[
-                                { key: 'texture', icon: <Network size={14} />, title: 'Texture graph', text: 'Noises, patterns, blurs and filters drawn into the material\'s pictures: base colour, normal, roughness and the rest.', run: () => createTextureGraph_(false) },
-                                { key: 'shader', icon: <Workflow size={14} />, title: 'Shader graph', text: 'Maths worked out for every pixel as the model draws: moving, glowing and view-dependent looks.', run: create },
-                                { key: 'function', icon: <Network size={14} />, title: 'Graph for other graphs', text: 'A texture graph with an input, made to be used as one node inside others (a smart mask, a filter).', run: () => createTextureGraph_(true) },
+                                { key: 'texture', icon: <GraphIcon size={14} />, title: 'Texture graph', text: 'Noises, patterns, blurs and filters drawn into the material\'s pictures: base colour, normal, roughness and the rest.', run: () => createTextureGraph_(false) },
+                                { key: 'shader', icon: <FlowIcon size={14} />, title: 'Shader graph', text: 'Maths worked out for every pixel as the model draws: moving, glowing and view-dependent looks.', run: create },
+                                { key: 'function', icon: <GraphIcon size={14} />, title: 'Graph for other graphs', text: 'A texture graph with an input, made to be used as one node inside others (a smart mask, a filter).', run: () => createTextureGraph_(true) },
                             ].map((item) => (
                                 <button key={item.key} onClick={() => { setNewMenu(false); item.run(); }} className="flex w-full gap-2 rounded px-2 py-1.5 text-left hover:bg-gray-800">
                                     <span className="mt-0.5 text-gray-400">{item.icon}</span>
@@ -318,7 +318,7 @@ export const MaterialGraphEditor: React.FC = () => {
                             onClick={() => { setSelectedId(candidate.id); select([]); }}
                             className={`mb-1 w-full truncate rounded px-2 py-1.5 text-left text-xs ${candidate.id === asset?.id ? 'bg-blue-900/40 text-white' : 'text-gray-300 hover:bg-gray-800'}`}
                         >
-                            <span className="flex items-center gap-1.5">{candidate.textureGraph ? <Network size={11} className="shrink-0 text-amber-400/80" /> : <Workflow size={11} className="shrink-0 text-sky-400/80" />}<span className="truncate">{candidate.name}</span></span>
+                            <span className="flex items-center gap-1.5">{candidate.textureGraph ? <GraphIcon size={11} className="shrink-0 text-amber-400/80" /> : <FlowIcon size={11} className="shrink-0 text-sky-400/80" />}<span className="truncate">{candidate.name}</span></span>
                         </button>
                     ))}
                 </div>
@@ -327,12 +327,12 @@ export const MaterialGraphEditor: React.FC = () => {
             {asset && asset.textureGraph ? (
                 <div className="flex min-w-0 flex-1 flex-col">
                     <div className="flex items-center gap-2 border-b border-gray-800 px-3 py-1.5">
-                        <Network size={13} className="text-amber-400/80" />
+                        <GraphIcon size={13} className="text-amber-400/80" />
                         <input aria-label="Material name" value={asset.name} onChange={(event) => rename(event.target.value)} className="w-64 rounded border border-gray-700 bg-gray-950 px-2 py-0.5 text-xs text-white" />
                         <span className="text-2xs text-gray-500">Texture graph</span>
                         <span className="flex-1" />
                         {error && <span className="text-2xs text-amber-400">{error}</span>}
-                        <button onClick={remove} aria-label="Delete material" className="rounded p-1 text-gray-500 hover:bg-gray-800 hover:text-red-400"><Trash2 size={14} /></button>
+                        <button onClick={remove} aria-label="Delete material" className="rounded p-1 text-gray-500 hover:bg-gray-800 hover:text-red-400"><TrashIcon size={14} /></button>
                     </div>
                     <TextureGraphWorkspace key={asset.id} asset={asset} assets={assets} onSave={save} onOpenAsset={(id) => { setSelectedId(id); select([]); }} />
                 </div>
@@ -356,12 +356,12 @@ export const MaterialGraphEditor: React.FC = () => {
                     <aside className="flex w-80 shrink-0 flex-col gap-3 overflow-y-auto border-l border-gray-800 p-3">
                         <div className="flex items-center gap-2">
                             <input aria-label="Material name" value={asset.name} onChange={(event) => rename(event.target.value)} className="min-w-0 flex-1 rounded border border-gray-700 bg-gray-950 px-2 py-1 text-xs text-white" />
-                            <button onClick={remove} aria-label="Delete material" className="rounded p-1 text-gray-500 hover:bg-gray-800 hover:text-red-400"><Trash2 size={14} /></button>
+                            <button onClick={remove} aria-label="Delete material" className="rounded p-1 text-gray-500 hover:bg-gray-800 hover:text-red-400"><TrashIcon size={14} /></button>
                         </div>
                         <MaterialPreview assetId={asset.id} graph={shadingGraph ?? graph} previewNodeIds={previewNodeIds} />
                         {shaderError && (
                             <div role="alert" className="rounded border border-red-900 bg-red-950/60 p-2">
-                                <div className="mb-1 flex items-center gap-1 text-2xs font-bold text-red-300"><AlertTriangle size={12} /> The shader does not compile</div>
+                                <div className="mb-1 flex items-center gap-1 text-2xs font-bold text-red-300"><WarningIcon size={12} /> The shader does not compile</div>
                                 <pre className="max-h-40 overflow-auto whitespace-pre-wrap font-mono text-2xs leading-4 text-red-200">{shaderError}</pre>
                             </div>
                         )}
@@ -378,7 +378,7 @@ export const MaterialGraphEditor: React.FC = () => {
                             <div className="space-y-2 rounded border border-gray-800 bg-gray-900/60 p-2">
                                 <div className="text-2xs font-bold text-gray-200">{selected.size} nodes selected</div>
                                 <div className="flex gap-2">
-                                    <button onClick={() => { update(removeNodes(graph, selected), true); select([]); }} className="flex items-center gap-1 rounded bg-gray-800 px-2 py-1 text-2xs text-gray-200 hover:bg-red-900"><Trash2 size={12} /> Delete</button>
+                                    <button onClick={() => { update(removeNodes(graph, selected), true); select([]); }} className="flex items-center gap-1 rounded bg-gray-800 px-2 py-1 text-2xs text-gray-200 hover:bg-red-900"><TrashIcon size={12} /> Delete</button>
                                     <button
                                         onClick={() => {
                                             const created = createComment(graph.nodes.filter(node => selected.has(node.id)).map(node => nodeRect(node, previews)), { x: 0, y: 0 });
@@ -387,7 +387,7 @@ export const MaterialGraphEditor: React.FC = () => {
                                         }}
                                         className="flex items-center gap-1 rounded bg-gray-800 px-2 py-1 text-2xs text-gray-200 hover:bg-gray-700"
                                     >
-                                        <MessageSquarePlus size={12} /> Comment
+                                        <CommentAddIcon size={12} /> Comment
                                     </button>
                                 </div>
                             </div>

@@ -1,7 +1,7 @@
 
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import * as THREE from 'three';
-import { Send, Crown, Video, Play, GitBranch, CheckSquare, Database, Trash2, ArrowLeft, MessageSquare, Box, Shield, Skull, Calculator, Timer, Hash, Type, ToggleLeft, Activity, X, LayoutTemplate, RefreshCcw, DoorOpen, Save, FolderOpen, Undo2, Redo2, Car, Bomb, Zap } from 'lucide-react';
+import { ArrowLeftIcon, BoltIcon, BombIcon, BranchIcon, CalculatorIcon, CarIcon, ChatIcon, CheckboxIcon, CrossIcon, CrownIcon, CubeIcon, DoorOpenIcon, FolderOpenIcon, HashIcon, LayoutIcon, PulseIcon, RedoIcon, RefreshIcon, SaveIcon, SendIcon, ShieldIcon, SkullIcon, TextIcon, TimerIcon, ToggleIcon, TrashIcon, UndoIcon, VideoIcon } from '../UI/Icons';
 import { useScene } from '../../context/SceneContext';
 import { LogicCanvas, LogicGraphSnapshot } from './LogicCanvas';
 import { LevelBlueprintInspector } from './LevelBlueprintInspector';
@@ -627,10 +627,10 @@ export const LevelBlueprintEditor: React.FC<LevelBlueprintEditorProps> = ({ onCl
                     {/* Templates */}
                     <div className="space-y-1">
                         <div className="px-2 text-2xs font-bold text-gray-500 mb-1 flex items-center gap-1">
-                            <LayoutTemplate size={10} /> Templates
+                            <LayoutIcon size={10} /> Templates
                         </div>
                         <button onClick={handleAddRestartTemplate} className="w-full text-left px-3 py-2 bg-blue-900/20 hover:bg-blue-900/40 border border-blue-900/50 rounded text-xs text-blue-300 flex items-center gap-2 group transition-colors">
-                            <RefreshCcw size={12} /> Restart on Death
+                            <RefreshIcon size={12} /> Restart on Death
                         </button>
                     </div>
 
@@ -640,40 +640,40 @@ export const LevelBlueprintEditor: React.FC<LevelBlueprintEditorProps> = ({ onCl
                     <div className="space-y-1">
                         <div className="px-2 text-2xs font-bold text-gray-500 mb-1">Events</div>
                         <button onClick={() => handleAddEvent('BeginPlay', '')} className="w-full text-left px-3 py-1.5 rounded hover:bg-gray-800 text-xs text-gray-300 flex items-center gap-2 group">
-                            <Activity size={12} className="text-red-400 group-hover:text-red-300" /> Event BeginPlay
+                            <PulseIcon size={12} className="text-red-400 group-hover:text-red-300" /> Event BeginPlay
                         </button>
                         <button onClick={() => handleAddEvent('Tick', '')} className="w-full text-left px-3 py-1.5 rounded hover:bg-gray-800 text-xs text-gray-300 flex items-center gap-2 group">
-                            <Timer size={12} className="text-red-400 group-hover:text-red-300" /> Event Tick
+                            <TimerIcon size={12} className="text-red-400 group-hover:text-red-300" /> Event Tick
                         </button>
                         <button onClick={handleAddBeginOverlap} className="w-full text-left px-3 py-1.5 rounded hover:bg-gray-800 text-xs text-gray-300 flex items-center gap-2 group">
-                            <Box size={12} className="text-red-400 group-hover:text-red-300" /> Actor Begin Overlap
+                            <CubeIcon size={12} className="text-red-400 group-hover:text-red-300" /> Actor Begin Overlap
                         </button>
                         <button onClick={() => handleAddEvent('NetworkEvent', '')} className="w-full text-left px-3 py-1.5 rounded hover:bg-gray-800 text-xs text-gray-300 flex items-center gap-2 group">
-                            <Activity size={12} className="text-red-400 group-hover:text-red-300" /> Network Event
+                            <PulseIcon size={12} className="text-red-400 group-hover:text-red-300" /> Network Event
                         </button>
                         <button onClick={() => handleAddEvent('TimelineEvent', '')} className="w-full text-left px-3 py-1.5 rounded hover:bg-gray-800 text-xs text-gray-300 flex items-center gap-2 group">
-                            <Timer size={12} className="text-red-400 group-hover:text-red-300" /> Timeline Event
+                            <TimerIcon size={12} className="text-red-400 group-hover:text-red-300" /> Timeline Event
                         </button>
                         <button onClick={() => handleAddEvent('DialogueEvent', '')} className="w-full text-left px-3 py-1.5 rounded hover:bg-gray-800 text-xs text-gray-300 flex items-center gap-2 group">
-                            <MessageSquare size={12} className="text-red-400 group-hover:text-red-300" /> Dialogue Event
+                            <ChatIcon size={12} className="text-red-400 group-hover:text-red-300" /> Dialogue Event
                         </button>
                         <button onClick={() => handleAddEvent('VehicleEntered', '')} className="w-full text-left px-3 py-1.5 rounded hover:bg-gray-800 text-xs text-gray-300 flex items-center gap-2 group">
-                            <Car size={12} className="text-red-400 group-hover:text-red-300" /> Vehicle Entered
+                            <CarIcon size={12} className="text-red-400 group-hover:text-red-300" /> Vehicle Entered
                         </button>
                         <button onClick={() => handleAddEvent('VehicleExited', '')} className="w-full text-left px-3 py-1.5 rounded hover:bg-gray-800 text-xs text-gray-300 flex items-center gap-2 group">
-                            <Car size={12} className="text-red-400 group-hover:text-red-300" /> Vehicle Exited
+                            <CarIcon size={12} className="text-red-400 group-hover:text-red-300" /> Vehicle Exited
                         </button>
                         <button onClick={() => handleAddEvent('ObjectBroken', '')} className="w-full text-left px-3 py-1.5 rounded hover:bg-gray-800 text-xs text-gray-300 flex items-center gap-2 group">
-                            <Bomb size={12} className="text-red-400 group-hover:text-red-300" /> Object Broken
+                            <BombIcon size={12} className="text-red-400 group-hover:text-red-300" /> Object Broken
                         </button>
                         <button onClick={() => handleAddEvent('AbilityUsed', '')} className="w-full text-left px-3 py-1.5 rounded hover:bg-gray-800 text-xs text-gray-300 flex items-center gap-2 group">
-                            <Zap size={12} className="text-red-400 group-hover:text-red-300" /> Ability Used
+                            <BoltIcon size={12} className="text-red-400 group-hover:text-red-300" /> Ability Used
                         </button>
                         <button onClick={() => handleAddEvent('ActorDied', '')} className="w-full text-left px-3 py-1.5 rounded hover:bg-gray-800 text-xs text-gray-300 flex items-center gap-2 group">
-                            <Skull size={12} className="text-red-400 group-hover:text-red-300" /> Actor Died
+                            <SkullIcon size={12} className="text-red-400 group-hover:text-red-300" /> Actor Died
                         </button>
                         <button onClick={() => handleAddEvent('AnimNotify', '')} className="w-full text-left px-3 py-1.5 rounded hover:bg-gray-800 text-xs text-gray-300 flex items-center gap-2 group">
-                            <Activity size={12} className="text-red-400 group-hover:text-red-300" /> Animation Notify
+                            <PulseIcon size={12} className="text-red-400 group-hover:text-red-300" /> Animation Notify
                         </button>
                     </div>
 
@@ -681,7 +681,7 @@ export const LevelBlueprintEditor: React.FC<LevelBlueprintEditorProps> = ({ onCl
                     <div className="space-y-1">
                         <div className="px-2 text-2xs font-bold text-gray-500 mb-1">Cameras</div>
                         <button onClick={handleAddSetActiveCamera} className="w-full text-left px-3 py-1.5 rounded hover:bg-gray-800 text-xs text-gray-300 flex items-center gap-2 group">
-                            <Video size={12} className="text-pink-400 group-hover:text-pink-300" /> Set Active Camera
+                            <VideoIcon size={12} className="text-pink-400 group-hover:text-pink-300" /> Set Active Camera
                         </button>
                     </div>
 
@@ -689,7 +689,7 @@ export const LevelBlueprintEditor: React.FC<LevelBlueprintEditorProps> = ({ onCl
                     <div className="space-y-1">
                         <div className="px-2 text-2xs font-bold text-gray-500 mb-1">Dialogue</div>
                         <button onClick={handleAddStartDialogue} className="w-full text-left px-3 py-1.5 rounded hover:bg-gray-800 text-xs text-gray-300 flex items-center gap-2 group">
-                            <MessageSquare size={12} className="text-sky-400 group-hover:text-sky-300" /> Start Dialogue
+                            <ChatIcon size={12} className="text-sky-400 group-hover:text-sky-300" /> Start Dialogue
                         </button>
                     </div>
 
@@ -697,10 +697,10 @@ export const LevelBlueprintEditor: React.FC<LevelBlueprintEditorProps> = ({ onCl
                     <div className="space-y-1">
                         <div className="px-2 text-2xs font-bold text-gray-500 mb-1">Multiplayer</div>
                         <button onClick={handleAddSendNetworkEvent} className="w-full text-left px-3 py-1.5 rounded hover:bg-gray-800 text-xs text-gray-300 flex items-center gap-2 group">
-                            <Send size={12} className="text-teal-400 group-hover:text-teal-300" /> Send Network Event
+                            <SendIcon size={12} className="text-teal-400 group-hover:text-teal-300" /> Send Network Event
                         </button>
                         <button onClick={handleAddIsNetworkHost} className="w-full text-left px-3 py-1.5 rounded hover:bg-gray-800 text-xs text-gray-300 flex items-center gap-2 group">
-                            <Crown size={12} className="text-teal-400 group-hover:text-teal-300" /> Is Network Host
+                            <CrownIcon size={12} className="text-teal-400 group-hover:text-teal-300" /> Is Network Host
                         </button>
                     </div>
 
@@ -708,10 +708,10 @@ export const LevelBlueprintEditor: React.FC<LevelBlueprintEditorProps> = ({ onCl
                     <div className="space-y-1">
                         <div className="px-2 text-2xs font-bold text-gray-500 mb-1">Values</div>
                         <div className="grid grid-cols-2 gap-1 px-1">
-                            <button onClick={() => handleAddLiteral('Float')} className="px-2 py-1 bg-gray-800 hover:bg-gray-700 rounded text-2xs text-green-400 border border-green-900/30 flex items-center justify-center gap-1"><Hash size={10} /> Float</button>
-                            <button onClick={() => handleAddLiteral('Integer')} className="px-2 py-1 bg-gray-800 hover:bg-gray-700 rounded text-2xs text-cyan-400 border border-cyan-900/30 flex items-center justify-center gap-1"><Hash size={10} /> Int</button>
-                            <button onClick={() => handleAddLiteral('String')} className="px-2 py-1 bg-gray-800 hover:bg-gray-700 rounded text-2xs text-pink-400 border border-pink-900/30 flex items-center justify-center gap-1"><Type size={10} /> String</button>
-                            <button onClick={() => handleAddLiteral('Boolean')} className="px-2 py-1 bg-gray-800 hover:bg-gray-700 rounded text-2xs text-red-400 border border-red-900/30 flex items-center justify-center gap-1"><ToggleLeft size={10} /> Bool</button>
+                            <button onClick={() => handleAddLiteral('Float')} className="px-2 py-1 bg-gray-800 hover:bg-gray-700 rounded text-2xs text-green-400 border border-green-900/30 flex items-center justify-center gap-1"><HashIcon size={10} /> Float</button>
+                            <button onClick={() => handleAddLiteral('Integer')} className="px-2 py-1 bg-gray-800 hover:bg-gray-700 rounded text-2xs text-cyan-400 border border-cyan-900/30 flex items-center justify-center gap-1"><HashIcon size={10} /> Int</button>
+                            <button onClick={() => handleAddLiteral('String')} className="px-2 py-1 bg-gray-800 hover:bg-gray-700 rounded text-2xs text-pink-400 border border-pink-900/30 flex items-center justify-center gap-1"><TextIcon size={10} /> String</button>
+                            <button onClick={() => handleAddLiteral('Boolean')} className="px-2 py-1 bg-gray-800 hover:bg-gray-700 rounded text-2xs text-red-400 border border-red-900/30 flex items-center justify-center gap-1"><ToggleIcon size={10} /> Bool</button>
                         </div>
                     </div>
 
@@ -719,10 +719,10 @@ export const LevelBlueprintEditor: React.FC<LevelBlueprintEditorProps> = ({ onCl
                     <div className="space-y-1">
                         <div className="px-2 text-2xs font-bold text-gray-500 mb-1">Math</div>
                         <div className="grid grid-cols-2 gap-1 px-1">
-                            <button onClick={() => handleAddMath('Add', 'Add', 'Float')} className="px-2 py-1 bg-gray-800 hover:bg-gray-700 rounded text-2xs text-gray-300 flex items-center gap-2"><Calculator size={10} /> Add</button>
-                            <button onClick={() => handleAddMath('Subtract', 'Sub', 'Float')} className="px-2 py-1 bg-gray-800 hover:bg-gray-700 rounded text-2xs text-gray-300 flex items-center gap-2"><Calculator size={10} /> Sub</button>
-                            <button onClick={() => handleAddMath('Add', 'Add (Int)', 'Integer')} className="px-2 py-1 bg-gray-800 hover:bg-gray-700 rounded text-2xs text-gray-300 flex items-center gap-2"><Calculator size={10} /> Add (Int)</button>
-                            <button onClick={() => handleAddToString()} className="px-2 py-1 bg-gray-800 hover:bg-gray-700 rounded text-2xs text-gray-300 flex items-center gap-2"><Type size={10} /> To Str</button>
+                            <button onClick={() => handleAddMath('Add', 'Add', 'Float')} className="px-2 py-1 bg-gray-800 hover:bg-gray-700 rounded text-2xs text-gray-300 flex items-center gap-2"><CalculatorIcon size={10} /> Add</button>
+                            <button onClick={() => handleAddMath('Subtract', 'Sub', 'Float')} className="px-2 py-1 bg-gray-800 hover:bg-gray-700 rounded text-2xs text-gray-300 flex items-center gap-2"><CalculatorIcon size={10} /> Sub</button>
+                            <button onClick={() => handleAddMath('Add', 'Add (Int)', 'Integer')} className="px-2 py-1 bg-gray-800 hover:bg-gray-700 rounded text-2xs text-gray-300 flex items-center gap-2"><CalculatorIcon size={10} /> Add (Int)</button>
+                            <button onClick={() => handleAddToString()} className="px-2 py-1 bg-gray-800 hover:bg-gray-700 rounded text-2xs text-gray-300 flex items-center gap-2"><TextIcon size={10} /> To Str</button>
                         </div>
                     </div>
 
@@ -730,25 +730,25 @@ export const LevelBlueprintEditor: React.FC<LevelBlueprintEditorProps> = ({ onCl
                     <div className="space-y-1">
                         <div className="px-2 text-2xs font-bold text-gray-500 mb-1">Actions</div>
                         <button onClick={handleAddPrintString} className="w-full text-left px-3 py-1.5 rounded hover:bg-gray-800 text-xs text-gray-300 flex items-center gap-2">
-                            <MessageSquare size={12} className="text-pink-400" /> Print String
+                            <ChatIcon size={12} className="text-pink-400" /> Print String
                         </button>
                         <button onClick={handleAddDestroyActor} className="w-full text-left px-3 py-1.5 rounded hover:bg-gray-800 text-xs text-gray-300 flex items-center gap-2">
-                            <Trash2 size={12} className="text-red-400" /> Destroy Actor
+                            <TrashIcon size={12} className="text-red-400" /> Destroy Actor
                         </button>
                         <button onClick={() => handleAddLevelAction('Restart', 'Restart Level')} className="w-full text-left px-3 py-1.5 rounded hover:bg-gray-800 text-xs text-gray-300 flex items-center gap-2">
-                            <RefreshCcw size={12} className="text-indigo-400" /> Restart Level
+                            <RefreshIcon size={12} className="text-indigo-400" /> Restart Level
                         </button>
                         <button onClick={() => handleAddLevelAction('EndGame', 'End Game')} className="w-full text-left px-3 py-1.5 rounded hover:bg-gray-800 text-xs text-gray-300 flex items-center gap-2">
-                            <X size={12} className="text-indigo-400" /> End Game
+                            <CrossIcon size={12} className="text-indigo-400" /> End Game
                         </button>
                         <button onClick={() => handleAddLevelAction('OpenLevel', 'Open Level')} className="w-full text-left px-3 py-1.5 rounded hover:bg-gray-800 text-xs text-gray-300 flex items-center gap-2">
-                            <DoorOpen size={12} className="text-indigo-400" /> Open Level
+                            <DoorOpenIcon size={12} className="text-indigo-400" /> Open Level
                         </button>
                         <button onClick={() => handleAddLevelAction('SaveGame', 'Save Game')} className="w-full text-left px-3 py-1.5 rounded hover:bg-gray-800 text-xs text-gray-300 flex items-center gap-2">
-                            <Save size={12} className="text-indigo-400" /> Save Game
+                            <SaveIcon size={12} className="text-indigo-400" /> Save Game
                         </button>
                         <button onClick={() => handleAddLevelAction('LoadGame', 'Load Game')} className="w-full text-left px-3 py-1.5 rounded hover:bg-gray-800 text-xs text-gray-300 flex items-center gap-2">
-                            <FolderOpen size={12} className="text-indigo-400" /> Load Game
+                            <FolderOpenIcon size={12} className="text-indigo-400" /> Load Game
                         </button>
                     </div>
 
@@ -756,10 +756,10 @@ export const LevelBlueprintEditor: React.FC<LevelBlueprintEditorProps> = ({ onCl
                     <div className="space-y-1">
                         <div className="px-2 text-2xs font-bold text-gray-500 mb-1">Logic</div>
                         <button onClick={handleAddBranch} className="w-full text-left px-3 py-1.5 rounded hover:bg-gray-800 text-xs text-gray-300 flex items-center gap-2">
-                            <GitBranch size={12} className="text-gray-200" /> Branch (If)
+                            <BranchIcon size={12} className="text-gray-200" /> Branch (If)
                         </button>
                         <button onClick={() => handleAddCompare('Greater', 'Greater (>)' )} className="w-full text-left px-3 py-1.5 rounded hover:bg-gray-800 text-xs text-gray-300 flex items-center gap-2">
-                            <CheckSquare size={12} className="text-blue-400" /> Compare
+                            <CheckboxIcon size={12} className="text-blue-400" /> Compare
                         </button>
                     </div>
 
@@ -787,7 +787,7 @@ export const LevelBlueprintEditor: React.FC<LevelBlueprintEditorProps> = ({ onCl
                             {contextVariables.map((v, i) => (
                                 <div key={i} className="flex bg-gray-800 rounded mx-1 mb-1 border border-gray-700 overflow-hidden">
                                     <div className="px-2 py-1 bg-gray-900 flex items-center justify-center border-r border-gray-700">
-                                        {v.blueprintType === 'Player' ? <Shield size={10} className="text-blue-400" /> : <Skull size={10} className="text-red-400" />}
+                                        {v.blueprintType === 'Player' ? <ShieldIcon size={10} className="text-blue-400" /> : <SkullIcon size={10} className="text-red-400" />}
                                     </div>
                                     <div className="flex-1 flex flex-col justify-center px-2 py-0.5 min-w-0">
                                         <div className="text-2xs font-bold text-gray-300 truncate">{v.name}</div>
@@ -810,7 +810,7 @@ export const LevelBlueprintEditor: React.FC<LevelBlueprintEditorProps> = ({ onCl
                 <div className="h-12 bg-gray-900 border-b border-gray-800 flex items-center justify-between px-4 shrink-0 z-10 shadow-sm">
                     <div className="flex items-center gap-3">
                         <button onClick={onClose} className="p-1.5 rounded-full hover:bg-gray-800 text-gray-400 hover:text-white transition-colors">
-                            <ArrowLeft size={16} />
+                            <ArrowLeftIcon size={16} />
                         </button>
                         <div>
                             <h1 className="text-sm font-bold text-gray-200">Level blueprint</h1>
@@ -825,7 +825,7 @@ export const LevelBlueprintEditor: React.FC<LevelBlueprintEditorProps> = ({ onCl
                             aria-label="Undo"
                             className="p-1.5 rounded hover:bg-gray-800 text-gray-400 hover:text-white disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-gray-400 transition-colors"
                         >
-                            <Undo2 size={14} />
+                            <UndoIcon size={14} />
                         </button>
                         <button
                             onClick={history.redo}
@@ -834,14 +834,14 @@ export const LevelBlueprintEditor: React.FC<LevelBlueprintEditorProps> = ({ onCl
                             aria-label="Redo"
                             className="p-1.5 rounded hover:bg-gray-800 text-gray-400 hover:text-white disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-gray-400 transition-colors"
                         >
-                            <Redo2 size={14} />
+                            <RedoIcon size={14} />
                         </button>
                         {selectedNode && (
                             <button 
                                 onClick={handleDelete}
                                 className="flex items-center gap-2 px-3 py-1.5 bg-red-900/20 hover:bg-red-900/40 text-red-400 border border-red-900/50 rounded text-xs font-bold transition-colors"
                             >
-                                <Trash2 size={12} /> Delete Node
+                                <TrashIcon size={12} /> Delete Node
                             </button>
                         )}
                     </div>

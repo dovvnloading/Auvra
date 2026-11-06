@@ -2,7 +2,7 @@
 import React, { useMemo, forwardRef, useState, useRef, useImperativeHandle } from 'react';
 import * as THREE from 'three';
 import { Billboard, Html } from '@react-three/drei';
-import { Skull, Music, Sun } from 'lucide-react';
+import { MusicIcon, SkullIcon, SunIcon } from '../UI/Icons';
 import { LoadedModelData, LevelObject } from '../../types';
 import { getComponentDefinition } from '../../runtime/components/registry';
 import { cloneCharacterModel } from '../../utils/mountedParts';
@@ -232,17 +232,17 @@ export const LevelObjectRenderer = forwardRef<THREE.Group, LevelObjectRendererPr
 
     // --- CASE 1: Spawn Point ---
     if (data.type === 'spawn_point') {
-        return renderGizmo("#ef4444", <Skull size={24} />, "SPAWNER");
+        return renderGizmo("#ef4444", <SkullIcon size={24} />, "SPAWNER");
     }
 
     // --- CASE 2: Audio Emitter ---
     if (data.type === 'audio_emitter') {
-        return renderGizmo("#f59e0b", <Music size={24} />, "AUDIO");
+        return renderGizmo("#f59e0b", <MusicIcon size={24} />, "AUDIO");
     }
 
     // --- CASE 3: Sky Sphere ---
     if (data.type === 'sky_sphere') {
-        return renderGizmo("#22d3ee", <Sun size={24} />, "SKYLIGHT");
+        return renderGizmo("#22d3ee", <SunIcon size={24} />, "SKYLIGHT");
     }
 
     // --- CASE 4: Empty object (a prop with no model): a small marker so it can be seen and clicked ---

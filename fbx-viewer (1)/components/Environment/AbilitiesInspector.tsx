@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { ChevronDown, ChevronRight, Plus, Trash2 } from 'lucide-react';
+import { ChevronDownIcon, ChevronRightIcon, PlusIcon, TrashIcon } from '../UI/Icons';
 import type { ComponentInspectorProps } from '../../runtime/components/types';
 import {
     ABILITY_PRESET_IDS,
@@ -112,10 +112,10 @@ const Card: React.FC<{ title: string; onRemove: () => void; children: React.Reac
         <div className="rounded border border-gray-800 bg-gray-900/60">
             <div className="flex items-center gap-1 px-1.5 py-1">
                 <button type="button" aria-label={`${open ? 'Collapse' : 'Expand'} ${title}`} onClick={() => setOpen(!open)} className="text-gray-400 hover:text-gray-200">
-                    {open ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
+                    {open ? <ChevronDownIcon size={11} /> : <ChevronRightIcon size={11} />}
                 </button>
                 <span className="flex-1 truncate text-2xs text-gray-200">{title}</span>
-                <button type="button" aria-label={`Remove ${title}`} onClick={onRemove} className="text-gray-500 hover:text-red-400"><Trash2 size={11} /></button>
+                <button type="button" aria-label={`Remove ${title}`} onClick={onRemove} className="text-gray-500 hover:text-red-400"><TrashIcon size={11} /></button>
             </div>
             {open && <div className="space-y-1 border-t border-gray-800 p-1.5">{children}</div>}
         </div>
@@ -172,7 +172,7 @@ export const AbilitiesInspector: React.FC<ComponentInspectorProps> = ({ componen
                     <div key={attribute.name} className="space-y-1 rounded border border-gray-800 bg-gray-900/60 p-1.5">
                         <div className="grid grid-cols-[1fr_14px] items-center gap-1">
                             <TextInput label={`Attribute ${index + 1} name`} value={attribute.name} onCommit={(name) => updateAttribute(index, { name })} />
-                            <button type="button" aria-label={`Remove ${attribute.name}`} onClick={() => commit({ attributes: set.attributes.filter((_, i) => i !== index) })} className="text-gray-500 hover:text-red-400"><Trash2 size={11} /></button>
+                            <button type="button" aria-label={`Remove ${attribute.name}`} onClick={() => commit({ attributes: set.attributes.filter((_, i) => i !== index) })} className="text-gray-500 hover:text-red-400"><TrashIcon size={11} /></button>
                         </div>
                         <div className="grid grid-cols-3 gap-1 text-2xs text-gray-500">
                             <label className="space-y-0.5"><span>Base</span><NumberInput label={`${attribute.name} base`} value={attribute.base} onCommit={(base) => updateAttribute(index, { base })} /></label>
@@ -183,7 +183,7 @@ export const AbilitiesInspector: React.FC<ComponentInspectorProps> = ({ componen
                         </div>
                     </div>
                 ))}
-                <button type="button" className={BUTTON} onClick={() => commit({ attributes: [...set.attributes, { name: uniqueId(attributeNames, 'attribute'), base: 100, min: 0, max: 100, regen: 0, regenDelay: 0 }] })}><Plus size={10} /> Attribute</button>
+                <button type="button" className={BUTTON} onClick={() => commit({ attributes: [...set.attributes, { name: uniqueId(attributeNames, 'attribute'), base: 100, min: 0, max: 100, regen: 0, regenDelay: 0 }] })}><PlusIcon size={10} /> Attribute</button>
                 <p className="text-2xs text-gray-500">A bound can be another attribute's name (health's maximum is maxHealth). An actor with health takes damage from weapons and blasts, less its armor.</p>
             </Section>
 
@@ -208,10 +208,10 @@ export const AbilitiesInspector: React.FC<ComponentInspectorProps> = ({ componen
                                 <Select label={`Effect ${effect.id} change ${m + 1} attribute`} value={modifier.attribute} options={attributeNames.includes(modifier.attribute) ? attributeNames : [modifier.attribute, ...attributeNames]} onChange={(attribute) => updateEffect(index, { modifiers: effect.modifiers.map((entry, i) => (i === m ? { ...entry, attribute } : entry)) })} />
                                 <Select label={`Effect ${effect.id} change ${m + 1} operation`} value={modifier.operation} options={MODIFIER_OPERATIONS} labels={{ add: 'Add', multiply: 'Multiply by 1 +', override: 'Set to' }} onChange={(operation) => updateEffect(index, { modifiers: effect.modifiers.map((entry, i) => (i === m ? { ...entry, operation } : entry)) })} />
                                 <NumberInput label={`Effect ${effect.id} change ${m + 1} value`} value={modifier.value} onCommit={(value) => updateEffect(index, { modifiers: effect.modifiers.map((entry, i) => (i === m ? { ...entry, value } : entry)) })} />
-                                <button type="button" aria-label={`Remove change ${m + 1}`} onClick={() => updateEffect(index, { modifiers: effect.modifiers.filter((_, i) => i !== m) })} className="text-gray-500 hover:text-red-400"><Trash2 size={11} /></button>
+                                <button type="button" aria-label={`Remove change ${m + 1}`} onClick={() => updateEffect(index, { modifiers: effect.modifiers.filter((_, i) => i !== m) })} className="text-gray-500 hover:text-red-400"><TrashIcon size={11} /></button>
                             </div>
                         ))}
-                        {attributeNames.length > 0 && <button type="button" className={BUTTON} onClick={() => updateEffect(index, { modifiers: [...effect.modifiers, { attribute: attributeNames[0], operation: 'add', value: -10 }] })}><Plus size={10} /> Change</button>}
+                        {attributeNames.length > 0 && <button type="button" className={BUTTON} onClick={() => updateEffect(index, { modifiers: [...effect.modifiers, { attribute: attributeNames[0], operation: 'add', value: -10 }] })}><PlusIcon size={10} /> Change</button>}
                         <Row label="Grants tags"><TagsInput label={`Effect ${effect.id} granted tags`} value={effect.grantedTags} onCommit={(grantedTags) => updateEffect(index, { grantedTags })} /></Row>
                         <Row label="Needs tags"><TagsInput label={`Effect ${effect.id} required tags`} value={effect.requiredTags} onCommit={(requiredTags) => updateEffect(index, { requiredTags })} /></Row>
                         <Row label="Immune with"><TagsInput label={`Effect ${effect.id} blocked tags`} value={effect.blockedTags} onCommit={(blockedTags) => updateEffect(index, { blockedTags })} /></Row>
@@ -221,7 +221,7 @@ export const AbilitiesInspector: React.FC<ComponentInspectorProps> = ({ componen
                 <button type="button" className={BUTTON} onClick={() => {
                     const id = uniqueId(set.effects.map(effect => effect.id), 'effect');
                     commit({ effects: [...set.effects, { id, name: id, duration: 'instant', seconds: 5, period: 0, modifiers: [], grantedTags: [], requiredTags: [], blockedTags: [], removeEffectsWithTags: [], stacking: 'refresh', maxStacks: 1 }] });
-                }}><Plus size={10} /> Effect</button>
+                }}><PlusIcon size={10} /> Effect</button>
             </Section>
 
             <Section title="Abilities">
@@ -237,10 +237,10 @@ export const AbilitiesInspector: React.FC<ComponentInspectorProps> = ({ componen
                             <div key={c} className="grid grid-cols-[1.4fr_1fr_14px] items-center gap-1">
                                 <Select label={`Ability ${ability.id} cost ${c + 1} attribute`} value={cost.attribute} options={attributeNames.includes(cost.attribute) ? attributeNames : [cost.attribute, ...attributeNames]} onChange={(attribute) => updateAbility(index, { costs: ability.costs.map((entry, i) => (i === c ? { ...entry, attribute } : entry)) })} />
                                 <NumberInput label={`Ability ${ability.id} cost ${c + 1} amount`} value={cost.amount} onCommit={(amount) => updateAbility(index, { costs: ability.costs.map((entry, i) => (i === c ? { ...entry, amount } : entry)) })} />
-                                <button type="button" aria-label={`Remove cost ${c + 1}`} onClick={() => updateAbility(index, { costs: ability.costs.filter((_, i) => i !== c) })} className="text-gray-500 hover:text-red-400"><Trash2 size={11} /></button>
+                                <button type="button" aria-label={`Remove cost ${c + 1}`} onClick={() => updateAbility(index, { costs: ability.costs.filter((_, i) => i !== c) })} className="text-gray-500 hover:text-red-400"><TrashIcon size={11} /></button>
                             </div>
                         ))}
-                        {attributeNames.length > 0 && ability.costs.length < 4 && <button type="button" className={BUTTON} onClick={() => updateAbility(index, { costs: [...ability.costs, { attribute: attributeNames[0], amount: 10 }] })}><Plus size={10} /> Cost</button>}
+                        {attributeNames.length > 0 && ability.costs.length < 4 && <button type="button" className={BUTTON} onClick={() => updateAbility(index, { costs: [...ability.costs, { attribute: attributeNames[0], amount: 10 }] })}><PlusIcon size={10} /> Cost</button>}
                         <EffectPicker label="On the user" effects={set.effects} value={ability.selfEffects} onCommit={(selfEffects) => updateAbility(index, { selfEffects })} />
                         <EffectPicker label="On the target" effects={set.effects} value={ability.targetEffects} onCommit={(targetEffects) => updateAbility(index, { targetEffects })} />
                         <Row label="Needs tags"><TagsInput label={`Ability ${ability.id} required tags`} value={ability.requiredTags} onCommit={(requiredTags) => updateAbility(index, { requiredTags })} /></Row>
@@ -252,7 +252,7 @@ export const AbilitiesInspector: React.FC<ComponentInspectorProps> = ({ componen
                 <button type="button" className={BUTTON} onClick={() => {
                     const id = uniqueId(set.abilities.map(ability => ability.id), 'ability');
                     commit({ abilities: [...set.abilities, { id, name: id, costs: [], cooldown: 1, activeTime: 0, requiredTags: [], blockedTags: [], activeTags: [], cancelTags: [], selfEffects: [], targetEffects: [], range: 0, input: '' }] });
-                }}><Plus size={10} /> Ability</button>
+                }}><PlusIcon size={10} /> Ability</button>
             </Section>
 
             <Section title="At start">

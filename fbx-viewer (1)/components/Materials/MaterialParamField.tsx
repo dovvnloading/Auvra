@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Trash2 } from 'lucide-react';
+import { TrashIcon } from '../UI/Icons';
 import { MAX_RAMP_STOPS, readParam, type MaterialParamDef, type MaterialRamp } from '../../runtime/materials/materialGraph';
 import { ColourFieldRgb } from '../UI/ColourPicker';
 
@@ -128,7 +128,7 @@ export const RampEditor: React.FC<{ label: string; ramp: MaterialRamp; onChange:
                 <span className="flex-1 text-2xs text-gray-500">{stops.length}/{MAX_RAMP_STOPS} stops</span>
                 <button aria-label={`Remove ${label} stop`} disabled={stops.length <= 1} className="rounded p-1 text-gray-500 hover:text-red-400 disabled:opacity-30"
                     onClick={() => { onChange({ stops: stops.filter((_, at) => at !== index) }); setSelected(Math.max(0, index - 1)); }}>
-                    <Trash2 size={12} />
+                    <TrashIcon size={12} />
                 </button>
             </div>
         </div>

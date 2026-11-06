@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Link2, Link2Off, Sigma, Upload } from 'lucide-react';
+import { LinkIcon, SigmaIcon, UnlinkIcon, UploadIcon } from '../UI/Icons';
 import { expressionError } from '../../texturing/graph/expressions';
 import { readRamp } from '../../texturing/graph/nodeKit';
 import { isParamLink, type GraphParameter, type GraphParameterKind, type RampStop, type TexParamDef } from '../../texturing/graph/types';
@@ -151,7 +151,7 @@ export const TextureParamField: React.FC<{
         <button ref={anchor} aria-label={`Link ${param.label} to a parameter`} title="Follow a parameter or formula, or expose as a parameter"
             onClick={() => { setFormula(linked && '$expr' in linked ? linked.$expr : ''); setMenu(true); }}
             className={`rounded p-0.5 ${linked ? 'text-sky-400 hover:text-sky-300' : 'text-zinc-600 hover:text-zinc-300'}`}>
-            {linked && '$expr' in linked ? <Sigma size={12} /> : <Link2 size={12} />}
+            {linked && '$expr' in linked ? <SigmaIcon size={12} /> : <LinkIcon size={12} />}
         </button>
     );
 
@@ -166,14 +166,14 @@ export const TextureParamField: React.FC<{
                 <div className="flex items-center gap-1.5 rounded border border-sky-900 bg-sky-950/40 px-1.5 py-1 text-2xs text-sky-200">
                     {'$bind' in linked ? <span className="flex-1 truncate">Follows <b>{parameters.find((p) => p.name === linked.$bind)?.label ?? linked.$bind}</b></span>
                         : <span className="flex-1 truncate font-mono">{linked.$expr}</span>}
-                    <button aria-label="Stop following" title="Stop following" onClick={() => onChange(structuredClone(param.default))} className="text-sky-400 hover:text-white"><Link2Off size={12} /></button>
+                    <button aria-label="Stop following" title="Stop following" onClick={() => onChange(structuredClone(param.default))} className="text-sky-400 hover:text-white"><UnlinkIcon size={12} /></button>
                 </div>
             ) : !inline(param) && <ParamControl param={param} value={value} textures={textures} onChange={onChange} />}
             {(problem || formulaProblem) && <p className="text-2xs text-amber-400">{formulaProblem ?? problem}</p>}
             <Popover anchor={anchor} open={menu} onClose={() => setMenu(false)} width={260} label={`Link ${param.label}`}>
                 <div className="space-y-2 p-2 text-xs">
                     <button onClick={() => { onExpose(); setMenu(false); }} className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-zinc-100 hover:bg-zinc-800">
-                        <Upload size={12} /> Expose as a new parameter
+                        <UploadIcon size={12} /> Expose as a new parameter
                     </button>
                     {choices.length > 0 && (
                         <div>

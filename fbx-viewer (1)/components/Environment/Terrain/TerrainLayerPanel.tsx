@@ -1,5 +1,5 @@
 import React, { useCallback, useMemo, useRef, useState } from 'react';
-import { ArrowDown, ArrowUp, Download, Eraser, ImageOff, PaintBucket, Plus, Trash2, Upload, Wand2 } from 'lucide-react';
+import { ArrowDownIcon, ArrowUpIcon, BucketIcon, DownloadIcon, EraserIcon, ImageOffIcon, PlusIcon, TrashIcon, UploadIcon, WandIcon } from '../../UI/Icons';
 import { LevelObject, TerrainData, TerrainGrassVariety, TerrainTextureLayer } from '../../../types';
 import { useScene } from '../../../context/SceneContext';
 import { useNotification } from '../../../context/NotificationContext';
@@ -227,7 +227,7 @@ export const TerrainLayerPanel: React.FC<TerrainLayerPanelProps> = ({ terrain, s
             <Section
                 title={`Layers (${layers.length} of ${MAX_TERRAIN_LAYERS})`}
                 actions={(
-                    <Button size="sm" disabled={layers.length >= MAX_TERRAIN_LAYERS || !terrainData} onClick={addLayer} title="Add a layer"><Plus size={11} /> Add</Button>
+                    <Button size="sm" disabled={layers.length >= MAX_TERRAIN_LAYERS || !terrainData} onClick={addLayer} title="Add a layer"><PlusIcon size={11} /> Add</Button>
                 )}
             >
                 {layers.length === 0 && (
@@ -253,7 +253,7 @@ export const TerrainLayerPanel: React.FC<TerrainLayerPanelProps> = ({ terrain, s
                                 <span className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded bg-gray-700">
                                     {texture
                                         ? <img src={texture.url} alt="" className="h-full w-full object-cover" draggable={false} />
-                                        : <ImageOff size={13} className="text-ink-3" />}
+                                        : <ImageOffIcon size={13} className="text-ink-3" />}
                                 </span>
                                 <span className="min-w-0 flex-1">
                                     <span className="block truncate text-xs text-ink">{entry.name || texture?.name || `Layer ${index + 1}`}</span>
@@ -277,9 +277,9 @@ export const TerrainLayerPanel: React.FC<TerrainLayerPanelProps> = ({ terrain, s
                     title={layer.name || `Layer ${selected + 1}`}
                     actions={(
                         <div className="flex gap-0.5">
-                            <Button size="sm" variant="ghost" disabled={selected === 0 || splatPending} title="Move up" onClick={() => moveLayer(-1)}><ArrowUp size={11} /></Button>
-                            <Button size="sm" variant="ghost" disabled={selected === layers.length - 1 || splatPending} title="Move down" onClick={() => moveLayer(1)}><ArrowDown size={11} /></Button>
-                            <Button size="sm" variant="danger" disabled={splatPending} title="Remove this layer: its paint goes to the base layer" onClick={removeLayer}><Trash2 size={11} /></Button>
+                            <Button size="sm" variant="ghost" disabled={selected === 0 || splatPending} title="Move up" onClick={() => moveLayer(-1)}><ArrowUpIcon size={11} /></Button>
+                            <Button size="sm" variant="ghost" disabled={selected === layers.length - 1 || splatPending} title="Move down" onClick={() => moveLayer(1)}><ArrowDownIcon size={11} /></Button>
+                            <Button size="sm" variant="danger" disabled={splatPending} title="Remove this layer: its paint goes to the base layer" onClick={removeLayer}><TrashIcon size={11} /></Button>
                         </div>
                     )}
                 >
@@ -340,10 +340,10 @@ export const TerrainLayerPanel: React.FC<TerrainLayerPanelProps> = ({ terrain, s
                         </label>
                     </div>
                     <div className="mt-2 grid grid-cols-2 gap-1">
-                        <Button size="md" disabled={splatPending} onClick={() => editWeights(grid => fillLayer(grid, selected))} title="Paint this layer over the whole terrain"><PaintBucket size={12} /> Fill</Button>
-                        <Button size="md" disabled={splatPending} onClick={() => editWeights(grid => clearLayer(grid, selected))} title="Take this layer off the whole terrain"><Eraser size={12} /> Clear</Button>
-                        <Button size="md" disabled={splatPending} onClick={() => importFile.current?.click()} title="Set this layer from an 8 or 16 bit grey PNG"><Upload size={12} /> Import</Button>
-                        <Button size="md" onClick={() => void exportWeights()} title="Save this layer's weights as a grey PNG"><Download size={12} /> Export</Button>
+                        <Button size="md" disabled={splatPending} onClick={() => editWeights(grid => fillLayer(grid, selected))} title="Paint this layer over the whole terrain"><BucketIcon size={12} /> Fill</Button>
+                        <Button size="md" disabled={splatPending} onClick={() => editWeights(grid => clearLayer(grid, selected))} title="Take this layer off the whole terrain"><EraserIcon size={12} /> Clear</Button>
+                        <Button size="md" disabled={splatPending} onClick={() => importFile.current?.click()} title="Set this layer from an 8 or 16 bit grey PNG"><UploadIcon size={12} /> Import</Button>
+                        <Button size="md" onClick={() => void exportWeights()} title="Save this layer's weights as a grey PNG"><DownloadIcon size={12} /> Export</Button>
                     </div>
                     <input
                         ref={importFile}
@@ -370,7 +370,7 @@ export const TerrainLayerPanel: React.FC<TerrainLayerPanelProps> = ({ terrain, s
                                 <div key={index} className="rounded border border-line p-1.5">
                                     <div className="flex items-center gap-1.5 pb-1">
                                         <span className="flex-1 truncate text-xs text-ink">{models.find(model => model.id === grass.modelId)?.name ?? 'Missing model'}</span>
-                                        <Button size="sm" variant="ghost" title="Stop growing this" onClick={() => commitLayers(layers.map((current, at) => (at === selected ? { ...current, grass: (current.grass ?? []).filter((_, kept) => kept !== index) } : current)))}><Trash2 size={11} /></Button>
+                                        <Button size="sm" variant="ghost" title="Stop growing this" onClick={() => commitLayers(layers.map((current, at) => (at === selected ? { ...current, grass: (current.grass ?? []).filter((_, kept) => kept !== index) } : current)))}><TrashIcon size={11} /></Button>
                                     </div>
                                     <div className="space-y-1">
                                         <NumberRow label="Per m²" unit="" step={0.5} min={0} max={64} value={grass.density} hint="Copies per square metre" onChange={(density) => write({ density })} />
@@ -419,7 +419,7 @@ export const TerrainLayerPanel: React.FC<TerrainLayerPanelProps> = ({ terrain, s
                             </div>
                         </Row>
                         <NumberRow label="Soft edge" unit="" min={0} max={45} value={rule.softness} hint="How gradually it starts and stops" onChange={(softness) => setRule(current => ({ ...current, softness }))} />
-                        <Button size="md" className="mt-1 w-full" disabled={splatPending} onClick={paintByRule}><Wand2 size={12} /> Paint This Layer</Button>
+                        <Button size="md" className="mt-1 w-full" disabled={splatPending} onClick={paintByRule}><WandIcon size={12} /> Paint This Layer</Button>
                     </div>
                 </Section>
             )}

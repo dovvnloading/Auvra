@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
-import { RotateCw } from 'lucide-react';
+import { RotateIcon } from '../UI/Icons';
 import type { TextureGpu } from '../../texturing/gpu/textureGpu';
 import { IconButton } from '../UI/kit';
 import { Select } from '../UI/Select';
@@ -219,7 +219,7 @@ export const TextureView3D: React.FC<{
                 <span className="text-2xs font-semibold text-zinc-300">3D</span>
                 <Select value={shape} options={shapes} onChange={(value) => setShape(value as PreviewShape)} className="w-36" />
                 <span className="flex-1" />
-                <IconButton label={spin ? 'Stop turning' : 'Turn slowly'} active={spin} onClick={() => setSpin((value) => !value)}><RotateCw size={13} /></IconButton>
+                <IconButton label={spin ? 'Stop turning' : 'Turn slowly'} active={spin} onClick={() => setSpin((value) => !value)}><RotateIcon size={13} /></IconButton>
             </div>
             <div
                 ref={host}

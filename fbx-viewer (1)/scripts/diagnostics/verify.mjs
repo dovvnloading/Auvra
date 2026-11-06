@@ -175,6 +175,7 @@ const EXEMPT = new Map(Object.entries({
   'components/Sandbox/combat.ts': 'hot-loop',
   'components/UI/Browser/browserFolders.ts': 'pure-utility',
   'components/UI/colourMath.ts': 'pure-utility',
+  'components/UI/Icons/glyphs.ts': 'data-model',
   'runtime/audioMixer.ts': 'pure-utility',
   'runtime/components/registry.ts': 'data-model',
   'runtime/levelVariables.ts': 'pure-derived-state',

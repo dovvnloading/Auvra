@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Search } from 'lucide-react';
+import { SearchIcon } from '../UI/Icons';
 import type { MaterialNodeDef } from '../../runtime/materials/materialGraph';
 import { searchNodes } from './materialGraphEditing';
 
@@ -44,7 +44,7 @@ export const MaterialNodePalette: React.FC<{
         >
             {context && <div className="mb-1 truncate px-1 text-2xs text-blue-300">{context}</div>}
             <div className="mb-2 flex items-center gap-1 rounded border border-gray-700 bg-gray-950 px-2">
-                <Search size={12} className="text-gray-500" />
+                <SearchIcon size={12} className="text-gray-500" />
                 <input
                     autoFocus
                     aria-label="Search nodes"

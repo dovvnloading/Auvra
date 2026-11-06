@@ -1,5 +1,5 @@
 import React, { useEffect, useRef } from 'react';
-import { Bone, Loader2 } from 'lucide-react';
+import { BoneIcon, SpinnerIcon } from '../Icons';
 import { useScene } from '../../../context/SceneContext';
 import type { LoadedModelData } from '../../../types';
 import type { BodyKind } from '../../../utils/autoRig/rigBody';
@@ -86,7 +86,7 @@ export const AutoRigPanel: React.FC<{ model: LoadedModelData }> = ({ model }) =>
   if (stage === 'saving') {
     return (
       <div className="flex flex-1 flex-col items-center justify-center gap-2 p-8 text-center text-xs text-ink-3">
-        <Loader2 size={16} className="animate-spin" />
+        <SpinnerIcon size={16} className="animate-spin" />
         <span>Saving the model with its skeleton</span>
       </div>
     );
@@ -96,7 +96,7 @@ export const AutoRigPanel: React.FC<{ model: LoadedModelData }> = ({ model }) =>
     const progress = stage === 'binding' ? session.progress : null;
     return (
       <div className="flex flex-1 flex-col items-center justify-center gap-2 p-8 text-center text-xs text-ink-3">
-        <Loader2 size={16} className="animate-spin" />
+        <SpinnerIcon size={16} className="animate-spin" />
         <span>{stage === 'reading' ? 'Reading the body' : 'Working out what each bone moves'}</span>
         {progress !== null && (
           <div className="h-1 w-40 overflow-hidden rounded-sm bg-white/10">
@@ -113,7 +113,7 @@ export const AutoRigPanel: React.FC<{ model: LoadedModelData }> = ({ model }) =>
       <p className="w-full [overflow-wrap:anywhere]">{model.name} has no skeleton.</p>
       {!projectStatus.readOnly && (
         <>
-          <Button variant="primary" icon={<Bone size={12} />} onClick={() => { void begin().catch((error: unknown) => failRig(error, 'The model could not be read.', model.id)); }}>Make a skeleton</Button>
+          <Button variant="primary" icon={<BoneIcon size={12} />} onClick={() => { void begin().catch((error: unknown) => failRig(error, 'The model could not be read.', model.id)); }}>Make a skeleton</Button>
           <p className="text-2xs">For a person, upright or hunched, or an animal on four legs. Clips from other rigs can then play on them.</p>
         </>
       )}

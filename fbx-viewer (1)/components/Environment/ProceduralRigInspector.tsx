@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { ArrowDown, ArrowUp, Plus, Trash2 } from 'lucide-react';
+import { ArrowDownIcon, ArrowUpIcon, PlusIcon, TrashIcon } from '../UI/Icons';
 import { useScene } from '../../context/SceneContext';
 import type { ComponentInspectorProps } from '../../runtime/components/types';
 import {
@@ -86,9 +86,9 @@ export const ProceduralRigInspector: React.FC<ComponentInspectorProps> = ({ comp
                         <select aria-label={`Constraint ${index + 1} kind`} value={c.kind} onChange={(event) => update(index, { kind: event.target.value as RigConstraintKind })} className={FIELD}>
                             {RIG_CONSTRAINT_KINDS.map(kind => <option key={kind} value={kind}>{KIND_LABELS[kind]}</option>)}
                         </select>
-                        <button type="button" aria-label={`Move constraint ${index + 1} up`} onClick={() => move(index, -1)} className="text-gray-500 hover:text-gray-200"><ArrowUp size={11} /></button>
-                        <button type="button" aria-label={`Move constraint ${index + 1} down`} onClick={() => move(index, 1)} className="text-gray-500 hover:text-gray-200"><ArrowDown size={11} /></button>
-                        <button type="button" aria-label={`Remove constraint ${index + 1}`} onClick={() => commit(constraints.filter((_, i) => i !== index))} className="text-gray-500 hover:text-red-400"><Trash2 size={11} /></button>
+                        <button type="button" aria-label={`Move constraint ${index + 1} up`} onClick={() => move(index, -1)} className="text-gray-500 hover:text-gray-200"><ArrowUpIcon size={11} /></button>
+                        <button type="button" aria-label={`Move constraint ${index + 1} down`} onClick={() => move(index, 1)} className="text-gray-500 hover:text-gray-200"><ArrowDownIcon size={11} /></button>
+                        <button type="button" aria-label={`Remove constraint ${index + 1}`} onClick={() => commit(constraints.filter((_, i) => i !== index))} className="text-gray-500 hover:text-red-400"><TrashIcon size={11} /></button>
                     </div>
                     <Row label="Bone"><TextInput label={`Constraint ${index + 1} bone`} value={c.bone} placeholder="Head" onCommit={(bone) => update(index, { bone })} /></Row>
                     <Row label="Weight"><NumberInput label={`Constraint ${index + 1} weight`} value={c.weight} step={0.05} onCommit={(weight) => update(index, { weight })} /></Row>
@@ -152,7 +152,7 @@ export const ProceduralRigInspector: React.FC<ComponentInspectorProps> = ({ comp
                 </div>
             ))}
             {constraints.length < 32 && (
-                <button type="button" className={BUTTON} onClick={() => commit([...constraints, { ...DEFAULT_RIG_CONSTRAINT, bone: 'Head' }])}><Plus size={10} /> Constraint</button>
+                <button type="button" className={BUTTON} onClick={() => commit([...constraints, { ...DEFAULT_RIG_CONSTRAINT, bone: 'Head' }])}><PlusIcon size={10} /> Constraint</button>
             )}
             <p className="text-2xs text-gray-500">Bones are found by name ('Head' finds 'mixamorig:Head'). Constraints apply top to bottom, after the animation and before the IK components that follow.</p>
         </div>

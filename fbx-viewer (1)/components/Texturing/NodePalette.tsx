@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Search } from 'lucide-react';
+import { SearchIcon } from '../UI/Icons';
 import { createNode } from '../../texturing/graph/document';
 import { MESH_MAPS, MESH_MAP_LABELS, MESH_MAP_NODE_TYPE, OUTPUT_NODE_TYPE } from '../../texturing/graph/nodes/io';
 import { NODE_CATEGORY_ORDER, TEXTURE_NODE_DEFINITIONS } from '../../texturing/graph/registry';
@@ -133,7 +133,7 @@ export const NodePalette: React.FC<{
             onDoubleClick={(event) => event.stopPropagation()}
         >
             <div className="flex items-center gap-2 border-b border-zinc-800 px-2 py-1.5">
-                <Search size={13} className="text-zinc-500" />
+                <SearchIcon size={13} className="text-zinc-500" />
                 <input
                     ref={input}
                     aria-label="Find a node"

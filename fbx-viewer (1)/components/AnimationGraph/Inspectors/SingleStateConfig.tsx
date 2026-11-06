@@ -1,5 +1,5 @@
 import React from 'react';
-import { Bell, Layers, Plus, X } from 'lucide-react';
+import { BellIcon, CrossIcon, LayersIcon, PlusIcon } from '../../UI/Icons';
 import { AnimNotify, GraphState } from '../../../types';
 import { Select } from '../../UI/Select';
 import { ScrubbableInput } from '../../UI/Properties/ScrubbableInput';
@@ -58,7 +58,7 @@ export const SingleStateConfig: React.FC<SingleStateConfigProps> = ({
             <div className="bg-gray-800 rounded-lg border border-gray-700 overflow-hidden">
                  <div className="p-3 bg-gray-800 border-b border-gray-700">
                     <span className="text-xs font-medium text-gray-200 flex items-center gap-2">
-                        <Layers size={12} className="text-gray-400" /> Animation Settings
+                        <LayersIcon size={12} className="text-gray-400" /> Animation Settings
                     </span>
                  </div>
 
@@ -110,7 +110,7 @@ export const SingleStateConfig: React.FC<SingleStateConfigProps> = ({
             <div className="space-y-3">
                 <div className="flex items-center justify-between px-1">
                     <label className="text-2xs text-gray-500 font-bold flex items-center gap-1.5">
-                        <Bell size={10} /> Notifies
+                        <BellIcon size={10} /> Notifies
                     </label>
                     <button
                         onClick={() => {
@@ -120,7 +120,7 @@ export const SingleStateConfig: React.FC<SingleStateConfigProps> = ({
                         aria-label="Add notify"
                         className="text-2xs px-2 py-1 bg-gray-800 hover:bg-gray-700 rounded border border-gray-700 text-gray-300 hover:text-white transition-colors flex items-center gap-1"
                     >
-                        <Plus size={10} /> Add
+                        <PlusIcon size={10} /> Add
                     </button>
                 </div>
 
@@ -139,7 +139,7 @@ export const SingleStateConfig: React.FC<SingleStateConfigProps> = ({
                                     aria-label={`Remove notify ${notify.name}`}
                                     className="text-gray-500 hover:text-red-400 p-1"
                                 >
-                                    <X size={12} />
+                                    <CrossIcon size={12} />
                                 </button>
                             </div>
                             <ScrubbableInput

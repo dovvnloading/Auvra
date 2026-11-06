@@ -1,5 +1,5 @@
 import React, { useId, useState } from 'react';
-import { Link2, X } from 'lucide-react';
+import { CrossIcon, LinkIcon } from '../UI/Icons';
 
 /** Game-state paths readGameStateBinding resolves (runtime/gameState.ts), besides 'vars.<name>'. */
 export const HUD_BINDING_SOURCES: readonly { path: string; label: string }[] = [
@@ -155,7 +155,7 @@ export const HUDBindingField: React.FC<HUDBindingFieldProps> = ({ value, bindabl
     return (
         <div className="space-y-2">
             <div className="text-2xs text-gray-500 font-bold flex items-center gap-1">
-                <Link2 size={10} /> Bind
+                <LinkIcon size={10} /> Bind
             </div>
             <div className="grid grid-cols-2 gap-2">
                 <div className="space-y-1">
@@ -183,7 +183,7 @@ export const HUDBindingField: React.FC<HUDBindingFieldProps> = ({ value, bindabl
                                 aria-label="Clear binding"
                                 className="p-1 rounded text-gray-400 hover:text-white hover:bg-gray-800 shrink-0"
                             >
-                                <X size={12} />
+                                <CrossIcon size={12} />
                             </button>
                         )}
                     </div>

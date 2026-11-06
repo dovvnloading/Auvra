@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Pipette } from 'lucide-react';
+import { EyedropperIcon } from './Icons';
 import { IconButton, Popover } from './kit';
 import { cssColour, hsvToRgb, parseHex, recentColours, rememberColour, rgbToHsv, sameColour, toHexText, type Hsva, type Rgba } from './colourMath';
 
@@ -181,7 +181,7 @@ const Panel: React.FC<{
                 {alpha && <NumberBox label="Alpha %" value={Math.round(current.a * 100)} max={100} onCommit={(percent) => setColour({ ...current, a: percent / 100 })} />}
                 {(onPick || dropper) && (
                     <IconButton label={onPick ? 'Pick a colour from the model' : 'Pick a colour from the screen'} onClick={() => (onPick ? onPick() : void pickFromScreen())} className="mb-[15px]">
-                        <Pipette size={13} />
+                        <EyedropperIcon size={13} />
                     </IconButton>
                 )}
             </div>

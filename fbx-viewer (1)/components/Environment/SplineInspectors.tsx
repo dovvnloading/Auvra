@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { ArrowLeftRight, Box, Mountain, Paintbrush, Plus, Route, Trash2, Waypoints } from 'lucide-react';
+import { ArrowsLeftRightIcon, BrushIcon, CubeIcon, MountainIcon, PlusIcon, RouteIcon, TrashIcon, WaypointsIcon } from '../UI/Icons';
 import { useScene } from '../../context/SceneContext';
 import type { ComponentInspectorProps } from '../../runtime/components/types';
 import { findSplineComponent } from '../../runtime/splineRegistry';
@@ -147,7 +147,7 @@ export const SplineInspector: React.FC<ComponentInspectorProps> = ({ object, com
         <div className="space-y-2">
             {otherSpline && <p className="text-2xs text-amber-400">Spline Mesh, Scatter and Follow Spline use the object's first Spline; this one is drawn but not used.</p>}
             <div className="flex items-center justify-between text-2xs text-gray-400">
-                <span className="flex items-center gap-1"><Route size={10} /> {format(spline.length)} m</span>
+                <span className="flex items-center gap-1"><RouteIcon size={10} /> {format(spline.length)} m</span>
                 <span>{data.points.length} points{data.closed ? ', closed' : ''}</span>
             </div>
 
@@ -170,7 +170,7 @@ export const SplineInspector: React.FC<ComponentInspectorProps> = ({ object, com
 
             <div className="grid grid-cols-2 gap-1">
                 <button type="button" className={BUTTON} onClick={() => { const added = appendSplinePoint(data); write(added.data); choose(added.index); }}>
-                    <Plus size={10} /> Add at end
+                    <PlusIcon size={10} /> Add at end
                 </button>
                 <button
                     type="button"
@@ -186,7 +186,7 @@ export const SplineInspector: React.FC<ComponentInspectorProps> = ({ object, com
                         choose(inserted.index);
                     }}
                 >
-                    <Waypoints size={10} /> Insert after
+                    <WaypointsIcon size={10} /> Insert after
                 </button>
                 <button
                     type="button"
@@ -198,10 +198,10 @@ export const SplineInspector: React.FC<ComponentInspectorProps> = ({ object, com
                         choose(Math.min(selected, data.points.length - 2));
                     }}
                 >
-                    <Trash2 size={10} /> Delete point
+                    <TrashIcon size={10} /> Delete point
                 </button>
                 <button type="button" className={BUTTON} onClick={() => { write(reverseSpline(data)); if (selected !== null) choose(data.points.length - 1 - selected); }}>
-                    <ArrowLeftRight size={10} /> Reverse
+                    <ArrowsLeftRightIcon size={10} /> Reverse
                 </button>
             </div>
 
@@ -240,21 +240,21 @@ export const SplineInspector: React.FC<ComponentInspectorProps> = ({ object, com
             )}
 
             <div className="space-y-1.5 pt-1 border-t border-gray-800/60">
-                <div className="flex items-center gap-1 text-2xs font-bold text-gray-300"><Mountain size={10} /> Terrain</div>
+                <div className="flex items-center gap-1 text-2xs font-bold text-gray-300"><MountainIcon size={10} /> Terrain</div>
                 <div className="grid grid-cols-3 gap-1">
                     <NumberField label="Width" value={brush.width} onCommit={(width) => setBrush({ ...brush, width: Math.max(0.1, width) })} />
                     <NumberField label="Falloff" value={brush.falloff} onCommit={(falloff) => setBrush({ ...brush, falloff: Math.max(0, falloff) })} />
                     <NumberField label="Depth" value={brush.depth} onCommit={(depth) => setBrush({ ...brush, depth })} />
                 </div>
                 <div className="grid grid-cols-2 gap-1">
-                    <button type="button" className={BUTTON} onClick={() => shapeTerrain('flatten')}><Mountain size={10} /> Flatten under</button>
-                    <button type="button" className={BUTTON} onClick={snapToTerrain}><Waypoints size={10} /> Snap points</button>
+                    <button type="button" className={BUTTON} onClick={() => shapeTerrain('flatten')}><MountainIcon size={10} /> Flatten under</button>
+                    <button type="button" className={BUTTON} onClick={snapToTerrain}><WaypointsIcon size={10} /> Snap points</button>
                 </div>
                 <div className="flex items-center gap-1">
                     <select aria-label="Terrain layer" value={layer} onChange={(event) => setLayer(Number(event.target.value))} className={`${FIELD} w-20`}>
                         {[1, 2, 3, 4, 5, 6, 7, 8].map(entry => <option key={entry} value={entry}>Layer {entry}</option>)}
                     </select>
-                    <button type="button" className={`${BUTTON} flex-1`} onClick={() => shapeTerrain('paint')}><Paintbrush size={10} /> Paint under</button>
+                    <button type="button" className={`${BUTTON} flex-1`} onClick={() => shapeTerrain('paint')}><BrushIcon size={10} /> Paint under</button>
                 </div>
                 {notice && <p className="text-2xs text-gray-400">{notice}</p>}
             </div>
@@ -273,7 +273,7 @@ export const SplineModelInspector: React.FC<ComponentInspectorProps> = ({ object
     const hasSpline = findSplineComponent(object) !== null;
     return (
         <div className="space-y-1">
-            <label className="flex items-center gap-1 text-2xs text-gray-400"><Box size={10} /> Model</label>
+            <label className="flex items-center gap-1 text-2xs text-gray-400"><CubeIcon size={10} /> Model</label>
             <select
                 aria-label="Model"
                 value={modelId}
@@ -300,7 +300,7 @@ export const FollowSplineInspector: React.FC<ComponentInspectorProps> = ({ objec
     const known = !target || choices.some(candidate => candidate.id === target);
     return (
         <div className="space-y-1">
-            <label className="flex items-center gap-1 text-2xs text-gray-400"><Route size={10} /> Spline to follow</label>
+            <label className="flex items-center gap-1 text-2xs text-gray-400"><RouteIcon size={10} /> Spline to follow</label>
             <select aria-label="Spline to follow" value={target} onChange={(event) => onChangeProps({ spline: event.target.value })} className={FIELD}>
                 <option value="">None</option>
                 {!known && <option value={target}>Missing spline</option>}

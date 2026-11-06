@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Search, Plus, Undo2, Redo2 } from 'lucide-react';
+import { PlusIcon, RedoIcon, SearchIcon, UndoIcon } from '../UI/Icons';
 import { AnimationGraphData } from '../../types';
 import { GraphNode } from './GraphNode';
 import { GraphConnection } from './GraphConnection';
@@ -154,7 +154,7 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
                             title="Undo (Ctrl+Z)"
                             aria-label="Undo"
                         >
-                            <Undo2 size={14} />
+                            <UndoIcon size={14} />
                         </button>
                         <button
                             onPointerDown={stopCanvasPointer}
@@ -164,7 +164,7 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
                             title="Redo (Ctrl+Y)"
                             aria-label="Redo"
                         >
-                            <Redo2 size={14} />
+                            <RedoIcon size={14} />
                         </button>
                     </>
                 )}
@@ -173,13 +173,13 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
                     className="flex items-center justify-center w-8 h-8 bg-gray-800 hover:bg-gray-700 text-white rounded-lg shadow-lg border border-gray-700"
                     title="Reset View"
                 >
-                    <Search size={14} />
+                    <SearchIcon size={14} />
                 </button>
                 <button 
                     onClick={() => addState(canvasRef.current)} 
                     className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-accent-ink rounded-lg shadow-lg text-xs font-bold transition-all border border-blue-400"
                 >
-                    <Plus size={14} /> Add State
+                    <PlusIcon size={14} /> Add State
                 </button>
             </div>
             
