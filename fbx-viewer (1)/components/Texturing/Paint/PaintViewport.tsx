@@ -403,6 +403,10 @@ export const PaintViewport: React.FC<{
             onMessage('The graphics card was reset: painting waits until the set has opened again from its saved pictures.');
             return;
         }
+        if (session.locked) {
+            onMessage(session.locked);
+            return;
+        }
         if (!target) {
             onMessage(tool === 'island' ? 'Pick a paint layer or a painted mask to fill.' : 'Pick a paint layer, or a painted mask effect, to paint on. Fill layers take their values from their settings.');
             return;

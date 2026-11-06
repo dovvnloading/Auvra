@@ -191,6 +191,25 @@ const relaid = (geometry: THREE.BufferGeometry, layout: MeshLayout): THREE.Buffe
 };
 
 /**
+ * Takes back a layout just put on with applyLayout: the model's meshes get `previous` again (the layout
+ * they had), or their file's own geometry where they had none.
+ */
+export const restoreLayout = (root: THREE.Object3D, previous: UvLayoutFile | null, applied: UvLayoutFile): void => {
+    const meshes = modelMeshes(root);
+    const kept = new Set((previous?.meshes ?? []).map((layout) => layout.meshIndex));
+    for (const layout of applied.meshes) {
+        if (kept.has(layout.meshIndex)) continue;
+        const mesh = meshes[layout.meshIndex];
+        const source = mesh?.geometry.userData?.uvLayoutSource as THREE.BufferGeometry | undefined;
+        if (!mesh || !source) continue;
+        const relaid = mesh.geometry;
+        mesh.geometry = source;
+        relaid.dispose();
+    }
+    if (previous) applyLayout(root, previous);
+};
+
+/**
  * Puts a layout on a model loaded from its file. Meshes that do not match (another file, a changed
  * import) are left as they are; returns how many were laid out.
  */

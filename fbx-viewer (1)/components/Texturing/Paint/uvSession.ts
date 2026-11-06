@@ -8,10 +8,10 @@ import { overlappingTriangles } from '../../../texturing/uv/overlap';
 import { DEFAULT_PACK, packIslands, type Island, type PackSettings, type Placement } from '../../../texturing/uv/pack';
 import { newTriangleTiles, transferPicture } from '../../../texturing/uv/transfer';
 import { DEFAULT_UNWRAP, unwrap, type UnwrapSettings } from '../../../texturing/uv/unwrap';
-import { applyLayout, buildLayout, decodeLayout, encodeLayout, type UvLayoutFile } from '../../../texturing/uv/uvLayout';
+import { applyLayout, buildLayout, decodeLayout, encodeLayout, restoreLayout, type UvLayoutFile } from '../../../texturing/uv/uvLayout';
 import { buildCharts, buildTopology, chartCoordinates, edgeKey, existingSeams, type Chart, type UvTopology } from '../../../texturing/uv/uvTopology';
 import { BEFORE, GpuResetError, pictureKey, pictureOwner, pictureOwners, picturePrecision } from '../../../texturing/paint/paintStack';
-import { BLEND_FOR, type FillSource, type PaintChannel, type PaintDocument, type PaintLayer } from '../../../texturing/paint/paintTypes';
+import { BLEND_FOR, PAINT_CHANNELS, type FillSource, type PaintChannel, type PaintDocument, type PaintLayer, type TilePictures } from '../../../texturing/paint/paintTypes';
 import type { PaintSession } from './paintSession';
 
 /**
@@ -513,8 +513,11 @@ export class UvSession {
     }
 
     /**
-     * Uses the proposal: carries every picture drawn on the surface over to it, splits the meshes, saves
-     * the layout with the model, and reopens painting on the new layout.
+     * Uses the proposal, all or nothing: every picture drawn on the surface is carried over to it as new
+     * pictures kept apart from the set's own, then the meshes are split and the layout saved with the model,
+     * then the set's document naming the new pictures is saved. Until that last step the set's own pictures
+     * and document are untouched (and nothing is saved from them), so a failure anywhere puts the model's
+     * meshes and saved layout back and leaves the set as it was. Painting reopens on the new layout.
      */
     async apply(): Promise<void> {
         const proposal = this.proposal;
@@ -530,27 +533,47 @@ export class UvSession {
         const part = paint.part;
         const object = paint.target.object;
         const size = stack.size;
-        this.busy = 'Carrying the pictures over';
+        this.busy = 'Saving the painting first';
         this.emit();
+        // What the set holds is kept first; nothing more is painted or saved until the switch is done or undone.
+        await paint.save();
+        paint.lock('The new UV layout is being put on: painting waits until it is done.');
+        let laidOut: { previous: UvLayoutFile | null; layout: UvLayoutFile; saved: boolean } | null = null;
         try {
+            this.busy = 'Carrying the pictures over';
+            this.emit();
             const corner = proposal.cornerUv;
             // The UDIM tiles the new layout uses (one for an ordinary layout): a picture each.
             const newTiles = [...new Set(newTriangleTiles(corner))].sort((a, b) => a - b);
             const spread = newTiles.length > 1;
-            // 1. Every picture of the set (painted layers, masks, what it wore before once carried): each tile
-            // of the new layout drawn from the current tiles' pictures. Pictures of layers deleted earlier
-            // are kept only for undo, which the set reopens without: they are not carried (nor kept again).
+            /** The new layout's pictures, kept as assets: by picture key, then tile. */
+            const carried = new Map<string, TilePictures>();
+            const keep = async (key: string, tile: number, image: GpuImage) => {
+                const assetId = await stack.storeImage(image);
+                carried.set(key, { ...(carried.get(key) ?? {}), [String(tile)]: { assetId } });
+            };
+            // 1. Every picture of the set (painted layers, masks, what it wore before once carried): each tile of
+            // the new layout drawn from whole copies of the current tiles' pictures. Pictures of layers deleted
+            // earlier are kept only for undo, which the set reopens without: they are not carried.
             const used = pictureOwners([stack.document]);
             for (const [key, byTile] of [...stack.pictures]) {
                 if (!used.has(pictureOwner(key))) continue;
-                const moved: Array<[number, GpuImage]> = [];
-                for (const tile of newTiles) {
-                    moved.push([tile, await transferPicture(gpu, part, corner, (from) => byTile.get(from) ?? null, size, { normalMap: key.endsWith(':normal'), tile, precision: picturePrecision(key), coverage: true })]);
-                }
-                for (const [tile, image] of moved) {
-                    gpu.copy(image, stack.picture(key, tile));
-                    gpu.release(image);
-                    stack.touch(key, tile);
+                const wholes = new Map<number, GpuImage>();
+                try {
+                    for (const tile of byTile.keys()) {
+                        const whole = stack.denseCopy(key, tile);
+                        if (whole) wholes.set(tile, whole);
+                    }
+                    for (const tile of newTiles) {
+                        const image = await transferPicture(gpu, part, corner, (from) => wholes.get(from) ?? null, size, { normalMap: key.endsWith(':normal'), tile, precision: picturePrecision(key), coverage: true });
+                        try {
+                            await keep(key, tile, image);
+                        } finally {
+                            gpu.release(image);
+                        }
+                    }
+                } finally {
+                    for (const whole of wholes.values()) gpu.release(whole);
                 }
             }
             // 2. The model's own pictures, which "what it wore before" fills read, fit only the layout it came
@@ -591,9 +614,11 @@ export class UvSession {
                         gpu.release(image);
                         image = single;
                     }
-                    gpu.copy(image, stack.picture(key, tile));
-                    gpu.release(image);
-                    stack.touch(key, tile);
+                    try {
+                        await keep(key, tile, image);
+                    } finally {
+                        gpu.release(image);
+                    }
                 }
             }
             // Such a layout also kept those pictures as textures of the set's own (named "<part> <channel> (relaid)"
@@ -606,16 +631,19 @@ export class UvSession {
             };
             const readsOwn = (channel: PaintChannel, source: FillSource | undefined): boolean => source?.kind === 'texture'
                 && source.projection === 'uv' && source.scale === 1 && source.rotation === 0 && Boolean(ownIds[channel]?.has(source.textureId) || keptBefore(channel, source.textureId));
-            const restore = (list: readonly PaintLayer[]): PaintLayer[] => list.map((layer) => ({
+            // 3. The set's document on the new layout: its layers name the new pictures (and only those).
+            const pictured = (list: readonly PaintLayer[]): PaintLayer[] => list.map((layer) => ({
                 ...layer,
                 ...(layer.fill ? { fill: Object.fromEntries(Object.entries(layer.fill).map(([channel, source]) => [channel, readsOwn(channel as PaintChannel, source) ? { kind: 'current' as const } : source])) } : {}),
-                ...(layer.layers ? { layers: restore(layer.layers) } : {}),
+                ...(layer.kind === 'paint' ? { pictures: Object.fromEntries(PAINT_CHANNELS.flatMap((channel) => { const tiles = carried.get(pictureKey(layer.id, channel)); return tiles ? [[channel, tiles] as const] : []; })) } : {}),
+                ...(layer.mask ? { mask: layer.mask.map((effect) => (effect.kind === 'paint' ? { ...effect, pictures: carried.get(pictureKey(effect.id)) ?? {} } : effect)) } : {}),
+                ...(layer.layers ? { layers: pictured(layer.layers) } : {}),
             }));
-            let layers = restore(stack.document.layers);
+            let layers = pictured(stack.document.layers);
             let channels = stack.document.channels;
             // The set goes on the model in place of its own material, glow and all: a glow it carried is drawn by
             // the layer that shows what the surface wore before.
-            if (stack.pictures.has(pictureKey(BEFORE, 'emissive')) && !channels.includes('emissive')) {
+            if (carried.has(pictureKey(BEFORE, 'emissive')) && !channels.includes('emissive')) {
                 const at = layers.findIndex((layer) => Object.values(layer.fill ?? {}).some((source) => source?.kind === 'current'));
                 if (at >= 0) {
                     channels = [...channels, 'emissive'];
@@ -624,8 +652,9 @@ export class UvSession {
                         : layer));
                 }
             }
-            let document: PaintDocument = { ...stack.document, layers, channels, bake: null, udim: spread || stack.document.udim };
-            // 3. The meshes themselves.
+            const before = Object.fromEntries(PAINT_CHANNELS.flatMap((channel) => { const tiles = carried.get(pictureKey(BEFORE, channel)); return tiles ? [[channel, tiles] as const] : []; }));
+            const document: PaintDocument = { ...stack.document, layers, channels, bake: null, udim: spread || stack.document.udim, ...(Object.keys(before).length ? { before } : {}) };
+            // 4. The meshes themselves, split and saved with the model.
             this.busy = 'Saving the layout';
             this.emit();
             let previous: UvLayoutFile | null = null;
@@ -642,31 +671,35 @@ export class UvSession {
             if (!paint.usable) throw new GpuResetError();
             const layout = buildLayout(object, part, corner, proposal.cornerKey, previous);
             applyLayout(object, layout);
+            laidOut = { previous, layout, saved: false };
             await this.host.saveLayout(paint.target.modelId, encodeLayout(layout), layout.meshes.length);
-            stack.setDocument(document);
-            document = await stack.keepPictures();
-            // Pictures of tiles the layout no longer uses are let go.
-            const keep = <T>(byTile: Record<string, T> | undefined): Record<string, T> => Object.fromEntries(Object.entries(byTile ?? {}).filter(([tile]) => newTiles.includes(Number(tile))));
-            const prune = (list: readonly PaintLayer[]): PaintLayer[] => list.map((layer) => ({
-                ...layer,
-                ...(layer.pictures ? { pictures: Object.fromEntries(Object.entries(layer.pictures).map(([channel, byTile]) => [channel, keep(byTile)])) } : {}),
-                ...(layer.mask ? { mask: layer.mask.map((effect) => (effect.kind === 'paint' && effect.pictures ? { ...effect, pictures: keep(effect.pictures) } : effect)) } : {}),
-                ...(layer.layers ? { layers: prune(layer.layers) } : {}),
-            }));
-            const before = document.before;
-            document = {
-                ...document,
-                layers: prune(document.layers),
-                ...(before ? { before: Object.fromEntries(Object.entries(before).map(([channel, byTile]) => [channel, keep(byTile)])) } : {}),
-            };
-            stack.setDocument(document);
-            await paint.save();
+            laidOut.saved = true;
+            // 5. The set's document naming the new pictures: once it is kept, the switch is done.
+            await paint.keepDocumentAs(document);
+            paint.retire();
             this.proposal = null;
             this.putOnWhenOpen = true;
             this.status = `The surface has its new layout${spread ? ` over ${newTiles.length} UDIM tiles` : ''}. Its pictures came with it and it goes on the model as it reopens; bake its mesh maps again for smart masks.`;
         } catch (error) {
             frontendDiagnostics.failure('uv_apply_failed', error);
-            this.status = error instanceof Error ? error.message : 'The new layout could not be used.';
+            // Undone: the meshes and the saved layout go back; the set still has its own pictures and document.
+            let undone = true;
+            if (laidOut) {
+                restoreLayout(object, laidOut.previous, laidOut.layout);
+                if (laidOut.saved) {
+                    try {
+                        await this.host.saveLayout(paint.target.modelId, laidOut.previous ? encodeLayout(laidOut.previous) : null, laidOut.previous?.meshes.length ?? 0);
+                    } catch (rollback) {
+                        frontendDiagnostics.failure('uv_apply_rollback_failed', rollback);
+                        undone = false;
+                    }
+                }
+            }
+            paint.unlock();
+            const reason = error instanceof Error ? error.message : 'The new layout could not be used.';
+            this.status = undone
+                ? `${reason} Nothing was changed: the model and the painting keep their layout.`
+                : `${reason} The model's saved layout could not be put back: open the project again before painting this set.`;
         } finally {
             this.busy = null;
             this.emit();
