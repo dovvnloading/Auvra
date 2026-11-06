@@ -142,6 +142,9 @@ export const useGraphRuntime = (
         matchedTurnRef.current = null;
         return turn;
     }, []);
+    // Whether that clip turns the character round (a turn of 180 degrees): its turn is followed while moving too.
+    const matchedTurnRoundRef = useRef(false);
+    const isMatchedTurnRound = useCallback((): boolean => matchedTurnRoundRef.current, []);
 
     // -- Root motion: travel accumulates until the owner of the transform consumes it.
     const rootMotionRef = useRef(new THREE.Vector3());
@@ -172,6 +175,7 @@ export const useGraphRuntime = (
         sourceClips: clipsByName,
         blendModeRef,
         matchedTurnOut: matchedTurnRef,
+        matchedTurnRoundOut: matchedTurnRoundRef,
     });
 
     // Without a character controller (the editor preview) the graph applies its own root motion.
@@ -193,5 +197,5 @@ export const useGraphRuntime = (
         return graph.states.find(state => state.id === id) ?? null;
     }, [activeStateRef, graph.states]);
 
-    return { setVariable, getVariable, getVariables, playMontage, stopMontage, consumeRootMotion, consumeRootYaw, consumeMatchedTurn, getActiveState };
+    return { setVariable, getVariable, getVariables, playMontage, stopMontage, consumeRootMotion, consumeRootYaw, consumeMatchedTurn, isMatchedTurnRound, getActiveState };
 };

@@ -141,6 +141,11 @@ export interface AnimatorExtras {
      * positive), for the character to turn by on the spot; null while none is turning it.
      */
     matchedTurnOut?: React.MutableRefObject<number | null>;
+    /**
+     * Whether the matched clip playing now turns the character round (see MotionDatabase.turnsRound):
+     * its turn (in matchedTurnOut) is then the character's to follow while moving too.
+     */
+    matchedTurnRoundOut?: React.MutableRefObject<boolean>;
 }
 
 /** Roughly a character's size, for telling whether it is on screen. */
@@ -358,6 +363,7 @@ export const useGraphAnimator = (
         // A Motion Match state picks the moment of its clips that best carries on the character's movement.
         let matched: string | null = null;
         if (locomotion) locomotion.matched = null;
+        if (extras.matchedTurnRoundOut) extras.matchedTurnRoundOut.current = false;
         let matchedScale = 1;
         // Set when the action list was made anew under a playing match: its clip starts again where the matcher is.
         let resumeMatched = false;
@@ -422,13 +428,15 @@ export const useGraphAnimator = (
                 }
                 const wasClip = match.matcher.clip, wasTime = match.matcher.time;
                 const choice = match.matcher.step(delta, velocity, velocity, 0, trajectory);
-                // A clip turning on the spot turns the character by its own turn, so its feet step round with it
-                // (just after a jump, by the turn the new clip made over this step).
+                // A clip turning on the spot, or turning the character round, turns it by its own turn, so its feet
+                // step round with it (just after a jump, by the turn the new clip made over this step).
+                const turnsRound = choice.clip >= 0 && match.matcher.database.turnsRound[choice.clip];
+                if (extras.matchedTurnRoundOut) extras.matchedTurnRoundOut.current = turnsRound;
                 if (extras.matchedTurnOut && choice.clip >= 0) {
                     const db = match.matcher.database;
                     const travel = db.travelAt(choice.clip, choice.time);
                     const from = !choice.jumped && choice.clip === wasClip ? wasTime : Math.max(0, choice.time - delta);
-                    if (Math.hypot(travel.x, travel.z) < WARP_SPEED * db.body) {
+                    if (turnsRound || Math.hypot(travel.x, travel.z) < WARP_SPEED * db.body) {
                         let turn = db.facingAt(choice.clip, choice.time) - db.facingAt(choice.clip, from);
                         // Across a loop's end the facing goes back to the start: that step is not turned.
                         if (Math.abs(turn) > Math.PI / 2) turn = 0;

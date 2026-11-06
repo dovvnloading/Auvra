@@ -283,9 +283,10 @@ export const PlayerController: React.FC<PlayerControllerProps> = ({
         const clipYaw = apiRef.current.consumeRootYaw?.() ?? 0;
         // Or a matched turn-in-place clip's turn, when one is turning the character.
         const matchedTurn = apiRef.current.consumeMatchedTurn?.() ?? null;
-        const {
+        // A matched clip that turns the character round sets the pace of the turn while it moves, too.
+        const turnsRound = !turnPlaying.current && (apiRef.current.isMatchedTurnRound?.() ?? false);        const {
             isMoving, effectiveSprint, localInputX, localInputY, isAirborne, isFalling, verticalSpeed, turnStarted, turningInPlace,
-        } = updatePhysics(input, delta, rootMotion, turnPlaying.current ? clipYaw : matchedTurn);
+        } = updatePhysics(input, delta, rootMotion, turnPlaying.current ? clipYaw : matchedTurn, turnsRound);
 
         // Turning in place: the held weapon's turn clip steps the feet round on the legs while the
         // upper body keeps its aim; without one the body turns on the spot.
