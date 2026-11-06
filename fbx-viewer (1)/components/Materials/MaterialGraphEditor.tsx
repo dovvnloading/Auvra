@@ -11,7 +11,9 @@ import {
     compileMaterialGraph,
     createMaterialGraph,
     getMaterialNodeDefinition,
+    materialGraphLook,
     materialGraphSettings,
+    materialGraphShape,
     type MaterialGraph,
     type MaterialGraphNode,
 } from '../../runtime/materials/materialGraph';
@@ -31,8 +33,9 @@ import { TextureGraphWorkspace, newTextureGraphStored } from '../Texturing/Textu
  * The project's material assets: each a node graph wired into a Material Output, edited on a canvas
  * (MaterialGraphCanvas.tsx) where every node shows its value, and shown on a lit, shadowed preview
  * as it changes. With nothing selected the inspector shows the material's own settings (blend mode,
- * alpha clip, two-sided, unlit). Models' materials take an asset in the Material Editor (Retexture
- * tab); every material using an asset follows edits to it straight away.
+ * alpha clip, two-sided, unlit). Models' materials take an asset in Properties › Material Overrides;
+ * every material using an asset follows edits to it straight away. Undo is kept for each material for
+ * the session, so it survives switching tabs and switching material.
  *
  * A material can instead be made by a texture graph (components/Texturing): images drawn node by
  * node into the pictures the material draws with.
@@ -53,9 +56,22 @@ const readPreviewsSetting = (): boolean => {
     try { return localStorage.getItem(PREVIEWS_KEY) !== 'off'; } catch { return true; }
 };
 
-/** The graph's identity apart from where its nodes sit, so moving nodes does not redraw previews. */
-const shadingSignature = (graph: MaterialGraph): string =>
-    JSON.stringify([graph.nodes.map(({ x: _x, y: _y, ...rest }) => rest), graph.links]);
+/**
+ * Each material's undo history for the session, outliving the tab (which unmounts when left). Begun
+ * afresh when another project opens.
+ */
+const sessionHistories = new Map<string, GraphHistory>();
+let historiesGeneration = -1;
+
+const historyOf = (id: string): GraphHistory => {
+    if (historiesGeneration !== materialLibrary.generation) {
+        sessionHistories.clear();
+        historiesGeneration = materialLibrary.generation;
+    }
+    let found = sessionHistories.get(id);
+    if (!found) sessionHistories.set(id, found = new GraphHistory());
+    return found;
+};
 
 const NodeInspector: React.FC<{
     node: MaterialGraphNode;
@@ -120,15 +136,10 @@ export const MaterialGraphEditor: React.FC = () => {
     const shaderError = useMaterialShaderError();
     const asset = assets.find(candidate => candidate.id === selectedId) ?? assets[0] ?? null;
     const pending = useRef(new Map<string, ReturnType<typeof setTimeout>>());
-    const histories = useRef(new Map<string, GraphHistory>());
     /** The graph before a drag began, recorded for undo when the drag ends. */
     const dragBase = useRef(new Map<string, MaterialGraph>());
 
-    const history = useCallback((id: string) => {
-        let found = histories.current.get(id);
-        if (!found) histories.current.set(id, found = new GraphHistory());
-        return found;
-    }, []);
+    const history = useCallback((id: string) => historyOf(id), []);
 
     const save = useCallback((next: MaterialAsset, immediately = false) => {
         const timers = pending.current;
@@ -227,7 +238,7 @@ export const MaterialGraphEditor: React.FC = () => {
         // A save still waiting would bring it back.
         clearTimeout(pending.current.get(asset.id));
         pending.current.delete(asset.id);
-        histories.current.delete(asset.id);
+        sessionHistories.delete(asset.id);
         removeMaterialAsset(asset.id).then(() => {
             setError(null);
             setSelectedId(null);
@@ -248,22 +259,27 @@ export const MaterialGraphEditor: React.FC = () => {
     const graph = asset?.graph ?? null;
 
     // Only a change to what the graph computes (not to where nodes sit) reaches the previews.
-    const signature = useMemo(() => (graph ? shadingSignature(graph) : ''), [graph]);
+    const signature = useMemo(() => (graph ? materialGraphLook(graph) : ''), [graph]);
     const shading = useRef<{ signature: string; graph: MaterialGraph | null }>({ signature: '', graph: null });
     if (shading.current.signature !== signature || (graph && !shading.current.graph)) shading.current = { signature, graph };
     const shadingGraph = shading.current.graph;
 
+    // Unused nodes and the shader's size change only with its shape, not with values dragged on a slider.
+    const shape = useMemo(() => (shadingGraph ? materialGraphShape(shadingGraph) : ''), [shadingGraph]);
+    const shapeGraph = useRef<MaterialGraph | null>(null);
+    shapeGraph.current = shadingGraph;
     const analysis = useMemo(() => {
-        if (!shadingGraph) return null;
-        const fragment = compileMaterialGraph(shadingGraph);
-        const vertex = compileMaterialGraph(shadingGraph, { stage: 'vertex' });
+        const current = shapeGraph.current;
+        if (!current) return null;
+        const fragment = compileMaterialGraph(current);
+        const vertex = compileMaterialGraph(current, { stage: 'vertex' });
         const vertexUnused = new Set(vertex.unused);
         return {
             key: `${fragment.key}#${vertex.key}`,
             unused: new Set(fragment.unused.filter(id => vertexUnused.has(id))),
             statements: fragment.statements.length + (fragment.connected.has('worldPositionOffset') ? vertex.statements.length : 0),
         };
-    }, [shadingGraph]);
+    }, [shape]);
     // A change to the shader's shape compiles it afresh: forget the last error.
     useEffect(() => { clearMaterialShaderError(); }, [analysis?.key]);
 
@@ -311,7 +327,7 @@ export const MaterialGraphEditor: React.FC = () => {
                     </Popover>
                 </div>
                 <div className="flex-1 overflow-y-auto p-2">
-                    {assets.length === 0 && <p className="px-1 text-2xs text-gray-500">No materials yet. A material is a node graph; give one to a model's material in the Retexture tab.</p>}
+                    {assets.length === 0 && <p className="px-1 text-2xs text-gray-500">No materials yet. A material is a node graph; give one to a model's material in Properties › Material Overrides.</p>}
                     {assets.map(candidate => (
                         <button
                             key={candidate.id}

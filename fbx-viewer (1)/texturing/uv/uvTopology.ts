@@ -193,6 +193,23 @@ export const buildCharts = (topology: UvTopology, seams: ReadonlySet<number>): C
     return charts;
 };
 
+/**
+ * The coordinates each chart's corners have now (two per corner), read from the surface's own: charts cut
+ * along the seams its coordinates already have, so every corner of a chart has one place.
+ */
+export const chartCoordinates = (charts: readonly Chart[], indices: ArrayLike<number>, uvs: ArrayLike<number>): Float64Array[] => charts.map((chart) => {
+    const uv = new Float64Array(chart.vertexWeld.length * 2);
+    chart.faces.forEach((face, i) => {
+        for (let k = 0; k < 3; k++) {
+            const vertex = indices[face * 3 + k];
+            const corner = chart.corners[i * 3 + k];
+            uv[corner * 2] = uvs[vertex * 2];
+            uv[corner * 2 + 1] = uvs[vertex * 2 + 1];
+        }
+    });
+    return uv;
+});
+
 /** Boundary loops of a chart, as runs of chart corners. */
 export const chartBoundaries = (chart: Chart): number[][] => {
     const count = new Map<string, number>();

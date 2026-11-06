@@ -1,7 +1,7 @@
 import React, { useRef, useState } from 'react';
 import { CheckCircleIcon, DownloadIcon, FlameIcon, RefreshIcon } from '../../UI/Icons';
 import type * as THREE from 'three';
-import { DEFAULT_BAKE_SETTINGS, type BakeSettings } from '../../../texturing/bake/meshBaker';
+import { BAKE_VERSION, DEFAULT_BAKE_SETTINGS, type BakeSettings } from '../../../texturing/bake/meshBaker';
 import { MESH_MAP_LABELS, MESH_MAPS, type MeshMapName } from '../../../texturing/graph/nodes/io';
 import { CHANNEL_LABELS, PAINT_CHANNELS, type PaintChannel } from '../../../texturing/paint/paintTypes';
 import type { PictureLayout } from '../../../texturing/materialOutput';
@@ -59,12 +59,17 @@ export const SetPanel: React.FC<{
             </section>
 
             <section className="space-y-2">
-                <div className="flex items-center justify-between">
-                    <span className="text-2xs font-semibold text-zinc-300">Mesh maps</span>
-                    {document.bake && (session.stack.bakeSize === null
-                        ? <span className="flex items-center gap-1 text-2xs text-emerald-400"><CheckCircleIcon size={11} /> Baked</span>
-                        : <span className="text-2xs text-amber-400">Baked at {2 ** session.stack.bakeSize} × {2 ** session.stack.bakeSize}: bake again for full detail</span>)}
+                <div className="flex items-center justify-between gap-2">
+                    <span className="shrink-0 text-2xs font-semibold text-zinc-300">Mesh maps</span>
+                    {document.bake && ((document.bake.version ?? 1) < BAKE_VERSION
+                        ? <span className="text-2xs text-amber-400">Older bake</span>
+                        : session.stack.bakeSize === null
+                            ? <span className="flex items-center gap-1 text-2xs text-emerald-400"><CheckCircleIcon size={11} /> Baked</span>
+                            : <span className="text-right text-2xs text-amber-400">Baked at {2 ** session.stack.bakeSize} × {2 ** session.stack.bakeSize}: bake again for full detail</span>)}
                 </div>
+                {document.bake && (document.bake.version ?? 1) < BAKE_VERSION && (
+                    <p className="text-2xs leading-snug text-amber-200/80">Baked before positions were measured evenly: 3D noise and scratches stretch on long or flat parts, and normals can show faint banding. Bake again to fix both; until then the set looks as it did.</p>
+                )}
                 <p className="text-2xs leading-snug text-zinc-500">Occlusion, curvature, thickness, normals, position and IDs read from the model. Smart masks and materials are built on them.</p>
                 <div className="flex items-center gap-2">
                     <span className="w-28 text-2xs text-zinc-400">Detail from</span>

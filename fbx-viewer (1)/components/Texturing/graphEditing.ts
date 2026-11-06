@@ -130,6 +130,18 @@ export const pasteNodes = (graph: TextureGraph, clipboard: GraphClipboard, at: P
 };
 
 export const COMMENT_COLORS = ['#3b4252', '#1e3a5f', '#14532d', '#713f12', '#7f1d1d', '#4c1d95', '#134e4a', '#57534e'];
+/** What each comment colour is called, for the buttons that choose it. */
+export const COMMENT_COLOR_NAMES: Record<string, string> = {
+    '#3b4252': 'Slate', '#1e3a5f': 'Blue', '#14532d': 'Green', '#713f12': 'Amber', '#7f1d1d': 'Red', '#4c1d95': 'Violet', '#134e4a': 'Teal', '#57534e': 'Stone',
+};
+/** Longest comment title kept (as the document keeps it). */
+export const MAX_COMMENT_TITLE = 500;
+
+/** The graph with one comment changed. */
+export const changeComment = (graph: TextureGraph, id: string, changes: Partial<Pick<TexGraphComment, 'text' | 'color'>>): TextureGraph => ({
+    ...graph,
+    comments: (graph.comments ?? []).map((comment) => (comment.id === id ? { ...comment, ...changes, ...(changes.text !== undefined ? { text: changes.text.slice(0, MAX_COMMENT_TITLE) } : {}) } : comment)),
+});
 
 export const createComment = (around: readonly Rect[], fallback: Point): TexGraphComment => {
     const bounds = boundsOf(around);
@@ -147,48 +159,97 @@ export const createComment = (around: readonly Rect[], fallback: Point): TexGrap
 
 /** Nodes nothing reaches an Output from: drawn dimmed. */
 export const unusedNodes = (graph: TextureGraph): Set<string> => {
+    const feeding = new Map<string, string[]>();
+    for (const link of graph.links) {
+        const list = feeding.get(link.to);
+        if (list) list.push(link.from);
+        else feeding.set(link.to, [link.from]);
+    }
     const used = new Set<string>();
     const stack = graph.nodes.filter((node) => node.type === OUTPUT_NODE_TYPE).map((node) => node.id);
     while (stack.length) {
         const id = stack.pop()!;
         if (used.has(id)) continue;
         used.add(id);
-        for (const link of graph.links) if (link.to === id) stack.push(link.from);
+        for (const from of feeding.get(id) ?? []) stack.push(from);
     }
     return new Set(graph.nodes.filter((node) => !used.has(node.id)).map((node) => node.id));
 };
 
-/** An undo history of whole graphs; quick edits of one value merge into one step. */
-export class GraphHistory {
-    private past: TextureGraph[] = [];
-    private future: TextureGraph[] = [];
+/**
+ * The kind every output pin carries, worked out once for the whole graph: wires look up their colour
+ * here instead of searching the graph for each one.
+ */
+export const outputKinds = (graph: TextureGraph, definitionOf: (node: TexGraphNode) => TexNodeDef | null): (nodeId: string, key: string) => PortKind | 'any' => {
+    const nodes = new Map(graph.nodes.map((node) => [node.id, node]));
+    const incoming = new Map<string, TexGraphLink>();
+    for (const link of graph.links) incoming.set(`${link.to}:${link.toInput}`, link);
+    const known = new Map<string, PortKind | 'any'>();
+    const resolving = new Set<string>();
+    const kindOf = (nodeId: string, key: string): PortKind | 'any' => {
+        const id = `${nodeId}:${key}`;
+        const found = known.get(id);
+        if (found) return found;
+        const node = nodes.get(nodeId);
+        const definition = node ? definitionOf(node) : null;
+        const port = definition?.outputs.find((candidate) => candidate.key === key);
+        let kind: PortKind | 'any' = 'any';
+        if (port && node && definition) {
+            if (port.kind !== 'any') kind = port.kind;
+            else if (definition.kindOf) kind = definition.kindOf(node.params);
+            else if (resolving.has(id)) kind = definition.anyDefault ?? 'gray';
+            else {
+                resolving.add(id);
+                const follows = definition.kindFrom ? (Array.isArray(definition.kindFrom) ? definition.kindFrom : [definition.kindFrom]) as string[] : [];
+                const kinds = follows.map((input) => {
+                    const link = incoming.get(`${nodeId}:${input}`);
+                    return link ? kindOf(link.from, link.fromOutput) : null;
+                }).filter((value): value is PortKind => value === 'color' || value === 'gray');
+                resolving.delete(id);
+                kind = kinds.length ? (kinds.includes('color') ? 'color' : 'gray') : definition.anyDefault ?? 'gray';
+            }
+        }
+        known.set(id, kind);
+        return kind;
+    };
+    return kindOf;
+};
+
+const HISTORY_STEPS = 200;
+/** Changes of one value this close together (a slider dragged, a value scrubbed) undo as one step. */
+const COALESCE_MS = 1200;
+
+/** An undo history of whole states (a graph and what goes with it); quick edits of one value merge into one step. */
+export class GraphHistory<T = TextureGraph> {
+    private past: T[] = [];
+    private future: T[] = [];
     private lastKey: string | undefined;
     private lastTime = 0;
 
-    record(before: TextureGraph, coalesce?: string): void {
-        const now = performance.now();
-        if (coalesce && coalesce === this.lastKey && now - this.lastTime < 1200) {
+    record(before: T, coalesce?: string, now = performance.now()): void {
+        if (coalesce && coalesce === this.lastKey && now - this.lastTime < COALESCE_MS) {
             this.lastTime = now;
+            this.future = [];
             return;
         }
         this.past.push(before);
-        if (this.past.length > 200) this.past.shift();
+        if (this.past.length > HISTORY_STEPS) this.past.shift();
         this.future = [];
         this.lastKey = coalesce;
         this.lastTime = now;
     }
 
-    undo(current: TextureGraph): TextureGraph | null {
+    undo(current: T): T | null {
         const previous = this.past.pop();
-        if (!previous) return null;
+        if (previous === undefined) return null;
         this.future.push(current);
         this.lastKey = undefined;
         return previous;
     }
 
-    redo(current: TextureGraph): TextureGraph | null {
+    redo(current: T): T | null {
         const next = this.future.pop();
-        if (!next) return null;
+        if (next === undefined) return null;
         this.past.push(current);
         this.lastKey = undefined;
         return next;
@@ -197,3 +258,21 @@ export class GraphHistory {
     get canUndo(): boolean { return this.past.length > 0; }
     get canRedo(): boolean { return this.future.length > 0; }
 }
+
+/** Materials whose texture graph history is kept while another is open, the most recent last. */
+const KEPT_HISTORIES = 24;
+const histories = new Map<string, GraphHistory<unknown>>();
+
+/**
+ * The undo history of one material's texture graph. It lives outside the editor's screens, so it
+ * survives switching to another material and back, and leaving the Materials tab; the histories of
+ * the materials touched longest ago are let go once many are kept.
+ */
+export const materialHistory = <T>(materialId: string): GraphHistory<T> => {
+    let found = histories.get(materialId);
+    if (found) histories.delete(materialId);
+    else found = new GraphHistory<unknown>();
+    histories.set(materialId, found);
+    while (histories.size > KEPT_HISTORIES) histories.delete(histories.keys().next().value as string);
+    return found as GraphHistory<T>;
+};

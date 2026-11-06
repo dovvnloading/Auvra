@@ -6,7 +6,7 @@ import { TextureGraphEvaluator, type ExternalImage } from '../graph/evaluator';
 import { MESH_MAPS, OUTPUT_NODE_TYPE, meshMapKey, type MeshMapName } from '../graph/nodes/io';
 import { jumpFlood } from '../graph/nodes/distance';
 import type { GraphResolver } from '../graph/registry';
-import { padImage, releaseTileBake, type TileBake } from '../bake/meshBaker';
+import { BAKE_VERSION, padImage, releaseTileBake, spaceOfBox, type PositionSpace, type TileBake } from '../bake/meshBaker';
 import { UvRaster } from '../bake/uvRaster';
 import type { PartMesh } from '../mesh/partMesh';
 import { encodePng, encodePng16, pngBitDepth, readPicture, readPng16 } from '../png';
@@ -167,6 +167,7 @@ uniform int uNormalMap;
 uniform int uChannel;
 uniform vec3 uCentre;
 uniform float uExtent;
+uniform float uOffset;
 vec4 read(vec2 uv) {
     vec4 c = texture(uTexture, uv);
     if (uGray == 1) c.rgb = c.rrr;
@@ -192,7 +193,9 @@ void main() {
     vec3 n = normalize(vNormal);
     vec3 w = pow(abs(n), vec3(uSharpness));
     w /= max(w.x + w.y + w.z, 1e-5);
-    vec3 q = (vPos - uCentre) / uExtent * uScale;
+    // Where the position map puts this place (with an offset of 0.5), so a texture graph's triplanar
+    // projection reading that map lays a pattern exactly where this does.
+    vec3 q = ((vPos - uCentre) / uExtent + uOffset) * uScale;
     mat2 r = rotate2(radians(uRotation));
     vec2 ux = r * q.zy;
     vec2 uy = r * q.xz;
@@ -213,16 +216,48 @@ void main() {
 const MASK_KINDS = { paint: 0, fill: 1, generator: 2, levels: 3, blur: 4, invert: 5 } as const;
 const MASK_BLENDS = { multiply: 0, add: 1, subtract: 2, replace: 3, max: 4, min: 5 } as const;
 
-/** Baked maps kept at 16 bits: where each texel is, and smooth values that steps would show in. */
-const FINE_MAPS: ReadonlySet<MeshMapName> = new Set(['position', 'height', 'curvature']);
+/**
+ * Baked maps kept at 16 bits, on the GPU and when saved: where each texel is, normals, and smooth values
+ * that steps would show in. Only the ID colours are fine at 8.
+ */
+const FINE_MAPS: ReadonlySet<MeshMapName> = new Set(['position', 'height', 'curvature', 'ambientOcclusion', 'thickness', 'normal', 'worldNormal']);
 
 /** Picture keys: a layer's channel, or a mask effect. */
 export const pictureKey = (owner: string, channel?: PaintChannel): string => (channel ? `${owner}:${channel}` : owner);
 
+/** Painted height and normals are kept in half floats (8 bits would step slopes and lighting); the rest at 8 bits. */
+export const picturePrecision = (key: string): 8 | 16 => (key.endsWith(':height') || key.endsWith(':normal') ? 16 : 8);
+
 /** The owner of the pictures of what the surface wore before painting began, carried onto a new layout. */
 export const BEFORE = 'before';
 
+/** Whose a picture is: a layer's or a mask effect's id, or BEFORE. */
+export const pictureOwner = (key: string): string => {
+    const colon = key.indexOf(':');
+    return colon < 0 ? key : key.slice(0, colon);
+};
+
+/** Owners of pictures the documents use: their layers, their mask effects, and what the surface wore before. */
+export const pictureOwners = (documents: Iterable<PaintDocument>): Set<string> => {
+    const owners = new Set<string>([BEFORE]);
+    for (const document of documents) {
+        for (const layer of allLayers(document.layers)) {
+            owners.add(layer.id);
+            for (const effect of layer.mask ?? []) owners.add(effect.id);
+        }
+    }
+    return owners;
+};
+
 interface Cached { signature: string; image: GpuImage }
+
+/** The GPU context was lost or reset: the set's pictures are gone until it is opened again. */
+export class GpuResetError extends Error {
+    constructor() {
+        super('The graphics card was reset, so painting is paused. The set opens again from its saved pictures.');
+        this.name = 'GpuResetError';
+    }
+}
 
 export class PaintStack {
     readonly size: number;
@@ -254,12 +289,51 @@ export class PaintStack {
     private again = false;
     /** Bumped when a fill or mask source outside the document changes (a re-bake, a picture loading). */
     sourcesVersion = 0;
+    /** The GPU context the pictures were made on (TextureGpu.generation): after a reset they are blank. */
+    private readonly generation: number;
+    /** Set once the GPU context is lost: the pictures are gone, and nothing may be painted on or kept from them. */
+    private abandoned = false;
 
     private constructor(readonly host: StackHost, readonly part: PartMesh, document: PaintDocument) {
         this.document = document;
         this.size = 2 ** document.size;
         this.tiles = part.tiles;
         this.raster = new UvRaster(host.gpu, part);
+        this.generation = host.gpu.generation;
+    }
+
+    /**
+     * Whether the pictures on the GPU are the set's: false once the GPU context is lost (and after it comes
+     * back, when every picture made before is blank). Painting, saving and baking wait for the set to be
+     * opened again from its kept pictures.
+     */
+    get usable(): boolean {
+        return !this.abandoned && this.gpu.generation === this.generation && !this.gpu.renderer.getContext().isContextLost();
+    }
+
+    /**
+     * Gives the set up after the GPU context was lost: its pictures died with the context, so they are let
+     * go of without being handed back to the pool, and nothing is kept from them.
+     */
+    abandon(): void {
+        this.abandoned = true;
+        this.unsaved.clear();
+        this.pictures.clear();
+        this.outputs.clear();
+        this.fills.clear();
+        this.masks.clear();
+        this.castCopies.clear();
+        this.padding.clear();
+        this.bake = null;
+        // Evaluators stop listening for the context coming back (what they held died with it).
+        for (const evaluator of this.evaluators.values()) evaluator.dispose();
+        this.evaluators.clear();
+        this.emit();
+    }
+
+    /** Throws when the pictures are not the set's (see usable), so nothing blank is kept over saved work. */
+    private assertUsable(): void {
+        if (!this.usable) throw new GpuResetError();
     }
 
     /** Opens a texture set: lays out its surface, reads its pictures and puts it together. */
@@ -308,10 +382,23 @@ export class PaintStack {
                 const tile = Number(tileName);
                 if (!this.tiles.includes(tile) || !picture?.assetId) continue;
                 try {
-                    const bitmap = await readPicture(await this.host.fetchPicture(picture.assetId));
-                    const texture = new THREE.Texture(bitmap);
-                    texture.flipY = false;
-                    texture.premultiplyAlpha = false;
+                    const blob = await this.host.fetchPicture(picture.assetId);
+                    let texture: THREE.Texture;
+                    let width: number;
+                    let height: number;
+                    let bitmap: ImageBitmap | null = null;
+                    if (await pngBitDepth(blob) === 16) {
+                        // Kept at 16 bits (painted height and normals): read whole, as a browser reads it at 8.
+                        const fine = await readPng16(blob);
+                        texture = new THREE.DataTexture(fine.data, fine.width, fine.height, THREE.RGBAFormat, THREE.FloatType);
+                        ({ width, height } = fine);
+                    } else {
+                        bitmap = await readPicture(blob);
+                        texture = new THREE.Texture(bitmap);
+                        texture.flipY = false;
+                        texture.premultiplyAlpha = false;
+                        ({ width, height } = bitmap);
+                    }
                     texture.colorSpace = THREE.NoColorSpace;
                     texture.minFilter = texture.magFilter = THREE.NearestFilter;
                     texture.generateMipmaps = false;
@@ -319,10 +406,10 @@ export class PaintStack {
                     const image = this.picture(key, tile);
                     // Kept at another size (the set was resized): scaled with the colour of see-through
                     // pixels left out, so stroke edges do not darken.
-                    const fragment = bitmap.width === this.size && bitmap.height === this.size ? 'void main() { outColor = texture(source, vUv); }' : RESAMPLE;
+                    const fragment = width === this.size && height === this.size ? 'void main() { outColor = texture(source, vUv); }' : RESAMPLE;
                     this.gpu.passNow(image, { fragment, inputs: { source: texture } });
                     texture.dispose();
-                    bitmap.close();
+                    bitmap?.close();
                 } catch {
                     // A picture that will not read leaves the layer empty rather than the set unopenable.
                 }
@@ -384,7 +471,7 @@ export class PaintStack {
         if (!byTile) this.pictures.set(key, byTile = new Map());
         let image = byTile.get(tile);
         if (!image) {
-            image = this.gpu.image(this.size, this.size, 'color', 8);
+            image = this.gpu.image(this.size, this.size, 'color', picturePrecision(key));
             this.gpu.clear(image, fill);
             byTile.set(tile, image);
         }
@@ -401,6 +488,15 @@ export class PaintStack {
         if (!byTile) return;
         for (const image of byTile.values()) this.gpu.release(image);
         this.pictures.delete(key);
+        for (const tile of byTile.keys()) {
+            this.unsaved.delete(`${key}|${tile}`);
+            this.versions.delete(`${key}|${tile}`);
+        }
+    }
+
+    /** Lets go of every picture whose layer or mask effect none of `owners` is (see pictureOwners). */
+    dropPicturesExcept(owners: ReadonlySet<string>): void {
+        for (const key of [...this.pictures.keys()]) if (!owners.has(pictureOwner(key))) this.dropPictures(key);
     }
 
     /** A mask effect painted fully white or black to start with. */
@@ -415,15 +511,27 @@ export class PaintStack {
      */
     async keepPictures(): Promise<PaintDocument> {
         const stored = new Map<string, string>();
+        // Pictures of deleted layers wait (undo may bring the layer back) rather than being kept for nothing.
+        const used = pictureOwners([this.document]);
         for (const entry of [...this.unsaved]) {
             const [key, tileName] = entry.split('|');
+            if (!used.has(pictureOwner(key))) continue;
+            // A lost GPU reads back nothing: never keep that over the saved picture.
+            this.assertUsable();
             const image = this.pictures.get(key)?.get(Number(tileName));
             // Marked kept as its pixels are read: a stroke landing while they are stored marks it again.
             this.unsaved.delete(entry);
             if (!image) continue;
-            const pixels = this.gpu.readRgba8(image, this.size, this.size, 'raw', false);
+            // Half-float pictures are kept as 16-bit PNGs, the rest at 8 bits.
+            const pixels = image.precision === 8 ? this.gpu.readRgba8(image, this.size, this.size, 'raw', false) : this.gpu.readUint16(image, this.size, this.size, 'color', false);
+            if (!this.usable) {
+                // Lost while being read: what came back is not the picture.
+                this.unsaved.add(entry);
+                throw new GpuResetError();
+            }
+            const encoded = pixels instanceof Uint16Array ? encodePng16(pixels, this.size, this.size, 4) : encodePng(pixels, this.size, this.size);
             try {
-                stored.set(entry, await this.host.storePicture(await encodePng(pixels, this.size, this.size)));
+                stored.set(entry, await this.host.storePicture(await encoded));
             } catch (error) {
                 this.unsaved.add(entry);
                 throw error;
@@ -482,31 +590,45 @@ export class PaintStack {
         this.invalidate();
     }
 
-    /** Keeps the baked maps as assets and returns the document naming them. */
-    async keepBake(settings: NonNullable<PaintDocument['bake']>['settings']): Promise<PaintDocument> {
+    /**
+     * Where 3D placement is measured from: the document's space (a cube round the whole model), whose fills
+     * cast from three sides line up with a texture graph's triplanar projection (offset 0.5); a set made
+     * before spaces were kept uses its own box, with its fills' old placement (offset 0).
+     */
+    space(): PositionSpace & { offset: number } {
+        if (this.document.space) return { ...this.document.space, offset: 0.5 };
+        return { ...spaceOfBox(this.part.bounds), offset: 0 };
+    }
+
+    /**
+     * Keeps the baked maps as assets and returns the document naming them, marked with the bake's version
+     * and the space its position map was measured in (`adopt` makes that space the set's own).
+     */
+    async keepBake(settings: NonNullable<PaintDocument['bake']>['settings'], space: PositionSpace, adopt = false): Promise<PaintDocument> {
         if (!this.bake) return this.document;
         const maps: NonNullable<PaintDocument['bake']>['maps'] = {};
         for (const [tile, result] of this.bake) {
             for (const [name, image] of Object.entries(result.maps)) {
                 if (!image) continue;
+                this.assertUsable();
                 let blob: Blob;
+                const gray = image.kind === 'gray';
                 if (FINE_MAPS.has(name as MeshMapName)) {
-                    // 8 bits would step these in 1/255ths of the model: noise and triplanar masks read from them would turn blocky.
-                    const values = this.gpu.readFloat(image);
-                    const gray = image.kind === 'gray';
-                    const samples = new Uint16Array(image.width * image.height * (gray ? 1 : 4));
-                    const quantize = (value: number) => Math.round(Math.min(1, Math.max(0, value)) * 65535);
-                    if (gray) for (let p = 0; p < samples.length; p++) samples[p] = quantize(values[p * 4]);
-                    else for (let i = 0; i < samples.length; i++) samples[i] = (i & 3) === 3 ? 65535 : quantize(values[i]);
+                    // 8 bits would step these in 1/255ths: noise and triplanar masks read from them would turn
+                    // blocky, and normals and occlusion would band once lit. Read a strip at a time.
+                    const samples = this.gpu.readUint16(image, image.width, image.height, gray ? 'gray' : 'color', false);
+                    this.assertUsable();
                     blob = await encodePng16(samples, image.width, image.height, gray ? 1 : 4);
                 } else {
-                    blob = await encodePng(this.gpu.readRgba8(image, this.size, this.size, image.kind === 'gray' ? 'gray' : 'raw', false), this.size, this.size);
+                    const pixels = this.gpu.readRgba8(image, this.size, this.size, gray ? 'gray' : 'raw', false);
+                    this.assertUsable();
+                    blob = await encodePng(pixels, this.size, this.size);
                 }
                 const assetId = await this.host.storePicture(blob);
                 maps[name as MeshMapName] = { ...(maps[name as MeshMapName] ?? {}), [String(tile)]: { assetId } };
             }
         }
-        this.document = { ...this.document, bake: { settings, maps, at: Date.now() } };
+        this.document = { ...this.document, ...(adopt ? { space } : {}), bake: { settings, maps, at: Date.now(), version: BAKE_VERSION, space } };
         return this.document;
     }
 
@@ -535,6 +657,8 @@ export class PaintStack {
 
     /** Puts the stale channels together; calls made meanwhile run once more afterwards. */
     compose(): Promise<void> {
+        // Nothing to put together once the GPU context is lost: the set opens again.
+        if (this.abandoned) return Promise.resolve();
         if (this.composing) {
             this.again = true;
             return this.composing;
@@ -546,7 +670,10 @@ export class PaintStack {
                     this.prune();
                     const channels = this.stale ? [...this.stale] : [...PAINT_CHANNELS];
                     this.stale = new Set();
-                    for (const tile of this.tiles) await this.composeTile(tile, channels);
+                    for (const tile of this.tiles) {
+                        if (this.abandoned) return;
+                        await this.composeTile(tile, channels);
+                    }
                     this.problem = null;
                     this.emit();
                 } while (this.again);
@@ -590,6 +717,7 @@ export class PaintStack {
         // Normal comes last: it is built on the height just made.
         const ordered = [...channels].sort((a, b) => Number(a === 'normal') - Number(b === 'normal'));
         for (const channel of ordered) {
+            if (this.abandoned) return;
             if (!enabled.includes(channel) && channel !== 'normal') {
                 this.gpu.release(outputs[channel]);
                 delete outputs[channel];
@@ -624,7 +752,8 @@ export class PaintStack {
 
     /** Baked normal, painted normal detail and painted height's slopes, laid together. */
     private finalNormal(tile: number, detail: GpuImage, height: GpuImage | null): GpuImage {
-        const out = this.gpu.image(this.size, this.size, 'color', 8);
+        // Half floats, so the 16-bit export holds 16 bits of detail.
+        const out = this.gpu.image(this.size, this.size, 'color', 16);
         const baked = this.meshMaps(tile).normal;
         this.gpu.passNow(out, {
             fragment: `uniform int uHasHeight;\nuniform float uStrength;
@@ -821,13 +950,13 @@ void main() {
     /** A picture laid onto this tile's texels along the UVs or from three sides, kept until its source or settings change. */
     private cast(key: string, source: unknown[], texture: THREE.Texture, channel: PaintChannel, tile: number, projection: FillProjection,
         read: { gray: boolean; srgb: boolean; rebuildNormal: boolean; channelRead: number }): GpuImage {
-        const signature = hashText(JSON.stringify([source, projection, read, channel, tile, this.size]));
+        const space = this.space();
+        const signature = hashText(JSON.stringify([source, projection, read, channel, tile, this.size, space]));
         const cached = this.fills.get(key);
         if (cached?.signature === signature) return cached.image;
         if (cached) this.gpu.release(cached.image);
-        // Height keeps its smooth steps; other channels are fine at 8 bits.
-        const image = this.gpu.image(this.size, this.size, 'color', channel === 'height' ? 16 : 8);
-        const extent = this.part.bounds.getSize(new THREE.Vector3());
+        // Height and normals keep their smooth steps; other channels are fine at 8 bits.
+        const image = this.gpu.image(this.size, this.size, 'color', channel === 'height' || channel === 'normal' ? 16 : 8);
         this.raster.draw(image, tile, CAST, {
             uniforms: {
                 uTexture: texture,
@@ -840,8 +969,9 @@ void main() {
                 uRebuildNormal: read.rebuildNormal ? 1 : 0,
                 uNormalMap: channel === 'normal' ? 1 : 0,
                 uChannel: read.channelRead,
-                uCentre: this.part.bounds.getCenter(new THREE.Vector3()),
-                uExtent: Math.max(extent.x, extent.y, extent.z, 1e-6),
+                uCentre: new THREE.Vector3(...space.centre),
+                uExtent: space.extent,
+                uOffset: space.offset,
             },
             clear: [0, 0, 0, 1],
         });

@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { LinkIcon, SigmaIcon, UnlinkIcon, UploadIcon } from '../UI/Icons';
 import { expressionError } from '../../texturing/graph/expressions';
-import { readRamp } from '../../texturing/graph/nodeKit';
+import { MAX_RAMP_STOPS, readRamp } from '../../texturing/graph/nodeKit';
 import { isParamLink, type GraphParameter, type GraphParameterKind, type RampStop, type TexParamDef } from '../../texturing/graph/types';
 import { CodeField, RampEditor, ScrubLabel } from '../Materials/MaterialParamField';
 import { Popover } from '../UI/kit';
@@ -31,23 +31,60 @@ export const exposedKind = (param: TexParamDef): GraphParameterKind | null => {
 };
 
 /**
- * A number typed as text and applied on Enter or on leaving the box, so half-typed values ("-", "0.")
- * never reach the graph. An unchanged value is not applied again, which would make an empty undo step.
+ * A setting's number kept inside its hard limits (a typed or scrubbed value past them stops at them),
+ * whole for whole-number settings. Typing may still go past a slider's soft end, up to the hard limit.
  */
-const DraftNumber: React.FC<{ label: string; value: number; integer?: boolean; className?: string; onCommit: (value: number) => void }> = ({ label, value, integer, className, onCommit }) => {
-    const shown = String(Number(value.toFixed(4)));
+export const clampToParam = (param: Pick<TexParamDef, 'kind' | 'min' | 'max'>, value: number): number => {
+    const whole = param.kind === 'int' ? Math.round(value) : value;
+    return Math.min(param.max ?? Infinity, Math.max(param.min ?? -Infinity, whole));
+};
+
+/**
+ * A number typed as text and applied on Enter or on leaving the box, so half-typed values ("-", "0.")
+ * never reach the graph and nothing that is not a number is ever stored. An unchanged value is not
+ * applied again, which would make an empty undo step.
+ */
+export const DraftNumber: React.FC<{ label: string; value: number; integer?: boolean; className?: string; limit?: (value: number) => number; onCommit: (value: number) => void }> = ({ label, value, integer, className, limit, onCommit }) => {
+    const shown = String(Number((Number.isFinite(value) ? value : 0).toFixed(4)));
     const [draft, setDraft] = useState(shown);
     useEffect(() => setDraft(shown), [shown]);
     const commit = (text: string) => {
         const number = Number(text.trim());
         if (!text.trim() || !Number.isFinite(number)) { setDraft(shown); return; }
-        const next = integer ? Math.round(number) : number;
+        const rounded = integer ? Math.round(number) : number;
+        const next = limit ? limit(rounded) : rounded;
         if (next !== value) onCommit(next);
-        else setDraft(shown);
+        setDraft(String(Number(next.toFixed(4))));
     };
     return (
         <input aria-label={label} value={draft} onChange={(event) => setDraft(event.target.value)} onBlur={(event) => commit(event.target.value)}
-            onKeyDown={(event) => { if (event.key === 'Enter') commit((event.target as HTMLInputElement).value); }} className={`text-right tabular-nums ${field} ${className ?? ''}`} />
+            onKeyDown={(event) => {
+                if (event.key === 'Enter') commit((event.target as HTMLInputElement).value);
+                if (event.key === 'Escape') { setDraft(shown); (event.target as HTMLInputElement).blur(); }
+            }}
+            className={`text-right tabular-nums ${field} ${className ?? ''}`} />
+    );
+};
+
+/**
+ * Text typed freely and applied on Enter or on leaving the box, as one change (one undo step) rather
+ * than one per key. Empty text goes back to what it was unless `allowEmpty`.
+ */
+export const DraftText: React.FC<{ label: string; value: string; maxLength?: number; allowEmpty?: boolean; placeholder?: string; className?: string; onCommit: (value: string) => void }> = ({ label, value, maxLength = 64, allowEmpty = false, placeholder, className, onCommit }) => {
+    const [draft, setDraft] = useState(value);
+    useEffect(() => setDraft(value), [value]);
+    const commit = (text: string) => {
+        const next = text.slice(0, maxLength);
+        if (!next.trim() && !allowEmpty) { setDraft(value); return; }
+        if (next !== value) onCommit(next);
+    };
+    return (
+        <input aria-label={label} value={draft} maxLength={maxLength} placeholder={placeholder} onChange={(event) => setDraft(event.target.value)} onBlur={(event) => commit(event.target.value)}
+            onKeyDown={(event) => {
+                if (event.key === 'Enter') commit((event.target as HTMLInputElement).value);
+                if (event.key === 'Escape') { setDraft(value); (event.target as HTMLInputElement).blur(); }
+            }}
+            className={`${field} ${className ?? ''}`} />
     );
 };
 
@@ -60,7 +97,7 @@ const NumberRow: React.FC<{ param: TexParamDef; value: number; onChange: (value:
                 <input type="range" aria-label={`${param.label} slider`} min={param.min} max={max} step={step} value={Math.min(max, value)}
                     onChange={(event) => onChange(Number(event.target.value))} className="h-1 min-w-0 flex-1 accent-sky-500" />
             )}
-            <DraftNumber label={param.label} value={value} integer={param.kind === 'int'} className="w-16" onCommit={onChange} />
+            <DraftNumber label={param.label} value={value} integer={param.kind === 'int'} className="w-16" limit={(next) => clampToParam(param, next)} onCommit={onChange} />
         </div>
     );
 };
@@ -95,7 +132,7 @@ export const ParamControl: React.FC<{
             return (
                 <div className="flex gap-1">
                     {[0, 1].map((index) => (
-                        <DraftNumber key={index} label={`${param.label} ${'XY'[index]}`} value={Number(v[index]) || 0} className="w-full min-w-0"
+                        <DraftNumber key={index} label={`${param.label} ${'XY'[index]}`} value={Number(v[index]) || 0} className="w-full min-w-0" limit={(next) => clampToParam(param, next)}
                             onCommit={(next) => onChange([0, 1].map((at) => (at === index ? next : Number(v[at]) || 0)))} />
                     ))}
                 </div>
@@ -104,9 +141,10 @@ export const ParamControl: React.FC<{
         case 'select':
             return <Select value={String(value ?? param.default)} options={(param.options ?? []).map((option) => ({ value: option.value, label: option.label }))} onChange={(next) => onChange(next)} className="w-full" />;
         case 'ramp': {
+            // Stops keep their alpha: a gradient map can fade to see-through.
             const stops = readRamp(value, (param.default as { stops: RampStop[] }).stops);
-            return <RampEditor label={param.label} ramp={{ stops: stops.map((stop) => ({ position: stop.position, color: stop.color.slice(0, 3) })) }}
-                onChange={(ramp) => onChange({ stops: ramp.stops.map((stop) => ({ position: stop.position, color: [...stop.color.slice(0, 3), 1] })) })} />;
+            return <RampEditor label={param.label} alpha maxStops={MAX_RAMP_STOPS} ramp={{ stops: stops.map((stop) => ({ position: stop.position, color: [...stop.color] })) }}
+                onChange={(ramp) => onChange({ stops: ramp.stops.map((stop) => ({ position: stop.position, color: [stop.color[0] ?? 0, stop.color[1] ?? 0, stop.color[2] ?? 0, stop.color[3] ?? 1] })) })} />;
         }
         case 'curve':
             return <CurveEditor value={value} onChange={onChange} />;
@@ -115,7 +153,7 @@ export const ParamControl: React.FC<{
         case 'code':
             return <CodeField label={param.label} code={String(value ?? '')} onChange={onChange} />;
         case 'string':
-            return <input aria-label={param.label} value={String(value ?? '')} onChange={(event) => onChange(event.target.value.slice(0, 64))} className={`w-full ${field}`} />;
+            return <DraftText label={param.label} value={String(value ?? '')} allowEmpty onCommit={onChange} className="w-full" />;
         default:
             return null;
     }
@@ -144,7 +182,7 @@ export const TextureParamField: React.FC<{
     const formulaProblem = linked && '$expr' in linked ? expressionError(linked.$expr, names) : null;
 
     const label = param.kind === 'float' || param.kind === 'int'
-        ? <ScrubLabel label={param.label} value={Number(linked ? param.default : value ?? param.default) || 0} step={param.step ?? 0.01} onChange={(next) => !linked && onChange(param.kind === 'int' ? Math.round(next) : next)} />
+        ? <ScrubLabel label={param.label} value={Number(linked ? param.default : value ?? param.default) || 0} step={param.step ?? 0.01} onChange={(next) => !linked && onChange(clampToParam(param, next))} />
         : <span className="text-2xs text-zinc-400">{param.label}</span>;
 
     const linkButton = canLink && (

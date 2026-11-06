@@ -135,7 +135,9 @@ export class UvRaster {
 
     /**
      * Draws tile `tile`'s triangles (and their edges, unless `edges` is false) into `target` with
-     * `fragment` (which declares its own uniforms and samplers and writes outColor).
+     * `fragment` (which declares its own uniforms and samplers and writes outColor). With edges, a texel
+     * can be drawn more than once (by its triangle and by the lines along its and its neighbours' edges):
+     * replacing or keeping the largest value is safe, but adding or laying over would count it twice.
      */
     draw(target: GpuImage | THREE.WebGLRenderTarget, tile: number, fragment: string, options: {
         uniforms?: Record<string, unknown>;

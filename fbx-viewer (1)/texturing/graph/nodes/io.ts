@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { GpuImage } from '../../gpu/textureGpu';
 import { anyIn, color, colorIn, float, onePass, out, select, vec2 } from '../nodeKit';
-import { CHANNEL_KIND, OUTPUT_CHANNELS, OUTPUT_CHANNEL_LABELS, type NodeRunContext, type OutputChannel, type PortKind, type TexNodeDef, type TexParamDef } from '../types';
+import { OUTPUT_CHANNELS, OUTPUT_CHANNEL_LABELS, outputNodeKind, type NodeRunContext, type OutputChannel, type PortKind, type TexNodeDef, type TexParamDef } from '../types';
 
 /** Where a graph starts and ends, the model's baked maps, project pictures and hand-written pixels. */
 
@@ -9,6 +9,33 @@ export const INPUT_NODE_TYPE = 'input';
 export const OUTPUT_NODE_TYPE = 'output';
 export const SUBGRAPH_NODE_TYPE = 'subgraph';
 export const MESH_MAP_NODE_TYPE = 'meshMap';
+
+/**
+ * A sub-graph node's own random seed and whether each copy varies, kept under names no graph
+ * parameter can have (parameter names are letters, digits and underscores).
+ */
+export const SUBGRAPH_SEED_KEY = '$seed';
+export const SUBGRAPH_VARY_KEY = '$vary';
+
+/** Nodes that read the model's mesh maps (`mesh:...` images) when nothing is wired in their place. */
+export const MESH_READING_NODE_TYPES: ReadonlySet<string> = new Set([MESH_MAP_NODE_TYPE, 'triplanar', 'directionMask', 'axisGradient', 'blendMeshNormals', 'noise3d']);
+
+/**
+ * Roughly how many samples each pixel of hand-written code takes: its reads of inputs and noise
+ * functions, times the loops round them (a loop's bound when it is written as a number, else 32).
+ * Heavy code is then drawn in bands across frames, like the other heavy nodes, instead of in one
+ * draw long enough at 4K or 8K for the system to reset the GPU.
+ */
+export const pixelProcessorCost = (code: string): number => {
+    const reads = (code.match(/\b(?:c_[abcd]|g_[abcd]|texture|texelFetch|texelWrap)\s*\(/g) ?? []).length;
+    const noises = (code.match(/\b(?:perlin|valueNoise)\s*\(/g) ?? []).length * 6 + (code.match(/\bworley\s*\(/g) ?? []).length * 40;
+    let loops = 1;
+    for (const match of code.matchAll(/\b(?:for|while)\s*\(([^)]*)\)/g)) {
+        const bound = /<=?\s*(\d+)/.exec(match[1]);
+        loops = Math.min(4096, loops * Math.min(256, Math.max(2, bound ? Number(bound[1]) : 32)));
+    }
+    return Math.min(1024, Math.max(16, (reads + noises + 4) * loops));
+};
 
 /** Maps baked from a model, as texture graphs read them (see texturing/bake). */
 export const MESH_MAPS = ['ambientOcclusion', 'curvature', 'normal', 'worldNormal', 'position', 'thickness', 'id', 'height'] as const;
@@ -87,11 +114,15 @@ export const IO_NODES: TexNodeDef[] = [
         params: [
             select('channel', 'Channel', 'baseColor', OUTPUT_CHANNELS.map((channel) => [channel, OUTPUT_CHANNEL_LABELS[channel]] as [string, string])),
             { key: 'name', label: 'Name', kind: 'string', default: '' },
+            select('kind', 'Kind', 'color', [['color', 'Colour'], ['gray', 'Grey']], {
+                showIf: (params) => params.channel === 'custom',
+                hint: 'What the image is: grey for masks and heights, so graphs using this one get a grey pin.',
+            }),
         ],
         sizeFrom: 'input',
         async run(context) {
             const channel = (OUTPUT_CHANNELS as readonly string[]).includes(String(context.params.channel)) ? context.params.channel as OutputChannel : 'custom';
-            const kind = CHANNEL_KIND[channel];
+            const kind = outputNodeKind(context.params);
             const input = context.input('in');
             if (!input) {
                 const image = context.image(kind);
@@ -185,7 +216,7 @@ export const IO_NODES: TexNodeDef[] = [
         async run(context) {
             const image = context.image(context.outputKind('out'));
             const code = String(context.params.code ?? '').slice(0, 8000);
-            await context.pass(image, `void main() {\nvec2 uv = vUv;\n${code}\n}`);
+            await context.pass(image, `void main() {\nvec2 uv = vUv;\n${code}\n}`, { cost: pixelProcessorCost(code) });
             return { out: image };
         },
     },

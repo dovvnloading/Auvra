@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { GpuImage, TextureGpu } from '../gpu/textureGpu';
 import { CHANNEL_IS_COLOR, type PaintChannel, type PaintDocument } from './paintTypes';
-import { pictureKey, type PaintStack } from './paintStack';
+import { GpuResetError, pictureKey, type PaintStack } from './paintStack';
 
 /**
  * BRUSH STROKES
@@ -55,6 +55,24 @@ export interface BrushSettings {
     /** For masks: the grey painted. */
     maskValue: number;
 }
+
+/** The largest brush radius, in screen pixels: the size sliders and the ] key stop here. */
+export const MAX_BRUSH_SIZE = 600;
+
+/** A picture's width over its height (1 when not known yet). */
+export const pictureAspect = (texture: THREE.Texture | null): number => {
+    const image = texture?.image as { width?: number; height?: number } | undefined;
+    return image?.width && image.height ? image.width / image.height : 1;
+};
+
+/**
+ * Where the stencil lies on a view of `width` × `height` pixels: its middle (from the top left), its size
+ * (a share of the view's height tall, as wide as its picture's proportions make it) and its turn in degrees.
+ */
+export const stencilPlace = (stencil: BrushSettings['stencil'], aspect: number, width: number, height: number): { x: number; y: number; width: number; height: number; angle: number } => {
+    const tall = height * stencil.scale;
+    return { x: width / 2 + stencil.offsetX * width, y: height / 2 + stencil.offsetY * height, width: tall * aspect, height: tall, angle: stencil.rotation };
+};
 
 export const DEFAULT_BRUSH: BrushSettings = {
     size: 40,
@@ -142,7 +160,30 @@ uniform int uHasStencil;
 uniform vec4 uStencilPlace;
 uniform float uStencilAngle;
 uniform float uStencilOpacity;
+uniform int uStencilSrgb;
+uniform int uStencilFlip;
 uniform int uIsland;
+
+// How much the stencil lets through at a place on the screen (pixels from the top left): its picture's
+// brightness inside it, nothing outside it, eased by its strength.
+float stencilAt(vec2 screen) {
+    vec2 sp = rotate2(-uStencilAngle) * ((screen - uStencilPlace.xy) / uStencilPlace.zw) + 0.5;
+    // The picture's top row at the top of its place on the screen, however the texture was uploaded.
+    if (uStencilFlip == 1) sp.y = 1.0 - sp.y;
+    vec4 c = texture(uStencil, sp);
+    if (uStencilSrgb == 1) c.rgb = linearToSrgb(c.rgb);
+    float inside = step(0.0, sp.x) * step(sp.x, 1.0) * step(0.0, sp.y) * step(sp.y, 1.0);
+    return mix(1.0, luma(c.rgb) * c.a * inside, uStencilOpacity);
+}
+
+// The stencil cast from the screen onto a place on the model, as a slide is cast through the model
+// (a surface brush can reach places the eye cannot see; they take the stencil where they fall on the screen).
+float stencilOnModel(vec3 p) {
+    vec4 clip = uViewProj * vec4(p, 1.0);
+    if (clip.w <= 0.0) return 1.0 - uStencilOpacity;
+    vec3 ndc = clip.xyz / clip.w;
+    return stencilAt(vec2((ndc.x * 0.5 + 0.5) * uViewport.x, (0.5 - ndc.y * 0.5) * uViewport.y));
+}
 
 float shapeAt(vec2 local, float radiusPixels) {
     float r = uShape == 1 ? max(abs(local.x), abs(local.y)) : length(local);
@@ -181,12 +222,7 @@ float coverageAt(vec3 p, vec3 n) {
             float s = shapeAt(local, d.z) * uDabs2[i].x;
             a = 1.0 - (1.0 - a) * (1.0 - s);
         }
-        if (uHasStencil == 1) {
-            vec2 sp = rotate2(-uStencilAngle) * ((screen - uStencilPlace.xy) / uStencilPlace.zw) + 0.5;
-            vec4 c = texture(uStencil, sp);
-            float inside = step(0.0, sp.x) * step(sp.x, 1.0) * step(0.0, sp.y) * step(sp.y, 1.0);
-            a *= mix(1.0, luma(c.rgb) * c.a * inside, uStencilOpacity);
-        }
+        if (uHasStencil == 1) a *= stencilAt(screen);
         return a * smoothstep(uFacing, uFacing + 0.15, facing);
     }
     float a = 0.0;
@@ -207,6 +243,7 @@ float coverageAt(vec3 p, vec3 n) {
         float s = shapeAt(local, radius * uDabs3[i].w) * uDabs2[i].x;
         a = 1.0 - (1.0 - a) * (1.0 - s);
     }
+    if (uHasStencil == 1 && a > 0.0) a *= stencilOnModel(p);
     return a;
 }
 
@@ -236,6 +273,10 @@ void main() {
     }
     outColor = vec4(a);
 }`;
+
+/** One batch's coverage laid over what the stroke has gathered so far (blended: batch + mask × (1 − batch)). */
+const GATHER_SHADER = /* glsl */ `
+void main() { outColor = vec4(texelFetch(batch, ivec2(gl_FragCoord.xy), 0).r); }`;
 
 const APPLY_SHADER = /* glsl */ `
 uniform int uErase;
@@ -312,10 +353,13 @@ const random = (seed: number): number => {
     return (h >>> 0) / 4294967295;
 };
 
+/** A block of a picture's pixels, bottom row first: bytes for 8-bit pictures, half floats for half-float ones. */
+export type BlockPixels = Uint8Array | Uint16Array;
+
 export interface PixelPatch {
     key: string;
     tile: number;
-    rects: Array<{ x: number; y: number; width: number; height: number; before: Uint8Array; after: Uint8Array | null }>;
+    rects: Array<{ x: number; y: number; width: number; height: number; before: BlockPixels; after: BlockPixels | null }>;
 }
 
 export interface HistoryEntry {
@@ -324,10 +368,65 @@ export interface HistoryEntry {
     pixels?: PixelPatch[];
 }
 
+/** Bytes of pixels an undo step holds. */
+export const historyBytes = (entry: HistoryEntry): number => {
+    let bytes = 0;
+    for (const patch of entry.pixels ?? []) for (const rect of patch.rects) bytes += rect.before.byteLength + (rect.after?.byteLength ?? 0);
+    return bytes;
+};
+
+/**
+ * The past steps to keep: at most `steps` of them, and few enough that the pixels of every step kept,
+ * past and future, fit in `bytes`. The oldest go first; the newest past step always stays.
+ */
+export const trimmedHistory = (past: readonly HistoryEntry[], future: readonly HistoryEntry[], steps: number, bytes: number): HistoryEntry[] => {
+    const kept = past.length > steps ? past.slice(past.length - steps) : [...past];
+    let total = 0;
+    for (const entry of kept) total += historyBytes(entry);
+    for (const entry of future) total += historyBytes(entry);
+    let first = 0;
+    while (total > bytes && kept.length - first > 1) total -= historyBytes(kept[first++]);
+    return first ? kept.slice(first) : kept;
+};
+
+/** Reads a block of a picture. Half-float pictures are read as 32-bit floats (which every GPU allows) and kept as half floats. */
+const readBlock = (gpu: TextureGpu, image: GpuImage, x: number, y: number, width: number, height: number): BlockPixels => {
+    if (image.precision === 8) {
+        const pixels = new Uint8Array(width * height * 4);
+        gpu.renderer.readRenderTargetPixels(image.target, x, y, width, height, pixels);
+        return pixels;
+    }
+    const block = gpu.image(width, height, 'color', 32);
+    gpu.passNow(block, { fragment: 'uniform vec2 uAt;\nvoid main() { outColor = texelFetch(source, ivec2(gl_FragCoord.xy + uAt), 0); }', inputs: { source: image }, uniforms: { uAt: new THREE.Vector2(x, y) } });
+    const floats = new Float32Array(width * height * 4);
+    gpu.renderer.readRenderTargetPixels(block.target, 0, 0, width, height, floats);
+    gpu.release(block);
+    const halves = new Uint16Array(floats.length);
+    for (let i = 0; i < floats.length; i++) halves[i] = THREE.DataUtils.toHalfFloat(floats[i]);
+    return halves;
+};
+
+/** Puts a block read by readBlock back into its picture. */
+const writeBlock = (gpu: TextureGpu, image: GpuImage, pixels: BlockPixels, region: { x: number; y: number; width: number; height: number }): void => {
+    if (pixels instanceof Uint8Array) {
+        gpu.write(image, pixels, region);
+        return;
+    }
+    const floats = new Float32Array(pixels.length);
+    for (let i = 0; i < pixels.length; i++) floats[i] = THREE.DataUtils.fromHalfFloat(pixels[i]);
+    gpu.write(image, floats, region);
+};
+
 const BLOCK = 32;
 
 export class Stroke {
     private readonly masks = new Map<number, GpuImage>();
+    /**
+     * One batch of dabs before it joins the stroke. A texel can be drawn more than once in a batch (by its
+     * triangle and by the lines along that triangle's edges and its neighbours', drawn so thin slivers are
+     * covered), so the batch is drawn here keeping the largest value, then laid over the stroke once.
+     */
+    private readonly batch: GpuImage;
     private readonly before = new Map<string, GpuImage>();
     private last: { x: number; y: number } | null = null;
     private travelled = 0;
@@ -343,14 +442,17 @@ export class Stroke {
         private readonly alpha: THREE.Texture | null,
         private readonly stencil: THREE.Texture | null,
     ) {
+        // Painting on pictures a lost GPU context left blank would save blank-based pictures over kept work.
+        if (!stack.usable) throw new GpuResetError();
         const gpu = stack.host.gpu;
+        this.batch = gpu.image(stack.size, stack.size, 'gray', 16);
         for (const tile of stack.tiles) {
             const mask = gpu.image(stack.size, stack.size, 'gray', 16);
             gpu.clear(mask, [0, 0, 0, 0]);
             this.masks.set(tile, mask);
             for (const key of this.keys()) {
                 const picture = stack.picture(key, tile, target.kind === 'mask' ? [1, 1, 1, 1] : [0, 0, 0, 0]);
-                const copy = gpu.image(stack.size, stack.size, 'color', 8);
+                const copy = gpu.image(stack.size, stack.size, 'color', picture.precision);
                 gpu.copy(picture, copy);
                 this.before.set(`${key}|${tile}`, copy);
             }
@@ -420,6 +522,7 @@ export class Stroke {
         for (let i = 0; i < dabs.length; i += MAX_DABS) batches.push(dabs.slice(i, i + MAX_DABS));
         if (island >= 0) batches.push([]);
         const stencil = this.brush.stencil;
+        const place = stencilPlace(stencil, pictureAspect(this.stencil), view.width, view.height);
         for (const batch of batches) {
             const d1 = Array.from({ length: MAX_DABS }, () => new THREE.Vector4());
             const d2 = Array.from({ length: MAX_DABS }, () => new THREE.Vector4());
@@ -438,8 +541,11 @@ export class Stroke {
                 }
             });
             for (const tile of stack.tiles) {
-                stack.raster.draw(this.masks.get(tile)!, tile, DAB_SHADER, {
-                    blend: 'alpha',
+                // Each texel takes each dab once: the batch is drawn keeping the largest value any of its
+                // draws gives a texel, then laid over the stroke.
+                stack.raster.draw(this.batch, tile, DAB_SHADER, {
+                    blend: 'max',
+                    clear: [0, 0, 0, 0],
                     uniforms: {
                         uViewProj: view.viewProjection,
                         uViewport: new THREE.Vector2(view.width, view.height),
@@ -460,12 +566,15 @@ export class Stroke {
                         uCentre: centre,
                         uStencil: this.stencil ?? gpu.constant('white'),
                         uHasStencil: stencil.enabled && this.stencil ? 1 : 0,
-                        uStencilPlace: new THREE.Vector4(view.width / 2 + stencil.offsetX * view.width, view.height / 2 + stencil.offsetY * view.height, view.height * stencil.scale, view.height * stencil.scale),
-                        uStencilAngle: (stencil.rotation * Math.PI) / 180,
+                        uStencilPlace: new THREE.Vector4(place.x, place.y, place.width, place.height),
+                        uStencilAngle: (place.angle * Math.PI) / 180,
                         uStencilOpacity: stencil.opacity,
+                        uStencilSrgb: this.stencil?.colorSpace === THREE.SRGBColorSpace ? 1 : 0,
+                        uStencilFlip: this.stencil?.flipY ? 1 : 0,
                         uIsland: island,
                     },
                 });
+                gpu.passNow(this.masks.get(tile)!, { fragment: GATHER_SHADER, inputs: { batch: this.batch }, blend: 'alpha' });
             }
         }
         this.apply();
@@ -535,9 +644,7 @@ export class Stroke {
                         const y = by * BLOCK;
                         const width = Math.min(stack.size, (end + 1) * BLOCK) - x;
                         const height = Math.min(stack.size, y + BLOCK) - y;
-                        const pixels = new Uint8Array(width * height * 4);
-                        gpu.renderer.readRenderTargetPixels(before.target, x, y, width, height, pixels);
-                        rects.push({ x, y, width, height, before: pixels, after: null });
+                        rects.push({ x, y, width, height, before: readBlock(gpu, before, x, y, width, height), after: null });
                         if (i < xs.length) start = xs[i];
                     }
                 }
@@ -546,6 +653,7 @@ export class Stroke {
         }
         for (const image of this.masks.values()) gpu.release(image);
         for (const image of this.before.values()) gpu.release(image);
+        gpu.release(this.batch);
         this.masks.clear();
         this.before.clear();
         return { label, pixels: patches };
@@ -563,25 +671,23 @@ export class Stroke {
         }
         for (const image of this.masks.values()) gpu.release(image);
         for (const image of this.before.values()) gpu.release(image);
+        gpu.release(this.batch);
         this.masks.clear();
         this.before.clear();
         this.stack.invalidate();
     }
 }
 
-/** Puts back (or forward) the pixels an entry changed. Returns the channels to put together again. */
+/** Puts back (or forward) the pixels an entry changed, and puts the set together again. */
 export const applyPixelHistory = (stack: PaintStack, patches: readonly PixelPatch[], direction: 'undo' | 'redo'): void => {
+    if (!stack.usable) throw new GpuResetError();
     const gpu = stack.host.gpu;
     for (const patch of patches) {
         const picture = stack.picture(patch.key, patch.tile);
         for (const rect of patch.rects) {
-            if (direction === 'undo' && !rect.after) {
-                const now = new Uint8Array(rect.width * rect.height * 4);
-                gpu.renderer.readRenderTargetPixels(picture.target, rect.x, rect.y, rect.width, rect.height, now);
-                rect.after = now;
-            }
+            if (direction === 'undo' && !rect.after) rect.after = readBlock(gpu, picture, rect.x, rect.y, rect.width, rect.height);
             const pixels = direction === 'undo' ? rect.before : rect.after;
-            if (pixels) gpu.write(picture, pixels, { x: rect.x, y: rect.y, width: rect.width, height: rect.height });
+            if (pixels) writeBlock(gpu, picture, pixels, { x: rect.x, y: rect.y, width: rect.width, height: rect.height });
         }
         stack.touch(patch.key, patch.tile);
     }

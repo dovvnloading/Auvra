@@ -104,10 +104,12 @@ Change how a model's materials look without editing its source file:
 
 1. Open the **Scene** tab and select the model.
 2. In the **Properties** sidebar, open **Material Overrides**.
-3. Click a material to expand it and change **Color**, **Roughness**, **Metalness**, **Emissive**, **Glow** (emissive strength), **Opacity**, **Base map** or **Normal map**. Maps are picked from the project's textures. Edits show on the model straight away.
+3. Click a material to expand it and change **Color**, **Roughness**, **Metalness**, **Emissive**, **Glow** (emissive strength), **Opacity**, **Base map**, **Normal map**, **Roughness map** or **Metalness map**. Maps are picked from the project's textures; the reset button next to a map clears it. Edits show on the model straight away.
 4. Click **Save**. **Revert** discards unsaved edits; the reset button next to a field returns it to the imported value.
 
-Overrides are stored with the model, so every placed copy and every build uses them. They are matched by material name and survive **Reimport**; an override whose material no longer exists is flagged so you can remove it. Unnamed materials cannot be overridden, and Animation models have no overrides. Closing the section discards unsaved edits.
+Overrides are stored with the model, so every placed copy and every build uses them: all copies of a model share one set of values. They are matched by material name and survive **Reimport**; an override whose material no longer exists is flagged so you can remove it. Unnamed materials cannot be overridden, and Animation models have no overrides. Closing the section discards unsaved edits.
+
+Every map a model's material wears shows here, including those **Retexture** saves. A result Retexture saves is a painted picture: it shows its own colours, is cut out where it is see-through and draws from both sides, as the note under its **Base map** says. Picking another base map, or clearing it, draws the material as usual again. Base maps that older projects stored apart from the other overrides show here as painted pictures too. **Reset Textures** at the top of the model's properties takes every painted picture off, so the model wears the maps it was imported with; the other overrides stay.
 
 ## Material graphs
 
@@ -117,7 +119,7 @@ A material asset describes a surface as a graph of nodes, so one material can be
 2. Right-click the canvas (or press **Space** or **Tab**, or click **Add node**) and type to find a node by name or keyword; arrow keys and **Enter** pick it, and it lands where the pointer is. With nothing typed the palette lists every node by category:
    - **Input**: Number, Color, Vector 2, Vector, Time.
    - **Geometry**: UV, World Position, Local Position, Object Position, World Normal, Local Normal, View Direction, Camera Position, Camera Distance, Vertex Color, Fresnel.
-   - **UV**: Tiling and Offset, Panner, Rotate UV, Polar Coordinates, Flipbook, Parallax Offset.
+   - **UV**: Tiling and Offset, Panner, Rotate UV, Polar Coordinates, Flipbook, Parallax Offset, UDIM Atlas (reads a set of UDIM tiles from one picture, as Paint makes it).
    - **Texture**: Texture Sample, Normal Map, Triplanar Sample, Normal From Height, Normal Blend, Normal Strength. Set a Texture Sample or Triplanar Sample's **Read As** to **Data** for masks, roughness, metalness and height maps, so their values are not treated as sRGB colour; tick a Normal Map's **Flip Green (DirectX)** for maps baked with the green channel pointing down.
    - **Procedural**: Noise, Fractal Noise (gradient, simplex or value noise; fractal, turbulence or ridged), Voronoi, Checker, Brick, Gradient.
    - **Color**: Color Ramp, Blend (14 modes), Hue / Saturation / Value, RGB to HSV, HSV to RGB, Desaturate, Contrast, Posterize, Luminance.
@@ -135,9 +137,11 @@ A material asset describes a surface as a graph of nodes, so one material can be
    - The values its unwired inputs take: Base Color, Opacity, Metalness, Roughness and Emissive.
 9. Connect the Material Output's **Base Color**, **Opacity**, **Metalness**, **Roughness**, **Normal (tangent space)**, **Emissive** and **Ambient Occlusion** inputs for the surface, and **World Position Offset** to move its vertices (in world units): the offset moves the shadow too, and works on skinned and instanced meshes.
 
-The preview shows the material on a sphere, cube, plane, cylinder or knot, lit by an environment that shows reflections and casting its shadow on a floor; drag it to turn it and scroll to zoom. A shader that does not compile (a mistake in Custom GLSL) is reported under the preview with the line it names. Changes save on their own. Time nodes run in every viewport, in play and in builds.
+The preview shows the material on a sphere, cube, plane, cylinder or knot, lit by an environment that shows reflections and casting its shadow on a floor; drag it to turn it and scroll to zoom. A shader that does not compile (a mistake in Custom GLSL) is reported under the preview with the line it names. Changes save on their own, and undo keeps each material's steps while the project is open, across switching tabs. Changing a value updates every model using the asset at once; only changes to wiring or to a node's choices rebuild its shader. Time nodes run in every viewport, in play and in builds, counting seconds from when the editor or the game opened.
 
-To use a material asset on a model, open the model's **Material Overrides**, expand a material and pick the asset in **Material asset**, then click **Save**. The model's material is then shaded by the graph, in every placed copy and every build; its own colour, map and PBR fields apply again when you set **Material asset** back to **(its own)**. Deleting a material asset returns every model that used it to its own material, and deleting a texture clears it from the Texture Sample, Normal Map and Triplanar Sample nodes that read it.
+To use a material asset on a model, open the model's **Material Overrides**, expand a material and pick the asset in **Material asset**, then click **Save**. The model's material is then shaded by the graph, in every placed copy and every build; its own colour, map and PBR fields apply again when you set **Material asset** back to **Its own**. Rain, snow and wind still reach a graph-shaded material, and bounced light takes its colour from the graph. Deleting a material asset returns every model that used it to its own material, and deleting a texture clears it from the Texture Sample, Normal Map and Triplanar Sample nodes that read it.
+
+**Material asset** offers only assets that draw. A texture graph is offered once its pictures are made (**Update material**), and a painting once it is put on a model; until then the field names them in a note. A graph for other graphs is never offered. A material drawn without lighting, or an older kind of shaded material, cannot be shaded by a graph: its **Material asset** field is turned off and says so.
 
 Materials made before blend modes keep their look: one whose opacity was set or wired is **Translucent**, any other **Opaque**.
 
@@ -145,7 +149,7 @@ Materials made before blend modes keep their look: one whose opacity was set or 
 
 A material asset can leave some of its values to the models that use it, like a material instance. Select a **Number**, **Color** or **Vector** node and give it a **Parameter name** (the node shows the name in its title). Nodes with the same name share one value.
 
-In a model's **Material Overrides**, a material shaded by that asset lists its parameters under **Material parameters**. Set a value to give this material its own (a red tint on one crate, a blue one on another); the reset button returns it to the value in the graph. Parameters only change values, not wiring, so every material using the asset keeps sharing one shader.
+In a model's **Material Overrides**, a material shaded by that asset lists its parameters under **Material parameters**. Set a value to give this material its own (a red tint on one model's crates, a blue one on another model using the same asset); the reset button returns it to the value in the graph. Like all overrides, the values belong to the model, so every placed copy of it shares them. Number, Color, Vector and Vector 2 values can all be parameters. Parameters only change values, not wiring, so every material using the asset keeps sharing one shader.
 
 ## Textures and audio
 

@@ -19,6 +19,17 @@ import type {
 
 export const OUTPUT_NODE_TYPE = 'output';
 export const REROUTE_NODE_TYPE = 'reroute';
+export const UDIM_ATLAS_NODE_TYPE = 'udimAtlas';
+
+/** UDIM tile numbers written in a list (anything but digits between them), each once, in the order given. */
+export const readUdimTiles = (value: unknown): number[] => {
+    const tiles: number[] = [];
+    for (const part of String(value ?? '').split(/[^0-9]+/)) {
+        const tile = Number(part);
+        if (part && tile >= 1001 && tile <= 1999 && !tiles.includes(tile)) tiles.push(tile);
+    }
+    return tiles;
+};
 
 const fromParam = (param: string) => ({ param });
 const value = (number: number) => ({ value: number });
@@ -186,7 +197,7 @@ export const MATERIAL_NODE_DEFINITIONS: MaterialNodeDef[] = [
         type: 'time',
         label: 'Time',
         category: 'Input',
-        description: 'Seconds since play started, for animated materials.',
+        description: 'Seconds counted from when the editor or the game opened, for animated materials.',
         inputs: [],
         outputs: [{ key: 'out', label: 'Seconds', type: 'float' }],
         params: [],
@@ -329,6 +340,49 @@ export const MATERIAL_NODE_DEFINITIONS: MaterialNodeDef[] = [
                     `vec2 ${cell} = vec2(mod(${frame}, ${columns}), ${rows} - 1.0 - floor(${frame} / ${columns}));`,
                 ],
                 outputs: { out: `((fract(${inputs.uv}) + ${cell}) / vec2(${columns}, ${rows}))` },
+            };
+        },
+    },
+    {
+        type: UDIM_ATLAS_NODE_TYPE,
+        label: 'UDIM Atlas',
+        category: 'UV',
+        description: "Reads a set's UDIM tiles from one picture that holds them side by side, as Paint's Put on the model makes it: each tile in a cell of its own, inside a gutter of its edge pixels, so tiles never bleed into each other. Wire its UV into every Texture Sample and Normal Map of the set.",
+        keywords: ['udim', 'tiles', 'texture set', 'tile atlas'],
+        inputs: [{ key: 'uv', label: 'UV', type: 'vec2', fallback: builtin('uv') }],
+        outputs: [{ key: 'out', label: 'UV', type: 'vec2' }],
+        params: [
+            { key: 'tiles', label: 'Tiles, in the order of their cells', kind: 'code', default: '1001' },
+            float('columns', 'Cells across', 1, { min: 1, max: 64, step: 1 }),
+            float('tileSize', 'Tile size (pixels)', 1024, { min: 1, max: 16384, step: 1 }),
+            float('gutter', 'Gutter (pixels)', 16, { min: 0, max: 1024, step: 1 }),
+        ],
+        emit: (inputs, context) => {
+            const tiles = readUdimTiles(context.static('tiles'));
+            const uv = context.local('uv');
+            const tile = context.local('tile');
+            const cell = context.local('cell');
+            const stride = context.local('stride');
+            const place = context.local('place');
+            const inside = context.local('inside');
+            const columns = context.param('columns');
+            const size = context.param('tileSize');
+            const gutter = context.param('gutter');
+            const rows = `ceil(${Math.max(1, tiles.length).toFixed(1)} / ${columns})`;
+            return {
+                statements: [
+                    `vec2 ${uv} = ${inputs.uv};`,
+                    // The UDIM tile the point lies in: 1001 at the origin, ten across, then up.
+                    `float ${tile} = 1001.0 + clamp(floor(${uv}.x), 0.0, 9.0) + 10.0 * max(floor(${uv}.y), 0.0);`,
+                    // Its cell; a tile not in the set reads the first.
+                    `float ${cell} = 0.0;`,
+                    ...tiles.slice(1).map((number, index) => `${index ? 'else ' : ''}if (abs(${tile} - ${number.toFixed(1)}) < 0.5) ${cell} = ${(index + 1).toFixed(1)};`),
+                    `float ${stride} = ${size} + 2.0 * ${gutter};`,
+                    `vec2 ${place} = vec2(mod(${cell}, ${columns}), floor(${cell} / ${columns}));`,
+                    // Kept half a pixel inside the tile, so filtering reads only the tile and its own gutter.
+                    `vec2 ${inside} = clamp(fract(${uv}) * ${size}, vec2(0.5), vec2(max(${size} - 0.5, 0.5)));`,
+                ],
+                outputs: { out: `((${place} * ${stride} + vec2(${gutter}) + ${inside}) / (vec2(${columns}, ${rows}) * ${stride}))` },
             };
         },
     },

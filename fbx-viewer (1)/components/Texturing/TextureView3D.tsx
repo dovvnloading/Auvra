@@ -1,19 +1,21 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
-import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
-import { RotateIcon } from '../UI/Icons';
+import { InfoIcon, RotateIcon, WarningIcon } from '../UI/Icons';
 import type { TextureGpu } from '../../texturing/gpu/textureGpu';
 import { IconButton } from '../UI/kit';
 import { Select } from '../UI/Select';
+import { previewGeometry, type BaseShape, type PreviewMeshMaps, type PreviewShape } from './previewMeshMaps';
 import type { PreviewSet } from './textureGraphSession';
 
 /**
  * The 3D view: the material on a shape (or on one of the project's models), lit by a studio
  * environment. Drag to turn round it, wheel to come closer; height can push the surface out for real.
+ * When the graph reads mesh maps, the view says where they come from; the picture is then shown once
+ * (the maps follow the surface), and on a model only the baked surface wears the graph.
  */
 
-export type PreviewShape = 'sphere' | 'roundedBox' | 'plane' | 'cylinder' | `model:${string}`;
+export type { PreviewShape } from './previewMeshMaps';
 
 const BASE_SHAPES: ReadonlyArray<{ value: PreviewShape; label: string }> = [
     { value: 'sphere', label: 'Sphere' },
@@ -33,28 +35,28 @@ const environmentOf = (gpu: TextureGpu): THREE.Texture => {
     return texture;
 };
 
-const shapeGeometry = (shape: PreviewShape): THREE.BufferGeometry => {
-    switch (shape) {
-        case 'roundedBox': return new RoundedBoxGeometry(1.5, 1.5, 1.5, 24, 0.18);
-        case 'cylinder': return new THREE.CylinderGeometry(0.8, 0.8, 1.8, 256, 96);
-        case 'plane': {
-            const geometry = new THREE.PlaneGeometry(2.2, 2.2, 384, 384);
-            geometry.rotateX(-Math.PI / 2);
-            return geometry;
-        }
-        default: return new THREE.SphereGeometry(1, 384, 192);
-    }
-};
+const materialName = (material: THREE.Material): string => material.name || '';
 
-/** A model's meshes in their rest pose, drawn with the preview material and fitted into a unit box. */
-const modelGroup = (source: THREE.Object3D, material: THREE.Material): THREE.Group => {
+/**
+ * A model's meshes in their rest pose, fitted into a unit box. Drawn with the preview material, or,
+ * when `wearing` names some of the model's materials, those with it and the rest in plain grey.
+ */
+const modelGroup = (source: THREE.Object3D, material: THREE.Material, plain: THREE.Material, only: ReadonlySet<string> | null): THREE.Group => {
     const group = new THREE.Group();
     source.updateWorldMatrix(true, true);
     const rootInverse = source.matrixWorld.clone().invert();
+    // A set named after something other than its materials (they had no names): the whole model wears it.
+    let matched = false;
+    if (only) source.traverse((child) => {
+        const mesh = child as THREE.Mesh;
+        if (mesh.isMesh) for (const own of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) if (only.has(materialName(own))) matched = true;
+    });
+    const wearing = matched ? only : null;
     source.traverse((child) => {
         const mesh = child as THREE.Mesh;
         if (!mesh.isMesh || !mesh.geometry?.attributes.uv) return;
-        const copy = new THREE.Mesh(mesh.geometry, material);
+        const pick = (own: THREE.Material) => (!wearing || wearing.has(materialName(own)) ? material : plain);
+        const copy = new THREE.Mesh(mesh.geometry, Array.isArray(mesh.material) ? mesh.material.map(pick) : pick(mesh.material));
         copy.matrixAutoUpdate = false;
         copy.matrix.multiplyMatrices(rootInverse, mesh.matrixWorld);
         group.add(copy);
@@ -75,10 +77,14 @@ export const TextureView3D: React.FC<{
     preview: PreviewSet;
     version: number;
     models?: ReadonlyArray<{ id: string; name: string; object: THREE.Object3D }>;
-}> = ({ gpu, preview, version, models = [] }) => {
+    shape: PreviewShape;
+    onShapeChange: (shape: PreviewShape) => void;
+    /** Where the graph's mesh maps come from, for this shape or model. */
+    meshMaps: PreviewMeshMaps;
+    onSurfaceChange: (surfaceId: string) => void;
+}> = ({ gpu, preview, version, models = [], shape, onShapeChange, meshMaps, onSurfaceChange }) => {
     const host = useRef<HTMLDivElement>(null);
     const canvas = useRef<HTMLCanvasElement>(null);
-    const [shape, setShape] = useState<PreviewShape>('sphere');
     const [tiling, setTiling] = useState(1);
     const [displace, setDisplace] = useState(0.04);
     const [light, setLight] = useState(1.25);
@@ -86,20 +92,26 @@ export const TextureView3D: React.FC<{
     const [size, setSize] = useState({ width: 0, height: 0 });
     const orbit = useRef({ yaw: 0.6, pitch: 0.35, distance: 4, lightTurn: 0 });
     const [orbitVersion, setOrbitVersion] = useState(0);
+    // Real mesh maps follow the surface one to one: the picture is shown once.
+    const repeat = meshMaps.real ? 1 : tiling;
+    const wearing = meshMaps.surface ? meshMaps.surface.materialNames : null;
+    const wearingKey = wearing ? wearing.join('\n') : '';
 
     const world = useMemo(() => {
         const scene = new THREE.Scene();
         scene.background = new THREE.Color(0x18181b);
         const camera = new THREE.PerspectiveCamera(35, 1, 0.05, 100);
         const material = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 1, metalness: 1 });
+        const plain = new THREE.MeshStandardMaterial({ color: 0x5a5a60, roughness: 0.7, metalness: 0 });
         const sun = new THREE.DirectionalLight(0xffffff, 1.4);
         sun.position.set(3, 4, 2);
         scene.add(sun);
-        return { scene, camera, material, sun, object: null as THREE.Object3D | null };
+        return { scene, camera, material, plain, sun, object: null as THREE.Object3D | null };
     }, []);
 
     useEffect(() => () => {
         world.material.dispose();
+        world.plain.dispose();
         world.object?.traverse((child) => { if ((child as THREE.Mesh).isMesh && !(child.userData.shared)) (child as THREE.Mesh).geometry.dispose(); });
     }, [world]);
 
@@ -112,15 +124,16 @@ export const TextureView3D: React.FC<{
         let object: THREE.Object3D;
         if (shape.startsWith('model:')) {
             const model = models.find((candidate) => `model:${candidate.id}` === shape);
-            object = model ? modelGroup(model.object, world.material) : new THREE.Mesh(shapeGeometry('sphere'), world.material);
-            object.traverse((child) => { child.userData.shared = true; });
+            const names = wearingKey ? new Set(wearingKey.split('\n')) : null;
+            object = model ? modelGroup(model.object, world.material, world.plain, names) : new THREE.Mesh(previewGeometry('sphere', { unique: false, detail: 'view' }), world.material);
+            if (model) object.traverse((child) => { child.userData.shared = true; });
         } else {
-            object = new THREE.Mesh(shapeGeometry(shape), world.material);
+            object = new THREE.Mesh(previewGeometry(shape as BaseShape, { unique: meshMaps.uniqueLayout, detail: 'view' }), world.material);
         }
         world.object = object;
         world.scene.add(object);
         setOrbitVersion((value) => value + 1);
-    }, [models, shape, world]);
+    }, [meshMaps.uniqueLayout, models, shape, wearingKey, world]);
 
     useEffect(() => {
         const element = host.current;
@@ -154,7 +167,7 @@ export const TextureView3D: React.FC<{
         const texture = (image: PreviewSet['baseColor']) => {
             const value = image?.target.texture ?? null;
             if (value) {
-                value.repeat.set(tiling, tiling);
+                value.repeat.set(repeat, repeat);
                 value.wrapS = value.wrapT = THREE.RepeatWrapping;
             }
             return value;
@@ -196,7 +209,7 @@ export const TextureView3D: React.FC<{
         camera.lookAt(0, 0, 0);
         camera.updateProjectionMatrix();
         gpu.present(element, () => gpu.renderer.render(scene, camera));
-    }, [displace, gpu, light, orbitVersion, preview, shape, size, tiling, version, world]);
+    }, [displace, gpu, light, orbitVersion, preview, repeat, shape, size, version, world]);
 
     useEffect(() => {
         const element = host.current;
@@ -217,7 +230,11 @@ export const TextureView3D: React.FC<{
         <div className="flex min-h-0 flex-1 flex-col">
             <div className="flex items-center gap-1.5 border-b border-zinc-800 px-2 py-1">
                 <span className="text-2xs font-semibold text-zinc-300">3D</span>
-                <Select value={shape} options={shapes} onChange={(value) => setShape(value as PreviewShape)} className="w-36" />
+                <Select value={shape} options={shapes} onChange={(value) => onShapeChange(value as PreviewShape)} className="w-36" />
+                {meshMaps.surfaces.length > 1 && (
+                    <Select value={meshMaps.surface?.id ?? ''} options={meshMaps.surfaces.map((surface) => ({ value: surface.id, label: surface.name }))}
+                        onChange={(value) => onSurfaceChange(String(value))} className="min-w-0 flex-1" placeholder="Baked surface" />
+                )}
                 <span className="flex-1" />
                 <IconButton label={spin ? 'Stop turning' : 'Turn slowly'} active={spin} onClick={() => setSpin((value) => !value)}><RotateIcon size={13} /></IconButton>
             </div>
@@ -239,11 +256,17 @@ export const TextureView3D: React.FC<{
                 onPointerUp={() => { drag.current = null; }}
             >
                 <canvas ref={canvas} className="absolute inset-0 h-full w-full" />
+                {meshMaps.note && (
+                    <div className={`pointer-events-none absolute inset-x-2 bottom-2 flex items-start gap-1.5 rounded border px-2 py-1 text-2xs leading-snug shadow ${meshMaps.tone === 'warning' ? 'border-amber-900 bg-zinc-950/90 text-amber-200' : 'border-zinc-800 bg-zinc-950/85 text-zinc-300'}`}>
+                        {meshMaps.tone === 'warning' ? <WarningIcon size={12} className="mt-px shrink-0" /> : <InfoIcon size={12} className="mt-px shrink-0 text-zinc-500" />}
+                        <span>{meshMaps.note}</span>
+                    </div>
+                )}
             </div>
             <div className="flex items-center gap-3 border-t border-zinc-800 px-2 py-1 text-2xs text-zinc-400">
-                <label className="flex items-center gap-1">Repeat
-                    <input type="range" min={1} max={8} step={1} value={tiling} onChange={(event) => setTiling(Number(event.target.value))} className="w-16 accent-sky-500" aria-label="Repeat on the shape" />
-                    <span className="w-3 tabular-nums">{tiling}</span>
+                <label className="flex items-center gap-1" title={meshMaps.real ? 'Shown once: the mesh maps follow the surface' : 'How many times the picture repeats on the shape'}>Repeat
+                    <input type="range" min={1} max={8} step={1} value={repeat} disabled={meshMaps.real} onChange={(event) => setTiling(Number(event.target.value))} className="w-16 accent-sky-500 disabled:opacity-40" aria-label="Repeat on the shape" />
+                    <span className="w-3 tabular-nums">{repeat}</span>
                 </label>
                 <label className="flex items-center gap-1" title="How far height pushes the surface out (shapes only)">Height
                     <input type="range" min={0} max={0.2} step={0.005} value={displace} onChange={(event) => setDisplace(Number(event.target.value))} className="w-16 accent-sky-500" aria-label="Height on the shape" />

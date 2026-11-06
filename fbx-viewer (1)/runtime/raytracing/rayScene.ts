@@ -1,5 +1,7 @@
 import * as THREE from 'three';
 import { BOUNDS_FLOATS, NODE_FLOATS, buildBvh, refitBvh, type Bvh } from './bvh';
+import { graphSurface } from '../materials/graphMaterial';
+import { graphBounceColour } from '../materials/bounceColour';
 
 /**
  * THE RAY SCENE
@@ -303,15 +305,18 @@ const WHITE: [number, number, number] = [1, 1, 1];
 export const rayMaterialFor = (material: THREE.Material, mean: TextureMean): RayMaterial => {
     const look = material as THREE.MeshStandardMaterial;
     const color = look.color ?? new THREE.Color(1, 1, 1);
-    const map = look.map ? mean(look.map) : WHITE;
+    // A graph-shaded material shows what its graph works out, not its own colour and map (bounceColour.ts).
+    const graph = graphSurface(material);
+    const graphColour = graph ? graphBounceColour(material, mean) : null;
+    const map = look.map && !graphColour ? mean(look.map) : WHITE;
     // A solid surface drawn from both sides (terrain) still has an inside: what is under the ground stays there.
     const twoSided = material.side === THREE.DoubleSide && material.userData?.raySolid !== true;
-    const flags = (isLit(material) ? 0 : MATERIAL_UNLIT) | (twoSided ? MATERIAL_TWO_SIDED : 0);
+    const flags = (isLit(material) && !graph?.unlit ? 0 : MATERIAL_UNLIT) | (twoSided ? MATERIAL_TWO_SIDED : 0);
     const override = material.userData?.rayAlbedo as THREE.Color | undefined;
     const layers = material.userData?.rayAlbedoMaps as readonly THREE.Texture[] | undefined;
     let albedo: [number, number, number] = override
         ? [override.r, override.g, override.b]
-        : [color.r * map[0], color.g * map[1], color.b * map[2]];
+        : graphColour ?? [color.r * map[0], color.g * map[1], color.b * map[2]];
     if (layers?.length) {
         albedo = [0, 0, 0];
         for (const layer of layers) {
@@ -322,7 +327,10 @@ export const rayMaterialFor = (material: THREE.Material, mean: TextureMean): Ray
         }
     }
     let emissive: [number, number, number] = [0, 0, 0];
-    if (look.emissive && look.emissiveIntensity > 0) {
+    if (graph) {
+        // The graph's own glow where it leaves it a constant; one it works out is not known here.
+        if (!graph.wired.has('emissive')) emissive = [...graph.emissive];
+    } else if (look.emissive && look.emissiveIntensity > 0) {
         const glow = look.emissiveMap ? mean(look.emissiveMap) : WHITE;
         emissive = [look.emissive.r * look.emissiveIntensity * glow[0], look.emissive.g * look.emissiveIntensity * glow[1], look.emissive.b * look.emissiveIntensity * glow[2]];
     }

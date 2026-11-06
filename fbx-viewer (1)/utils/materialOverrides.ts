@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { materialLibrary } from '../runtime/materials/materialLibrary';
+import { canBindMaterialGraph } from '../runtime/materials/graphMaterial';
 import { CARD_FRINGE_KEY } from './processing/ModelMaterials';
 import { MAX_PARAMETER_NAME_LENGTH, type MaterialParameterValues } from '../runtime/materials/materialGraph';
 
@@ -9,6 +10,11 @@ import { MAX_PARAMETER_NAME_LENGTH, type MaterialParameterValues } from '../runt
  * idempotent and reversible: the first time a material is touched its
  * imported values are captured, and every apply restores them before laying
  * the overrides on top, so removing a field (or a whole entry) reverts it.
+ *
+ * Every map a material is given (base, normal, roughness, metalness) is an
+ * override field here. Older projects kept a model's painted base maps apart,
+ * as one texture per material name (the model's `textureOverrides`): those are
+ * taken in as painted base maps when the model loads (withLegacyBaseMaps).
  */
 export interface MaterialOverride {
   /** Base colour, `#rrggbb` (sRGB). */
@@ -25,6 +31,13 @@ export interface MaterialOverride {
   opacity?: number;
   /** Logical texture id (textures domain) replacing the base-colour map. */
   mapTextureId?: string;
+  /**
+   * How the base map draws: true for a painted picture (Retexture's, or one of the older per-model
+   * texture overrides), which shows its own colours, is cut out where it is see-through and is drawn
+   * from both sides; false for a plain base map. Set either way, it also says an older per-model texture
+   * override for this material has been taken in, so it is not taken in again.
+   */
+  paintedMap?: boolean;
   /** Logical texture id (textures domain) replacing the normal map. */
   normalTextureId?: string;
   /** Logical texture id replacing the roughness map (standard/physical materials only). */
@@ -34,8 +47,8 @@ export interface MaterialOverride {
   /** A material asset (materials domain) whose node graph shades the material instead. */
   materialId?: string;
   /**
-   * Values for the material asset's parameters: a number, or an RGB / XYZ triple. A list, not a
-   * map by name, so no parameter name ever becomes a document key.
+   * Values for the material asset's parameters: a number, or 2, 3 or 4 numbers (a Vector 2, a colour
+   * or a Vector). A list, not a map by name, so no parameter name ever becomes a document key.
    */
   parameters?: MaterialParameterSetting[];
 }
@@ -80,12 +93,16 @@ const MAX_PARAMETER_MAGNITUDE = 1e6;
 const parameterNumber = (value: unknown): number | undefined =>
   typeof value === 'number' && Number.isFinite(value) ? clamp(value, -MAX_PARAMETER_MAGNITUDE, MAX_PARAMETER_MAGNITUDE) : undefined;
 
+/** Numbers a vector parameter holds: a Vector 2, a colour or Vector, or four. */
+const MIN_PARAMETER_COMPONENTS = 2;
+const MAX_PARAMETER_COMPONENTS = 4;
+
 const normalizeParameterValue = (value: unknown): number | number[] | undefined => {
   const single = parameterNumber(value);
   if (single !== undefined) return single;
-  if (!Array.isArray(value) || value.length !== 3) return undefined;
-  const triple = value.map(parameterNumber);
-  return triple.every((component): component is number => component !== undefined) ? triple : undefined;
+  if (!Array.isArray(value) || value.length < MIN_PARAMETER_COMPONENTS || value.length > MAX_PARAMETER_COMPONENTS) return undefined;
+  const components = value.map(parameterNumber);
+  return components.every((component): component is number => component !== undefined) ? components : undefined;
 };
 
 const normalizeParameters = (value: unknown): MaterialParameterSetting[] | undefined => {
@@ -121,6 +138,7 @@ export const normalizeMaterialOverride = (value: unknown): MaterialOverride | nu
     emissiveIntensity: normalizeNumber(source.emissiveIntensity, 0, MAX_EMISSIVE_INTENSITY),
     opacity: normalizeNumber(source.opacity, 0, 1),
     mapTextureId: normalizeTextureId(source.mapTextureId),
+    paintedMap: typeof source.paintedMap === 'boolean' ? source.paintedMap : undefined,
     normalTextureId: normalizeTextureId(source.normalTextureId),
     roughnessTextureId: normalizeTextureId(source.roughnessTextureId),
     metalnessTextureId: normalizeTextureId(source.metalnessTextureId),
@@ -170,6 +188,63 @@ const canonicalOverrides = (overrides: MaterialOverrides): string => JSON.string
 /** Same entries and values, ignoring key order. */
 export const materialOverridesEqual = (a: MaterialOverrides, b: MaterialOverrides): boolean =>
   canonicalOverrides(a) === canonicalOverrides(b);
+
+/**
+ * The overrides with a model's older per-material texture overrides (`textureOverrides`) taken in, as
+ * painted base maps, where an override has not decided its base map yet: it has no base map of its own,
+ * and no `paintedMap` either way (which a base map cleared or replaced in Material Overrides leaves).
+ * The same overrides when there is nothing to take in.
+ */
+export const withLegacyBaseMaps = (overrides: MaterialOverrides, legacy: unknown): MaterialOverrides => {
+  if (!legacy || typeof legacy !== 'object' || Array.isArray(legacy)) return overrides;
+  let next = overrides;
+  for (const [name, value] of Object.entries(legacy as Record<string, unknown>)) {
+    const textureId = normalizeTextureId(value);
+    if (!name || name.length > MAX_NAME_LENGTH || !textureId) continue;
+    const entry = next[name];
+    if (entry?.mapTextureId !== undefined || entry?.paintedMap !== undefined) continue;
+    if (!entry && Object.keys(next).length >= MAX_MATERIAL_OVERRIDES) continue;
+    next = { ...next, [name]: { ...entry, mapTextureId: textureId, paintedMap: true } };
+  }
+  return next;
+};
+
+/**
+ * The overrides with a material's base map set (or cleared, with undefined) from Material Overrides,
+ * which sets plain base maps. Where the base map was a painted one, or an older texture override was
+ * taken in, `paintedMap` stays as false, so the older override is not taken in again on the next load.
+ */
+export const withBaseMap = (overrides: MaterialOverrides, materialName: string, textureId: string | undefined): MaterialOverrides => {
+  const entry = overrides[materialName];
+  let next = setMaterialOverrideField(overrides, materialName, 'mapTextureId', textureId);
+  if (entry?.paintedMap !== undefined) next = setMaterialOverrideField(next, materialName, 'paintedMap', false);
+  return next;
+};
+
+/**
+ * The overrides with `textureId` as the painted base map of each named material, beside whatever else
+ * their overrides hold: how the mask tool and the host's texture commit put a picture on a material.
+ */
+export const withPaintedBaseMap = (overrides: MaterialOverrides, materialNames: Iterable<string>, textureId: string): MaterialOverrides => {
+  let next = overrides;
+  for (const name of materialNames) next = { ...next, [name]: { ...next[name], mapTextureId: textureId, paintedMap: true } };
+  return next;
+};
+
+/**
+ * The overrides without their painted base maps (Retexture's results, the mask tool's pictures and the
+ * older per-model texture overrides taken in), so their materials wear their imported maps again: what
+ * Reset Textures leaves. The same overrides when there are none.
+ */
+export const withoutPaintedBaseMaps = (overrides: MaterialOverrides): MaterialOverrides => {
+  let next = overrides;
+  for (const [name, entry] of Object.entries(overrides)) {
+    if (entry.paintedMap !== true) continue;
+    next = setMaterialOverrideField(next, name, 'mapTextureId', undefined);
+    next = setMaterialOverrideField(next, name, 'paintedMap', undefined);
+  }
+  return next;
+};
 
 /** Texture ids referenced by the overrides, per slot. */
 export const materialOverrideTextureIds = (overrides: MaterialOverrides): Array<{ textureId: string; slot: MaterialTextureSlot }> => {
@@ -224,6 +299,10 @@ interface MaterialBaseline {
   emissiveIntensity?: number;
   opacity: number;
   transparent: boolean;
+  /** How it is cut out and which sides it draws: a painted base map changes these. */
+  alphaTest: number;
+  side: THREE.Side;
+  forceSinglePass: boolean;
   hasMap: boolean;
   map: THREE.Texture | null;
   hasNormalMap: boolean;
@@ -238,6 +317,9 @@ interface MaterialBaseline {
   appliedRoughnessMap: THREE.Texture | null;
   appliedMetalnessMap: THREE.Texture | null;
   appliedTransparent: boolean;
+  appliedAlphaTest: number;
+  appliedSide: THREE.Side;
+  appliedForceSinglePass: boolean;
 }
 
 /** Imported values, kept off `userData` so clones and JSON export stay untouched. */
@@ -265,6 +347,9 @@ const captureBaseline = (material: OverridableMaterial): MaterialBaseline => ({
   emissiveIntensity: typeof material.emissiveIntensity === 'number' ? material.emissiveIntensity : undefined,
   opacity: material.opacity,
   transparent: material.transparent,
+  alphaTest: material.alphaTest,
+  side: material.side,
+  forceSinglePass: material.forceSinglePass,
   hasMap: 'map' in material,
   map: material.map ?? null,
   hasNormalMap: 'normalMap' in material,
@@ -278,6 +363,9 @@ const captureBaseline = (material: OverridableMaterial): MaterialBaseline => ({
   appliedRoughnessMap: material.roughnessMap ?? null,
   appliedMetalnessMap: material.metalnessMap ?? null,
   appliedTransparent: material.transparent,
+  appliedAlphaTest: material.alphaTest,
+  appliedSide: material.side,
+  appliedForceSinglePass: material.forceSinglePass,
 });
 
 const baselineOf = (material: THREE.Material): MaterialBaseline => {
@@ -287,6 +375,14 @@ const baselineOf = (material: THREE.Material): MaterialBaseline => {
     baselines.set(material, baseline);
   }
   return baseline;
+};
+
+/**
+ * Notes how materials look as imported, before a tool puts a look of its own on them that an override
+ * will later hold (Retexture trying results on): restoring then puts back what they had, not the result.
+ */
+export const rememberImportedLook = (materials: readonly THREE.Material[]): void => {
+  for (const material of materials) baselineOf(material);
 };
 
 const collectMaterials = (root: THREE.Object3D): THREE.Material[] => {
@@ -303,7 +399,8 @@ const collectMaterials = (root: THREE.Object3D): THREE.Material[] => {
 };
 
 /** Shader-affecting state: a change needs `material.needsUpdate`. */
-const programKey = (material: OverridableMaterial) => `${Boolean(material.map)}|${Boolean(material.normalMap)}|${Boolean(material.roughnessMap)}|${Boolean(material.metalnessMap)}|${material.transparent}`;
+const programKey = (material: OverridableMaterial) =>
+  `${Boolean(material.map)}|${Boolean(material.normalMap)}|${Boolean(material.roughnessMap)}|${Boolean(material.metalnessMap)}|${material.transparent}|${material.alphaTest > 0}|${material.side}|${material.forceSinglePass}`;
 
 const restoreBaseline = (material: OverridableMaterial, baseline: MaterialBaseline) => {
   if (baseline.color && material.color) material.color.copy(baseline.color);
@@ -313,6 +410,9 @@ const restoreBaseline = (material: OverridableMaterial, baseline: MaterialBaseli
   if (baseline.emissiveIntensity !== undefined) material.emissiveIntensity = baseline.emissiveIntensity;
   material.opacity = baseline.opacity;
   material.transparent = baseline.transparent;
+  material.alphaTest = baseline.alphaTest;
+  material.side = baseline.side;
+  material.forceSinglePass = baseline.forceSinglePass;
   if (baseline.hasMap) material.map = baseline.map;
   if (baseline.hasNormalMap) material.normalMap = baseline.normalMap;
   if (baseline.hasRoughnessMap) material.roughnessMap = baseline.roughnessMap;
@@ -373,15 +473,24 @@ export const applyMaterialOverrides = (
     if (!override && !baselines.has(material)) continue;
     const before = programKey(material);
     const baseline = baselineOf(material);
-    // A map or transparency rebound since the last apply (retexture, texture
-    // preview) becomes the imported value, so restoring never puts back a
-    // replaced, disposed map.
-    const mapRebound = baseline.hasMap && (material.map ?? null) !== baseline.appliedMap;
+    // A map or drawing rebound since the last apply (a texture preview, an older
+    // tool) becomes the imported value, so restoring never puts back a replaced,
+    // disposed map. A map an override is about to bind (one tagged for it, as
+    // Retexture's are when saved) is not the imported value, nor is how it draws.
+    const rebound = (slot: THREE.Texture | null | undefined, applied: THREE.Texture | null) =>
+      (slot ?? null) !== applied && overrideTextureKey(slot) === null;
+    const overrideMapPut = (material.map ?? null) !== baseline.appliedMap && overrideTextureKey(material.map) !== null;
+    const mapRebound = baseline.hasMap && rebound(material.map, baseline.appliedMap);
     if (mapRebound) baseline.map = material.map ?? null;
-    if (baseline.hasNormalMap && (material.normalMap ?? null) !== baseline.appliedNormalMap) baseline.normalMap = material.normalMap ?? null;
-    if (baseline.hasRoughnessMap && (material.roughnessMap ?? null) !== baseline.appliedRoughnessMap) baseline.roughnessMap = material.roughnessMap ?? null;
-    if (baseline.hasMetalnessMap && (material.metalnessMap ?? null) !== baseline.appliedMetalnessMap) baseline.metalnessMap = material.metalnessMap ?? null;
-    if (mapRebound || material.transparent !== baseline.appliedTransparent) baseline.transparent = material.transparent;
+    if (baseline.hasNormalMap && rebound(material.normalMap, baseline.appliedNormalMap)) baseline.normalMap = material.normalMap ?? null;
+    if (baseline.hasRoughnessMap && rebound(material.roughnessMap, baseline.appliedRoughnessMap)) baseline.roughnessMap = material.roughnessMap ?? null;
+    if (baseline.hasMetalnessMap && rebound(material.metalnessMap, baseline.appliedMetalnessMap)) baseline.metalnessMap = material.metalnessMap ?? null;
+    if (!overrideMapPut) {
+      if (mapRebound || material.transparent !== baseline.appliedTransparent) baseline.transparent = material.transparent;
+      if (mapRebound || material.alphaTest !== baseline.appliedAlphaTest) baseline.alphaTest = material.alphaTest;
+      if (mapRebound || material.side !== baseline.appliedSide) baseline.side = material.side;
+      if (mapRebound || material.forceSinglePass !== baseline.appliedForceSinglePass) baseline.forceSinglePass = material.forceSinglePass;
+    }
     restoreBaseline(material, baseline);
     if (override) {
       result.appliedMaterialNames.add(material.name);
@@ -398,7 +507,17 @@ export const applyMaterialOverrides = (
       }
       if (baseline.hasMap) {
         const map = bindTexture(override.mapTextureId, 'map');
-        if (map) material.map = map;
+        if (map) {
+          material.map = map;
+          if (override.paintedMap) {
+            // A painted picture shows its own colours: a plain colour tinted nothing until now.
+            if (!baseline.map && override.color === undefined) material.color?.set(0xffffff);
+            material.transparent = true;
+            material.alphaTest = 0.5;
+            material.side = THREE.DoubleSide;
+            material.forceSinglePass = true;
+          }
+        }
       }
       if (baseline.hasNormalMap) {
         const normalMap = bindTexture(override.normalTextureId, 'normal');
@@ -427,6 +546,9 @@ export const applyMaterialOverrides = (
     baseline.appliedRoughnessMap = material.roughnessMap ?? null;
     baseline.appliedMetalnessMap = material.metalnessMap ?? null;
     baseline.appliedTransparent = material.transparent;
+    baseline.appliedAlphaTest = material.alphaTest;
+    baseline.appliedSide = material.side;
+    baseline.appliedForceSinglePass = material.forceSinglePass;
     if (programKey(material) !== before) material.needsUpdate = true;
   }
   return result;
@@ -442,6 +564,8 @@ export interface MaterialValues {
   opacity: number;
   hasMapSlot: boolean;
   hasNormalSlot: boolean;
+  hasRoughnessSlot: boolean;
+  hasMetalnessSlot: boolean;
 }
 
 export interface ModelMaterialInfo {
@@ -453,6 +577,8 @@ export interface ModelMaterialInfo {
   instanceCount: number;
   /** Imported values of the first instance. */
   base: MaterialValues;
+  /** Whether a material asset can shade it: only standard (lit, physically based) materials take one. */
+  takesAsset: boolean;
 }
 
 const hexOf = (color: THREE.Color | undefined): string | null => (color ? `#${color.getHexString()}` : null);
@@ -469,6 +595,8 @@ export const readMaterialBaseValues = (material: THREE.Material): MaterialValues
     opacity: baseline.opacity,
     hasMapSlot: baseline.hasMap,
     hasNormalSlot: baseline.hasNormalMap,
+    hasRoughnessSlot: baseline.hasRoughnessMap,
+    hasMetalnessSlot: baseline.hasMetalnessMap,
   };
 };
 
@@ -481,7 +609,7 @@ export const listModelMaterials = (root: THREE.Object3D): ModelMaterialInfo[] =>
       existing.instanceCount += 1;
       continue;
     }
-    byName.set(material.name, { name: material.name, type: material.type, instanceCount: 1, base: readMaterialBaseValues(material) });
+    byName.set(material.name, { name: material.name, type: material.type, instanceCount: 1, base: readMaterialBaseValues(material), takesAsset: canBindMaterialGraph(material) });
   }
   return [...byName.values()];
 };
@@ -511,16 +639,18 @@ export interface HydrateMaterialOverridesOptions {
 
 /**
  * Load the textures a stored `materialOverrides` value references and apply
- * it to a freshly loaded model. Bound textures become owned by the model's
- * materials; any other loaded texture is disposed, including on failure.
- * Returns the normalized overrides to keep on the model.
+ * it to a freshly loaded model, with the model's older `textureOverrides`
+ * (`legacyBaseMaps`) taken in as painted base maps. Bound textures become owned
+ * by the model's materials; any other loaded texture is disposed, including on
+ * failure. Returns the normalized overrides to keep on the model.
  */
 export const hydrateMaterialOverrides = async (
   root: THREE.Object3D,
   value: unknown,
   options: HydrateMaterialOverridesOptions,
+  legacyBaseMaps?: unknown,
 ): Promise<MaterialOverrides> => {
-  const overrides = normalizeMaterialOverrides(value);
+  const overrides = withLegacyBaseMaps(normalizeMaterialOverrides(value), legacyBaseMaps);
   if (Object.keys(overrides).length === 0) return overrides;
   const load = options.loadTexture ?? ((url: string) => new THREE.TextureLoader().loadAsync(url));
   const loaded = new Map<string, THREE.Texture>();

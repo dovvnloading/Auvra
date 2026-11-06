@@ -13,6 +13,8 @@ import {
     raysSeeMaterial,
     simplifyTriangles,
 } from '../../runtime/raytracing/rayScene';
+import { OUTPUT_NODE_TYPE, defaultParams, normalizeMaterialGraph } from '../../runtime/materials/materialGraph';
+import { bindMaterialGraph } from '../../runtime/materials/graphMaterial';
 
 const everything = () => true;
 const white = (): [number, number, number] => [1, 1, 1];
@@ -528,6 +530,60 @@ describe('what a material gives rays', () => {
         const ground = new THREE.MeshStandardMaterial();
         ground.userData.rayAlbedo = new THREE.Color(0.1, 0.3, 0.05);
         expect(rayMaterialFor(ground, white).albedo[1]).toBeCloseTo(0.3);
+    });
+
+    describe('shaded by a graph', () => {
+        const node = (id: string, type: string, params: Record<string, unknown> = {}) => ({ id, type, x: 0, y: 0, params: { ...defaultParams(type), ...params } });
+        const link = (fromNode: string, fromOutput: string, toNode: string, toInput: string) => ({ fromNode, fromOutput, toNode, toInput });
+        const linear = (value: number) => new THREE.Color().setRGB(value, value, value, THREE.SRGBColorSpace).r;
+        // Its own colour and map are not what it shows.
+        const imported = () => new THREE.MeshStandardMaterial({ color: new THREE.Color(1, 0, 0), map: new THREE.Texture() });
+
+        it('takes the graph\'s constant base colour and glow, not its own', () => {
+            const material = imported();
+            bindMaterialGraph(material, normalizeMaterialGraph({ nodes: [node('out', OUTPUT_NODE_TYPE, { baseColor: [0.5, 0.5, 0.5], emissive: [0, 0.5, 0] })], links: [] }));
+            const look = rayMaterialFor(material, white);
+            expect(look.albedo[0]).toBeCloseTo(linear(0.5));
+            expect(look.albedo[1]).toBeCloseTo(linear(0.5));
+            expect(look.emissive[1]).toBeCloseTo(linear(0.5));
+        });
+
+        it('averages the graph\'s base-colour texture, times a constant tint', () => {
+            const bricks = new THREE.Texture();
+            const material = imported();
+            bindMaterialGraph(material, normalizeMaterialGraph({
+                nodes: [node('out', OUTPUT_NODE_TYPE), node('tex', 'texture', { texture: 'bricks' }), node('tint', 'color', { value: [1, 1, 0] }), node('mul', 'multiply')],
+                links: [link('tex', 'rgb', 'mul', 'a'), link('tint', 'out', 'mul', 'b'), link('mul', 'out', 'out', 'baseColor')],
+            }), (id) => (id === 'bricks' ? bricks : null));
+            const look = rayMaterialFor(material, (texture) => (texture === bricks ? [0.4, 0.2, 0.6] : [9, 9, 9]));
+            expect(look.albedo[0]).toBeCloseTo(0.4);
+            expect(look.albedo[1]).toBeCloseTo(0.2);
+            expect(look.albedo[2]).toBeCloseTo(0);
+        });
+
+        it('keeps its own colour while the graph\'s texture loads, and marks an unlit graph unlit', () => {
+            const material = imported();
+            bindMaterialGraph(material, normalizeMaterialGraph({
+                nodes: [node('out', OUTPUT_NODE_TYPE, { shading: 'unlit' }), node('tex', 'texture', { texture: 'later' })],
+                links: [link('tex', 'rgb', 'out', 'baseColor')],
+            }), () => null);
+            const look = rayMaterialFor(material, () => [0.5, 0.5, 0.5]);
+            expect(look.albedo).toEqual([0.5, 0, 0]);
+            expect(look.flags & MATERIAL_UNLIT).toBeTruthy();
+            // Tinted, too: a texture still loading is not a constant.
+            const tinted = imported();
+            bindMaterialGraph(tinted, normalizeMaterialGraph({
+                nodes: [node('out', OUTPUT_NODE_TYPE), node('tex', 'texture', { texture: 'later' }), node('tint', 'color'), node('mul', 'multiply')],
+                links: [link('tex', 'rgb', 'mul', 'a'), link('tint', 'out', 'mul', 'b'), link('mul', 'out', 'out', 'baseColor')],
+            }), () => null);
+            expect(rayMaterialFor(tinted, () => [0.5, 0.5, 0.5]).albedo).toEqual([0.5, 0, 0]);
+        });
+
+        it('keeps its own colour until a graph that works its colour out has been drawn on a renderer', () => {
+            const material = imported();
+            bindMaterialGraph(material, normalizeMaterialGraph({ nodes: [node('out', OUTPUT_NODE_TYPE), node('n', 'noise')], links: [link('n', 'out', 'out', 'baseColor')] }));
+            expect(rayMaterialFor(material, () => [0.5, 0.5, 0.5]).albedo).toEqual([0.5, 0, 0]);
+        });
     });
 
     it('sees solid things only', () => {

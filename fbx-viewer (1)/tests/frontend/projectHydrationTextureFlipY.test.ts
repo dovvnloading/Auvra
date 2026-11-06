@@ -65,4 +65,33 @@ describe('loadGameContent texture overrides', () => {
     expect(body.map!.flipY).toBe(flipY);
     expect(body.map!.colorSpace).toBe(THREE.SRGBColorSpace);
   });
+
+  it('takes an older texture override in as a painted base map of the material overrides', async () => {
+    const { model, body } = bodyModel(false);
+    mocks.loadFBXFile.mockResolvedValue(model);
+    const loaded = await loadGameContent({
+      textures: [{ id: 'tex-1', name: 'Skin', assetId: 'asset-skin' }],
+      models: [{ id: 'm1', name: 'Robot.fbx', assetId: 'asset-robot', textureOverrides: { Body: 'tex-1' }, materialOverrides: { Body: { roughness: 0.3 } } }],
+    }, { resolveAssetUrl: async (assetId: string) => `pack://assets/${assetId}`, generateThumbnails: false });
+    const [hydrated] = loaded.content.models;
+    expect(hydrated.materialOverrides).toEqual({ Body: { roughness: 0.3, mapTextureId: 'tex-1', paintedMap: true } });
+    expect(hydrated.textureOverrides).toEqual({});
+    // Drawn as it always was: cut out where see-through, from both sides.
+    expect([body.transparent, body.alphaTest, body.side]).toEqual([true, 0.5, THREE.DoubleSide]);
+    expect(body.roughness).toBe(0.3);
+  });
+
+  it('leaves an older texture override out once the material overrides decided the base map', async () => {
+    const { model, body } = bodyModel(false);
+    const imported = body.map;
+    mocks.loadFBXFile.mockResolvedValue(model);
+    const loaded = await loadGameContent({
+      textures: [{ id: 'tex-1', name: 'Skin', assetId: 'asset-skin' }],
+      // The base map was cleared in Material Overrides.
+      models: [{ id: 'm1', name: 'Robot.fbx', assetId: 'asset-robot', textureOverrides: { Body: 'tex-1' }, materialOverrides: { Body: { paintedMap: false } } }],
+    }, { resolveAssetUrl: async (assetId: string) => `pack://assets/${assetId}`, generateThumbnails: false });
+    expect(loaded.content.models[0].materialOverrides).toEqual({ Body: { paintedMap: false } });
+    expect(body.map).toBe(imported);
+    expect(body.side).toBe(THREE.FrontSide);
+  });
 });

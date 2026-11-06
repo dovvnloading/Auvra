@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { COVER_CELLS, OPEN_SKY, type WeatherCover } from './weatherCover';
 import { windUniforms } from './wind';
+import { hasOwnCompileHook, setShaderStage, shaderStageNames } from './materials/shaderStages';
 
 /**
  * WEATHER AND WIND ON SURFACES
@@ -10,7 +11,10 @@ import { windUniforms } from './wind';
  * standard or physical material is patched once, and then every patched material reads the same
  * few uniforms, so a change in the weather costs nothing per material. Under cover (see
  * weatherCover) surfaces stay dry. Materials with a shader patch of their own are left alone unless
- * they say they take the weather (userData.weatherSurface, as the terrain's do).
+ * they say they take the weather (userData.weatherSurface, as the terrain's do). The weather is the
+ * last of a material's shader stages (materials/shaderStages.ts), so it lies on top of a material
+ * graph and a compressed normal map's rebuild alike: a graph-shaded or compressed-normal material
+ * gets wet and snowy, and sways, like any other.
  *
  * Foliage sways in the wind the same way: leaves, grass and the like (found by their materials'
  * names, or set on an object by a Wind Sway component) bend from the base, more toward the top,
@@ -153,13 +157,12 @@ if ( uWeatherWetness + uWeatherSnow > 0.001 ) {
 
 const PROGRAM_KEY = 'auvra-weather-1';
 const patched = new WeakSet<THREE.Material>();
-/** Materials this patch is all the shader they have of their own, from which their look can be read off as usual without it. */
-const onlyWeather = new WeakSet<THREE.Material>();
 
 const takesWeather = (material: THREE.Material): material is THREE.MeshStandardMaterial => {
     if (!(material as THREE.MeshStandardMaterial).isMeshStandardMaterial) return false;
     if (material.userData.noWeather) return false;
-    return material.onBeforeCompile === THREE.Material.prototype.onBeforeCompile || material.userData.weatherSurface === true;
+    // The engine's own stages (a graph, a normal map's rebuild) are no reason to stay dry; a hook of the material's own is.
+    return !hasOwnCompileHook(material) || material.userData.weatherSurface === true;
 };
 
 /** Whether it is raining or snowing on surfaces now. */
@@ -167,30 +170,23 @@ export const weatherIsOn = (): boolean => WEATHER_UNIFORMS.uWeatherWetness.value
 
 /** Whether a material works out its look in a shader of its own, as opposed to what three does with its maps and values. */
 export const hasOwnShader = (material: THREE.Material): boolean => {
-    if (material.onBeforeCompile === THREE.Material.prototype.onBeforeCompile) return false;
-    return !onlyWeather.has(material) || weatherIsOn();
+    const stages = shaderStageNames(material);
+    const own = hasOwnCompileHook(material);
+    if (!own && !stages.length) return false;
+    // A material whose only patch is the weather looks as its maps and values say while it is dry.
+    const onlyWeather = !own && stages.length === 1 && stages[0] === 'weather';
+    return !onlyWeather || weatherIsOn();
 };
 
 /** Whether a material bends in the wind, in its shader. */
 export const swaysInWind = (material: THREE.Material): boolean => Boolean(windOf(material));
 
-/** Patches one material to take the weather (once; false when it does not take it). */
-export const patchWeatherMaterial = (material: THREE.Material): boolean => {
-    if (patched.has(material)) return true;
-    if (!takesWeather(material)) return false;
-    patched.add(material);
-    const before = material.onBeforeCompile;
-    if (before === THREE.Material.prototype.onBeforeCompile) onlyWeather.add(material);
-    const ownKey = Object.prototype.hasOwnProperty.call(material, 'customProgramCacheKey')
-        ? material.customProgramCacheKey.bind(material)
-        : null;
-    const beforeSource = before.toString();
-    const patch: THREE.Material['onBeforeCompile'] = (shader, renderer) => {
-        before.call(material, shader, renderer);
+/** The weather's shader stage: rain, snow and, for a material that sways, wind. */
+const weatherStage = (material: THREE.Material) => ({
+    patch: (shader: THREE.WebGLProgramParametersWithUniforms) => {
         if (!shader.fragmentShader.includes('#include <lights_physical_fragment>')) return;
         Object.assign(shader.uniforms, WEATHER_UNIFORMS);
-        const wind = windOf(material);
-        if (wind) {
+        if (windOf(material)) {
             Object.assign(shader.uniforms, windUniforms, materialWindUniforms(material));
             shader.vertexShader = `#define AUVRA_WIND\n${shader.vertexShader}`;
         }
@@ -200,15 +196,23 @@ export const patchWeatherMaterial = (material: THREE.Material): boolean => {
         shader.fragmentShader = shader.fragmentShader
             .replace('#include <common>', `#include <common>${FRAGMENT_HEAD}`)
             .replace('#include <lights_physical_fragment>', `${FRAGMENT_BODY}\n#include <lights_physical_fragment>`);
-    };
-    material.onBeforeCompile = patch;
-    // Programs are shared by key: a patched material must not share one with an unpatched one, and if
-    // something later replaces the patch, the key goes back to what it was.
-    material.customProgramCacheKey = () => {
-        const base = ownKey ? ownKey() : (material.onBeforeCompile === patch ? beforeSource : material.onBeforeCompile.toString());
-        return material.onBeforeCompile === patch ? `${base}|${PROGRAM_KEY}${windOf(material) ? '|wind' : ''}` : base;
-    };
-    material.needsUpdate = true;
+    },
+    // Programs are shared by key: a material that sways must not share one with one that does not.
+    key: () => `${PROGRAM_KEY}${windOf(material) ? '|wind' : ''}`,
+    // Every program the material builds holds the wind's uniforms too, swaying or not: three may reuse one for the other.
+    uniforms: (): Record<string, THREE.IUniform> => ({
+        ...WEATHER_UNIFORMS,
+        ...windUniforms,
+        ...((material.userData.windUniforms as Record<string, THREE.IUniform> | undefined) ?? {}),
+    }),
+});
+
+/** Patches one material to take the weather (once; false when it does not take it). */
+export const patchWeatherMaterial = (material: THREE.Material): boolean => {
+    if (patched.has(material)) return true;
+    if (!takesWeather(material)) return false;
+    patched.add(material);
+    setShaderStage(material, 'weather', weatherStage(material));
     return true;
 };
 

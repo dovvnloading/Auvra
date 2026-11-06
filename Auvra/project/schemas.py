@@ -101,7 +101,7 @@ _NESTED_KEYS = {
 _FREEFORM_KEYS = {"settings", "overrides", "style", "payload", "data", "customData", "props", "graph", "textureGraph", "paint"}
 # ``materialOverrides`` is keyed by authored material names, so its entries are
 # checked against the override fields instead of by their (arbitrary) key.
-_MATERIAL_OVERRIDE_KEYS = {"color", "roughness", "metalness", "emissive", "emissiveIntensity", "opacity", "mapTextureId", "normalTextureId", "roughnessTextureId", "metalnessTextureId", "materialId", "parameters"}
+_MATERIAL_OVERRIDE_KEYS = {"color", "roughness", "metalness", "emissive", "emissiveIntensity", "opacity", "mapTextureId", "paintedMap", "normalTextureId", "roughnessTextureId", "metalnessTextureId", "materialId", "parameters"}
 _MATERIAL_TEXTURE_KEYS = ("mapTextureId", "normalTextureId", "roughnessTextureId", "metalnessTextureId")
 # Material names are also the keys of ``materialOverrides`` and
 # ``textureOverrides``, but every document crosses two protocol key blocklists:

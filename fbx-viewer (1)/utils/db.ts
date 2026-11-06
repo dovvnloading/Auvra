@@ -13,7 +13,7 @@ import { terrainLayersReferenceTexture, withoutTerrainLayerTexture } from '../co
 import { frontendDiagnostics } from '../diagnostics/runtime';
 import { editorSession, type EditorSessionLease } from './editorSession';
 import { sortByHierarchy } from './sceneGraph';
-import { normalizeMaterialOverrides, setMaterialOverrideField, type MaterialOverrides } from './materialOverrides';
+import { normalizeMaterialOverrides, setMaterialOverrideField, withPaintedBaseMap, type MaterialOverrides } from './materialOverrides';
 import { MATERIALS_DOMAIN, materialAssetDocument, readMaterialAsset, withoutAssetTexture } from '../runtime/materials/materialLibrary';
 import { SKIN_PAINT_ENCODING, SKIN_PAINT_FILE_NAME, SKIN_PAINT_MIME, type SkinPaintFile, type SkinPaintReference } from './skinPaint/skinPaintFile';
 
@@ -376,6 +376,11 @@ class DBOperations {
       await this.canonicalChange('models', 'upsert', { ...assetInfoDocument(id, updates), ...(clipNames?.length ? { clipNames } : {}) }, id);
   }
 
+  /**
+   * Keeps `file` as a texture and makes it the painted base map of the named materials, in their material
+   * overrides (`mapTextureId` with `paintedMap`), beside whatever else those hold. An older per-material
+   * texture override of theirs is let go of in the same change. Returns the texture's id.
+   */
   async addModelTextureOverride(modelId: string, materialNames: string[], file: File, dimensions: { width: number; height: number }): Promise<string> {
     this.requireNativeProject();
     const assetId = await projectService.uploadAsset(file);
@@ -383,11 +388,12 @@ class DBOperations {
     const model = nativeDomainRecords(snapshot, 'models').find((record) => record.id === modelId);
     if (!model) throw new Error('Model does not exist in the active project');
     const textureId = assetId;
-    const textureOverrides = { ...(model.textureOverrides || {}) } as Record<string, string>;
-    for (const materialName of materialNames) textureOverrides[materialName] = textureId;
+    const materialOverrides = withPaintedBaseMap(normalizeMaterialOverrides(model.materialOverrides), materialNames, textureId);
+    const textureOverrides = Object.fromEntries(Object.entries((model.textureOverrides || {}) as Record<string, string>)
+      .filter(([materialName]) => !materialNames.includes(materialName)));
     await projectService.applyChanges([
       { domain: 'textures', operation: 'upsert', id: textureId, value: { id: textureId, name: file.name, assetId, dimensions } },
-      { domain: 'models', operation: 'upsert', id: modelId, value: { ...model, textureOverrides } },
+      { domain: 'models', operation: 'upsert', id: modelId, value: { ...model, materialOverrides, textureOverrides } },
     ]);
     return textureId;
   }

@@ -115,8 +115,32 @@ describe('useModelManager texture overrides follow the model UV origin', () => {
     const { result } = renderManager(model);
     await act(() => result.current.retextureModel('m1', 'blob:retexture'));
     expect(mocks.dbOperations.addModelTextureOverride).toHaveBeenCalled();
-    expect(result.current.models[0].textureOverrides).toEqual({ Body: 'tex-1' });
     expect(body.map!.flipY).toBe(flipY);
+  });
+
+  it('retexture puts the picture on as a painted base map of the material overrides, keeping the imported map', async () => {
+    const { model, body } = bodyModel('m1');
+    const imported = body.map!;
+    const disposed = vi.fn();
+    imported.addEventListener('dispose', disposed);
+    model.materialOverrides = { Body: { roughness: 0.3 } };
+    model.textureOverrides = { Body: 'older' };
+    const { result } = renderManager(model);
+    await act(() => result.current.retextureModel('m1', 'blob:retexture'));
+    expect(mocks.dbOperations.addModelTextureOverride).toHaveBeenCalledWith('m1', ['Body'], expect.any(File), expect.anything());
+    // Named for what it is, as the texture library will list it.
+    expect((mocks.dbOperations.addModelTextureOverride.mock.calls[0] as unknown[])[2]).toMatchObject({ name: 'Painted Body.png' });
+    const updated = result.current.models[0];
+    expect(updated.materialOverrides).toEqual({ Body: { roughness: 0.3, mapTextureId: 'tex-1', paintedMap: true } });
+    expect(updated.textureOverrides).toEqual({});
+    expect(body.map).not.toBe(imported);
+    expect([body.transparent, body.alphaTest, body.side]).toEqual([true, 0.5, THREE.DoubleSide]);
+    expect(body.roughness).toBe(0.3);
+    // Taken off again, the material wears what it was imported with.
+    applyMaterialOverrides(model.object, { Body: { roughness: 0.3 } });
+    expect(body.map).toBe(imported);
+    expect(body.side).toBe(THREE.FrontSide);
+    expect(disposed).not.toHaveBeenCalled();
   });
 
   it('reimport from FBX to glTF reorients the adopted override textures', async () => {
