@@ -30,6 +30,8 @@ export interface TexPortDef {
     kind: PinKind;
     /** An image input that also takes a material wire, keeping one channel of it (an Output's). */
     material?: boolean;
+    /** Not shown on the canvas: a named link's wire runs to it instead. */
+    hidden?: boolean;
     fallback?: InputFallback;
     /** A heading the canvas lists the port under, for nodes with many ports. */
     group?: string;

@@ -1,4 +1,5 @@
 import { createNode, newNodeId, wouldCycle } from '../../texturing/graph/document';
+import { withNamedLinks } from '../../texturing/graph/namedLinks';
 import { OUTPUT_NODE_TYPE, SUBGRAPH_NODE_TYPE } from '../../texturing/graph/nodes/io';
 import { textureNodeDefinition, type GraphResolver } from '../../texturing/graph/registry';
 import type { PinKind, PortKind, TexGraphComment, TexGraphLink, TexGraphNode, TexNodeDef, TextureGraph } from '../../texturing/graph/types';
@@ -157,10 +158,10 @@ export const createComment = (around: readonly Rect[], fallback: Point): TexGrap
     };
 };
 
-/** Nodes nothing reaches an Output from: drawn dimmed. */
+/** Nodes nothing reaches an Output from: drawn dimmed. A named link counts as a wire. */
 export const unusedNodes = (graph: TextureGraph): Set<string> => {
     const feeding = new Map<string, string[]>();
-    for (const link of graph.links) {
+    for (const link of withNamedLinks(graph).links) {
         const list = feeding.get(link.to);
         if (list) list.push(link.from);
         else feeding.set(link.to, [link.from]);
@@ -183,7 +184,7 @@ export const unusedNodes = (graph: TextureGraph): Set<string> => {
 export const outputKinds = (graph: TextureGraph, definitionOf: (node: TexGraphNode) => TexNodeDef | null): (nodeId: string, key: string) => PinKind => {
     const nodes = new Map(graph.nodes.map((node) => [node.id, node]));
     const incoming = new Map<string, TexGraphLink>();
-    for (const link of graph.links) incoming.set(`${link.to}:${link.toInput}`, link);
+    for (const link of withNamedLinks(graph).links) incoming.set(`${link.to}:${link.toInput}`, link);
     const known = new Map<string, PinKind>();
     const resolving = new Set<string>();
     const kindOf = (nodeId: string, key: string): PinKind => {

@@ -10,6 +10,7 @@ import type { MenuItem, NodeView, PinKindStyle } from '../NodeGraph/types';
 import { createNode, newNodeId } from '../../texturing/graph/document';
 import { mainInput, unknownNodeMessage } from '../../texturing/graph/evaluator';
 import { wireFits } from '../../texturing/graph/material';
+import { NAMED_RECEIVE_TYPE, NAMED_SEND_TYPE, linkName, namedLinks } from '../../texturing/graph/namedLinks';
 import { INPUT_NODE_TYPE, MESH_MAPS, MESH_MAP_LABELS, MESH_MAP_NODE_TYPE, OUTPUT_NODE_TYPE, REROUTE_NODE_TYPE, SUBGRAPH_NODE_TYPE } from '../../texturing/graph/nodes/io';
 import { NODE_CATEGORY_ORDER, TEXTURE_NODE_DEFINITIONS, placeholderDefinition, textureNodeDefinition, type GraphResolver } from '../../texturing/graph/registry';
 import { OUTPUT_CHANNELS, OUTPUT_CHANNEL_LABELS, type OutputChannel, type PinKind, type TexGraphComment, type TexGraphLink, type TexGraphNode, type TexNodeDef, type TexPortDef, type TextureGraph } from '../../texturing/graph/types';
@@ -172,7 +173,7 @@ const NODE_ENTRIES: readonly FinderEntry[] = (() => {
 /** Pictures the finder draws: every node that makes an image on its own (not outputs, inputs, pictures or reroute points). */
 const PICTURE_REQUESTS: readonly PictureRequest[] = NODE_ENTRIES.flatMap((entry): PictureRequest[] => {
     if (entry.id.startsWith('mesh:')) return [{ key: entry.id, type: MESH_MAP_NODE_TYPE, params: { map: entry.id.slice(5) } }];
-    if (entry.id.includes(':') || [INPUT_NODE_TYPE, REROUTE_NODE_TYPE, 'bitmap'].includes(entry.id)) return [];
+    if (entry.id.includes(':') || [INPUT_NODE_TYPE, REROUTE_NODE_TYPE, NAMED_SEND_TYPE, NAMED_RECEIVE_TYPE, 'bitmap'].includes(entry.id)) return [];
     return [{ key: entry.id, type: entry.id }];
 });
 
@@ -275,15 +276,16 @@ export const TextureGraphCanvas: React.FC<TextureGraphCanvasProps> = (props) => 
             const state = session.state(node.id);
             const isOutput = node.type === OUTPUT_NODE_TYPE;
             const error = missing ? unknownNodeMessage(node.type) : state?.error;
-            const kindTitle = isOutput ? (String(node.params.name || '') || OUTPUT_CHANNEL_LABELS[node.params.channel as OutputChannel] || 'Output') : def?.label ?? node.type;
+            const named = node.type === NAMED_SEND_TYPE ? `Send: ${linkName(node) || 'no name'}` : node.type === NAMED_RECEIVE_TYPE ? `Receive: ${linkName(node) || 'no name'}` : null;
+            const kindTitle = isOutput ? (String(node.params.name || '') || OUTPUT_CHANNEL_LABELS[node.params.channel as OutputChannel] || 'Output') : named ?? def?.label ?? node.type;
             const view: NodeView = {
                 title: node.name || kindTitle,
                 tint: missing ? MISSING_TINT : isOutput ? OUTPUT_TINT : CATEGORY_TINTS[def?.category ?? 'Utility'] ?? CATEGORY_TINTS.Utility,
                 layout: node.type === REROUTE_NODE_TYPE ? 'dot' : 'edges',
                 width: NODE_WIDTH,
                 body: missing ? 48 : THUMBNAIL_SIZE,
-                inputs: (def?.inputs ?? []).map((port) => ({ key: port.key, label: port.label, kind: pinKind(port), ...(port.group ? { group: port.group } : {}) })),
-                outputs: (def?.outputs ?? []).map((port) => ({ key: port.key, label: port.label, kind: kindOf(node.id, port.key) })),
+                inputs: (def?.inputs ?? []).filter((port) => !port.hidden).map((port) => ({ key: port.key, label: port.label, kind: pinKind(port), ...(port.group ? { group: port.group } : {}) })),
+                outputs: (def?.outputs ?? []).filter((port) => !port.hidden).map((port) => ({ key: port.key, label: port.label, kind: kindOf(node.id, port.key) })),
                 ...(unused.has(node.id) ? { unused: true } : {}),
                 ...(error ? { error } : {}),
                 ...(missing ? { missing: true } : {}),
@@ -320,13 +322,14 @@ export const TextureGraphCanvas: React.FC<TextureGraphCanvasProps> = (props) => 
     ], [graphs, resolve]);
 
     const renderBody = useCallback((nodeId: string, view: NodeView) => (view.missing ? null : <Thumbnail session={session} nodeId={nodeId} />), [session]);
+    const ghostLinks = useMemo(() => namedLinks(graph).map((link) => ({ from: link.from, to: link.to })), [graph]);
 
     const adapter = useMemo<NodeGraphAdapter<TexGraphNode>>(() => {
         const pins = (node: EditableNode<TexGraphNode>): PinSet => {
             const def = textureNodeDefinition(node.source, latest.current.resolve);
             return {
-                inputs: (def?.inputs ?? []).map((port) => ({ key: port.key, kind: pinKind(port) })),
-                outputs: (def?.outputs ?? []).map((port) => ({ key: port.key, kind: port.kind === 'any' ? def?.kindOf?.(node.source.params) ?? 'any' : port.kind })),
+                inputs: (def?.inputs ?? []).filter((port) => !port.hidden).map((port) => ({ key: port.key, kind: pinKind(port) })),
+                outputs: (def?.outputs ?? []).filter((port) => !port.hidden).map((port) => ({ key: port.key, kind: port.kind === 'any' ? def?.kindOf?.(node.source.params) ?? 'any' : port.kind })),
             };
         };
         const create = (entryId: string, at: Point): EditableNode<TexGraphNode> | null => {
@@ -364,11 +367,17 @@ export const TextureGraphCanvas: React.FC<TextureGraphCanvasProps> = (props) => 
             },
             looks: true,
             renderBody,
+            cost: (nodeId) => {
+                const state = latest.current.session.state(nodeId);
+                return state && !state.error ? { value: state.milliseconds, label: state.milliseconds < 1 ? '<1 ms' : `${Math.round(state.milliseconds)} ms` } : null;
+            },
+            costWords: 'each node tinted by how long it took to draw',
+            ghostLinks,
             menuItems,
             onOpenNode: (nodeId) => latest.current.onView(nodeId),
             onOpenGraph: (nodeId) => latest.current.onOpenGraph?.(nodeId),
         };
-    }, [entries, renderBody]);
+    }, [entries, ghostLinks, renderBody]);
 
     const onEdit = useCallback((next: EditableGraph<TexGraphNode>, coalesce?: string) => {
         const current = latest.current.graph;

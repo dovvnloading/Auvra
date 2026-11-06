@@ -36,6 +36,9 @@ export interface NodeCardProps {
     folds: boolean;
     kinds: Readonly<Record<string, PinKindStyle>>;
     actions: CardActions;
+    /** With the cost map on: how costly the node is next to the costliest (0 to 1), and the cost in words. */
+    heat?: number;
+    heatLabel?: string;
     renderBody?: (nodeId: string, view: NodeView) => React.ReactNode;
 }
 
@@ -82,7 +85,7 @@ const Pin: React.FC<{ nodeId: string; side: 'in' | 'out'; pinKey: string; label:
     />
 );
 
-const NodeCardBase: React.FC<NodeCardProps> = ({ node, view, layout, wired, selected, highlighted, dx, dy, detail, renaming, folds, kinds, actions, renderBody }) => {
+const NodeCardBase: React.FC<NodeCardProps> = ({ node, view, layout, wired, selected, highlighted, dx, dy, detail, renaming, folds, kinds, actions, renderBody, heat, heatLabel }) => {
     const left = node.x + dx;
     const top = node.y + dy;
     const tint = node.color ?? view.tint;
@@ -173,6 +176,12 @@ const NodeCardBase: React.FC<NodeCardProps> = ({ node, view, layout, wired, sele
             )}
             {node.bypass && !node.collapsed && (
                 <div className="pointer-events-none absolute inset-x-0 bottom-0 rounded-b-md" style={{ top: HEADER, background: 'repeating-linear-gradient(135deg, rgb(0 0 0 / 0.38) 0 6px, transparent 6px 12px)' }} />
+            )}
+            {heat !== undefined && (
+                <>
+                    <div className="pointer-events-none absolute inset-0 rounded-md" style={{ background: `rgb(239 68 68 / ${(0.06 + heat * 0.42).toFixed(3)})`, boxShadow: `inset 0 0 0 2px rgb(239 68 68 / ${(0.15 + heat * 0.7).toFixed(3)})` }} />
+                    {heatLabel && <span className="pointer-events-none absolute bottom-1 right-1 rounded-sm bg-black/70 px-1 font-mono text-[10px] text-white">{heatLabel}</span>}
+                </>
             )}
             {view.missing && !node.collapsed && (
                 <p className="pointer-events-none absolute inset-x-0 px-2 text-center text-2xs leading-snug text-warn/80" style={{ top: layout.bodyTop + 4 }}>Not available in this version. Settings and wires are kept.</p>

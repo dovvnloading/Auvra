@@ -2,6 +2,7 @@ import type * as THREE from 'three';
 import type { GpuImage, ImagePrecision, TextureGpu } from '../gpu/textureGpu';
 import { formulaScope, graphContentKey, hashText, parameterValues, resolveNodeParams, shaderSeed, subgraphRunSeed, MAX_SIZE_LOG2 } from './document';
 import { MATERIAL_CHANNELS, materialOf, materialResults, type MaterialImages } from './material';
+import { withNamedLinks } from './namedLinks';
 import { nodeBindings } from './nodeKit';
 import { INPUT_NODE_TYPE, MESH_MAP_NODE_TYPE, MESH_READING_NODE_TYPES, OUTPUT_NODE_TYPE, SUBGRAPH_NODE_TYPE, SUBGRAPH_SEED_KEY, SUBGRAPH_VARY_KEY } from './nodes/io';
 import { textureNodeDefinition, type GraphResolver } from './registry';
@@ -192,7 +193,8 @@ export class TextureGraphEvaluator {
     private plan(graph: TextureGraph, targets: readonly string[]): Plan {
         const nodes = new Map(graph.nodes.map((node) => [node.id, node]));
         const incoming = new Map<string, Map<string, TexGraphLink>>();
-        for (const link of graph.links) {
+        // Named links draw as wires from each sender to its receivers.
+        for (const link of withNamedLinks(graph).links) {
             if (!nodes.has(link.from) || !nodes.has(link.to)) continue;
             let map = incoming.get(link.to);
             if (!map) incoming.set(link.to, map = new Map());

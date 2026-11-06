@@ -54,6 +54,9 @@ const CATEGORY_MARKS: Record<string, IconComponent> = {
 };
 
 const LOOK_KEYS = ['name', 'color', 'collapsed', 'bypass'] as const;
+
+/** A rough cost of what each kind of node adds to the shader, for the cost map: a texture read counts 4. */
+const COST_WEIGHTS: Record<string, number> = { Texture: 4, Procedural: 6, Custom: 8, Color: 2, Math: 1, Vector: 1, Logic: 1, UV: 1, Geometry: 1, Input: 0.5, Utility: 0.25 };
 type LookedNode = MaterialGraphNode & NodeLook;
 
 // ---- the graph read into the canvas's shape, and back ----
@@ -222,6 +225,14 @@ export const MaterialGraphCanvas: React.FC<MaterialGraphCanvasProps> = (props) =
         },
         looks: MATERIAL_LOOKS_KEPT,
         renderBody,
+        cost: (nodeId) => {
+            const node = latest.current.graph.nodes.find((candidate) => candidate.id === nodeId);
+            const definition = node && getMaterialNodeDefinition(node.type);
+            if (!node || !definition || node.type === OUTPUT_NODE_TYPE) return null;
+            const value = (COST_WEIGHTS[definition.category] ?? 1) + definition.inputs.length * 0.25;
+            return { value, label: `≈ ${value.toFixed(1)}` };
+        },
+        costWords: 'an estimate of what each node adds to the shader (a texture read counts 4)',
     }), []);
 
     const onEdit = useCallback((next: EditableGraph<MaterialGraphNode>, coalesce?: string) => {
