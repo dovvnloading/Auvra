@@ -13,57 +13,34 @@ import {
     type MaterialNodeDef,
     type MaterialValueType,
 } from '../../runtime/materials/materialGraph';
-import { NODE_PREVIEW_SIZE } from '../../runtime/materials/materialPreviews';
+import { DOT, cardLayout } from '../NodeGraph/layout';
+import type { NodeLook } from '../NodeGraph/model';
+import { materialNodeView } from './materialNodeViews';
+
+export { showsPreview } from './materialNodeViews';
 
 /**
  * What the material graph editor (MaterialGraphEditor.tsx) does to a graph, apart from drawing it:
- * where nodes and pins sit, selecting, copying and pasting, wiring, searching for nodes, and undo.
+ * how big nodes are, selecting, copying and pasting, wiring, searching for nodes, and undo. The
+ * canvas itself is the shared node graph canvas (MaterialGraphCanvas.tsx adapts it).
  */
 
 // ---------------------------------------------------------------------------
 // Layout
 // ---------------------------------------------------------------------------
 
-export const NODE_WIDTH = 200;
-export const HEADER = 28;
-export const ROW = 22;
 /** A reroute is a dot this wide. */
-export const REROUTE_SIZE = 18;
-const PREVIEW_MARGIN = 8;
+export const REROUTE_SIZE = DOT;
 
 export interface Point { x: number; y: number }
 export interface Rect { x: number; y: number; width: number; height: number }
 
-/** True for nodes that show their value as an image. */
-export const showsPreview = (node: MaterialGraphNode): boolean => node.type !== OUTPUT_NODE_TYPE && node.type !== REROUTE_NODE_TYPE;
+const NO_WIRES: ReadonlySet<string> = new Set();
 
+/** A node's rectangle as the canvas draws it (closed pin groups taken as having nothing wired). */
 export const nodeRect = (node: MaterialGraphNode, previews: boolean): Rect => {
-    if (node.type === REROUTE_NODE_TYPE) return { x: node.x, y: node.y, width: REROUTE_SIZE, height: REROUTE_SIZE };
-    const definition = getMaterialNodeDefinition(node.type)!;
-    const rows = definition.outputs.length + definition.inputs.length;
-    const preview = previews && showsPreview(node) ? NODE_PREVIEW_SIZE + PREVIEW_MARGIN : 0;
-    return { x: node.x, y: node.y, width: NODE_WIDTH, height: HEADER + rows * ROW + 6 + preview };
-};
-
-/** Top of the node's preview image, from the node's top. */
-export const previewTop = (node: MaterialGraphNode): number => {
-    const definition = getMaterialNodeDefinition(node.type)!;
-    return HEADER + (definition.outputs.length + definition.inputs.length) * ROW + 4;
-};
-
-/** Where a pin sits: outputs on the right, one row each, then inputs on the left. */
-export const pinPosition = (node: MaterialGraphNode, kind: 'in' | 'out', key: string): Point => {
-    if (node.type === REROUTE_NODE_TYPE) return { x: node.x + (kind === 'out' ? REROUTE_SIZE : 0), y: node.y + REROUTE_SIZE / 2 };
-    const definition = getMaterialNodeDefinition(node.type)!;
-    const index = kind === 'out'
-        ? definition.outputs.findIndex(port => port.key === key)
-        : definition.outputs.length + definition.inputs.findIndex(port => port.key === key);
-    return { x: node.x + (kind === 'out' ? NODE_WIDTH : 0), y: node.y + HEADER + index * ROW + ROW / 2 };
-};
-
-export const wirePath = (from: Point, to: Point): string => {
-    const bend = Math.max(40, Math.abs(to.x - from.x) / 2);
-    return `M ${from.x} ${from.y} C ${from.x + bend} ${from.y}, ${to.x - bend} ${to.y}, ${to.x} ${to.y}`;
+    const layout = cardLayout(materialNodeView(node, { previews }), node as MaterialGraphNode & NodeLook, NO_WIRES);
+    return { x: node.x, y: node.y, width: layout.width, height: layout.height };
 };
 
 export const rectsOverlap = (a: Rect, b: Rect): boolean =>

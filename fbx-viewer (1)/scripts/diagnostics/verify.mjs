@@ -33,6 +33,7 @@ const EXEMPT = new Map(Object.entries({
   'components/NodeGraph/model.ts': 'pure-utility',
   'components/NodeGraph/types.ts': 'data-model',
   'components/NodeGraph/wires.ts': 'pure-utility',
+  'components/Materials/materialNodeViews.ts': 'pure-utility',
   'texturing/gpu/glslLibrary.ts': 'pure-utility',
   'texturing/graph/document.ts': 'data-model',
   'texturing/graph/evaluator.ts': 'hot-loop',
