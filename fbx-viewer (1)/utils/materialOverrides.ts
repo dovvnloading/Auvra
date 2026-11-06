@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { materialLibrary } from '../runtime/materials/materialLibrary';
 import { canBindMaterialGraph } from '../runtime/materials/graphMaterial';
+import { isGraphUpgraded } from '../runtime/materials/physicalSurface';
 import { CARD_FRINGE_KEY } from './processing/ModelMaterials';
 import { MAX_PARAMETER_NAME_LENGTH, type MaterialParameterValues } from '../runtime/materials/materialGraph';
 
@@ -51,7 +52,45 @@ export interface MaterialOverride {
    * or a Vector). A list, not a map by name, so no parameter name ever becomes a document key.
    */
   parameters?: MaterialParameterSetting[];
+  // A physical material's values (glTF files using the coat, sheen, transmission, specular, index of
+  // refraction, thin film or anisotropy extensions); materials of other kinds ignore them.
+  /** Clear coat amount, 0..1. */
+  coat?: number;
+  coatRoughness?: number;
+  /** Sheen colour, `#rrggbb` (sRGB); black turns the sheen off. */
+  sheenColor?: string;
+  sheenRoughness?: number;
+  /** Thin film (iridescence) amount, 0..1. */
+  thinFilm?: number;
+  /** Thin film thickness in nanometres. */
+  thinFilmThickness?: number;
+  transmission?: number;
+  /** Thickness of the volume behind a transmissive surface, in metres. */
+  thickness?: number;
+  /** Colour light takes on through the volume, `#rrggbb` (sRGB), reached at `attenuationDistance`. */
+  attenuationColor?: string;
+  attenuationDistance?: number;
+  dispersion?: number;
+  /** Index of refraction. */
+  ior?: number;
+  specularWeight?: number;
+  /** Specular colour, `#rrggbb` (sRGB). */
+  specularColor?: string;
+  anisotropy?: number;
+  /** Anisotropy direction, in degrees. */
+  anisotropyRotation?: number;
 }
+
+/** The physical values an override can hold, with their ranges. */
+export const PHYSICAL_OVERRIDE_RANGES = {
+  coat: [0, 1], coatRoughness: [0, 1], sheenRoughness: [0, 1], thinFilm: [0, 1], thinFilmThickness: [0, 2000],
+  transmission: [0, 1], thickness: [0, 1000], attenuationDistance: [0.0001, 1e6], dispersion: [0, 10], ior: [1, 5],
+  specularWeight: [0, 1], anisotropy: [0, 1], anisotropyRotation: [0, 360],
+} as const;
+
+export type PhysicalOverrideNumber = keyof typeof PHYSICAL_OVERRIDE_RANGES;
+export type PhysicalOverrideColor = 'sheenColor' | 'attenuationColor' | 'specularColor';
+const PHYSICAL_OVERRIDE_COLORS: readonly PhysicalOverrideColor[] = ['sheenColor', 'attenuationColor', 'specularColor'];
 
 export interface MaterialParameterSetting {
   name: string;
@@ -144,6 +183,8 @@ export const normalizeMaterialOverride = (value: unknown): MaterialOverride | nu
     metalnessTextureId: normalizeTextureId(source.metalnessTextureId),
     materialId: normalizeTextureId(source.materialId),
     parameters: normalizeParameters(source.parameters),
+    ...Object.fromEntries(Object.entries(PHYSICAL_OVERRIDE_RANGES).map(([key, [min, max]]) => [key, normalizeNumber(source[key], min, max)])),
+    ...Object.fromEntries(PHYSICAL_OVERRIDE_COLORS.map((key) => [key, normalizeColor(source[key])])),
   };
   const result = Object.fromEntries(Object.entries(candidate).filter(([, field]) => field !== undefined)) as MaterialOverride;
   return Object.keys(result).length > 0 ? result : null;
@@ -291,6 +332,97 @@ const overrideTextureKey = (texture: THREE.Texture | null | undefined): string |
   return typeof textureId === 'string' && (slot === 'map' || slot === 'normal' || slot === 'roughness' || slot === 'metalness') ? `${slot}:${textureId}` : null;
 };
 
+/** A physical material's own values, as imported. */
+interface PhysicalBaseline {
+  clearcoat: number;
+  clearcoatRoughness: number;
+  sheen: number;
+  sheenColor: THREE.Color;
+  sheenRoughness: number;
+  iridescence: number;
+  iridescenceThicknessRange: [number, number];
+  transmission: number;
+  thickness: number;
+  attenuationColor: THREE.Color;
+  attenuationDistance: number;
+  dispersion: number;
+  ior: number;
+  specularIntensity: number;
+  specularColor: THREE.Color;
+  anisotropy: number;
+  anisotropyRotation: number;
+}
+
+/** Whether a material is physical as imported (not only while a graph needs it to be). */
+const isOwnPhysical = (material: THREE.Material): material is THREE.MeshPhysicalMaterial =>
+  (material as THREE.MeshPhysicalMaterial).isMeshPhysicalMaterial === true && !isGraphUpgraded(material);
+
+const capturePhysical = (material: THREE.MeshPhysicalMaterial): PhysicalBaseline => ({
+  clearcoat: material.clearcoat,
+  clearcoatRoughness: material.clearcoatRoughness,
+  sheen: material.sheen,
+  sheenColor: material.sheenColor.clone(),
+  sheenRoughness: material.sheenRoughness,
+  iridescence: material.iridescence,
+  iridescenceThicknessRange: [material.iridescenceThicknessRange[0], material.iridescenceThicknessRange[1]],
+  transmission: material.transmission,
+  thickness: material.thickness,
+  attenuationColor: material.attenuationColor.clone(),
+  attenuationDistance: material.attenuationDistance,
+  dispersion: material.dispersion,
+  ior: material.ior,
+  specularIntensity: material.specularIntensity,
+  specularColor: material.specularColor.clone(),
+  anisotropy: material.anisotropy,
+  anisotropyRotation: material.anisotropyRotation,
+});
+
+const restorePhysical = (material: THREE.MeshPhysicalMaterial, physical: PhysicalBaseline): void => {
+  material.clearcoat = physical.clearcoat;
+  material.clearcoatRoughness = physical.clearcoatRoughness;
+  material.sheen = physical.sheen;
+  material.sheenColor.copy(physical.sheenColor);
+  material.sheenRoughness = physical.sheenRoughness;
+  material.iridescence = physical.iridescence;
+  material.iridescenceThicknessRange = [physical.iridescenceThicknessRange[0], physical.iridescenceThicknessRange[1]];
+  material.transmission = physical.transmission;
+  material.thickness = physical.thickness;
+  material.attenuationColor.copy(physical.attenuationColor);
+  material.attenuationDistance = physical.attenuationDistance;
+  material.dispersion = physical.dispersion;
+  material.ior = physical.ior;
+  material.specularIntensity = physical.specularIntensity;
+  material.specularColor.copy(physical.specularColor);
+  material.anisotropy = physical.anisotropy;
+  material.anisotropyRotation = physical.anisotropyRotation;
+};
+
+/** Lays an override's physical values onto a physical material (whose own values were just restored). */
+const applyPhysical = (material: THREE.MeshPhysicalMaterial, override: MaterialOverride): void => {
+  if (override.coat !== undefined) material.clearcoat = override.coat;
+  if (override.coatRoughness !== undefined) material.clearcoatRoughness = override.coatRoughness;
+  if (override.sheenColor) {
+    material.sheenColor.set(override.sheenColor);
+    // Black is no sheen; any colour turns it on, as glTF's sheen does.
+    material.sheen = material.sheenColor.getHex() === 0 ? 0 : 1;
+  }
+  if (override.sheenRoughness !== undefined) material.sheenRoughness = override.sheenRoughness;
+  if (override.thinFilm !== undefined) material.iridescence = override.thinFilm;
+  if (override.thinFilmThickness !== undefined) {
+    material.iridescenceThicknessRange = [Math.min(material.iridescenceThicknessRange[0], override.thinFilmThickness), override.thinFilmThickness];
+  }
+  if (override.transmission !== undefined) material.transmission = override.transmission;
+  if (override.thickness !== undefined) material.thickness = override.thickness;
+  if (override.attenuationColor) material.attenuationColor.set(override.attenuationColor);
+  if (override.attenuationDistance !== undefined) material.attenuationDistance = override.attenuationDistance;
+  if (override.dispersion !== undefined) material.dispersion = override.dispersion;
+  if (override.ior !== undefined) material.ior = override.ior;
+  if (override.specularWeight !== undefined) material.specularIntensity = override.specularWeight;
+  if (override.specularColor) material.specularColor.set(override.specularColor);
+  if (override.anisotropy !== undefined) material.anisotropy = override.anisotropy;
+  if (override.anisotropyRotation !== undefined) material.anisotropyRotation = THREE.MathUtils.degToRad(override.anisotropyRotation);
+};
+
 interface MaterialBaseline {
   color?: THREE.Color;
   roughness?: number;
@@ -320,6 +452,8 @@ interface MaterialBaseline {
   appliedAlphaTest: number;
   appliedSide: THREE.Side;
   appliedForceSinglePass: boolean;
+  /** A physical material's own physical values; null for other kinds. */
+  physical: PhysicalBaseline | null;
 }
 
 /** Imported values, kept off `userData` so clones and JSON export stay untouched. */
@@ -366,6 +500,7 @@ const captureBaseline = (material: OverridableMaterial): MaterialBaseline => ({
   appliedAlphaTest: material.alphaTest,
   appliedSide: material.side,
   appliedForceSinglePass: material.forceSinglePass,
+  physical: isOwnPhysical(material) ? capturePhysical(material) : null,
 });
 
 const baselineOf = (material: THREE.Material): MaterialBaseline => {
@@ -541,6 +676,13 @@ export const applyMaterialOverrides = (
     }
     // An assigned material asset shades it by its graph instead (or no longer, once unassigned).
     materialLibrary.assign(material, override?.materialId ?? null, overrideTextureFlipY(root), materialParameterValues(override?.parameters));
+    // A physical material's own values: as imported, then this override's. A material asset shading it
+    // decides them itself, and letting go of one gives the material back the values it had, so they are
+    // laid on after it has.
+    if (baseline.physical && isOwnPhysical(material) && !override?.materialId) {
+      restorePhysical(material, baseline.physical);
+      if (override) applyPhysical(material, override);
+    }
     baseline.appliedMap = material.map ?? null;
     baseline.appliedNormalMap = material.normalMap ?? null;
     baseline.appliedRoughnessMap = material.roughnessMap ?? null;
@@ -566,7 +708,31 @@ export interface MaterialValues {
   hasNormalSlot: boolean;
   hasRoughnessSlot: boolean;
   hasMetalnessSlot: boolean;
+  /** A physical material's own values, shown as Material Overrides edits them; null for other kinds. */
+  physical: PhysicalValues | null;
 }
+
+/** A physical material's values as Material Overrides shows them: colours as `#rrggbb`, the direction in degrees. */
+export type PhysicalValues = Record<PhysicalOverrideNumber, number> & Record<PhysicalOverrideColor, string>;
+
+const physicalValuesOf = (physical: PhysicalBaseline): PhysicalValues => ({
+  coat: physical.clearcoat,
+  coatRoughness: physical.clearcoatRoughness,
+  sheenColor: physical.sheen > 0 ? `#${physical.sheenColor.getHexString()}` : '#000000',
+  sheenRoughness: physical.sheenRoughness,
+  thinFilm: physical.iridescence,
+  thinFilmThickness: physical.iridescenceThicknessRange[1],
+  transmission: physical.transmission,
+  thickness: physical.thickness,
+  attenuationColor: `#${physical.attenuationColor.getHexString()}`,
+  attenuationDistance: physical.attenuationDistance,
+  dispersion: physical.dispersion,
+  ior: physical.ior,
+  specularWeight: physical.specularIntensity,
+  specularColor: `#${physical.specularColor.getHexString()}`,
+  anisotropy: physical.anisotropy,
+  anisotropyRotation: THREE.MathUtils.radToDeg(physical.anisotropyRotation),
+});
 
 export interface ModelMaterialInfo {
   /** Override key ('' for an unnamed material, which cannot be overridden). */
@@ -597,6 +763,7 @@ export const readMaterialBaseValues = (material: THREE.Material): MaterialValues
     hasNormalSlot: baseline.hasNormalMap,
     hasRoughnessSlot: baseline.hasRoughnessMap,
     hasMetalnessSlot: baseline.hasMetalnessMap,
+    physical: baseline.physical ? physicalValuesOf(baseline.physical) : null,
   };
 };
 
