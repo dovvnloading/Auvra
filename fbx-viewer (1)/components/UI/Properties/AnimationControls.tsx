@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import * as THREE from 'three';
-import { Play, Pause, Film, StopCircle, Plus, CornerDownRight, FlipHorizontal2, Repeat, Scissors } from 'lucide-react';
+import { CornerDownRightIcon, FilmIcon, LoopIcon, MirrorIcon, PauseIcon, PlayIcon, PlusIcon, ScissorsIcon, StopIcon } from '../Icons';
 import { DEFAULT_MODEL_IMPORT_SETTINGS, LoadedModelData } from '../../../types';
 import { useScene } from '../../../context/SceneContext';
 import { MODEL_FILE_ACCEPT } from '../../../utils/modelLoader';
@@ -86,7 +86,7 @@ const LoadedAnimationControls: React.FC<AnimationControlsProps & { model: NonNul
         {/* Header & Playback */}
         <div className="flex items-center justify-between">
            <div className="flex items-center gap-2 text-gray-400">
-             <Film size={14} />
+             <FilmIcon size={14} />
              <span className="text-xs font-semibold tracking-wider">Animation</span>
            </div>
            
@@ -119,9 +119,9 @@ const LoadedAnimationControls: React.FC<AnimationControlsProps & { model: NonNul
             `}
         >
             {isPlaying ? (
-                <><Pause size={16} /> Pause</>
+                <><PauseIcon size={16} /> Pause</>
             ) : (
-                <><Play size={16} /> Play</>
+                <><PlayIcon size={16} /> Play</>
             )}
         </button>
 
@@ -141,7 +141,7 @@ const LoadedAnimationControls: React.FC<AnimationControlsProps & { model: NonNul
                         title="Cut a long take into named clips, or trim a clip's ends"
                         className={`flex items-center gap-1 text-2xs px-2 py-1 rounded bg-gray-800 hover:bg-gray-700 text-gray-400 hover:text-white transition-colors border border-gray-700 ${isLoading ? 'opacity-50 cursor-not-allowed' : ''}`}
                     >
-                        <Scissors size={10} />
+                        <ScissorsIcon size={10} />
                         <span>Cut</span>
                     </button>
                 )}
@@ -152,7 +152,7 @@ const LoadedAnimationControls: React.FC<AnimationControlsProps & { model: NonNul
                     text-gray-400 hover:text-white cursor-pointer transition-colors border border-gray-700
                     ${isLoading ? 'opacity-50 cursor-not-allowed' : ''}
                 `}>
-                    <Plus size={10} />
+                    <PlusIcon size={10} />
                     <span>Import Clips</span>
                     <input 
                         type="file" 
@@ -179,7 +179,7 @@ const LoadedAnimationControls: React.FC<AnimationControlsProps & { model: NonNul
                     `}
                 >
                     <span className="truncate flex-1 mr-2 flex items-center gap-2">
-                        <StopCircle size={12} />
+                        <StopIcon size={12} />
                         T-Pose / Reset
                     </span>
                     {!activeClip && <div className="w-1.5 h-1.5 rounded-full bg-white shadow-[0_0_6px_rgba(255,255,255,0.8)]"></div>}
@@ -187,7 +187,7 @@ const LoadedAnimationControls: React.FC<AnimationControlsProps & { model: NonNul
 
                 {allClips.length === 0 ? (
                     <div className="h-full flex flex-col items-center justify-center text-gray-600 text-xs italic gap-1 mt-4">
-                        <Film size={20} className="opacity-20" />
+                        <FilmIcon size={20} className="opacity-20" />
                         No animations found
                     </div>
                 ) : (
@@ -221,15 +221,15 @@ const LoadedAnimationControls: React.FC<AnimationControlsProps & { model: NonNul
                                 
                                 {isExternal && (
                                     <div className="flex items-center gap-1 text-2xs text-gray-500 group-hover:text-gray-400">
-                                        <CornerDownRight size={10} />
+                                        <CornerDownRightIcon size={10} />
                                         <span className="truncate">From: {item.sourceModelName}</span>
                                     </div>
                                 )}
                                 {range && (
                                     <div className="flex items-center gap-1 text-2xs text-gray-500 group-hover:text-gray-400 tabular-nums">
-                                        <Scissors size={10} />
+                                        <ScissorsIcon size={10} />
                                         <span>{item.clip.duration.toFixed(2)} s</span>
-                                        {range.loop ? <><Repeat size={10} className="ml-1" /><span>Loops</span></> : <span className="ml-1">Plays once</span>}
+                                        {range.loop ? <><LoopIcon size={10} className="ml-1" /><span>Loops</span></> : <span className="ml-1">Plays once</span>}
                                     </div>
                                 )}
                             </button>
@@ -242,7 +242,7 @@ const LoadedAnimationControls: React.FC<AnimationControlsProps & { model: NonNul
                                     aria-label={`Cut ${item.clip.name}`}
                                     className="absolute right-11 top-1/2 -translate-y-1/2 p-1 rounded text-gray-500 hover:text-white hover:bg-gray-700 opacity-0 group-hover/clip:opacity-100 focus:opacity-100 transition-opacity"
                                 >
-                                    <Scissors size={12} />
+                                    <ScissorsIcon size={12} />
                                 </button>
                             )}
                             {canMirror && (
@@ -254,7 +254,7 @@ const LoadedAnimationControls: React.FC<AnimationControlsProps & { model: NonNul
                                     aria-label={`Mirror ${item.clip.name}`}
                                     className="absolute right-6 top-1/2 -translate-y-1/2 p-1 rounded text-gray-500 hover:text-white hover:bg-gray-700 opacity-0 group-hover/clip:opacity-100 focus:opacity-100 transition-opacity"
                                 >
-                                    <FlipHorizontal2 size={12} />
+                                    <MirrorIcon size={12} />
                                 </button>
                             )}
                             </div>

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Boxes, PackagePlus, MapPin, Trash2, RefreshCw } from 'lucide-react';
+import { CubesIcon, PackagePlusIcon, PinIcon, RefreshIcon, TrashIcon } from '../UI/Icons';
 import { usePrefabs } from '../../hooks/usePrefabs';
 import { editorSession } from '../../utils/editorSession';
 import { appConfirm, appPrompt } from '../../utils/appDialogs';
@@ -56,7 +56,7 @@ export const PrefabPanel: React.FC<PrefabPanelProps> = ({
         <div className="flex flex-col h-full min-h-0">
             <div className="flex items-center justify-between p-3 border-b border-gray-800 bg-gray-950 shrink-0">
                 <span className="text-xs font-bold text-gray-300 flex items-center gap-2">
-                    <Boxes size={14} className="text-sky-400" /> Prefabs
+                    <CubesIcon size={14} className="text-sky-400" /> Prefabs
                 </span>
                 <button
                     onClick={() => void refresh()}
@@ -64,7 +64,7 @@ export const PrefabPanel: React.FC<PrefabPanelProps> = ({
                     title="Reload prefabs"
                     aria-label="Reload prefabs"
                 >
-                    <RefreshCw size={12} className={isLoading ? 'animate-spin' : ''} />
+                    <RefreshIcon size={12} className={isLoading ? 'animate-spin' : ''} />
                 </button>
             </div>
 
@@ -75,7 +75,7 @@ export const PrefabPanel: React.FC<PrefabPanelProps> = ({
                     className="w-full flex items-center justify-center gap-2 py-1.5 rounded-md text-2xs font-bold transition-all bg-sky-700 text-white hover:bg-sky-600 disabled:bg-gray-800 disabled:text-gray-500 disabled:cursor-not-allowed"
                     title={hasSelection ? 'Save the selected object and its children as a prefab' : 'Select an object first'}
                 >
-                    <PackagePlus size={12} /> Create from selection
+                    <PackagePlusIcon size={12} /> Create from selection
                 </button>
             </div>
 
@@ -90,7 +90,7 @@ export const PrefabPanel: React.FC<PrefabPanelProps> = ({
                         key={prefab.id}
                         className="group flex items-center gap-2 px-2 py-1.5 rounded bg-gray-800/40 hover:bg-gray-800 border border-transparent hover:border-gray-700"
                     >
-                        <Boxes size={12} className="text-sky-400 shrink-0" />
+                        <CubesIcon size={12} className="text-sky-400 shrink-0" />
                         <div className="flex-1 min-w-0">
                             <div className="text-xs text-gray-200 truncate" title={prefab.name}>{prefab.name}</div>
                             <div className="text-2xs text-gray-500">
@@ -103,7 +103,7 @@ export const PrefabPanel: React.FC<PrefabPanelProps> = ({
                             className="flex items-center gap-1 px-1.5 py-1 rounded text-2xs font-bold text-emerald-300 hover:text-white hover:bg-emerald-700 disabled:text-gray-600 disabled:hover:bg-transparent"
                             title={placementTarget ? 'Place at the camera target' : 'Place at the origin'}
                         >
-                            <MapPin size={11} /> Place
+                            <PinIcon size={11} /> Place
                         </button>
                         <button
                             onClick={() => void handleDelete(prefab.id, prefab.name)}
@@ -111,7 +111,7 @@ export const PrefabPanel: React.FC<PrefabPanelProps> = ({
                             title="Delete prefab"
                             aria-label={`Delete prefab ${prefab.name}`}
                         >
-                            <Trash2 size={11} />
+                            <TrashIcon size={11} />
                         </button>
                     </div>
                 ))}

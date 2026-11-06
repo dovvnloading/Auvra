@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { MessageSquare } from 'lucide-react';
+import { ChatIcon } from '../UI/Icons';
 import { useScene } from '../../context/SceneContext';
 import { dialogueProblems, normalizeDialogue } from '../../runtime/dialogue';
 import type { ComponentInspectorProps } from '../../runtime/components/types';
@@ -35,7 +35,7 @@ export const DialogueInspector: React.FC<ComponentInspectorProps> = ({ object, c
                 onClick={() => setEditing(true)}
                 className="w-full py-1.5 text-xs bg-sky-600/20 hover:bg-sky-600/30 border border-sky-500/40 rounded text-sky-200 flex items-center justify-center gap-2 transition-colors"
             >
-                <MessageSquare size={12} /> Edit Dialogue
+                <ChatIcon size={12} /> Edit Dialogue
             </button>
             {editing && (
                 <DialogueEditorModal

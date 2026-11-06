@@ -1,6 +1,6 @@
 
 import React from 'react';
-import { X, Check, AlertTriangle, Info, Loader2 } from 'lucide-react';
+import { CheckIcon, CrossIcon, InfoIcon, SpinnerIcon, WarningIcon } from './Icons';
 import { useNotification, Notification, NotificationType } from '../../context/NotificationContext';
 
 const NOTIFICATION_COLORS: Record<NotificationType, string> = {
@@ -11,10 +11,10 @@ const NOTIFICATION_COLORS: Record<NotificationType, string> = {
 };
 
 const NOTIFICATION_ICONS: Record<NotificationType, React.ReactNode> = {
-    info: <Info size={16} className="text-gray-300" />,
-    success: <Check size={16} className="text-gray-300" />,
-    error: <AlertTriangle size={16} className="text-gray-300" />,
-    loading: <Loader2 size={16} className="text-blue-400 animate-spin" />
+    info: <InfoIcon size={16} className="text-gray-300" />,
+    success: <CheckIcon size={16} className="text-gray-300" />,
+    error: <WarningIcon size={16} className="text-gray-300" />,
+    loading: <SpinnerIcon size={16} className="text-blue-400 animate-spin" />
 };
 
 const Toast: React.FC<{ notification: Notification; onDismiss: (id: string) => void }> = ({ notification, onDismiss }) => {
@@ -64,7 +64,7 @@ const Toast: React.FC<{ notification: Notification; onDismiss: (id: string) => v
                     onClick={() => onDismiss(notification.id)}
                     className="w-8 shrink-0 flex items-start justify-center pt-2 text-gray-600 hover:text-white transition-colors"
                 >
-                    <X size={14} />
+                    <CrossIcon size={14} />
                 </button>
             </div>
         </div>

@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import type * as THREE from 'three';
-import { AlertTriangle, Footprints, Plus, X } from 'lucide-react';
+import { CrossIcon, FootprintsIcon, PlusIcon, WarningIcon } from '../../UI/Icons';
 import { GraphState } from '../../../types';
 import { Select } from '../../UI/Select';
 import { motionDatabaseWhenReady } from '../../../runtime/motionDatabase';
@@ -115,7 +115,7 @@ export const MotionMatchConfig: React.FC<MotionMatchConfigProps> = ({ node, upda
     return (
         <div className="space-y-2">
             <div className="flex items-center gap-1.5 text-2xs font-bold text-gray-500">
-                <Footprints size={11} /> Clips to match from
+                <FootprintsIcon size={11} /> Clips to match from
             </div>
             {node.blendSamples.map((sample, index) => {
                 const summary = summaries?.find(entry => entry.name === sample.clipName);
@@ -133,7 +133,7 @@ export const MotionMatchConfig: React.FC<MotionMatchConfigProps> = ({ node, upda
                                 onClick={() => updateState({ blendSamples: node.blendSamples.filter((_, i) => i !== index) })}
                                 className="text-gray-500 hover:text-red-400"
                             >
-                                <X size={12} />
+                                <CrossIcon size={12} />
                             </button>
                         </div>
                         {summary && <p className="pl-1 text-2xs text-gray-500">{summary.text}</p>}
@@ -145,11 +145,11 @@ export const MotionMatchConfig: React.FC<MotionMatchConfigProps> = ({ node, upda
                 onClick={() => updateState({ blendSamples: [...node.blendSamples, { id: crypto.randomUUID(), clipName: '', position: [0, 0] }] })}
                 className="flex w-full items-center justify-center gap-1 rounded border border-gray-700 bg-gray-800 py-1 text-2xs text-gray-200 hover:bg-gray-700"
             >
-                <Plus size={10} /> Clip
+                <PlusIcon size={10} /> Clip
             </button>
             {warnings.map(warning => (
                 <p key={warning} className="flex gap-1.5 text-2xs leading-snug text-amber-300/90">
-                    <AlertTriangle size={11} className="mt-px shrink-0" /> {warning}
+                    <WarningIcon size={11} className="mt-px shrink-0" /> {warning}
                 </p>
             ))}
             <p className="text-2xs leading-snug text-gray-500">

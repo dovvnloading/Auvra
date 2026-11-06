@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Activity, Plus, X } from 'lucide-react';
+import { CrossIcon, PlusIcon, PulseIcon } from '../../UI/Icons';
 import { BlendSample, GraphState } from '../../../types';
 import { Select } from '../../UI/Select';
 import { blendSpaceTriangles } from '../utils/blending';
@@ -169,7 +169,7 @@ export const BlendStateConfig: React.FC<BlendStateConfigProps> = ({
             <div className="bg-gray-800 rounded-lg border border-gray-700 overflow-hidden">
                 <div className="p-3 bg-gray-800 border-b border-gray-700">
                     <span className="text-xs font-medium text-gray-200 flex items-center gap-2">
-                        <Activity size={12} className="text-gray-400" /> Parameters
+                        <PulseIcon size={12} className="text-gray-400" /> Parameters
                     </span>
                 </div>
                 <div className={`p-3 grid gap-3 ${is1D ? 'grid-cols-1' : 'grid-cols-2'}`}>
@@ -205,7 +205,7 @@ export const BlendStateConfig: React.FC<BlendStateConfigProps> = ({
                         }}
                         className="text-2xs px-2 py-1 bg-gray-800 hover:bg-gray-700 rounded border border-gray-700 text-gray-300 hover:text-white transition-colors flex items-center gap-1"
                     >
-                        <Plus size={10} /> Add
+                        <PlusIcon size={10} /> Add
                     </button>
                 </div>
 
@@ -242,7 +242,7 @@ export const BlendStateConfig: React.FC<BlendStateConfigProps> = ({
                                     aria-label={`Remove sample ${idx + 1}`}
                                     className="text-gray-500 hover:text-red-400 p-1"
                                 >
-                                    <X size={12} />
+                                    <CrossIcon size={12} />
                                 </button>
                             </div>
                             <div className="p-2 flex gap-2 bg-gray-900/30">

@@ -1,5 +1,5 @@
 import React, { useRef, useState } from 'react';
-import { ArrowDown, ArrowUp, Brush, Copy, Eye, EyeOff, Folder, FolderInput, Layers, PaintBucket, Plus, Sparkles, Trash2, Wand2 } from 'lucide-react';
+import { ArrowDownIcon, ArrowUpIcon, BrushIcon, BucketIcon, CopyIcon, EyeIcon, EyeOffIcon, FolderIcon, FolderMoveIcon, LayersIcon, PlusIcon, SparklesIcon, TrashIcon, WandIcon } from '../../UI/Icons';
 import { BLEND_MODES, BLEND_MODE_LABELS } from '../../../texturing/gpu/glslLibrary';
 import { OUTPUT_NODE_TYPE } from '../../../texturing/graph/nodes/io';
 import { OUTPUT_CHANNEL_LABELS, type GraphParameter, type OutputChannel, type TexParamDef } from '../../../texturing/graph/types';
@@ -177,7 +177,7 @@ export const LayerPanel: React.FC<{
     const list = (layers: readonly PaintLayer[], depth: number) => {
         for (const item of [...layers].reverse()) {
             const selected = item.id === selection.layerId;
-            const KindIcon = item.kind === 'folder' ? Folder : item.kind === 'fill' ? PaintBucket : Brush;
+            const KindIcon = item.kind === 'folder' ? FolderIcon : item.kind === 'fill' ? BucketIcon : BrushIcon;
             rows.push(
                 <div
                     key={item.id}
@@ -195,7 +195,7 @@ export const LayerPanel: React.FC<{
                     style={{ paddingLeft: 6 + depth * 14 }}
                 >
                     <button aria-label={item.visible ? `Hide ${item.name}` : `Show ${item.name}`} onClick={(event) => { event.stopPropagation(); changeLayer(item.id, (current) => ({ ...current, visible: !current.visible }), 'Show or hide layer'); }}
-                        className="rounded p-0.5 text-zinc-500 hover:text-zinc-200">{item.visible ? <Eye size={12} /> : <EyeOff size={12} />}</button>
+                        className="rounded p-0.5 text-zinc-500 hover:text-zinc-200">{item.visible ? <EyeIcon size={12} /> : <EyeOffIcon size={12} />}</button>
                     <KindIcon size={12} className={item.kind === 'fill' ? 'text-amber-400/80' : item.kind === 'folder' ? 'text-zinc-400' : 'text-sky-400/80'} />
                     <span className="min-w-0 flex-1 truncate">{item.name}</span>
                     {item.mask?.length ? (
@@ -212,9 +212,9 @@ export const LayerPanel: React.FC<{
     const smartMenu = (
         <div className="max-h-[420px] space-y-2 overflow-y-auto p-2">
             <div className="grid grid-cols-3 gap-1">
-                <button onClick={() => add(newPaintLayer(document), 'Add paint layer')} className="flex flex-col items-center gap-1 rounded border border-zinc-800 p-2 text-2xs text-zinc-200 hover:bg-zinc-800"><Brush size={14} /> Paint</button>
-                <button onClick={() => add(newFillLayer(document), 'Add fill layer')} className="flex flex-col items-center gap-1 rounded border border-zinc-800 p-2 text-2xs text-zinc-200 hover:bg-zinc-800"><PaintBucket size={14} /> Fill</button>
-                <button onClick={() => add(newFolder(), 'Add folder')} className="flex flex-col items-center gap-1 rounded border border-zinc-800 p-2 text-2xs text-zinc-200 hover:bg-zinc-800"><Folder size={14} /> Folder</button>
+                <button onClick={() => add(newPaintLayer(document), 'Add paint layer')} className="flex flex-col items-center gap-1 rounded border border-zinc-800 p-2 text-2xs text-zinc-200 hover:bg-zinc-800"><BrushIcon size={14} /> Paint</button>
+                <button onClick={() => add(newFillLayer(document), 'Add fill layer')} className="flex flex-col items-center gap-1 rounded border border-zinc-800 p-2 text-2xs text-zinc-200 hover:bg-zinc-800"><BucketIcon size={14} /> Fill</button>
+                <button onClick={() => add(newFolder(), 'Add folder')} className="flex flex-col items-center gap-1 rounded border border-zinc-800 p-2 text-2xs text-zinc-200 hover:bg-zinc-800"><FolderIcon size={14} /> Folder</button>
             </div>
             <div className="px-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Smart materials</div>
             {SMART_MATERIALS.map((material) => (
@@ -226,7 +226,7 @@ export const LayerPanel: React.FC<{
             {graphs.length > 0 && <div className="px-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Texture graphs in this project</div>}
             {graphs.map((graph) => (
                 <button key={graph.id} onClick={() => { const entry = resolve(graph.id); if (entry) add(graphMaterialLayer(document, graph.id, graph.name, entry.graph), `Add ${graph.name}`); }}
-                    className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-zinc-100 hover:bg-zinc-800"><Sparkles size={12} className="text-amber-400/80" /> {graph.name}</button>
+                    className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-zinc-100 hover:bg-zinc-800"><SparklesIcon size={12} className="text-amber-400/80" /> {graph.name}</button>
             ))}
         </div>
     );
@@ -234,24 +234,24 @@ export const LayerPanel: React.FC<{
     return (
         <div className="flex min-h-0 flex-1 flex-col">
             <div className="flex items-center gap-1 border-b border-zinc-800 px-2 py-1.5">
-                <Layers size={13} className="text-zinc-500" />
+                <LayersIcon size={13} className="text-zinc-500" />
                 <span className="flex-1 text-xs font-semibold text-zinc-300">Layers</span>
-                <button ref={addButton} onClick={() => setAddMenu(true)} className="flex items-center gap-1 rounded bg-zinc-800 px-2 py-0.5 text-2xs text-zinc-200 hover:bg-zinc-700"><Plus size={11} /> Add</button>
+                <button ref={addButton} onClick={() => setAddMenu(true)} className="flex items-center gap-1 rounded bg-zinc-800 px-2 py-0.5 text-2xs text-zinc-200 hover:bg-zinc-700"><PlusIcon size={11} /> Add</button>
                 <Popover anchor={addButton} open={addMenu} onClose={() => setAddMenu(false)} width={300} label="Add a layer">{smartMenu}</Popover>
             </div>
             <div className="max-h-[38%] min-h-[80px] overflow-y-auto">{rows}</div>
             {layer && (
                 <div className="flex items-center gap-0.5 border-y border-zinc-800 px-1 py-0.5">
-                    <IconButton label="Move up" onClick={() => nudge(layer.id, 1)}><ArrowUp size={12} /></IconButton>
-                    <IconButton label="Move down" onClick={() => nudge(layer.id, -1)}><ArrowDown size={12} /></IconButton>
-                    <IconButton label="Duplicate" onClick={() => duplicate(layer)}><Copy size={12} /></IconButton>
+                    <IconButton label="Move up" onClick={() => nudge(layer.id, 1)}><ArrowUpIcon size={12} /></IconButton>
+                    <IconButton label="Move down" onClick={() => nudge(layer.id, -1)}><ArrowDownIcon size={12} /></IconButton>
+                    <IconButton label="Duplicate" onClick={() => duplicate(layer)}><CopyIcon size={12} /></IconButton>
                     <IconButton label="Put into a new folder" onClick={() => {
                         const folder = newFolder(`${layer.name} folder`, [layer]);
                         change(mapLayer(document.layers, layer.id, () => folder), 'Put into folder');
                         onSelect({ layerId: folder.id, effectId: null });
-                    }}><FolderInput size={12} /></IconButton>
+                    }}><FolderMoveIcon size={12} /></IconButton>
                     <span className="flex-1" />
-                    <button ref={maskButton} onClick={() => setMaskMenu(true)} className="rounded px-1.5 py-0.5 text-2xs text-zinc-300 hover:bg-zinc-800"><Wand2 size={11} className="mr-1 inline" />Mask</button>
+                    <button ref={maskButton} onClick={() => setMaskMenu(true)} className="rounded px-1.5 py-0.5 text-2xs text-zinc-300 hover:bg-zinc-800"><WandIcon size={11} className="mr-1 inline" />Mask</button>
                     <Popover anchor={maskButton} open={maskMenu} onClose={() => setMaskMenu(false)} width={280} label="Add to the mask">
                         <div className="space-y-1 p-2 text-xs">
                             <button onClick={() => addMask([{ id: paintId('m'), kind: 'paint', enabled: true, blend: 'replace', opacity: 1, value: 0 }], 'Add black mask')} className="block w-full rounded px-2 py-1 text-left text-zinc-100 hover:bg-zinc-800">Black mask: paint to show the layer</button>
@@ -269,7 +269,7 @@ export const LayerPanel: React.FC<{
                             ))}
                         </div>
                     </Popover>
-                    <IconButton label="Delete layer" onClick={() => { changeLayer(layer.id, () => null, 'Delete layer'); onSelect({ layerId: null, effectId: null }); }}><Trash2 size={12} /></IconButton>
+                    <IconButton label="Delete layer" onClick={() => { changeLayer(layer.id, () => null, 'Delete layer'); onSelect({ layerId: null, effectId: null }); }}><TrashIcon size={12} /></IconButton>
                 </div>
             )}
             <div className="min-h-0 flex-1 overflow-y-auto p-2.5">
@@ -347,7 +347,7 @@ const LayerSettings: React.FC<{
                     <input type="checkbox" checked={effect.enabled} onChange={(event) => setEffect({ enabled: event.target.checked }, 'Turn mask effect on or off')} className="accent-sky-500" aria-label="On" />
                     <span className="flex-1 text-2xs font-semibold text-zinc-200">{effect.kind === 'generator' ? (resolve(effect.graphId ?? '')?.name ?? 'Smart mask') : MASK_KIND_LABELS[effect.kind]}</span>
                     {effect.kind === 'paint' && <span className={`text-[10px] ${active ? 'text-sky-300' : 'text-zinc-500'}`}>{active ? 'Painting here' : 'Click to paint'}</span>}
-                    <button aria-label="Remove effect" onClick={(event) => { event.stopPropagation(); update({ mask: (layer.mask ?? []).filter((_, i) => i !== index) }, 'Remove mask effect'); }} className="rounded p-0.5 text-zinc-500 hover:text-red-400"><Trash2 size={11} /></button>
+                    <button aria-label="Remove effect" onClick={(event) => { event.stopPropagation(); update({ mask: (layer.mask ?? []).filter((_, i) => i !== index) }, 'Remove mask effect'); }} className="rounded p-0.5 text-zinc-500 hover:text-red-400"><TrashIcon size={11} /></button>
                 </div>
                 {effect.kind !== 'levels' && effect.kind !== 'invert' && effect.kind !== 'blur' && (
                     <Select value={effect.blend} options={[...MASK_BLENDS]} onChange={(blend) => setEffect({ blend: blend as MaskBlend }, 'Change mask blend')} className="w-full" />

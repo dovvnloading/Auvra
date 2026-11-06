@@ -1,5 +1,5 @@
 import React, { useSyncExternalStore } from 'react';
-import { Check, Grid3x3, Package, RotateCw, Scissors, Wand2, X } from 'lucide-react';
+import { CheckIcon, CrossIcon, GridIcon, PackageIcon, RotateIcon, ScissorsIcon, WandIcon } from '../../UI/Icons';
 import { Button, Segmented, Spinner } from '../../UI/kit';
 import type { UvSession, UvStats } from './uvSession';
 
@@ -47,10 +47,10 @@ export const UvPanel: React.FC<{ uv: UvSession; onSeamTool: () => void; onApplie
                 <Row label="Piece curvature" value={set.coneAngle} min={20} max={110} suffix="°" onChange={(coneAngle) => { uv.unwrapSettings = { ...set, coneAngle }; touchVersion(uv); }} />
                 <Row label="Stretch allowed" value={set.stretchLimit} min={1.1} max={4} step={0.05} onChange={(stretchLimit) => { uv.unwrapSettings = { ...set, stretchLimit }; touchVersion(uv); }} />
                 <div className="grid grid-cols-2 gap-1.5">
-                    <Button size="sm" disabled={busy} icon={<Wand2 size={12} />} onClick={() => uv.unwrapAuto(false)}>Unwrap afresh</Button>
-                    <Button size="sm" disabled={busy} icon={<Wand2 size={12} />} onClick={() => uv.unwrapAuto(true)}>Unwrap, keep seams</Button>
-                    <Button size="sm" disabled={busy} icon={<Scissors size={12} />} onClick={onSeamTool}>Seam tool</Button>
-                    <Button size="sm" disabled={busy} icon={<Scissors size={12} />} onClick={() => uv.unwrapWithSeams()}>Unwrap these seams</Button>
+                    <Button size="sm" disabled={busy} icon={<WandIcon size={12} />} onClick={() => uv.unwrapAuto(false)}>Unwrap afresh</Button>
+                    <Button size="sm" disabled={busy} icon={<WandIcon size={12} />} onClick={() => uv.unwrapAuto(true)}>Unwrap, keep seams</Button>
+                    <Button size="sm" disabled={busy} icon={<ScissorsIcon size={12} />} onClick={onSeamTool}>Seam tool</Button>
+                    <Button size="sm" disabled={busy} icon={<ScissorsIcon size={12} />} onClick={() => uv.unwrapWithSeams()}>Unwrap these seams</Button>
                 </div>
             </section>
 
@@ -66,22 +66,22 @@ export const UvPanel: React.FC<{ uv: UvSession; onSeamTool: () => void; onApplie
                     <Segmented value={`${pack.tilesX}x${pack.tilesY}`} options={[{ value: '1x1', label: 'One' }, { value: '2x1', label: '2' }, { value: '2x2', label: '4' }, { value: '4x2', label: '8' }]}
                         onChange={(value) => { const [x, y] = value.split('x').map(Number); uv.packSettings = { ...pack, tilesX: x, tilesY: y }; touchVersion(uv); }} label="UDIM tiles" />
                 </div>
-                <Button size="sm" className="w-full justify-center" disabled={busy} icon={<Package size={12} />} onClick={touch}>{uv.proposal ? 'Pack again' : 'Pack the current islands'}</Button>
+                <Button size="sm" className="w-full justify-center" disabled={busy} icon={<PackageIcon size={12} />} onClick={touch}>{uv.proposal ? 'Pack again' : 'Pack the current islands'}</Button>
                 <p className="text-2xs leading-snug text-zinc-500">Every island gets the same texel density, follows its size on the model, and is turned to its tightest box. In the UV view, drag islands to move them, R turns the selected ones, + and − scale them.</p>
             </section>
 
             {uv.proposal && (
                 <section className="space-y-2">
                     <div className="flex gap-1.5">
-                        <Button variant="primary" className="flex-1 justify-center" disabled={busy} icon={busy ? <Spinner /> : <Check size={13} />} onClick={() => void uv.apply().then(onApplied)}>{uv.busy ?? 'Use this layout'}</Button>
-                        <Button disabled={busy} icon={<X size={13} />} onClick={() => uv.discard()}>Discard</Button>
+                        <Button variant="primary" className="flex-1 justify-center" disabled={busy} icon={busy ? <Spinner /> : <CheckIcon size={13} />} onClick={() => void uv.apply().then(onApplied)}>{uv.busy ?? 'Use this layout'}</Button>
+                        <Button disabled={busy} icon={<CrossIcon size={13} />} onClick={() => uv.discard()}>Discard</Button>
                     </div>
                     <p className="text-2xs leading-snug text-zinc-500">The model's meshes are split along the new seams and saved with the project. Its own pictures and every painted layer are carried over, so it looks the same.</p>
                 </section>
             )}
             {busy && !uv.proposal && <p className="flex items-center gap-2 text-2xs text-zinc-400"><Spinner /> {uv.busy}</p>}
             {uv.status && <p className="text-2xs text-sky-300">{uv.status}</p>}
-            <p className="flex items-center gap-1 text-2xs text-zinc-600"><Grid3x3 size={11} /><RotateCw size={11} /> Show “UV checker” or “UV stretch” to judge a layout on the model.</p>
+            <p className="flex items-center gap-1 text-2xs text-zinc-600"><GridIcon size={11} /><RotateIcon size={11} /> Show “UV checker” or “UV stretch” to judge a layout on the model.</p>
         </div>
     );
 };

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { AlertTriangle, Maximize, MessageSquarePlus, Plus, Redo2, Undo2 } from 'lucide-react';
+import { CommentAddIcon, FrameIcon, PlusIcon, RedoIcon, UndoIcon, WarningIcon } from '../UI/Icons';
 import { OUTPUT_NODE_TYPE } from '../../texturing/graph/nodes/io';
 import { textureNodeDefinition, type GraphResolver } from '../../texturing/graph/registry';
 import { OUTPUT_CHANNEL_LABELS, type OutputChannel, type PortKind, type TexGraphNode, type TexNodeDef, type TextureGraph } from '../../texturing/graph/types';
@@ -448,7 +448,7 @@ export const TextureGraphCanvas: React.FC<TextureGraphCanvasProps> = ({
                 <div className="flex items-center gap-1 rounded-t-md px-1.5 text-2xs font-semibold text-white" style={{ height: HEADER, background: tint }}>
                     <span className="truncate">{label}</span>
                     <span className="flex-1" />
-                    {error && <AlertTriangle size={11} className="shrink-0 text-red-200" />}
+                    {error && <WarningIcon size={11} className="shrink-0 text-red-200" />}
                     {state && !error && state.milliseconds >= 20 && <span className="shrink-0 font-mono text-[9px] font-normal text-white/70">{Math.round(state.milliseconds)}ms</span>}
                 </div>
                 <div className="relative flex items-center justify-center" style={{ height: body }}>
@@ -517,15 +517,15 @@ export const TextureGraphCanvas: React.FC<TextureGraphCanvasProps> = ({
                 </div>
             </div>
             <div className="absolute left-2 top-2 flex items-center gap-1 rounded-md border border-zinc-800 bg-zinc-900/90 p-1 shadow">
-                <IconButton label="Add a node" shortcut="Space" onClick={() => { const box = root.current!.getBoundingClientRect(); openPalette(box.left + box.width / 2, box.top + box.height / 2); }}><Plus size={14} /></IconButton>
-                <IconButton label="Undo" shortcut="Ctrl+Z" disabled={!canUndo} onClick={onUndo}><Undo2 size={14} /></IconButton>
-                <IconButton label="Redo" shortcut="Ctrl+Y" disabled={!canRedo} onClick={onRedo}><Redo2 size={14} /></IconButton>
-                <IconButton label="Frame" shortcut="F" onClick={() => frame(selection.size ? selection : undefined)}><Maximize size={14} /></IconButton>
+                <IconButton label="Add a node" shortcut="Space" onClick={() => { const box = root.current!.getBoundingClientRect(); openPalette(box.left + box.width / 2, box.top + box.height / 2); }}><PlusIcon size={14} /></IconButton>
+                <IconButton label="Undo" shortcut="Ctrl+Z" disabled={!canUndo} onClick={onUndo}><UndoIcon size={14} /></IconButton>
+                <IconButton label="Redo" shortcut="Ctrl+Y" disabled={!canRedo} onClick={onRedo}><RedoIcon size={14} /></IconButton>
+                <IconButton label="Frame" shortcut="F" onClick={() => frame(selection.size ? selection : undefined)}><FrameIcon size={14} /></IconButton>
                 <IconButton label="Comment the selection" shortcut="C" disabled={!selection.size} onClick={() => {
                     const comment = createComment(graph.nodes.filter((node) => selection.has(node.id)).map((node) => nodeRect(node, definition(node))), pointer);
                     onChange({ ...graph, comments: [...(graph.comments ?? []), comment] }, true);
                     onSelect([], comment.id);
-                }}><MessageSquarePlus size={14} /></IconButton>
+                }}><CommentAddIcon size={14} /></IconButton>
             </div>
             <div className="pointer-events-none absolute bottom-2 left-2 rounded bg-zinc-900/80 px-2 py-1 text-2xs text-zinc-400">
                 {session.busy ? 'Drawing…' : `${graph.nodes.length} nodes · drew ${session.lastRun.nodes} in ${Math.round(session.lastRun.milliseconds)} ms`}

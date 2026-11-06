@@ -1,7 +1,7 @@
 
 import React, { useCallback, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
-import { Box, Move, RotateCw, Scaling, Trash2, X, RotateCcw, Skull, Timer, Users, UserPlus, Hash, Music, Volume2, Radio, Ear, Repeat, VolumeX, Mountain, Layers, Plus, CircleDashed, Hammer, ArrowUp, ArrowDown, Minus, Activity, Wind, AlertTriangle, Grid, Sun, CloudFog, PersonStanding, Puzzle, GitBranch, Boxes, Brush, Route } from 'lucide-react';
+import { BranchIcon, CrossIcon, CubeIcon, CubesIcon, FogIcon, HashIcon, LayersIcon, LoopIcon, MountainIcon, MoveIcon, MusicIcon, MuteIcon, PersonIcon, PlusIcon, PuzzleIcon, RadioIcon, ResetIcon, RotateIcon, RouteIcon, ScaleIcon, SkullIcon, SunIcon, TimerIcon, TrashIcon, UserPlusIcon, UsersIcon, VolumeIcon, WarningIcon, WindIcon } from '../../UI/Icons';
 import { EditorState } from '../types';
 import { useAssets } from '../../../context/AssetContext';
 import { useGameContent } from '../../../runtime/GameContentContext';
@@ -127,7 +127,7 @@ const TransformFields: React.FC<{
     return (
         <div className="space-y-3 pt-2 border-t border-gray-800/50">
             <div className="flex items-center justify-between">
-                <div className={SECTION_TITLE}><Move size={12} /> Transform</div>
+                <div className={SECTION_TITLE}><MoveIcon size={12} /> Transform</div>
                 {object.parentId && <span className="text-2xs text-gray-500">Local to parent</span>}
             </div>
             <div className="space-y-1">
@@ -146,7 +146,7 @@ const TransformFields: React.FC<{
                 </div>
             </div>
             <div className="space-y-1">
-                <div className="text-2xs text-gray-400 flex items-center gap-1"><RotateCw size={10} /> Rotation (Degrees)</div>
+                <div className="text-2xs text-gray-400 flex items-center gap-1"><RotateIcon size={10} /> Rotation (Degrees)</div>
                 {/* LevelObject.rotation is stored in radians; degrees are presentation only. */}
                 <div className="grid grid-cols-3 gap-1">
                     {AXES.map((axis, i) => (
@@ -166,7 +166,7 @@ const TransformFields: React.FC<{
             </div>
             {showScale && (
                 <div className="space-y-1">
-                    <div className="text-2xs text-gray-400 flex items-center gap-1"><Scaling size={10} /> Scale</div>
+                    <div className="text-2xs text-gray-400 flex items-center gap-1"><ScaleIcon size={10} /> Scale</div>
                     <div className="grid grid-cols-3 gap-1">
                         {AXES.map((axis, i) => (
                             <ScrubbableInput
@@ -212,7 +212,7 @@ const ParentField: React.FC<{
 
     return (
         <div className="space-y-1">
-            <label className={SECTION_TITLE}><GitBranch size={12} /> Parent</label>
+            <label className={SECTION_TITLE}><BranchIcon size={12} /> Parent</label>
             <select
                 value={current}
                 onChange={(e) => onReparent(e.target.value || null)}
@@ -409,7 +409,7 @@ const ComponentsSection: React.FC<{
 
     return (
         <div className="space-y-3 pt-2 border-t border-gray-800/50">
-            <div className={SECTION_TITLE}><Puzzle size={12} /> Components</div>
+            <div className={SECTION_TITLE}><PuzzleIcon size={12} /> Components</div>
 
             {components.length === 0 && (
                 <div className="text-2xs text-gray-500 italic">No components. Add one to give this object lights or behaviour.</div>
@@ -436,7 +436,7 @@ const ComponentsSection: React.FC<{
                                 title="Remove component"
                                 aria-label={`Remove ${definition?.label ?? component.type}`}
                             >
-                                <Trash2 size={12} />
+                                <TrashIcon size={12} />
                             </button>
                         </div>
                         <div className="p-2 space-y-2">
@@ -478,7 +478,7 @@ const ComponentsSection: React.FC<{
                     aria-expanded={menuOpen}
                     aria-haspopup="menu"
                 >
-                    <Plus size={12} /> Add Component
+                    <PlusIcon size={12} /> Add Component
                 </button>
                 {menuOpen && (
                     <div role="menu" className="mt-1 rounded border border-gray-700 bg-gray-950 shadow-xl overflow-hidden">
@@ -582,16 +582,16 @@ const MultiSelectionInspector: React.FC<{
             <div className="w-72 bg-gray-900 border-l border-gray-800 flex flex-col shrink-0 z-20 shadow-xl animate-in slide-in-from-right-10 duration-200 h-full" {...edits.panelHandlers}>
                 <div className="flex border-b border-gray-800 bg-gray-950 justify-between items-center p-3 shrink-0">
                     <span className="text-xs font-bold text-gray-300 flex items-center gap-2">
-                        <Boxes size={14} className="text-blue-400" /> {selection.length} Objects Selected
+                        <CubesIcon size={14} className="text-blue-400" /> {selection.length} Objects Selected
                     </span>
                     <button onClick={onClear} className="text-gray-500 hover:text-white transition-colors" title="Clear Selection">
-                        <X size={14} />
+                        <CrossIcon size={14} />
                     </button>
                 </div>
 
                 <div className="p-4 space-y-6 overflow-y-auto custom-scrollbar flex-1">
                     <div className="space-y-1">
-                        <div className={SECTION_TITLE}><Layers size={12} /> Selection</div>
+                        <div className={SECTION_TITLE}><LayersIcon size={12} /> Selection</div>
                         <ul className="space-y-0.5">
                             {shown.map(object => (
                                 <li key={object.id} className="flex items-center justify-between text-2xs text-gray-300 bg-gray-800/40 rounded px-2 py-1">
@@ -611,7 +611,7 @@ const MultiSelectionInspector: React.FC<{
                     </div>
 
                     <div className="space-y-3 pt-2 border-t border-gray-800/50">
-                        <div className={SECTION_TITLE}><Move size={12} /> Shared Transform</div>
+                        <div className={SECTION_TITLE}><MoveIcon size={12} /> Shared Transform</div>
                         <div className="space-y-1">
                             <div className="text-2xs text-gray-400">Move By (World)</div>
                             <div className="flex gap-1">
@@ -650,7 +650,7 @@ const MultiSelectionInspector: React.FC<{
                             onClick={() => onDelete(selection.map(o => o.id))}
                             className="w-full py-2 bg-red-900/20 hover:bg-red-900/40 text-red-400 border border-red-900/50 rounded text-xs font-bold transition-colors flex items-center justify-center gap-2"
                         >
-                            <Trash2 size={14} /> Delete {selection.length} Objects
+                            <TrashIcon size={14} /> Delete {selection.length} Objects
                         </button>
                     </div>
                 </div>
@@ -741,16 +741,16 @@ export const EnvironmentInspector: React.FC<EnvironmentInspectorProps> = ({ stat
                     {/* Header */}
                     <div className="flex border-b border-gray-800 bg-gray-950 justify-between items-center p-3 shrink-0">
                         <span className="text-xs font-bold text-gray-300 flex items-center gap-2">
-                            {isSpawner ? <Skull size={14} className="text-red-400"/> :
-                             isAudio ? <Music size={14} className="text-amber-400"/> :
-                             isTerrain ? <Mountain size={14} className="text-amber-500" /> :
-                             isSky ? <Sun size={14} className="text-cyan-400" /> :
-                             isPlayerStart ? <PersonStanding size={14} className="text-green-400" /> :
-                             <Box size={14} className="text-blue-400"/>}
+                            {isSpawner ? <SkullIcon size={14} className="text-red-400"/> :
+                             isAudio ? <MusicIcon size={14} className="text-amber-400"/> :
+                             isTerrain ? <MountainIcon size={14} className="text-amber-500" /> :
+                             isSky ? <SunIcon size={14} className="text-cyan-400" /> :
+                             isPlayerStart ? <PersonIcon size={14} className="text-green-400" /> :
+                             <CubeIcon size={14} className="text-blue-400"/>}
                             {isSpawner ? 'Spawner Config' : (isAudio ? 'Audio Config' : (isTerrain ? 'Terrain Props' : (isSky ? 'Sky Atmosphere' : (isPlayerStart ? 'Player Start' : 'Object Inspector'))))}
                         </span>
                         <button onClick={() => actions.setSelectedObjectId(null)} className="text-gray-500 hover:text-white transition-colors" title="Deselect Object">
-                            <X size={14} />
+                            <CrossIcon size={14} />
                         </button>
                     </div>
 
@@ -798,7 +798,7 @@ export const EnvironmentInspector: React.FC<EnvironmentInspectorProps> = ({ stat
                                 <div className="space-y-2">
                                     <div className="flex justify-between items-center">
                                         <span className="text-2xs font-bold text-cyan-400 flex items-center gap-1.5">
-                                            <Timer size={12} /> Time of Day
+                                            <TimerIcon size={12} /> Time of Day
                                         </span>
                                         <span className="text-2xs font-mono text-white">
                                             {Math.floor(selectedObject.skyConfig.timeOfDay)}:{Math.floor((selectedObject.skyConfig.timeOfDay % 1) * 60).toString().padStart(2, '0')}
@@ -835,7 +835,7 @@ export const EnvironmentInspector: React.FC<EnvironmentInspectorProps> = ({ stat
                                 {/* Atmosphere: the analytic sky's own controls */}
                                 {skyModel(selectedObject.skyConfig) === 'classic' && <div className="space-y-2">
                                     <div className="text-2xs font-bold text-gray-500 flex items-center gap-1.5">
-                                        <Wind size={12} /> Atmosphere
+                                        <WindIcon size={12} /> Atmosphere
                                     </div>
                                     <div className="grid grid-cols-2 gap-2">
                                         <ScrubbableInput
@@ -868,7 +868,7 @@ export const EnvironmentInspector: React.FC<EnvironmentInspectorProps> = ({ stat
                                 {/* Lighting & Fog */}
                                 <div className="space-y-2">
                                     <div className="text-2xs font-bold text-gray-500 flex items-center gap-1.5">
-                                        <Sun size={12} /> Light & Fog
+                                        <SunIcon size={12} /> Light & Fog
                                     </div>
                                     <div className="space-y-2 bg-gray-800 p-2 rounded border border-gray-700">
                                         <div className="flex items-center justify-between">
@@ -894,7 +894,7 @@ export const EnvironmentInspector: React.FC<EnvironmentInspectorProps> = ({ stat
                                         <div className="h-px bg-gray-700 my-1" />
 
                                         <div className="flex items-center justify-between">
-                                            <span className="text-2xs text-gray-400 flex items-center gap-1"><CloudFog size={10}/> Fog Density</span>
+                                            <span className="text-2xs text-gray-400 flex items-center gap-1"><FogIcon size={10}/> Fog Density</span>
                                             <div className="w-16">
                                                 <ScrubbableInput label="" value={selectedObject.skyConfig.fogDensity} onChange={(v) => scrubUpdate({ skyConfig: { ...selectedObject.skyConfig!, fogDensity: Math.max(0, v) } })} step={0.001} labelWidth="w-0" />
                                             </div>
@@ -911,7 +911,7 @@ export const EnvironmentInspector: React.FC<EnvironmentInspectorProps> = ({ stat
                                     onClick={() => commitUpdate({ skyConfig: newSkyConfig() })}
                                     className="w-full py-2 text-xs bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded text-gray-400 flex items-center justify-center gap-2 transition-colors"
                                 >
-                                    <RotateCcw size={12} /> Reset to Default
+                                    <ResetIcon size={12} /> Reset to Default
                                 </button>
                             </div>
                         )}
@@ -926,11 +926,11 @@ export const EnvironmentInspector: React.FC<EnvironmentInspectorProps> = ({ stat
                                 <div className="space-y-4 pt-2 border-t border-gray-800/50">
                                     <div className="space-y-3 bg-red-950/20 p-3 rounded border border-red-900/30">
                                         <div className="flex items-center gap-2 text-xs font-bold text-red-400 ">
-                                            <Users size={12} /> Spawning
+                                            <UsersIcon size={12} /> Spawning
                                         </div>
                                         <div className="space-y-1">
                                             <label className="text-2xs font-medium text-gray-400 flex items-center gap-1.5">
-                                                <UserPlus size={10} /> Enemy
+                                                <UserPlusIcon size={10} /> Enemy
                                             </label>
                                             <select
                                                 value={missing ? '' : spawn.blueprintId}
@@ -945,7 +945,7 @@ export const EnvironmentInspector: React.FC<EnvironmentInspectorProps> = ({ stat
                                             </select>
                                             {!spawn.blueprintId || missing ? (
                                                 <p className="text-2xs text-amber-400 flex items-start gap-1.5 pt-1">
-                                                    <AlertTriangle size={10} className="shrink-0 mt-0.5" />
+                                                    <WarningIcon size={10} className="shrink-0 mt-0.5" />
                                                     {enemies.length
                                                         ? 'Choose an enemy. The spawner creates nothing until one is set.'
                                                         : 'Create an Enemy blueprint in the Blueprints tab, then choose it here.'}
@@ -968,7 +968,7 @@ export const EnvironmentInspector: React.FC<EnvironmentInspectorProps> = ({ stat
                                         </div>
                                         <div className="space-y-1">
                                             <label className="text-2xs font-medium text-gray-400 flex items-center gap-1.5">
-                                                <Route size={10} /> Patrol Path
+                                                <RouteIcon size={10} /> Patrol Path
                                             </label>
                                             <select
                                                 aria-label="Patrol Path"
@@ -983,7 +983,7 @@ export const EnvironmentInspector: React.FC<EnvironmentInspectorProps> = ({ stat
                                             </select>
                                         </div>
                                         <p className="text-2xs text-gray-500 leading-relaxed flex items-start gap-1.5">
-                                            <Hash size={10} className="shrink-0 mt-0.5" />
+                                            <HashIcon size={10} className="shrink-0 mt-0.5" />
                                             {spawn.maxSpawns > 0
                                                 ? `Spawns one enemy every ${spawn.interval} s around this point, ${spawn.maxSpawns} in all.`
                                                 : `Spawns one enemy every ${spawn.interval} s around this point, with no limit (Max 0).`}
@@ -998,13 +998,13 @@ export const EnvironmentInspector: React.FC<EnvironmentInspectorProps> = ({ stat
                             <div className="space-y-4 pt-2 border-t border-gray-800/50">
                                 <div className="space-y-3 bg-amber-950/20 p-3 rounded border border-amber-900/30">
                                     <div className="flex items-center gap-2 text-xs font-bold text-amber-400 ">
-                                        <Volume2 size={12} /> Sound Properties
+                                        <VolumeIcon size={12} /> Sound Properties
                                     </div>
 
                                     {/* Audio File Selector */}
                                     <div className="space-y-1">
                                         <label className="text-2xs font-medium text-gray-400 flex items-center gap-1.5">
-                                            <Music size={10} /> Source File
+                                            <MusicIcon size={10} /> Source File
                                         </label>
                                         <select
                                             value={selectedObject.audioConfig?.audioId || ''}
@@ -1050,7 +1050,7 @@ export const EnvironmentInspector: React.FC<EnvironmentInspectorProps> = ({ stat
                                     {/* Mute Toggle */}
                                     <div className="flex items-center justify-between bg-gray-900 p-2 rounded border border-gray-800">
                                         <span className="text-2xs text-gray-400 font-bold flex items-center gap-1.5">
-                                            <VolumeX size={10} /> Mute
+                                            <MuteIcon size={10} /> Mute
                                         </span>
                                         <input
                                             type="checkbox"
@@ -1065,7 +1065,7 @@ export const EnvironmentInspector: React.FC<EnvironmentInspectorProps> = ({ stat
                                     {/* Spatial Toggle */}
                                     <div className="flex items-center justify-between bg-gray-900 p-2 rounded border border-gray-800">
                                         <span className="text-2xs text-gray-400 font-bold flex items-center gap-1.5">
-                                            <Radio size={10} /> 3D Spatial
+                                            <RadioIcon size={10} /> 3D Spatial
                                         </span>
                                         <input
                                             type="checkbox"
@@ -1080,7 +1080,7 @@ export const EnvironmentInspector: React.FC<EnvironmentInspectorProps> = ({ stat
                                     {/* Loop Toggle */}
                                     <div className="flex items-center justify-between bg-gray-900 p-2 rounded border border-gray-800">
                                         <span className="text-2xs text-gray-400 font-bold flex items-center gap-1.5">
-                                            <Repeat size={10} /> Loop
+                                            <LoopIcon size={10} /> Loop
                                         </span>
                                         <input
                                             type="checkbox"
@@ -1112,7 +1112,7 @@ export const EnvironmentInspector: React.FC<EnvironmentInspectorProps> = ({ stat
                                 }}
                                 className="w-full py-2 bg-red-900/20 hover:bg-red-900/40 text-red-400 border border-red-900/50 rounded text-xs font-bold transition-colors flex items-center justify-center gap-2"
                             >
-                                <Trash2 size={14} /> Delete Object
+                                <TrashIcon size={14} /> Delete Object
                             </button>
                         </div>
                     </div>

@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { Loader2, Sun, X } from 'lucide-react';
+import { CrossIcon, SpinnerIcon, SunIcon } from '../UI/Icons';
 import { useLevel } from '../../context/LevelContext';
 import { editorSession } from '../../utils/editorSession';
 import { projectService } from '../../utils/projectService';
@@ -141,7 +141,7 @@ export const BakedLightingSection: React.FC<{ levelId: string | null }> = ({ lev
         <div className="shrink-0 border-t border-gray-800 bg-gray-950 p-3 space-y-2">
             <div className="flex items-center justify-between">
                 <span className="text-xs font-bold text-gray-300 flex items-center gap-2">
-                    <Sun size={14} className="text-amber-400" /> Baked Lighting
+                    <SunIcon size={14} className="text-amber-400" /> Baked Lighting
                 </span>
                 {probes && !bakingThis && (
                     <span className={`text-2xs ${outOfDate ? 'text-amber-400' : 'text-gray-500'}`} title={probes.bakedAt}>
@@ -165,7 +165,7 @@ export const BakedLightingSection: React.FC<{ levelId: string | null }> = ({ lev
             {bakingThis ? (
                 <div className="space-y-1">
                     <div className="flex items-center justify-between text-2xs text-gray-400">
-                        <span className="flex items-center gap-1"><Loader2 size={10} className="animate-spin" /> {stage}</span>
+                        <span className="flex items-center gap-1"><SpinnerIcon size={10} className="animate-spin" /> {stage}</span>
                         <span>{fraction}%</span>
                     </div>
                     <div className="h-1.5 rounded bg-gray-800 overflow-hidden">
@@ -176,7 +176,7 @@ export const BakedLightingSection: React.FC<{ levelId: string | null }> = ({ lev
                         className="w-full flex items-center justify-center gap-1 py-1 rounded text-2xs text-gray-300 bg-gray-800 hover:bg-gray-700"
                         aria-label="Cancel light bake"
                     >
-                        <X size={11} /> Cancel
+                        <CrossIcon size={11} /> Cancel
                     </button>
                 </div>
             ) : (

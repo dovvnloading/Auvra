@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { AlertTriangle, ArrowDown, ArrowUp, Brain, Plus, Trash2 } from 'lucide-react';
+import { ArrowDownIcon, ArrowUpIcon, BrainIcon, PlusIcon, TrashIcon, WarningIcon } from '../UI/Icons';
 import type { BehaviorAction, BehaviorCondition, BehaviorNode, BehaviorNodeType, BehaviorTreeData } from '../../types';
 import { behaviorTreeProblems, defaultBehaviorTree, gunnerBehaviorTree } from '../../runtime/behaviorTree';
 
@@ -180,10 +180,10 @@ export const BehaviorTreeEditor: React.FC<BehaviorTreeEditorProps> = ({ tree, on
                     </div>
                     <div className="flex flex-col gap-0.5 opacity-60 group-hover:opacity-100">
                         {canAdd && (
-                            <button type="button" onClick={() => setAdding(adding === id ? null : id)} title="Add a child" aria-label={`Add a child to ${name}`} className="text-gray-400 hover:text-white"><Plus size={12} /></button>
+                            <button type="button" onClick={() => setAdding(adding === id ? null : id)} title="Add a child" aria-label={`Add a child to ${name}`} className="text-gray-400 hover:text-white"><PlusIcon size={12} /></button>
                         )}
-                        {index > 0 && <button type="button" onClick={() => onChange(moveBehaviorNode(tree, id, -1))} title="Move up" aria-label={`Move ${name} up`} className="text-gray-400 hover:text-white"><ArrowUp size={12} /></button>}
-                        {index >= 0 && index < siblings.length - 1 && <button type="button" onClick={() => onChange(moveBehaviorNode(tree, id, 1))} title="Move down" aria-label={`Move ${name} down`} className="text-gray-400 hover:text-white"><ArrowDown size={12} /></button>}
+                        {index > 0 && <button type="button" onClick={() => onChange(moveBehaviorNode(tree, id, -1))} title="Move up" aria-label={`Move ${name} up`} className="text-gray-400 hover:text-white"><ArrowUpIcon size={12} /></button>}
+                        {index >= 0 && index < siblings.length - 1 && <button type="button" onClick={() => onChange(moveBehaviorNode(tree, id, 1))} title="Move down" aria-label={`Move ${name} down`} className="text-gray-400 hover:text-white"><ArrowDownIcon size={12} /></button>}
                         <button
                             type="button"
                             onClick={() => onChange(id === tree.rootId ? undefined : removeBehaviorNode(tree, id))}
@@ -191,7 +191,7 @@ export const BehaviorTreeEditor: React.FC<BehaviorTreeEditorProps> = ({ tree, on
                             aria-label={`Delete ${name}`}
                             className="text-gray-500 hover:text-red-400"
                         >
-                            <Trash2 size={12} />
+                            <TrashIcon size={12} />
                         </button>
                     </div>
                 </div>
@@ -218,11 +218,11 @@ export const BehaviorTreeEditor: React.FC<BehaviorTreeEditorProps> = ({ tree, on
 
     return (
         <div className="space-y-2">
-            <div className="flex items-center gap-1.5 text-2xs text-gray-500"><Brain size={12} className="text-sky-400" /> Evaluated from the top every frame; the first branch that is not failing decides.</div>
+            <div className="flex items-center gap-1.5 text-2xs text-gray-500"><BrainIcon size={12} className="text-sky-400" /> Evaluated from the top every frame; the first branch that is not failing decides.</div>
             {renderNode(tree.rootId, 0, [], new Set())}
             {problems.length > 0 && (
                 <div className="rounded border border-amber-700/50 bg-amber-950/30 p-2 space-y-0.5">
-                    {problems.map(problem => <div key={problem} className="flex items-center gap-1 text-2xs text-amber-300"><AlertTriangle size={10} /> {problem}</div>)}
+                    {problems.map(problem => <div key={problem} className="flex items-center gap-1 text-2xs text-amber-300"><WarningIcon size={10} /> {problem}</div>)}
                 </div>
             )}
         </div>

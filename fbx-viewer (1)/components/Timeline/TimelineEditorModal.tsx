@@ -1,7 +1,7 @@
 import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { AlertTriangle, Captions, Crosshair, Eye, Film, Hash, Move3d, Music, PersonStanding, Plus, SunDim, Trash2, Video, Volume2, VolumeX, X, Zap } from 'lucide-react';
-import type { LucideIcon } from 'lucide-react';
+import { AxesIcon, BoltIcon, CaptionsIcon, CrossIcon, CrosshairIcon, EyeIcon, FilmIcon, HashIcon, MusicIcon, MuteIcon, PersonIcon, PlusIcon, SunDimIcon, TrashIcon, VideoIcon, VolumeIcon, WarningIcon } from '../UI/Icons';
+import type { IconComponent } from '../UI/Icons';
 import type { LevelObject } from '../../types';
 import {
     TIMELINE_PLAYER_TARGET,
@@ -103,16 +103,16 @@ const INTERPOLATIONS: { value: TimelineInterpolation; label: string }[] = [
     { value: 'smooth', label: 'Smooth' },
 ];
 
-const KIND_INFO: Record<TrackKind, { label: string; icon: LucideIcon; text: string; fill: string }> = {
-    transform: { label: 'Transform', icon: Move3d, text: 'text-blue-400', fill: 'bg-blue-400' },
-    visibility: { label: 'Visibility', icon: Eye, text: 'text-emerald-400', fill: 'bg-emerald-400' },
-    variable: { label: 'Variable', icon: Hash, text: 'text-violet-400', fill: 'bg-violet-400' },
-    event: { label: 'Event', icon: Zap, text: 'text-amber-400', fill: 'bg-amber-400' },
-    camera: { label: 'Camera', icon: Video, text: 'text-pink-400', fill: 'bg-pink-400' },
-    animation: { label: 'Animation', icon: PersonStanding, text: 'text-orange-400', fill: 'bg-orange-400' },
-    audio: { label: 'Audio', icon: Music, text: 'text-cyan-400', fill: 'bg-cyan-400' },
-    subtitle: { label: 'Subtitles', icon: Captions, text: 'text-lime-300', fill: 'bg-lime-300' },
-    fade: { label: 'Fade', icon: SunDim, text: 'text-slate-300', fill: 'bg-slate-300' },
+const KIND_INFO: Record<TrackKind, { label: string; icon: IconComponent; text: string; fill: string }> = {
+    transform: { label: 'Transform', icon: AxesIcon, text: 'text-blue-400', fill: 'bg-blue-400' },
+    visibility: { label: 'Visibility', icon: EyeIcon, text: 'text-emerald-400', fill: 'bg-emerald-400' },
+    variable: { label: 'Variable', icon: HashIcon, text: 'text-violet-400', fill: 'bg-violet-400' },
+    event: { label: 'Event', icon: BoltIcon, text: 'text-amber-400', fill: 'bg-amber-400' },
+    camera: { label: 'Camera', icon: VideoIcon, text: 'text-pink-400', fill: 'bg-pink-400' },
+    animation: { label: 'Animation', icon: PersonIcon, text: 'text-orange-400', fill: 'bg-orange-400' },
+    audio: { label: 'Audio', icon: MusicIcon, text: 'text-cyan-400', fill: 'bg-cyan-400' },
+    subtitle: { label: 'Subtitles', icon: CaptionsIcon, text: 'text-lime-300', fill: 'bg-lime-300' },
+    fade: { label: 'Fade', icon: SunDimIcon, text: 'text-slate-300', fill: 'bg-slate-300' },
 };
 
 /** A clip, sound or subtitle key lasts a length and is drawn as a bar; other keys are instants. */
@@ -550,7 +550,7 @@ const KeyDetails: React.FC<{
                 onClick={onDelete}
                 className="w-full py-1.5 text-xs bg-gray-800 hover:bg-red-900/40 border border-gray-700 hover:border-red-800 rounded text-gray-300 hover:text-red-300 flex items-center justify-center gap-2 transition-colors"
             >
-                <Trash2 size={12} /> Delete Key
+                <TrashIcon size={12} /> Delete Key
             </button>
         </div>
     );
@@ -850,7 +850,7 @@ export const TimelineEditorModal: React.FC<TimelineEditorModalProps> = ({
             <div className="relative flex w-full h-[50vh] min-h-[320px] flex-col overflow-hidden rounded-xl border border-gray-700 bg-gray-900 shadow-2xl">
                 <div className="flex items-center justify-between border-b border-gray-800 bg-gray-950 px-5 py-3">
                     <div className="flex items-center gap-3 min-w-0">
-                        <Film size={18} className="text-blue-400 shrink-0" />
+                        <FilmIcon size={18} className="text-blue-400 shrink-0" />
                         <div className="min-w-0">
                             <h2 className="text-sm font-bold text-white">Timeline</h2>
                             <p className="text-2xs text-gray-500 truncate">
@@ -858,7 +858,7 @@ export const TimelineEditorModal: React.FC<TimelineEditorModalProps> = ({
                             </p>
                         </div>
                     </div>
-                    <button type="button" onClick={requestClose} className="rounded p-1 text-gray-500 hover:bg-gray-800 hover:text-white" aria-label="Close timeline editor"><X size={16} /></button>
+                    <button type="button" onClick={requestClose} className="rounded p-1 text-gray-500 hover:bg-gray-800 hover:text-white" aria-label="Close timeline editor"><CrossIcon size={16} /></button>
                 </div>
 
                 <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-gray-800 bg-gray-950/60 px-4 py-2">
@@ -876,7 +876,7 @@ export const TimelineEditorModal: React.FC<TimelineEditorModalProps> = ({
                                     aria-label={`Add ${label} track`}
                                     className="flex items-center gap-1 rounded border border-gray-700 bg-gray-800 px-2 h-6 text-2xs text-gray-300 hover:bg-gray-700 transition-colors"
                                 >
-                                    <Plus size={11} /><Icon size={11} className={text} /> {label}
+                                    <PlusIcon size={11} /><Icon size={11} className={text} /> {label}
                                 </button>
                             );
                         })}
@@ -980,7 +980,7 @@ export const TimelineEditorModal: React.FC<TimelineEditorModalProps> = ({
                                                         title={track.muted ? 'Muted: playback skips this track' : 'Mute track'}
                                                         className={`rounded p-0.5 transition-colors ${track.muted ? 'text-amber-400' : 'text-gray-500 hover:text-gray-200'}`}
                                                     >
-                                                        {track.muted ? <VolumeX size={12} /> : <Volume2 size={12} />}
+                                                        {track.muted ? <MuteIcon size={12} /> : <VolumeIcon size={12} />}
                                                     </button>
                                                     <button
                                                         type="button"
@@ -989,7 +989,7 @@ export const TimelineEditorModal: React.FC<TimelineEditorModalProps> = ({
                                                         title="Delete track"
                                                         className="rounded p-0.5 text-gray-500 hover:text-red-400 transition-colors"
                                                     >
-                                                        <Trash2 size={12} />
+                                                        <TrashIcon size={12} />
                                                     </button>
                                                 </div>
                                                 {target !== null && (
@@ -1111,7 +1111,7 @@ export const TimelineEditorModal: React.FC<TimelineEditorModalProps> = ({
                                                         title="Key the target's current position, rotation and scale at the playhead"
                                                         className="flex h-5 w-full items-center justify-center gap-1 rounded border border-gray-700 bg-gray-800 text-2xs text-gray-300 hover:bg-gray-700 disabled:opacity-40 transition-colors"
                                                     >
-                                                        <Crosshair size={10} /> Add key from object
+                                                        <CrosshairIcon size={10} /> Add key from object
                                                     </button>
                                                 )}
                                             </div>
@@ -1227,7 +1227,7 @@ export const TimelineEditorModal: React.FC<TimelineEditorModalProps> = ({
                         <span className={dirty ? 'text-amber-400' : 'text-gray-500'}>{dirty ? 'Unsaved changes' : 'No changes'}</span>
                         {lateKeys > 0 && (
                             <span className="flex items-center gap-1 text-amber-300 truncate">
-                                <AlertTriangle size={12} /> {lateKeys === 1 ? '1 key is' : `${lateKeys} keys are`} past the end of the timeline.
+                                <WarningIcon size={12} /> {lateKeys === 1 ? '1 key is' : `${lateKeys} keys are`} past the end of the timeline.
                             </span>
                         )}
                     </div>
@@ -1240,7 +1240,7 @@ export const TimelineEditorModal: React.FC<TimelineEditorModalProps> = ({
                 {confirmDiscard && (
                     <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/60">
                         <div role="alertdialog" aria-modal="true" aria-label="Discard changes" className="w-80 space-y-3 rounded-lg border border-gray-700 bg-gray-900 p-4 shadow-2xl">
-                            <div className="flex items-center gap-2 text-sm font-bold text-white"><AlertTriangle size={14} className="text-amber-400" /> Discard changes?</div>
+                            <div className="flex items-center gap-2 text-sm font-bold text-white"><WarningIcon size={14} className="text-amber-400" /> Discard changes?</div>
                             <p className="text-2xs text-gray-400">The edits made to this timeline have not been saved.</p>
                             <div className="flex justify-end gap-2">
                                 <button type="button" autoFocus onClick={keepEditing} className="rounded border border-gray-700 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-800">Keep Editing</button>

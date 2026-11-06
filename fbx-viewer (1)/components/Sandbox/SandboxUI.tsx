@@ -1,6 +1,6 @@
 
 import React, { useCallback } from 'react';
-import { Gamepad2, User, Skull, Play, Square, MousePointer2, HeartPulse, AlertCircle, CheckCircle2, Keyboard, RotateCcw, AlertTriangle, XCircle, Zap, ZapOff } from 'lucide-react';
+import { BoltIcon, BoltOffIcon, CheckCircleIcon, ErrorIcon, ExitIcon, GamepadIcon, HealthIcon, KeyboardIcon, PlayIcon, PointerIcon, ResetIcon, SkullIcon, StopIcon, UserIcon, WarningIcon } from '../UI/Icons';
 import { Blueprint, LoadedModelData } from '../../types';
 import type { PlayerWeaponStatus } from '../../runtime/gameState';
 import { ScopeReticle } from '../HUDEditor/assets/ScopeReticle';
@@ -36,9 +36,9 @@ const StatusRow: React.FC<{ label: string; value: string; isReady: boolean; icon
         </div>
         <div className="pl-2">
             {isReady ? (
-                <CheckCircle2 size={14} className="text-green-500/80" />
+                <CheckCircleIcon size={14} className="text-green-500/80" />
             ) : (
-                <AlertCircle size={14} className="text-red-500/80" />
+                <ErrorIcon size={14} className="text-red-500/80" />
             )}
         </div>
     </div>
@@ -74,7 +74,7 @@ export const SandboxUI: React.FC<SandboxUIProps> = ({
                 
                 <div className="flex flex-col items-center text-center space-y-2 mb-10">
                     <div className="text-red-600 animate-pulse mb-2">
-                        <AlertTriangle size={48} />
+                        <WarningIcon size={48} />
                     </div>
                     <h1 className="text-6xl font-black text-white tracking-[0.2em] drop-shadow-[0_0_25px_rgba(220,38,38,0.6)] font-mono">
                         GAME OVER
@@ -91,7 +91,7 @@ export const SandboxUI: React.FC<SandboxUIProps> = ({
                         className="group relative px-8 py-3 bg-white text-black font-bold text-sm hover:bg-gray-200 transition-all clip-path-slant"
                     >
                         <span className="flex items-center gap-2">
-                            <RotateCcw size={16} /> Restart
+                            <ResetIcon size={16} /> Restart
                         </span>
                         <div className="absolute inset-0 border-2 border-white group-hover:scale-105 transition-transform" />
                     </button>
@@ -101,7 +101,7 @@ export const SandboxUI: React.FC<SandboxUIProps> = ({
                         className="group px-8 py-3 bg-transparent text-gray-500 hover:text-red-500 font-bold text-sm border border-gray-800 hover:border-red-900 transition-all"
                     >
                         <span className="flex items-center gap-2">
-                            <XCircle size={16} /> Exit
+                            <ExitIcon size={16} /> Exit
                         </span>
                     </button>
                 </div>
@@ -133,7 +133,7 @@ export const SandboxUI: React.FC<SandboxUIProps> = ({
                     {/* Header */}
                     <div className="h-10 bg-gray-950 border-b border-gray-800 flex items-center justify-between px-4 shrink-0">
                         <div className="flex items-center gap-2 text-gray-200 font-bold text-xs tracking-wide">
-                            <Gamepad2 size={14} className="text-blue-500" />
+                            <GamepadIcon size={14} className="text-blue-500" />
                             <span>Simulation</span>
                         </div>
                         <div className="flex items-center gap-1.5">
@@ -150,20 +150,20 @@ export const SandboxUI: React.FC<SandboxUIProps> = ({
                             {/* Player Config */}
                             <div className="space-y-2">
                                 <div className="text-2xs font-bold text-gray-500 flex items-center gap-1.5">
-                                    <User size={10} /> Active Player
+                                    <UserIcon size={10} /> Active Player
                                 </div>
                                 <div className="space-y-1">
                                     <StatusRow 
                                         label="Blueprint" 
                                         value={playerBlueprint.name} 
                                         isReady={true} 
-                                        icon={<User size={12} />} 
+                                        icon={<UserIcon size={12} />} 
                                     />
                                     <StatusRow 
                                         label="Target Mesh" 
                                         value={playerModel?.name || 'None'} 
                                         isReady={!!playerModel} 
-                                        icon={<MousePointer2 size={12} />} 
+                                        icon={<PointerIcon size={12} />} 
                                     />
                                 </div>
                             </div>
@@ -171,20 +171,20 @@ export const SandboxUI: React.FC<SandboxUIProps> = ({
                             {/* Enemy Config */}
                             <div className="space-y-2">
                                 <div className="text-2xs font-bold text-gray-500 flex items-center gap-1.5">
-                                    <Skull size={10} /> Opponent
+                                    <SkullIcon size={10} /> Opponent
                                 </div>
                                 <div className="space-y-1">
                                     <StatusRow 
                                         label="AI Controller" 
                                         value={enemyBlueprint.name} 
                                         isReady={true} 
-                                        icon={<Skull size={12} />} 
+                                        icon={<SkullIcon size={12} />} 
                                     />
                                     <StatusRow 
                                         label="Target Mesh" 
                                         value={enemyModel?.name || 'None'} 
                                         isReady={!!enemyModel} 
-                                        icon={<MousePointer2 size={12} />} 
+                                        icon={<PointerIcon size={12} />} 
                                     />
                                 </div>
                             </div>
@@ -196,7 +196,7 @@ export const SandboxUI: React.FC<SandboxUIProps> = ({
                         <div className="flex gap-4">
                             <div className="flex-1 bg-gray-950/50 rounded border border-gray-800/50 p-3">
                                 <div className="text-2xs font-bold text-gray-500 mb-2 flex items-center gap-1.5">
-                                    <Keyboard size={10} /> Input Map
+                                    <KeyboardIcon size={10} /> Input Map
                                 </div>
                                 <div className="grid grid-cols-2 gap-y-2 gap-x-4">
                                     <div className="flex items-center justify-between text-2xs group"><span className="text-gray-500">Move</span><span className="font-mono text-gray-300">WASD</span></div>
@@ -211,7 +211,7 @@ export const SandboxUI: React.FC<SandboxUIProps> = ({
                                     onClick={onToggleQuality}
                                     className={`w-24 flex flex-col items-center justify-center gap-2 rounded border transition-all ${highQuality ? 'bg-blue-900/20 border-blue-500/50 text-blue-400' : 'bg-gray-800 border-gray-700 text-gray-500 hover:text-gray-300'}`}
                                 >
-                                    {highQuality ? <Zap size={20} /> : <ZapOff size={20} />}
+                                    {highQuality ? <BoltIcon size={20} /> : <BoltOffIcon size={20} />}
                                     <div className="text-2xs font-bold ">{highQuality ? 'HQ Rendering' : 'Low Perf'}</div>
                                 </button>
                             )}
@@ -230,7 +230,7 @@ export const SandboxUI: React.FC<SandboxUIProps> = ({
                                 }
                             `}
                         >
-                            <Play size={14} fill="currentColor" />
+                            <PlayIcon size={14} fill="currentColor" />
                             Start simulation
                         </button>
                     </div>
@@ -267,7 +267,7 @@ export const SandboxUI: React.FC<SandboxUIProps> = ({
                     <div className="flex flex-col gap-1">
                         <div className="flex justify-between items-end px-0.5">
                             <span className="text-2xs font-bold text-gray-400 flex items-center gap-1 ">
-                                <HeartPulse size={10} className="text-red-500" /> HP
+                                <HealthIcon size={10} className="text-red-500" /> HP
                             </span>
                             <span className="text-2xs font-mono font-bold text-gray-300">
                                 {Math.ceil(health)} <span className="text-gray-600">/</span> {maxHealth}
@@ -314,7 +314,7 @@ export const SandboxUI: React.FC<SandboxUIProps> = ({
                         onClick={onStop}
                         className="flex items-center gap-2 px-4 py-2 bg-gray-900/90 hover:bg-gray-800 text-red-400 hover:text-red-300 font-bold text-2xs rounded border border-gray-700 shadow-xl transition-all"
                     >
-                        <Square size={10} fill="currentColor" /> Stop Simulation
+                        <StopIcon size={10} fill="currentColor" /> Stop Simulation
                     </button>
                 </div>
             )}

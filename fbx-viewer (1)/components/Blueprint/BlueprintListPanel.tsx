@@ -1,5 +1,5 @@
 import React from 'react';
-import { FileCode, Shield, Skull, Trash2 } from 'lucide-react';
+import { BlueprintIcon, ShieldIcon, SkullIcon, TrashIcon } from '../UI/Icons';
 import { Blueprint, BlueprintType } from '../../types';
 
 interface BlueprintListPanelProps {
@@ -31,7 +31,7 @@ export const BlueprintListPanel: React.FC<BlueprintListPanelProps> = ({
         <div className="w-64 bg-gray-900 border-r border-gray-800 flex flex-col shrink-0 z-20">
             <div className="p-3 border-b border-gray-800 shrink-0 flex items-center justify-between bg-gray-950">
                 <span className="text-xs font-bold text-gray-400 tracking-wider flex items-center gap-2">
-                    <FileCode size={12} /> File manager
+                    <BlueprintIcon size={12} /> File manager
                 </span>
                 <div className="flex gap-1">
                     {!hasPlayerCharacter && (
@@ -41,7 +41,7 @@ export const BlueprintListPanel: React.FC<BlueprintListPanelProps> = ({
                             className="p-1 hover:bg-gray-800 rounded text-blue-400 hover:text-white transition-colors" 
                             title="New Player"
                         >
-                            <Shield size={12} />
+                            <ShieldIcon size={12} />
                         </button>
                     )}
                     <button 
@@ -49,7 +49,7 @@ export const BlueprintListPanel: React.FC<BlueprintListPanelProps> = ({
                         className="p-1 hover:bg-gray-800 rounded text-red-400 hover:text-white transition-colors" 
                         title="New Enemy"
                     >
-                        <Skull size={12} />
+                        <SkullIcon size={12} />
                     </button>
                 </div>
             </div>
@@ -71,8 +71,8 @@ export const BlueprintListPanel: React.FC<BlueprintListPanelProps> = ({
                         `}
                     >
                         {bp.type === 'Player Character' 
-                            ? <Shield size={16} className={selectedId === bp.id ? "text-blue-400" : "text-gray-600"} /> 
-                            : <Skull size={16} className={selectedId === bp.id ? "text-red-400" : "text-gray-600"} />
+                            ? <ShieldIcon size={16} className={selectedId === bp.id ? "text-blue-400" : "text-gray-600"} /> 
+                            : <SkullIcon size={16} className={selectedId === bp.id ? "text-red-400" : "text-gray-600"} />
                         }
                         <div className="flex-1 min-w-0">
                             <div className="text-xs font-bold truncate">{bp.name}</div>
@@ -89,7 +89,7 @@ export const BlueprintListPanel: React.FC<BlueprintListPanelProps> = ({
                             className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100 p-1.5 text-gray-500 hover:text-red-400 hover:bg-gray-900 rounded transition-all"
                             title="Delete Blueprint"
                         >
-                            <Trash2 size={12} />
+                            <TrashIcon size={12} />
                         </button>
                     </div>
                 ))}

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { AlertTriangle, Brush, Eraser, Maximize, PaintBucket, Pipette, Redo2, Scissors, Undo2 } from 'lucide-react';
+import { BrushIcon, BucketIcon, EraserIcon, EyedropperIcon, FrameIcon, RedoIcon, ScissorsIcon, UndoIcon, WarningIcon } from '../../UI/Icons';
 import { useAssets } from '../../../context/AssetContext';
 import { useScene } from '../../../context/SceneContext';
 import { frontendDiagnostics } from '../../../diagnostics/runtime';
@@ -206,15 +206,15 @@ export const PaintWorkspace: React.FC = () => {
 
             <div className="flex min-w-0 flex-1 flex-col">
                 <div className="flex items-center gap-1 border-b border-zinc-800 px-2 py-1">
-                    <IconButton label="Paint" shortcut="B" active={tool === 'paint'} onClick={() => setTool('paint')}><Brush size={14} /></IconButton>
-                    <IconButton label="Erase" shortcut="E" active={tool === 'erase'} onClick={() => setTool('erase')}><Eraser size={14} /></IconButton>
-                    <IconButton label="Fill a UV island" shortcut="G" active={tool === 'island'} onClick={() => setTool('island')}><PaintBucket size={14} /></IconButton>
-                    <IconButton label="Pick a colour" shortcut="P" active={tool === 'pick'} onClick={() => setTool('pick')}><Pipette size={14} /></IconButton>
-                    <IconButton label="Mark or clear seams (Shift clears)" shortcut="S" active={tool === 'seam'} onClick={() => setTool('seam')}><Scissors size={14} /></IconButton>
+                    <IconButton label="Paint" shortcut="B" active={tool === 'paint'} onClick={() => setTool('paint')}><BrushIcon size={14} /></IconButton>
+                    <IconButton label="Erase" shortcut="E" active={tool === 'erase'} onClick={() => setTool('erase')}><EraserIcon size={14} /></IconButton>
+                    <IconButton label="Fill a UV island" shortcut="G" active={tool === 'island'} onClick={() => setTool('island')}><BucketIcon size={14} /></IconButton>
+                    <IconButton label="Pick a colour" shortcut="P" active={tool === 'pick'} onClick={() => setTool('pick')}><EyedropperIcon size={14} /></IconButton>
+                    <IconButton label="Mark or clear seams (Shift clears)" shortcut="S" active={tool === 'seam'} onClick={() => setTool('seam')}><ScissorsIcon size={14} /></IconButton>
                     <span className="mx-1 h-4 w-px bg-zinc-800" />
-                    <IconButton label={session?.undoLabel ? `Undo ${session.undoLabel.toLowerCase()}` : 'Undo'} shortcut="Ctrl+Z" disabled={!session?.canUndo} onClick={() => session?.undo()}><Undo2 size={14} /></IconButton>
-                    <IconButton label="Redo" shortcut="Ctrl+Y" disabled={!session?.canRedo} onClick={() => session?.redo()}><Redo2 size={14} /></IconButton>
-                    <IconButton label="Frame the model" shortcut="F" onClick={() => setFrameSignal((value) => value + 1)}><Maximize size={14} /></IconButton>
+                    <IconButton label={session?.undoLabel ? `Undo ${session.undoLabel.toLowerCase()}` : 'Undo'} shortcut="Ctrl+Z" disabled={!session?.canUndo} onClick={() => session?.undo()}><UndoIcon size={14} /></IconButton>
+                    <IconButton label="Redo" shortcut="Ctrl+Y" disabled={!session?.canRedo} onClick={() => session?.redo()}><RedoIcon size={14} /></IconButton>
+                    <IconButton label="Frame the model" shortcut="F" onClick={() => setFrameSignal((value) => value + 1)}><FrameIcon size={14} /></IconButton>
                     <span className="mx-1 h-4 w-px bg-zinc-800" />
                     <span className="text-2xs text-zinc-500">Size</span>
                     <input type="range" min={1} max={400} value={brush.size} onChange={(event) => setBrush({ ...brush, size: Number(event.target.value) })} className="h-1 w-24 accent-sky-500" aria-label="Brush size" />
@@ -245,7 +245,7 @@ export const PaintWorkspace: React.FC = () => {
                     )}
                     {session?.stack.problem && (
                         <div className="pointer-events-none absolute left-3 top-3 flex max-w-[60%] items-start gap-2 rounded border border-amber-800 bg-amber-950/90 px-2 py-1 text-2xs text-amber-200">
-                            <AlertTriangle size={12} className="mt-px shrink-0" /> {session.stack.problem}
+                            <WarningIcon size={12} className="mt-px shrink-0" /> {session.stack.problem}
                         </div>
                     )}
                     {session?.busy && !session.progress && (

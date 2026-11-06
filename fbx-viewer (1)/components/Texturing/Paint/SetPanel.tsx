@@ -1,5 +1,5 @@
 import React, { useRef, useState } from 'react';
-import { CheckCircle2, Download, Flame, RefreshCw } from 'lucide-react';
+import { CheckCircleIcon, DownloadIcon, FlameIcon, RefreshIcon } from '../../UI/Icons';
 import type * as THREE from 'three';
 import { DEFAULT_BAKE_SETTINGS, type BakeSettings } from '../../../texturing/bake/meshBaker';
 import { MESH_MAP_LABELS, MESH_MAPS, type MeshMapName } from '../../../texturing/graph/nodes/io';
@@ -62,7 +62,7 @@ export const SetPanel: React.FC<{
                 <div className="flex items-center justify-between">
                     <span className="text-2xs font-semibold text-zinc-300">Mesh maps</span>
                     {document.bake && (session.stack.bakeSize === null
-                        ? <span className="flex items-center gap-1 text-2xs text-emerald-400"><CheckCircle2 size={11} /> Baked</span>
+                        ? <span className="flex items-center gap-1 text-2xs text-emerald-400"><CheckCircleIcon size={11} /> Baked</span>
                         : <span className="text-2xs text-amber-400">Baked at {2 ** session.stack.bakeSize} × {2 ** session.stack.bakeSize}: bake again for full detail</span>)}
                 </div>
                 <p className="text-2xs leading-snug text-zinc-500">Occlusion, curvature, thickness, normals, position and IDs read from the model. Smart masks and materials are built on them.</p>
@@ -97,7 +97,7 @@ export const SetPanel: React.FC<{
                         <div className="flex justify-between text-2xs text-zinc-400"><span>{session.busy}</span><button className="hover:text-white" onClick={() => controller.current?.abort()}>Stop</button></div>
                     </div>
                 ) : (
-                    <Button className="w-full justify-center" disabled={busy} icon={<Flame size={13} />} onClick={() => {
+                    <Button className="w-full justify-center" disabled={busy} icon={<FlameIcon size={13} />} onClick={() => {
                         controller.current = new AbortController();
                         void session.bake(settings, models.find((model) => model.id === highPoly)?.object ?? null, controller.current.signal);
                     }}>{document.bake ? 'Bake again' : 'Bake mesh maps'}</Button>
@@ -107,10 +107,10 @@ export const SetPanel: React.FC<{
             <section className="space-y-2">
                 <div className="text-2xs font-semibold text-zinc-300">On the model</div>
                 <div className={`flex items-start gap-1.5 rounded border p-2 text-2xs ${!session.changedSinceApply && document.applied ? 'border-emerald-900 bg-emerald-950/40 text-emerald-200' : 'border-amber-900 bg-amber-950/40 text-amber-200'}`}>
-                    {!session.changedSinceApply && document.applied ? <CheckCircle2 size={13} className="mt-px shrink-0" /> : <RefreshCw size={13} className="mt-px shrink-0" />}
+                    {!session.changedSinceApply && document.applied ? <CheckCircleIcon size={13} className="mt-px shrink-0" /> : <RefreshIcon size={13} className="mt-px shrink-0" />}
                     <span>{!session.changedSinceApply && document.applied ? 'The model wears this painting as it is now.' : document.applied ? 'Painted since the model last got it: it still wears the earlier pictures.' : 'The model does not wear this painting yet. Painting is kept as you go either way.'}</span>
                 </div>
-                <Button variant="primary" className="w-full justify-center" disabled={busy} icon={busy ? <Spinner /> : <RefreshCw size={13} />} onClick={() => void session.apply()}>{busy && !session.progress ? session.busy : 'Put on the model'}</Button>
+                <Button variant="primary" className="w-full justify-center" disabled={busy} icon={busy ? <Spinner /> : <RefreshIcon size={13} />} onClick={() => void session.apply()}>{busy && !session.progress ? session.busy : 'Put on the model'}</Button>
             </section>
 
             <section className="space-y-2">
@@ -124,7 +124,7 @@ export const SetPanel: React.FC<{
                     <Segmented value={convention} options={[{ value: 'bottom', label: 'Bottom left' }, { value: 'top', label: 'Top left' }]} onChange={setConvention} label="UV origin" />
                 </div>
                 <p className="text-2xs leading-snug text-zinc-500">Bottom left suits FBX and OBJ tools; top left suits glTF. Normals are green-up. UDIM tiles are numbered in the file names.</p>
-                <Button className="w-full justify-center" disabled={busy} icon={<Download size={13} />} onClick={() => void session.exportPictures(layout, convention === 'bottom')}>Download pictures</Button>
+                <Button className="w-full justify-center" disabled={busy} icon={<DownloadIcon size={13} />} onClick={() => void session.exportPictures(layout, convention === 'bottom')}>Download pictures</Button>
             </section>
         </div>
     );

@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import * as THREE from 'three';
-import { Grid2x2, Maximize } from 'lucide-react';
+import { FrameIcon, TilesIcon } from '../UI/Icons';
 import type { GpuImage } from '../../texturing/gpu/textureGpu';
 import { IconButton, Segmented } from '../UI/kit';
 import type { TextureGraphSession } from './textureGraphSession';
@@ -144,8 +144,8 @@ export const TextureView2D: React.FC<{ session: TextureGraphSession; nodeId: str
             <div className="flex items-center gap-1 border-b border-zinc-800 px-2 py-1">
                 <span className="min-w-0 flex-1 truncate text-2xs font-semibold text-zinc-300">{label}</span>
                 <Segmented value={channel} options={CHANNELS} onChange={setChannel} label="Channel shown" />
-                <IconButton label={tile ? 'Show once' : 'Show repeated, to check it tiles'} active={tile} onClick={() => setTile((value) => !value)}><Grid2x2 size={13} /></IconButton>
-                <IconButton label="Fit" onClick={() => setView({ panX: 0, panY: 0, zoom: 0 })}><Maximize size={13} /></IconButton>
+                <IconButton label={tile ? 'Show once' : 'Show repeated, to check it tiles'} active={tile} onClick={() => setTile((value) => !value)}><TilesIcon size={13} /></IconButton>
+                <IconButton label="Fit" onClick={() => setView({ panX: 0, panY: 0, zoom: 0 })}><FrameIcon size={13} /></IconButton>
             </div>
             <div
                 ref={host}

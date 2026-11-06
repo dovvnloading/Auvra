@@ -1,5 +1,5 @@
 import React from 'react';
-import { Plus, Spline, X } from 'lucide-react';
+import { CrossIcon, PlusIcon, SplineIcon } from '../../UI/Icons';
 import { AnimCurve, AnimCurveKey } from '../../../types';
 import { Select } from '../../UI/Select';
 import { ScrubbableInput } from '../../UI/Properties/ScrubbableInput';
@@ -52,7 +52,7 @@ export const CurvesEditor: React.FC<CurvesEditorProps> = ({ curves, onChange, va
         <div className="space-y-3">
             <div className="flex items-center justify-between px-1">
                 <label className="text-2xs text-gray-500 font-bold flex items-center gap-1.5">
-                    <Spline size={10} /> Curves
+                    <SplineIcon size={10} /> Curves
                 </label>
                 <button
                     onClick={() => onChange([...curves, {
@@ -63,7 +63,7 @@ export const CurvesEditor: React.FC<CurvesEditorProps> = ({ curves, onChange, va
                     aria-label="Add curve"
                     className="text-2xs px-2 py-1 bg-gray-800 hover:bg-gray-700 rounded border border-gray-700 text-gray-300 hover:text-white transition-colors flex items-center gap-1"
                 >
-                    <Plus size={10} /> Add
+                    <PlusIcon size={10} /> Add
                 </button>
             </div>
 
@@ -87,7 +87,7 @@ export const CurvesEditor: React.FC<CurvesEditorProps> = ({ curves, onChange, va
                                     aria-label="Remove curve"
                                     className="text-gray-500 hover:text-red-400 p-1"
                                 >
-                                    <X size={12} />
+                                    <CrossIcon size={12} />
                                 </button>
                             </div>
                             <CurveGraph keys={curve.keys} duration={duration} />
@@ -113,7 +113,7 @@ export const CurvesEditor: React.FC<CurvesEditorProps> = ({ curves, onChange, va
                                         disabled={curve.keys.length <= 1}
                                         className="text-gray-500 hover:text-red-400 disabled:opacity-30 p-1 shrink-0"
                                     >
-                                        <X size={10} />
+                                        <CrossIcon size={10} />
                                     </button>
                                 </div>
                             ))}

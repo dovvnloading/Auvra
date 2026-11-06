@@ -1,7 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import {
-    Activity, Box, BoxSelect, ClipboardCopy, Combine, Download, Droplets, Eye, EyeOff, FlipHorizontal2, Hammer, Layers, Lock, LockOpen, Minus, Mountain, Plus, Rows3, Trash2, TrendingUp, Upload, Waves, Wind, CircleDashed, Scaling,
-} from 'lucide-react';
+import { CircleDashedIcon, CopyIcon, CubeIcon, DownloadIcon, DropletsIcon, EyeIcon, EyeOffIcon, HammerIcon, LayersIcon, LockIcon, MergeIcon, MinusIcon, MirrorIcon, MountainIcon, PlusIcon, PulseIcon, RampIcon, ScaleIcon, SelectBoxIcon, SmoothIcon, TerraceIcon, TrashIcon, UnlockIcon, UploadIcon, WindIcon } from '../../UI/Icons';
 import { useScene } from '../../../context/SceneContext';
 import { TerrainRegionNote } from './TerrainRegionNote';
 import { useNotification } from '../../../context/NotificationContext';
@@ -34,18 +32,18 @@ interface TerrainPanelProps {
 const RESOLUTIONS = [64, 128, 256, 512, 1024];
 
 const SCULPT_TOOLS: { tool: SculptToolName; icon: React.ReactNode; hint: string }[] = [
-    { tool: 'sculpt', icon: <Mountain size={14} />, hint: 'Hold the left button to raise the ground. Hold Shift to lower it.' },
-    { tool: 'smooth', icon: <Waves size={14} />, hint: 'Hold to even out bumps. Larger Reach smooths broader shapes.' },
-    { tool: 'flatten', icon: <Minus size={14} />, hint: 'Levels to the height under the first click. Ctrl-click sets a fixed height.' },
-    { tool: 'ramp', icon: <TrendingUp size={14} />, hint: 'Click the bottom and the top of the ramp, then build it.' },
-    { tool: 'erosion', icon: <Wind size={14} />, hint: 'Hold to let steep ground slump, as weathering does.' },
-    { tool: 'hydro', icon: <Droplets size={14} />, hint: 'Hold to rain on the ground: water cuts channels and drops silt.' },
-    { tool: 'noise', icon: <Activity size={14} />, hint: 'Hold to roughen the ground. Shift works the other way.' },
-    { tool: 'terrace', icon: <Rows3 size={14} />, hint: 'Hold to cut the ground into steps.' },
-    { tool: 'holes', icon: <CircleDashed size={14} />, hint: 'Hold to cut holes in the ground for caves and tunnels. Shift fills them.' },
-    { tool: 'mirror', icon: <FlipHorizontal2 size={14} />, hint: 'Copies one half of the terrain onto the other, for symmetric maps.' },
-    { tool: 'copy', icon: <ClipboardCopy size={14} />, hint: 'Drag a box on the ground to copy it, then click to paste it anywhere.' },
-    { tool: 'region', icon: <BoxSelect size={14} />, hint: 'Hold to choose the ground the brushes may change. Shift takes it away.' },
+    { tool: 'sculpt', icon: <MountainIcon size={14} />, hint: 'Hold the left button to raise the ground. Hold Shift to lower it.' },
+    { tool: 'smooth', icon: <SmoothIcon size={14} />, hint: 'Hold to even out bumps. Larger Reach smooths broader shapes.' },
+    { tool: 'flatten', icon: <MinusIcon size={14} />, hint: 'Levels to the height under the first click. Ctrl-click sets a fixed height.' },
+    { tool: 'ramp', icon: <RampIcon size={14} />, hint: 'Click the bottom and the top of the ramp, then build it.' },
+    { tool: 'erosion', icon: <WindIcon size={14} />, hint: 'Hold to let steep ground slump, as weathering does.' },
+    { tool: 'hydro', icon: <DropletsIcon size={14} />, hint: 'Hold to rain on the ground: water cuts channels and drops silt.' },
+    { tool: 'noise', icon: <PulseIcon size={14} />, hint: 'Hold to roughen the ground. Shift works the other way.' },
+    { tool: 'terrace', icon: <TerraceIcon size={14} />, hint: 'Hold to cut the ground into steps.' },
+    { tool: 'holes', icon: <CircleDashedIcon size={14} />, hint: 'Hold to cut holes in the ground for caves and tunnels. Shift fills them.' },
+    { tool: 'mirror', icon: <MirrorIcon size={14} />, hint: 'Copies one half of the terrain onto the other, for symmetric maps.' },
+    { tool: 'copy', icon: <CopyIcon size={14} />, hint: 'Drag a box on the ground to copy it, then click to paste it anywhere.' },
+    { tool: 'region', icon: <SelectBoxIcon size={14} />, hint: 'Hold to choose the ground the brushes may change. Shift takes it away.' },
 ];
 
 const FALLOFFS: { label: string; value: TerrainBrushFalloff }[] = [
@@ -285,7 +283,7 @@ const EditLayersSection: React.FC<{ terrain: LevelObject }> = ({ terrain }) => {
                         const id = crypto.randomUUID();
                         write({ ...data, editLayers: [...layers, { id, name: `Layer ${layers.length + 1}`, visible: true, locked: false, opacity: 1 }], activeEditLayer: id });
                     }}
-                ><Plus size={11} /> Add</Button>
+                ><PlusIcon size={11} /> Add</Button>
             )}
         >
             <div className="space-y-1" onPointerDownCapture={() => { armed.current = true; }}>
@@ -298,15 +296,15 @@ const EditLayersSection: React.FC<{ terrain: LevelObject }> = ({ terrain }) => {
                     }}
                     className={`${rowClass(!active)} w-full text-left text-xs text-ink`}
                 >
-                    <Mountain size={11} className="mr-1 shrink-0 text-ink-3" /> Ground
+                    <MountainIcon size={11} className="mr-1 shrink-0 text-ink-3" /> Ground
                 </button>
                 {layers.map(layer => (
                     <div key={layer.id} className={rowClass(layer.id === data.activeEditLayer)}>
                         <button type="button" title={layer.visible ? 'Hide this layer' : 'Show this layer'} aria-pressed={layer.visible} disabled={isEditLayerPending(layer)} onClick={() => write(withEditLayerChange(data, layer.id, { visible: !layer.visible }))} className="shrink-0 p-0.5 text-ink-2 hover:text-ink disabled:opacity-40">
-                            {layer.visible ? <Eye size={12} /> : <EyeOff size={12} />}
+                            {layer.visible ? <EyeIcon size={12} /> : <EyeOffIcon size={12} />}
                         </button>
                         <button type="button" title={layer.locked ? 'Unlock this layer' : 'Lock this layer'} aria-pressed={layer.locked} onClick={() => write(withEditLayerChange(data, layer.id, { locked: !layer.locked }), false)} className="shrink-0 p-0.5 text-ink-2 hover:text-ink">
-                            {layer.locked ? <Lock size={12} /> : <LockOpen size={12} />}
+                            {layer.locked ? <LockIcon size={12} /> : <UnlockIcon size={12} />}
                         </button>
                         <button type="button" onClick={() => write({ ...data, activeEditLayer: layer.id }, false)} className="min-w-0 flex-1 truncate text-left text-xs text-ink">
                             {layer.name}{isEditLayerPending(layer) ? ' (loading)' : ''}
@@ -326,8 +324,8 @@ const EditLayersSection: React.FC<{ terrain: LevelObject }> = ({ terrain }) => {
                         }}
                     />
                     <div className="grid grid-cols-2 gap-1 pt-0.5">
-                        <Button size="sm" disabled={isEditLayerPending(active)} title="Keep this layer's work for good, as part of the ground" onClick={() => write(withEditLayerMerged(data, active.id))}><Combine size={11} /> Merge</Button>
-                        <Button size="sm" variant="danger" disabled={isEditLayerPending(active)} title="Remove this layer and all its work" onClick={() => write(withoutEditLayer(data, active.id))}><Trash2 size={11} /> Remove</Button>
+                        <Button size="sm" disabled={isEditLayerPending(active)} title="Keep this layer's work for good, as part of the ground" onClick={() => write(withEditLayerMerged(data, active.id))}><MergeIcon size={11} /> Merge</Button>
+                        <Button size="sm" variant="danger" disabled={isEditLayerPending(active)} title="Remove this layer and all its work" onClick={() => write(withoutEditLayer(data, active.id))}><TrashIcon size={11} /> Remove</Button>
                     </div>
                 </div>
             )}
@@ -523,7 +521,7 @@ const ManageTab: React.FC<{
                                 aria-pressed={entry.id === terrain?.id}
                                 className={`flex w-full items-center gap-2 rounded border px-2 py-1 text-left text-xs transition-colors duration-75 ${entry.id === terrain?.id ? 'border-accent/70 bg-accent/15 text-ink' : 'border-line text-ink-2 hover:bg-gray-750'}`}
                             >
-                                <Mountain size={12} className="shrink-0" />
+                                <MountainIcon size={12} className="shrink-0" />
                                 <span className="flex-1 truncate">{entry.name}</span>
                                 <span className="shrink-0 text-2xs text-ink-3">{entry.terrainData?.width} × {entry.terrainData?.depth} m</span>
                             </button>
@@ -542,7 +540,7 @@ const ManageTab: React.FC<{
                             <Select value={resize ?? data.resolution} options={RESOLUTIONS.map(value => ({ label: `${value} cells`, value }))} onChange={(value: number) => setResize(value)} />
                         </Row>
                         {resize !== null && resize !== data.resolution && (
-                            <Button variant="primary" size="md" className="w-full" onClick={applyResize}><Scaling size={12} /> Resample to {resize} cells</Button>
+                            <Button variant="primary" size="md" className="w-full" onClick={applyResize}><ScaleIcon size={12} /> Resample to {resize} cells</Button>
                         )}
                     </div>
                     <div className="mt-2 space-y-1">
@@ -553,10 +551,10 @@ const ManageTab: React.FC<{
                             </div>
                         </Row>
                         <div className="grid grid-cols-2 gap-1 pt-1">
-                            <Button size="md" onClick={() => { fileTarget.current = 'existing'; fileInput.current?.click(); }} title="Replace this terrain's heights from a 16-bit PNG or RAW file"><Upload size={12} /> Import</Button>
-                            <Button size="md" onClick={() => void exportHeights(false)} title="Save the heights as a 16-bit PNG"><Download size={12} /> Export PNG</Button>
-                            <Button size="md" onClick={() => void exportHeights(true)} title="Save the heights as 16-bit RAW (.r16)"><Download size={12} /> Export RAW</Button>
-                            <Button size="md" variant="danger" onClick={() => void removeLevelObject(terrain.id)}><Trash2 size={12} /> Delete</Button>
+                            <Button size="md" onClick={() => { fileTarget.current = 'existing'; fileInput.current?.click(); }} title="Replace this terrain's heights from a 16-bit PNG or RAW file"><UploadIcon size={12} /> Import</Button>
+                            <Button size="md" onClick={() => void exportHeights(false)} title="Save the heights as a 16-bit PNG"><DownloadIcon size={12} /> Export PNG</Button>
+                            <Button size="md" onClick={() => void exportHeights(true)} title="Save the heights as 16-bit RAW (.r16)"><DownloadIcon size={12} /> Export RAW</Button>
+                            <Button size="md" variant="danger" onClick={() => void removeLevelObject(terrain.id)}><TrashIcon size={12} /> Delete</Button>
                         </div>
                     </div>
                 </Section>
@@ -577,8 +575,8 @@ const ManageTab: React.FC<{
                     </Row>
                     <p className="text-2xs text-ink-3">{(width / resolution).toFixed(2)} m between vertices.</p>
                     <div className="flex gap-1.5 pt-1">
-                        <Button variant="primary" size="md" className="flex-1" onClick={() => void createFrom(undefined)}><Plus size={12} /> Create</Button>
-                        <Button size="md" title="Create it from a 16-bit PNG or RAW heightmap" onClick={() => { fileTarget.current = 'new'; fileInput.current?.click(); }}><Upload size={12} /> From File</Button>
+                        <Button variant="primary" size="md" className="flex-1" onClick={() => void createFrom(undefined)}><PlusIcon size={12} /> Create</Button>
+                        <Button size="md" title="Create it from a 16-bit PNG or RAW heightmap" onClick={() => { fileTarget.current = 'new'; fileInput.current?.click(); }}><UploadIcon size={12} /> From File</Button>
                     </div>
                 </div>
             </Section>
@@ -599,9 +597,9 @@ const ManageTab: React.FC<{
 };
 
 const TABS: { value: TerrainTab; label: string; icon: React.ReactNode }[] = [
-    { value: 'manage', label: 'Manage', icon: <Box size={12} /> },
-    { value: 'sculpt', label: 'Sculpt', icon: <Hammer size={12} /> },
-    { value: 'paint', label: 'Paint', icon: <Layers size={12} /> },
+    { value: 'manage', label: 'Manage', icon: <CubeIcon size={12} /> },
+    { value: 'sculpt', label: 'Sculpt', icon: <HammerIcon size={12} /> },
+    { value: 'paint', label: 'Paint', icon: <LayersIcon size={12} /> },
 ];
 
 /** The Terrain tool's panel: make and exchange terrains, shape them, and paint them. */

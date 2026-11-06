@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { AlertTriangle, Loader2 } from "lucide-react";
+import { SpinnerIcon, WarningIcon } from '../UI/Icons';
 import { frontendDiagnostics } from "../../diagnostics/runtime";
 
 interface DynamicHUDComponentProps {
@@ -197,12 +197,12 @@ export const DynamicHUDComponent: React.FC<DynamicHUDComponentProps> = ({ code, 
 
   if (error) {
     return <div className="w-full h-full flex flex-col items-center justify-center bg-red-900/20 border border-red-500/50 rounded p-2 text-center">
-      <AlertTriangle size={24} className="text-red-500 mb-1" />
+      <WarningIcon size={24} className="text-red-500 mb-1" />
       <span className="text-[10px] text-red-300 font-mono break-all">{error}</span>
     </div>;
   }
   if (!compiledCode) {
-    return <div className="w-full h-full flex items-center justify-center text-gray-500"><Loader2 size={16} className="animate-spin" /></div>;
+    return <div className="w-full h-full flex items-center justify-center text-gray-500"><SpinnerIcon size={16} className="animate-spin" /></div>;
   }
   return <iframe
     ref={iframeRef}

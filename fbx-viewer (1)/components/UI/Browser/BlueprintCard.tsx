@@ -1,6 +1,6 @@
 
 import React from 'react';
-import { Shield, Skull } from 'lucide-react';
+import { ShieldIcon, SkullIcon } from '../Icons';
 import { Blueprint } from '../../../types';
 
 interface BlueprintCardProps {
@@ -16,8 +16,8 @@ export const BlueprintCard: React.FC<BlueprintCardProps> = ({ blueprint, onSelec
         >
             <div className="aspect-[4/3] bg-gray-800 rounded-md border border-gray-700 overflow-hidden group-hover:border-blue-500 transition-colors shadow-sm relative flex flex-col items-center justify-center p-4">
                 {blueprint.type === 'Player Character'
-                    ? <Shield size={32} className="text-gray-600 group-hover:text-blue-400 transition-colors" />
-                    : <Skull size={32} className="text-gray-600 group-hover:text-red-400 transition-colors" />
+                    ? <ShieldIcon size={32} className="text-gray-600 group-hover:text-blue-400 transition-colors" />
+                    : <SkullIcon size={32} className="text-gray-600 group-hover:text-red-400 transition-colors" />
                 }
                 <div className="absolute top-2 right-2 flex flex-col gap-1">
                     <span className="text-2xs font-bold text-gray-500 bg-gray-900/80 px-1 rounded border border-gray-700">

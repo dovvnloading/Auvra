@@ -5,7 +5,7 @@ import { createPortal, useFrame, useStore, useThree, type RootState } from '@rea
 import { AuvraCanvas } from '../../renderer/AuvraCanvas';
 import { Grid, OrbitControls, ContactShadows } from '@react-three/drei';
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib';
-import { Crosshair, Pause, Play, RotateCcw, StepForward } from 'lucide-react';
+import { CrosshairIcon, PauseIcon, PlayIcon, ResetIcon, StepForwardIcon } from '../UI/Icons';
 import { useScene } from '../../context/SceneContext';
 import { AnimationGraphData, GraphTransition, LoadedModelData } from '../../types';
 import { GraphRuntime, type GraphRuntimeAPI } from './GraphRuntime';
@@ -352,7 +352,7 @@ export const PreviewTransport: React.FC<PreviewTransportProps> = ({
             aria-label={paused ? 'Play preview' : 'Pause preview'}
             title={paused ? 'Play' : 'Pause'}
         >
-            {paused ? <Play size={12} /> : <Pause size={12} />}
+            {paused ? <PlayIcon size={12} /> : <PauseIcon size={12} />}
         </button>
         <button
             type="button"
@@ -363,7 +363,7 @@ export const PreviewTransport: React.FC<PreviewTransportProps> = ({
             aria-label="Step one frame"
             title="Step one frame (while paused)"
         >
-            <StepForward size={12} />
+            <StepForwardIcon size={12} />
         </button>
         <button
             type="button"
@@ -373,7 +373,7 @@ export const PreviewTransport: React.FC<PreviewTransportProps> = ({
             aria-label="Restart preview"
             title="Restart: model back to its start position, graph back to its entry state"
         >
-            <RotateCcw size={12} />
+            <ResetIcon size={12} />
         </button>
         <div className="w-px h-4 bg-gray-700 mx-1"></div>
         <input
@@ -406,7 +406,7 @@ export const PreviewTransport: React.FC<PreviewTransportProps> = ({
             aria-label="Follow model"
             title={follow ? 'Camera follows the model' : 'Camera stays put; orbit freely'}
         >
-            <Crosshair size={12} /> Follow
+            <CrosshairIcon size={12} /> Follow
         </button>
     </div>
 );

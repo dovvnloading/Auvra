@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Film } from 'lucide-react';
+import { FilmIcon } from '../UI/Icons';
 import { useScene } from '../../context/SceneContext';
 import { selectPlayerBlueprint } from '../Sandbox/hooks/useSandboxConfiguration';
 import { normalizeTimeline } from '../../runtime/timeline/evaluate';
@@ -61,7 +61,7 @@ export const TimelineInspector: React.FC<ComponentInspectorProps> = ({ object, c
                 onClick={() => setEditing(true)}
                 className="w-full py-1.5 text-xs bg-blue-600/20 hover:bg-blue-600/30 border border-blue-500/40 rounded text-blue-200 flex items-center justify-center gap-2 transition-colors"
             >
-                <Film size={12} /> Edit Timeline
+                <FilmIcon size={12} /> Edit Timeline
             </button>
             {editing && (
                 <TimelineEditorModal

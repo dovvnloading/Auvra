@@ -1,5 +1,5 @@
 import React, { useId } from 'react';
-import { MousePointerClick } from 'lucide-react';
+import { ClickIcon } from '../UI/Icons';
 import { parseMenuAction, type MenuActionKind } from '../../player/menus';
 
 const OPEN_LEVEL_PREFIX = 'openLevel:';
@@ -54,7 +54,7 @@ export const HUDActionField: React.FC<HUDActionFieldProps> = ({ value, levels, o
         <div className="space-y-2">
             <div className="space-y-1">
                 <label htmlFor={`${id}-action`} className="text-2xs text-gray-500 font-bold flex items-center gap-1">
-                    <MousePointerClick size={10} /> Action
+                    <ClickIcon size={10} /> Action
                 </label>
                 <select id={`${id}-action`} value={mode} onChange={(event) => handleModeChange(event.target.value)} className={FIELD_CLASS}>
                     <option value={NONE}>None</option>

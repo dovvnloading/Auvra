@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Eye, EyeOff, Play, RefreshCw, RotateCcw, Search, Square, StepForward } from 'lucide-react';
+import { EyeIcon, EyeOffIcon, PlayIcon, RefreshIcon, ResetIcon, SearchIcon, StepForwardIcon, StopIcon } from '../UI/Icons';
 import type { InspectedObject, RuntimeInspector } from '../../runtime/PauseController';
 
 interface PlayToolbarProps {
@@ -76,13 +76,13 @@ export const PlayToolbar: React.FC<PlayToolbarProps> = ({ paused, onResume, onSt
                     <span className="w-2 h-2 rounded-full bg-amber-400" /> Paused
                 </span>
                 <button type="button" onClick={onResume} className={`${BUTTON} bg-green-700 hover:bg-green-600 text-white`} title="Resume (F8)">
-                    <Play size={12} /> Resume
+                    <PlayIcon size={12} /> Resume
                 </button>
                 <button type="button" onClick={onStep} className={`${BUTTON} bg-gray-800 hover:bg-gray-700 text-gray-200`} title="Step one frame (F10)">
-                    <StepForward size={12} /> Step
+                    <StepForwardIcon size={12} /> Step
                 </button>
                 <button type="button" onClick={onRestart} className={`${BUTTON} bg-gray-800 hover:bg-gray-700 text-gray-200`} title="Restart the level">
-                    <RotateCcw size={12} /> Restart
+                    <ResetIcon size={12} /> Restart
                 </button>
                 <button
                     type="button"
@@ -91,10 +91,10 @@ export const PlayToolbar: React.FC<PlayToolbarProps> = ({ paused, onResume, onSt
                     aria-pressed={inspectorOpen}
                     title="Inspect the running objects"
                 >
-                    <Search size={12} /> Inspect
+                    <SearchIcon size={12} /> Inspect
                 </button>
                 <button type="button" onClick={onStop} className={`${BUTTON} bg-red-800 hover:bg-red-700 text-white`} title="Stop and return to the editor (Esc)">
-                    <Square size={12} /> Stop
+                    <StopIcon size={12} /> Stop
                 </button>
             </div>
 
@@ -108,7 +108,7 @@ export const PlayToolbar: React.FC<PlayToolbarProps> = ({ paused, onResume, onSt
                             className="flex-1 bg-gray-950 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 focus:outline-none focus:border-blue-500"
                         />
                         <button type="button" onClick={refresh} className="text-gray-400 hover:text-white" title="Read the scene again" aria-label="Refresh">
-                            <RefreshCw size={12} />
+                            <RefreshIcon size={12} />
                         </button>
                     </div>
                     <div className="flex-1 overflow-y-auto p-1 space-y-1">
@@ -116,7 +116,7 @@ export const PlayToolbar: React.FC<PlayToolbarProps> = ({ paused, onResume, onSt
                         {rows.map(row => (
                             <div key={row.id} className="px-2 py-1.5 rounded bg-gray-800/60 text-2xs font-mono">
                                 <div className="flex items-center gap-1.5 font-sans text-xs font-bold text-gray-200">
-                                    {row.visible ? <Eye size={10} className="text-gray-500" /> : <EyeOff size={10} className="text-amber-500" />}
+                                    {row.visible ? <EyeIcon size={10} className="text-gray-500" /> : <EyeOffIcon size={10} className="text-amber-500" />}
                                     <span className="truncate">{row.name}</span>
                                 </div>
                                 <div className="text-gray-400">pos {formatVector(row.position, 2)}</div>

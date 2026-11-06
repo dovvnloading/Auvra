@@ -1,13 +1,7 @@
 
 
 import React, { useState, useEffect, useMemo } from 'react';
-import { 
-    Play, GitBranch, CheckSquare, Combine, Activity, Database, MessageSquare, Trash, 
-    Plus, Minus, X, Divide, ChevronRight, ChevronLeft, Equal, Hash, Type as TypeIcon, ToggleLeft, ArrowRight,
-    Skull, Shield, Clock, RefreshCcw, AlertTriangle,
-    ListOrdered, Repeat, Repeat1, ArrowLeftRight, DoorClosed, PackagePlus, Move3d, Volume2, Zap, Crosshair,
-    Variable, Gamepad2, Dices, Film, Smile, Send, Crown, Video, HeartPulse, HeartCrack, Package, Megaphone, Route, Car, Sparkles, Sun, CloudRain, Bomb
-} from 'lucide-react';
+import { ArrowRightIcon, ArrowsLeftRightIcon, AxesIcon, BoltIcon, BombIcon, BranchIcon, CarIcon, ChatIcon, CheckboxIcon, ChevronLeftIcon, ChevronRightIcon, ClockIcon, CrossIcon, CrosshairIcon, CrownIcon, DamageIcon, DatabaseIcon, DiceIcon, DivideIcon, DoorIcon, EqualIcon, FaceIcon, FilmIcon, GamepadIcon, HashIcon, HealthIcon, LoopIcon, LoopOnceIcon, MegaphoneIcon, MergeIcon, MinusIcon, PackageIcon, PackagePlusIcon, PlayIcon, PlusIcon, PulseIcon, RainIcon, RefreshIcon, RouteIcon, SendIcon, SequenceIcon, ShieldIcon, SkullIcon, SparklesIcon, SunIcon, TextIcon, ToggleIcon, TrashIcon, VariableIcon, VideoIcon, VolumeIcon, WarningIcon } from '../UI/Icons';
 import { LogicNode, LogicPin, PinDataType, LevelObject } from '../../types';
 import { describeActor, isOverlapEvent, overlapEventName, overlapTargetWarning, resolveOverlapTarget, selectedOverlapActorId } from './overlapTargets';
 import { FLOW_NODE_DEFINITIONS, FlowNodeDefinition } from '../../hooks/levelBlueprintNodes/flow';
@@ -61,94 +55,94 @@ export const PIN_COLORS: Record<PinDataType, string> = {
 };
 
 const NODE_STYLES: Record<string, { border: string, bg: string, icon: React.ReactNode }> = {
-    'Event': { border: 'border-red-800', bg: 'bg-red-900/90', icon: <Activity size={14} className="text-red-400" /> },
-    'Branch': { border: 'border-gray-600', bg: 'bg-gray-800', icon: <GitBranch size={14} className="text-gray-300" /> },
-    'Check': { border: 'border-blue-800', bg: 'bg-blue-900/40', icon: <CheckSquare size={14} className="text-blue-400" /> },
-    'VariableGet': { border: 'border-emerald-800', bg: 'bg-emerald-900/40', icon: <Database size={14} className="text-emerald-400" /> },
-    'VariableSet': { border: 'border-emerald-800', bg: 'bg-emerald-900/40', icon: <Database size={14} className="text-emerald-400" /> },
-    'PrintString': { border: 'border-pink-800', bg: 'bg-gray-800', icon: <MessageSquare size={14} className="text-pink-400" /> },
-    'DestroyActor': { border: 'border-red-800', bg: 'bg-gray-800', icon: <Trash size={14} className="text-red-400" /> },
-    'Add': { border: 'border-green-800', bg: 'bg-green-900/40', icon: <Plus size={14} className="text-green-400" /> },
-    'Subtract': { border: 'border-green-800', bg: 'bg-green-900/40', icon: <Minus size={14} className="text-green-400" /> },
-    'Multiply': { border: 'border-green-800', bg: 'bg-green-900/40', icon: <X size={14} className="text-green-400" /> },
-    'Divide': { border: 'border-green-800', bg: 'bg-green-900/40', icon: <Divide size={14} className="text-green-400" /> },
-    'Greater': { border: 'border-blue-800', bg: 'bg-blue-900/40', icon: <ChevronRight size={14} className="text-blue-400" /> },
-    'Less': { border: 'border-blue-800', bg: 'bg-blue-900/40', icon: <ChevronLeft size={14} className="text-blue-400" /> },
-    'Equal': { border: 'border-blue-800', bg: 'bg-blue-900/40', icon: <Equal size={14} className="text-blue-400" /> },
-    'And': { border: 'border-blue-800', bg: 'bg-blue-900/40', icon: <Combine size={14} className="text-blue-400" /> },
-    'Or': { border: 'border-blue-800', bg: 'bg-blue-900/40', icon: <Combine size={14} className="text-blue-400" /> },
-    'LiteralFloat': { border: 'border-green-700', bg: 'bg-green-950/80', icon: <Hash size={14} className="text-green-400" /> },
-    'LiteralInteger': { border: 'border-cyan-700', bg: 'bg-cyan-950/80', icon: <Hash size={14} className="text-cyan-400" /> },
-    'LiteralString': { border: 'border-pink-700', bg: 'bg-pink-950/80', icon: <TypeIcon size={14} className="text-pink-400" /> },
-    'LiteralBoolean': { border: 'border-red-700', bg: 'bg-red-950/80', icon: <ToggleLeft size={14} className="text-red-400" /> },
-    'ToString': { border: 'border-pink-800', bg: 'bg-pink-900/40', icon: <ArrowRight size={14} className="text-pink-400" /> },
-    'LevelAction': { border: 'border-indigo-800', bg: 'bg-indigo-900/80', icon: <RefreshCcw size={14} className="text-indigo-400" /> },
+    'Event': { border: 'border-red-800', bg: 'bg-red-900/90', icon: <PulseIcon size={14} className="text-red-400" /> },
+    'Branch': { border: 'border-gray-600', bg: 'bg-gray-800', icon: <BranchIcon size={14} className="text-gray-300" /> },
+    'Check': { border: 'border-blue-800', bg: 'bg-blue-900/40', icon: <CheckboxIcon size={14} className="text-blue-400" /> },
+    'VariableGet': { border: 'border-emerald-800', bg: 'bg-emerald-900/40', icon: <DatabaseIcon size={14} className="text-emerald-400" /> },
+    'VariableSet': { border: 'border-emerald-800', bg: 'bg-emerald-900/40', icon: <DatabaseIcon size={14} className="text-emerald-400" /> },
+    'PrintString': { border: 'border-pink-800', bg: 'bg-gray-800', icon: <ChatIcon size={14} className="text-pink-400" /> },
+    'DestroyActor': { border: 'border-red-800', bg: 'bg-gray-800', icon: <TrashIcon size={14} className="text-red-400" /> },
+    'Add': { border: 'border-green-800', bg: 'bg-green-900/40', icon: <PlusIcon size={14} className="text-green-400" /> },
+    'Subtract': { border: 'border-green-800', bg: 'bg-green-900/40', icon: <MinusIcon size={14} className="text-green-400" /> },
+    'Multiply': { border: 'border-green-800', bg: 'bg-green-900/40', icon: <CrossIcon size={14} className="text-green-400" /> },
+    'Divide': { border: 'border-green-800', bg: 'bg-green-900/40', icon: <DivideIcon size={14} className="text-green-400" /> },
+    'Greater': { border: 'border-blue-800', bg: 'bg-blue-900/40', icon: <ChevronRightIcon size={14} className="text-blue-400" /> },
+    'Less': { border: 'border-blue-800', bg: 'bg-blue-900/40', icon: <ChevronLeftIcon size={14} className="text-blue-400" /> },
+    'Equal': { border: 'border-blue-800', bg: 'bg-blue-900/40', icon: <EqualIcon size={14} className="text-blue-400" /> },
+    'And': { border: 'border-blue-800', bg: 'bg-blue-900/40', icon: <MergeIcon size={14} className="text-blue-400" /> },
+    'Or': { border: 'border-blue-800', bg: 'bg-blue-900/40', icon: <MergeIcon size={14} className="text-blue-400" /> },
+    'LiteralFloat': { border: 'border-green-700', bg: 'bg-green-950/80', icon: <HashIcon size={14} className="text-green-400" /> },
+    'LiteralInteger': { border: 'border-cyan-700', bg: 'bg-cyan-950/80', icon: <HashIcon size={14} className="text-cyan-400" /> },
+    'LiteralString': { border: 'border-pink-700', bg: 'bg-pink-950/80', icon: <TextIcon size={14} className="text-pink-400" /> },
+    'LiteralBoolean': { border: 'border-red-700', bg: 'bg-red-950/80', icon: <ToggleIcon size={14} className="text-red-400" /> },
+    'ToString': { border: 'border-pink-800', bg: 'bg-pink-900/40', icon: <ArrowRightIcon size={14} className="text-pink-400" /> },
+    'LevelAction': { border: 'border-indigo-800', bg: 'bg-indigo-900/80', icon: <RefreshIcon size={14} className="text-indigo-400" /> },
     // Flow control
-    'Sequence': { border: 'border-slate-500', bg: 'bg-slate-800', icon: <ListOrdered size={14} className="text-slate-200" /> },
-    'ForLoop': { border: 'border-slate-500', bg: 'bg-slate-800', icon: <Repeat size={14} className="text-slate-200" /> },
-    'Delay': { border: 'border-slate-500', bg: 'bg-slate-800', icon: <Clock size={14} className="text-slate-200" /> },
-    'DoOnce': { border: 'border-slate-500', bg: 'bg-slate-800', icon: <Repeat1 size={14} className="text-slate-200" /> },
-    'FlipFlop': { border: 'border-slate-500', bg: 'bg-slate-800', icon: <ArrowLeftRight size={14} className="text-slate-200" /> },
-    'Gate': { border: 'border-slate-500', bg: 'bg-slate-800', icon: <DoorClosed size={14} className="text-slate-200" /> },
+    'Sequence': { border: 'border-slate-500', bg: 'bg-slate-800', icon: <SequenceIcon size={14} className="text-slate-200" /> },
+    'ForLoop': { border: 'border-slate-500', bg: 'bg-slate-800', icon: <LoopIcon size={14} className="text-slate-200" /> },
+    'Delay': { border: 'border-slate-500', bg: 'bg-slate-800', icon: <ClockIcon size={14} className="text-slate-200" /> },
+    'DoOnce': { border: 'border-slate-500', bg: 'bg-slate-800', icon: <LoopOnceIcon size={14} className="text-slate-200" /> },
+    'FlipFlop': { border: 'border-slate-500', bg: 'bg-slate-800', icon: <ArrowsLeftRightIcon size={14} className="text-slate-200" /> },
+    'Gate': { border: 'border-slate-500', bg: 'bg-slate-800', icon: <DoorIcon size={14} className="text-slate-200" /> },
     // World
-    'SpawnPrefab': { border: 'border-sky-800', bg: 'bg-sky-950/80', icon: <PackagePlus size={14} className="text-sky-400" /> },
-    'GetActorTransform': { border: 'border-sky-800', bg: 'bg-sky-950/60', icon: <Move3d size={14} className="text-sky-400" /> },
-    'SetActorTransform': { border: 'border-sky-800', bg: 'bg-sky-950/80', icon: <Move3d size={14} className="text-sky-400" /> },
-    'ApplyImpulse': { border: 'border-sky-800', bg: 'bg-sky-950/80', icon: <Zap size={14} className="text-sky-400" /> },
-    'MakeNoise': { border: 'border-amber-800', bg: 'bg-amber-950/70', icon: <Megaphone size={14} className="text-amber-400" /> },
-    'Raycast': { border: 'border-sky-800', bg: 'bg-sky-950/80', icon: <Crosshair size={14} className="text-sky-400" /> },
-    'PlaySound': { border: 'border-amber-800', bg: 'bg-amber-950/70', icon: <Volume2 size={14} className="text-amber-400" /> },
-    'PlayPlayerAnimation': { border: 'border-fuchsia-800', bg: 'bg-fuchsia-950/70', icon: <Film size={14} className="text-fuchsia-400" /> },
-    'SetMorphTarget': { border: 'border-fuchsia-800', bg: 'bg-fuchsia-950/70', icon: <Smile size={14} className="text-fuchsia-400" /> },
+    'SpawnPrefab': { border: 'border-sky-800', bg: 'bg-sky-950/80', icon: <PackagePlusIcon size={14} className="text-sky-400" /> },
+    'GetActorTransform': { border: 'border-sky-800', bg: 'bg-sky-950/60', icon: <AxesIcon size={14} className="text-sky-400" /> },
+    'SetActorTransform': { border: 'border-sky-800', bg: 'bg-sky-950/80', icon: <AxesIcon size={14} className="text-sky-400" /> },
+    'ApplyImpulse': { border: 'border-sky-800', bg: 'bg-sky-950/80', icon: <BoltIcon size={14} className="text-sky-400" /> },
+    'MakeNoise': { border: 'border-amber-800', bg: 'bg-amber-950/70', icon: <MegaphoneIcon size={14} className="text-amber-400" /> },
+    'Raycast': { border: 'border-sky-800', bg: 'bg-sky-950/80', icon: <CrosshairIcon size={14} className="text-sky-400" /> },
+    'PlaySound': { border: 'border-amber-800', bg: 'bg-amber-950/70', icon: <VolumeIcon size={14} className="text-amber-400" /> },
+    'PlayPlayerAnimation': { border: 'border-fuchsia-800', bg: 'bg-fuchsia-950/70', icon: <FilmIcon size={14} className="text-fuchsia-400" /> },
+    'SetMorphTarget': { border: 'border-fuchsia-800', bg: 'bg-fuchsia-950/70', icon: <FaceIcon size={14} className="text-fuchsia-400" /> },
     // Player
-    'DamagePlayer': { border: 'border-red-800', bg: 'bg-red-950/70', icon: <HeartCrack size={14} className="text-red-400" /> },
-    'HealPlayer': { border: 'border-green-800', bg: 'bg-green-950/70', icon: <HeartPulse size={14} className="text-green-400" /> },
-    'GetPlayerHealth': { border: 'border-green-800', bg: 'bg-green-950/50', icon: <HeartPulse size={14} className="text-green-400" /> },
-    'AddAmmo': { border: 'border-amber-800', bg: 'bg-amber-950/70', icon: <Package size={14} className="text-amber-400" /> },
-    'GiveWeapon': { border: 'border-amber-800', bg: 'bg-amber-950/70', icon: <Crosshair size={14} className="text-amber-400" /> },
+    'DamagePlayer': { border: 'border-red-800', bg: 'bg-red-950/70', icon: <DamageIcon size={14} className="text-red-400" /> },
+    'HealPlayer': { border: 'border-green-800', bg: 'bg-green-950/70', icon: <HealthIcon size={14} className="text-green-400" /> },
+    'GetPlayerHealth': { border: 'border-green-800', bg: 'bg-green-950/50', icon: <HealthIcon size={14} className="text-green-400" /> },
+    'AddAmmo': { border: 'border-amber-800', bg: 'bg-amber-950/70', icon: <PackageIcon size={14} className="text-amber-400" /> },
+    'GiveWeapon': { border: 'border-amber-800', bg: 'bg-amber-950/70', icon: <CrosshairIcon size={14} className="text-amber-400" /> },
     // Splines
-    'GetSplineLength': { border: 'border-fuchsia-800', bg: 'bg-fuchsia-950/50', icon: <Route size={14} className="text-fuchsia-400" /> },
-    'GetSplinePoint': { border: 'border-fuchsia-800', bg: 'bg-fuchsia-950/50', icon: <Route size={14} className="text-fuchsia-400" /> },
-    'FindClosestOnSpline': { border: 'border-fuchsia-800', bg: 'bg-fuchsia-950/50', icon: <Route size={14} className="text-fuchsia-400" /> },
-    'EnterVehicle': { border: 'border-orange-800', bg: 'bg-orange-950/50', icon: <Car size={14} className="text-orange-400" /> },
-    'ExitVehicle': { border: 'border-orange-800', bg: 'bg-orange-950/50', icon: <Car size={14} className="text-orange-400" /> },
-    'GetVehicleState': { border: 'border-orange-800', bg: 'bg-orange-950/50', icon: <Car size={14} className="text-orange-400" /> },
-    'GetPlayerVehicle': { border: 'border-orange-800', bg: 'bg-orange-950/50', icon: <Car size={14} className="text-orange-400" /> },
-    'SetVehicleInput': { border: 'border-orange-800', bg: 'bg-orange-950/50', icon: <Car size={14} className="text-orange-400" /> },
-    'ReleaseVehicleInput': { border: 'border-orange-800', bg: 'bg-orange-950/50', icon: <Car size={14} className="text-orange-400" /> },
-    'PlayParticles': { border: 'border-amber-800', bg: 'bg-amber-950/50', icon: <Sparkles size={14} className="text-amber-400" /> },
-    'StopParticles': { border: 'border-amber-800', bg: 'bg-amber-950/50', icon: <Sparkles size={14} className="text-amber-400" /> },
-    'EmitParticles': { border: 'border-amber-800', bg: 'bg-amber-950/50', icon: <Sparkles size={14} className="text-amber-400" /> },
-    'GetParticles': { border: 'border-amber-800', bg: 'bg-amber-950/50', icon: <Sparkles size={14} className="text-amber-400" /> },
-    'SetTimeOfDay': { border: 'border-sky-800', bg: 'bg-sky-950/50', icon: <Sun size={14} className="text-sky-400" /> },
-    'GetTimeOfDay': { border: 'border-sky-800', bg: 'bg-sky-950/50', icon: <Sun size={14} className="text-sky-400" /> },
-    'SetDayLength': { border: 'border-sky-800', bg: 'bg-sky-950/50', icon: <Sun size={14} className="text-sky-400" /> },
-    'SetWeather': { border: 'border-sky-800', bg: 'bg-sky-950/50', icon: <CloudRain size={14} className="text-sky-400" /> },
-    'SetSkyPreset': { border: 'border-sky-800', bg: 'bg-sky-950/50', icon: <CloudRain size={14} className="text-sky-400" /> },
-    'Explode': { border: 'border-rose-800', bg: 'bg-rose-950/50', icon: <Bomb size={14} className="text-rose-400" /> },
-    'BreakObject': { border: 'border-rose-800', bg: 'bg-rose-950/50', icon: <Bomb size={14} className="text-rose-400" /> },
-    'DamageObject': { border: 'border-rose-800', bg: 'bg-rose-950/50', icon: <Bomb size={14} className="text-rose-400" /> },
-    'GetObjectHealth': { border: 'border-rose-800', bg: 'bg-rose-950/50', icon: <Bomb size={14} className="text-rose-400" /> },
-    'UseAbility': { border: 'border-violet-800', bg: 'bg-violet-950/50', icon: <Zap size={14} className="text-violet-400" /> },
-    'ApplyEffect': { border: 'border-violet-800', bg: 'bg-violet-950/50', icon: <Zap size={14} className="text-violet-400" /> },
-    'RemoveEffect': { border: 'border-violet-800', bg: 'bg-violet-950/50', icon: <Zap size={14} className="text-violet-400" /> },
-    'GetAttribute': { border: 'border-violet-800', bg: 'bg-violet-950/50', icon: <Zap size={14} className="text-violet-400" /> },
-    'ChangeAttribute': { border: 'border-violet-800', bg: 'bg-violet-950/50', icon: <Zap size={14} className="text-violet-400" /> },
-    'HasTag': { border: 'border-violet-800', bg: 'bg-violet-950/50', icon: <Zap size={14} className="text-violet-400" /> },
-    'AddTag': { border: 'border-violet-800', bg: 'bg-violet-950/50', icon: <Zap size={14} className="text-violet-400" /> },
-    'RemoveTag': { border: 'border-violet-800', bg: 'bg-violet-950/50', icon: <Zap size={14} className="text-violet-400" /> },
-    'GetAbilityCooldown': { border: 'border-violet-800', bg: 'bg-violet-950/50', icon: <Zap size={14} className="text-violet-400" /> },
-    'GetWeather': { border: 'border-sky-800', bg: 'bg-sky-950/50', icon: <CloudRain size={14} className="text-sky-400" /> },
-    'SendNetworkEvent': { border: 'border-teal-800', bg: 'bg-teal-950/70', icon: <Send size={14} className="text-teal-400" /> },
-    'IsNetworkHost': { border: 'border-teal-800', bg: 'bg-teal-950/70', icon: <Crown size={14} className="text-teal-400" /> },
-    'SetActiveCamera': { border: 'border-pink-800', bg: 'bg-pink-950/70', icon: <Video size={14} className="text-pink-400" /> },
-    'StartDialogue': { border: 'border-sky-800', bg: 'bg-sky-950/70', icon: <MessageSquare size={14} className="text-sky-400" /> },
-    'InputActionPressed': { border: 'border-orange-800', bg: 'bg-orange-950/70', icon: <Gamepad2 size={14} className="text-orange-400" /> },
-    'GetLevelVariable': { border: 'border-teal-800', bg: 'bg-teal-950/60', icon: <Variable size={14} className="text-teal-400" /> },
-    'SetLevelVariable': { border: 'border-teal-800', bg: 'bg-teal-950/80', icon: <Variable size={14} className="text-teal-400" /> },
-    'RandomFloat': { border: 'border-green-800', bg: 'bg-green-950/60', icon: <Dices size={14} className="text-green-400" /> },
-    'RandomInt': { border: 'border-cyan-800', bg: 'bg-cyan-950/60', icon: <Dices size={14} className="text-cyan-400" /> },
-    'Print': { border: 'border-pink-800', bg: 'bg-gray-800', icon: <MessageSquare size={14} className="text-pink-400" /> },
+    'GetSplineLength': { border: 'border-fuchsia-800', bg: 'bg-fuchsia-950/50', icon: <RouteIcon size={14} className="text-fuchsia-400" /> },
+    'GetSplinePoint': { border: 'border-fuchsia-800', bg: 'bg-fuchsia-950/50', icon: <RouteIcon size={14} className="text-fuchsia-400" /> },
+    'FindClosestOnSpline': { border: 'border-fuchsia-800', bg: 'bg-fuchsia-950/50', icon: <RouteIcon size={14} className="text-fuchsia-400" /> },
+    'EnterVehicle': { border: 'border-orange-800', bg: 'bg-orange-950/50', icon: <CarIcon size={14} className="text-orange-400" /> },
+    'ExitVehicle': { border: 'border-orange-800', bg: 'bg-orange-950/50', icon: <CarIcon size={14} className="text-orange-400" /> },
+    'GetVehicleState': { border: 'border-orange-800', bg: 'bg-orange-950/50', icon: <CarIcon size={14} className="text-orange-400" /> },
+    'GetPlayerVehicle': { border: 'border-orange-800', bg: 'bg-orange-950/50', icon: <CarIcon size={14} className="text-orange-400" /> },
+    'SetVehicleInput': { border: 'border-orange-800', bg: 'bg-orange-950/50', icon: <CarIcon size={14} className="text-orange-400" /> },
+    'ReleaseVehicleInput': { border: 'border-orange-800', bg: 'bg-orange-950/50', icon: <CarIcon size={14} className="text-orange-400" /> },
+    'PlayParticles': { border: 'border-amber-800', bg: 'bg-amber-950/50', icon: <SparklesIcon size={14} className="text-amber-400" /> },
+    'StopParticles': { border: 'border-amber-800', bg: 'bg-amber-950/50', icon: <SparklesIcon size={14} className="text-amber-400" /> },
+    'EmitParticles': { border: 'border-amber-800', bg: 'bg-amber-950/50', icon: <SparklesIcon size={14} className="text-amber-400" /> },
+    'GetParticles': { border: 'border-amber-800', bg: 'bg-amber-950/50', icon: <SparklesIcon size={14} className="text-amber-400" /> },
+    'SetTimeOfDay': { border: 'border-sky-800', bg: 'bg-sky-950/50', icon: <SunIcon size={14} className="text-sky-400" /> },
+    'GetTimeOfDay': { border: 'border-sky-800', bg: 'bg-sky-950/50', icon: <SunIcon size={14} className="text-sky-400" /> },
+    'SetDayLength': { border: 'border-sky-800', bg: 'bg-sky-950/50', icon: <SunIcon size={14} className="text-sky-400" /> },
+    'SetWeather': { border: 'border-sky-800', bg: 'bg-sky-950/50', icon: <RainIcon size={14} className="text-sky-400" /> },
+    'SetSkyPreset': { border: 'border-sky-800', bg: 'bg-sky-950/50', icon: <RainIcon size={14} className="text-sky-400" /> },
+    'Explode': { border: 'border-rose-800', bg: 'bg-rose-950/50', icon: <BombIcon size={14} className="text-rose-400" /> },
+    'BreakObject': { border: 'border-rose-800', bg: 'bg-rose-950/50', icon: <BombIcon size={14} className="text-rose-400" /> },
+    'DamageObject': { border: 'border-rose-800', bg: 'bg-rose-950/50', icon: <BombIcon size={14} className="text-rose-400" /> },
+    'GetObjectHealth': { border: 'border-rose-800', bg: 'bg-rose-950/50', icon: <BombIcon size={14} className="text-rose-400" /> },
+    'UseAbility': { border: 'border-violet-800', bg: 'bg-violet-950/50', icon: <BoltIcon size={14} className="text-violet-400" /> },
+    'ApplyEffect': { border: 'border-violet-800', bg: 'bg-violet-950/50', icon: <BoltIcon size={14} className="text-violet-400" /> },
+    'RemoveEffect': { border: 'border-violet-800', bg: 'bg-violet-950/50', icon: <BoltIcon size={14} className="text-violet-400" /> },
+    'GetAttribute': { border: 'border-violet-800', bg: 'bg-violet-950/50', icon: <BoltIcon size={14} className="text-violet-400" /> },
+    'ChangeAttribute': { border: 'border-violet-800', bg: 'bg-violet-950/50', icon: <BoltIcon size={14} className="text-violet-400" /> },
+    'HasTag': { border: 'border-violet-800', bg: 'bg-violet-950/50', icon: <BoltIcon size={14} className="text-violet-400" /> },
+    'AddTag': { border: 'border-violet-800', bg: 'bg-violet-950/50', icon: <BoltIcon size={14} className="text-violet-400" /> },
+    'RemoveTag': { border: 'border-violet-800', bg: 'bg-violet-950/50', icon: <BoltIcon size={14} className="text-violet-400" /> },
+    'GetAbilityCooldown': { border: 'border-violet-800', bg: 'bg-violet-950/50', icon: <BoltIcon size={14} className="text-violet-400" /> },
+    'GetWeather': { border: 'border-sky-800', bg: 'bg-sky-950/50', icon: <RainIcon size={14} className="text-sky-400" /> },
+    'SendNetworkEvent': { border: 'border-teal-800', bg: 'bg-teal-950/70', icon: <SendIcon size={14} className="text-teal-400" /> },
+    'IsNetworkHost': { border: 'border-teal-800', bg: 'bg-teal-950/70', icon: <CrownIcon size={14} className="text-teal-400" /> },
+    'SetActiveCamera': { border: 'border-pink-800', bg: 'bg-pink-950/70', icon: <VideoIcon size={14} className="text-pink-400" /> },
+    'StartDialogue': { border: 'border-sky-800', bg: 'bg-sky-950/70', icon: <ChatIcon size={14} className="text-sky-400" /> },
+    'InputActionPressed': { border: 'border-orange-800', bg: 'bg-orange-950/70', icon: <GamepadIcon size={14} className="text-orange-400" /> },
+    'GetLevelVariable': { border: 'border-teal-800', bg: 'bg-teal-950/60', icon: <VariableIcon size={14} className="text-teal-400" /> },
+    'SetLevelVariable': { border: 'border-teal-800', bg: 'bg-teal-950/80', icon: <VariableIcon size={14} className="text-teal-400" /> },
+    'RandomFloat': { border: 'border-green-800', bg: 'bg-green-950/60', icon: <DiceIcon size={14} className="text-green-400" /> },
+    'RandomInt': { border: 'border-cyan-800', bg: 'bg-cyan-950/60', icon: <DiceIcon size={14} className="text-cyan-400" /> },
+    'Print': { border: 'border-pink-800', bg: 'bg-gray-800', icon: <ChatIcon size={14} className="text-pink-400" /> },
 };
 
 /** The node header icon for a node type (the palette reuses it); undefined for unstyled types. */
@@ -237,7 +231,7 @@ export const LogicNodeComponent: React.FC<LogicNodeProps> = ({
     }, [node.inputs, node.outputs, width, totalHeight, node.id, onRegisterLayout]);
 
     // --- RENDER ---
-    const style = NODE_STYLES[node.type] || { border: 'border-gray-700', bg: 'bg-gray-900', icon: <Activity size={14} /> };
+    const style = NODE_STYLES[node.type] || { border: 'border-gray-700', bg: 'bg-gray-900', icon: <PulseIcon size={14} /> };
     const borderClass = isSelected ? 'ring-2 ring-blue-500 shadow-[0_0_20px_rgba(59,130,246,0.4)]' : '';
     
     return (
@@ -271,8 +265,8 @@ export const LogicNodeComponent: React.FC<LogicNodeProps> = ({
                 {/* Optional Status Icon */}
                 {node.data?.targetBlueprintType && (
                     node.data.targetBlueprintType === 'Enemy' 
-                        ? <Skull size={12} className="text-red-400" /> 
-                        : <Shield size={12} className="text-blue-400" />
+                        ? <SkullIcon size={12} className="text-red-400" /> 
+                        : <ShieldIcon size={12} className="text-blue-400" />
                 )}
             </div>
 
@@ -294,7 +288,7 @@ export const LogicNodeComponent: React.FC<LogicNodeProps> = ({
                                 onPointerUp={(e) => { e.stopPropagation(); onPinMouseUp(e, pin); }}
                             >
                                 {pin.dataType === 'Exec' ? (
-                                    <Play size={14} fill="white" className="text-white drop-shadow-md" />
+                                    <PlayIcon size={14} fill="white" className="text-white drop-shadow-md" />
                                 ) : (
                                     <div 
                                         className="w-3 h-3 rounded-full border border-black/50 shadow-sm"
@@ -326,7 +320,7 @@ export const LogicNodeComponent: React.FC<LogicNodeProps> = ({
                                 onPointerUp={(e) => { e.stopPropagation(); onPinMouseUp(e, pin); }}
                             >
                                 {pin.dataType === 'Exec' ? (
-                                    <Play size={14} fill="white" className="text-white drop-shadow-md" />
+                                    <PlayIcon size={14} fill="white" className="text-white drop-shadow-md" />
                                 ) : (
                                     <div 
                                         className="w-3 h-3 rounded-full border border-black/50 shadow-sm"
@@ -389,7 +383,7 @@ export const LogicNodeComponent: React.FC<LogicNodeProps> = ({
 
                     {overlapWarning && (
                         <div role="alert" title={overlapWarning} className="mt-1 flex items-start gap-1 text-2xs leading-tight text-amber-300">
-                            <AlertTriangle size={10} className="shrink-0 mt-px" />
+                            <WarningIcon size={10} className="shrink-0 mt-px" />
                             <span className="line-clamp-2">{overlapWarning}</span>
                         </div>
                     )}

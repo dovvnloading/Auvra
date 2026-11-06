@@ -1,7 +1,7 @@
 
 import React from 'react';
 import type * as THREE from 'three';
-import { MousePointer2 } from 'lucide-react';
+import { PointerIcon } from '../UI/Icons';
 import { AnimationGraphData } from '../../types';
 import { StateInspector } from './Inspectors/StateInspector';
 import { TransitionInspector } from './Inspectors/TransitionInspector';
@@ -95,7 +95,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                 />
              ) : (
                  <div className="flex-1 flex flex-col items-center justify-center text-center text-gray-500 p-6">
-                     <MousePointer2 size={32} className="mx-auto mb-3 opacity-20" />
+                     <PointerIcon size={32} className="mx-auto mb-3 opacity-20" />
                      <p className="text-xs">Select a state or transition<br/>to edit properties.</p>
                  </div>
              )}

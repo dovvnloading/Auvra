@@ -1,5 +1,5 @@
 import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
-import { Hammer, RotateCcw, Save, SlidersHorizontal, X } from 'lucide-react';
+import { CrossIcon, HammerIcon, ResetIcon, SaveIcon, SlidersIcon } from '../UI/Icons';
 import { useScene } from '../../context/SceneContext';
 import { projectService } from '../../utils/projectService';
 import { useNativeProjectDocument } from '../../utils/useNativeProjectDocument';
@@ -244,8 +244,8 @@ export const GameSettingsPanel: React.FC<GameSettingsPanelProps> = ({ onClose })
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/55 p-4" role="dialog" aria-modal="true" aria-label="Game settings">
       <div className="flex w-full max-w-xl max-h-[90vh] flex-col overflow-hidden rounded-xl border border-gray-700 bg-gray-900 shadow-2xl">
         <div className="flex items-center justify-between border-b border-gray-800 bg-gray-950 px-5 py-4">
-          <div className="flex items-center gap-3"><SlidersHorizontal size={18} className="text-blue-400" /><div><h2 className="text-sm font-bold text-white">Game Settings</h2><p className="text-2xs text-gray-500">Stored in the project · used by Play and Build Game</p></div></div>
-          <button type="button" onClick={onClose} className="rounded p-1 text-gray-500 hover:bg-gray-800 hover:text-white" aria-label="Close game settings"><X size={16} /></button>
+          <div className="flex items-center gap-3"><SlidersIcon size={18} className="text-blue-400" /><div><h2 className="text-sm font-bold text-white">Game Settings</h2><p className="text-2xs text-gray-500">Stored in the project · used by Play and Build Game</p></div></div>
+          <button type="button" onClick={onClose} className="rounded p-1 text-gray-500 hover:bg-gray-800 hover:text-white" aria-label="Close game settings"><CrossIcon size={16} /></button>
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto p-5 space-y-4">
           {!hydrated && <div className="text-xs text-gray-500">Loading game settings…</div>}
@@ -357,17 +357,17 @@ export const GameSettingsPanel: React.FC<GameSettingsPanelProps> = ({ onClose })
             </fieldset>
             <div className="flex items-center justify-between gap-3">
               <p className="text-2xs text-gray-500">{buildBlocked ?? 'Pick a parent folder; an earlier build of this target there is replaced.'}</p>
-              <button type="button" disabled={!canBuild} onClick={() => void build()} className="flex shrink-0 items-center gap-2 rounded bg-emerald-700 px-3 py-1.5 text-xs font-bold text-white hover:bg-emerald-600 disabled:opacity-50"><Hammer size={13} /> {building ? 'Building…' : `Build ${BUILD_TARGET_COPY[selectedBuild.target].label}`}</button>
+              <button type="button" disabled={!canBuild} onClick={() => void build()} className="flex shrink-0 items-center gap-2 rounded bg-emerald-700 px-3 py-1.5 text-xs font-bold text-white hover:bg-emerald-600 disabled:opacity-50"><HammerIcon size={13} /> {building ? 'Building…' : `Build ${BUILD_TARGET_COPY[selectedBuild.target].label}`}</button>
             </div>
           </div>
 
           {(message || error) && <div className="rounded border border-gray-700 bg-gray-950 p-3 text-xs text-gray-300">{message || error?.message}</div>}
         </div>
         <div className="flex items-center justify-between gap-2 border-t border-gray-800 bg-gray-950 px-5 py-3">
-          <button type="button" disabled={disabled || !dirty} onClick={revert} className="flex items-center gap-2 rounded border border-gray-700 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-800 disabled:opacity-50"><RotateCcw size={13} /> Revert</button>
+          <button type="button" disabled={disabled || !dirty} onClick={revert} className="flex items-center gap-2 rounded border border-gray-700 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-800 disabled:opacity-50"><ResetIcon size={13} /> Revert</button>
           <div className="flex items-center gap-2">
             <button type="button" onClick={onClose} className="rounded px-3 py-1.5 text-xs text-gray-400 hover:bg-gray-800 hover:text-white">Close</button>
-            <button type="button" disabled={disabled || !dirty || !writable} onClick={() => void save()} className="flex items-center gap-2 rounded bg-blue-600 px-3 py-1.5 text-xs font-bold text-accent-ink hover:bg-blue-500 disabled:opacity-50" title={writable ? 'Save game settings' : 'Open a writable project to save'}><Save size={13} /> {saving ? 'Saving…' : 'Save'}</button>
+            <button type="button" disabled={disabled || !dirty || !writable} onClick={() => void save()} className="flex items-center gap-2 rounded bg-blue-600 px-3 py-1.5 text-xs font-bold text-accent-ink hover:bg-blue-500 disabled:opacity-50" title={writable ? 'Save game settings' : 'Open a writable project to save'}><SaveIcon size={13} /> {saving ? 'Saving…' : 'Save'}</button>
           </div>
         </div>
       </div>

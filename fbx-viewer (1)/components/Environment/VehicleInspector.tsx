@@ -1,5 +1,5 @@
 import React from 'react';
-import { Route } from 'lucide-react';
+import { RouteIcon } from '../UI/Icons';
 import { useScene } from '../../context/SceneContext';
 import type { ComponentInspectorProps } from '../../runtime/components/types';
 import { findSplineComponent } from '../../runtime/splineRegistry';
@@ -15,7 +15,7 @@ export const VehicleInspector: React.FC<ComponentInspectorProps> = ({ object, co
     const ownBody = (object.components ?? []).some(entry => entry.enabled && entry.type === 'rigidBody');
     return (
         <div className="space-y-1">
-            <label className="flex items-center gap-1 text-2xs text-gray-400"><Route size={10} /> AI path</label>
+            <label className="flex items-center gap-1 text-2xs text-gray-400"><RouteIcon size={10} /> AI path</label>
             <select aria-label="AI path" value={path} onChange={(event) => onChangeProps({ aiPath: event.target.value })} className={FIELD}>
                 <option value="">None (parked until driven)</option>
                 {!known && <option value={path}>Missing spline</option>}

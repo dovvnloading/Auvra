@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Check, Search } from 'lucide-react';
+import { CheckIcon, SearchIcon } from '../UI/Icons';
 import { hostProviderService, ProviderCapability, ProviderModel } from '../../services/HostProviderService';
 import { formatModelPrice, modelCostWeight } from '../../services/providerPricing';
 import { isUtilityModel, modelSample, picksFor, type PickTier } from '../../services/providerPicks';
@@ -48,7 +48,7 @@ const ModelRow: React.FC<{ model: ProviderModel; note?: string; sample?: string;
           {note && <span className="block truncate text-2xs text-ink-3">{note}</span>}
         </span>
         {price && <span className="shrink-0 text-right text-2xs tabular-nums text-ink-2">{price}</span>}
-        {chosen && <Check size={12} className="shrink-0 text-accent" />}
+        {chosen && <CheckIcon size={12} className="shrink-0 text-accent" />}
       </button>
     </li>
   );
@@ -102,7 +102,7 @@ export const ModelPicker: React.FC<ModelPickerProps> = ({ providerId, capability
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex shrink-0 items-center gap-2 px-3 py-2">
         <div className="relative min-w-0 flex-1">
-          <Search size={12} className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-ink-3" />
+          <SearchIcon size={12} className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-ink-3" />
           <TextInput
             autoFocus
             value={search}

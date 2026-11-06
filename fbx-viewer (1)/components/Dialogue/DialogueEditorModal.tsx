@@ -1,6 +1,6 @@
 import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { AlertTriangle, ArrowDown, ArrowUp, Flag, MessageSquare, Plus, Trash2, X } from 'lucide-react';
+import { ArrowDownIcon, ArrowUpIcon, ChatIcon, CrossIcon, FlagIcon, PlusIcon, TrashIcon, WarningIcon } from '../UI/Icons';
 import { DIALOGUE_LIMITS, dialogueProblems, type DialogueData } from '../../runtime/dialogue';
 import { addChoice, addLine, lineLabel, moveLine, removeChoice, removeLine, updateChoice, updateLine } from './dialogueEditing';
 
@@ -122,7 +122,7 @@ export const DialogueEditorModal: React.FC<DialogueEditorModalProps> = ({ dialog
             <div className="relative flex w-full max-w-5xl h-[85vh] flex-col overflow-hidden rounded-xl border border-gray-700 bg-gray-900 shadow-2xl">
                 <div className="flex items-center justify-between border-b border-gray-800 bg-gray-950 px-5 py-3">
                     <div className="flex items-center gap-3 min-w-0">
-                        <MessageSquare size={18} className="text-sky-400 shrink-0" />
+                        <ChatIcon size={18} className="text-sky-400 shrink-0" />
                         <div className="min-w-0">
                             <h2 className="text-sm font-bold text-white">Dialogue</h2>
                             <p className="text-2xs text-gray-500 truncate">
@@ -130,7 +130,7 @@ export const DialogueEditorModal: React.FC<DialogueEditorModalProps> = ({ dialog
                             </p>
                         </div>
                     </div>
-                    <button type="button" onClick={requestClose} className="rounded p-1 text-gray-500 hover:bg-gray-800 hover:text-white" aria-label="Close dialogue editor"><X size={16} /></button>
+                    <button type="button" onClick={requestClose} className="rounded p-1 text-gray-500 hover:bg-gray-800 hover:text-white" aria-label="Close dialogue editor"><CrossIcon size={16} /></button>
                 </div>
 
                 <div className="flex min-h-0 flex-1">
@@ -144,7 +144,7 @@ export const DialogueEditorModal: React.FC<DialogueEditorModalProps> = ({ dialog
                                         aria-current={item.id === selectedId}
                                         className={`w-full rounded px-2 py-1.5 text-left text-xs flex items-center gap-2 ${item.id === selectedId ? 'bg-sky-600/20 text-sky-100 border border-sky-500/40' : 'text-gray-300 hover:bg-gray-800 border border-transparent'}`}
                                     >
-                                        {item.id === draft.startId && <Flag size={10} className="text-emerald-400 shrink-0" aria-label="Start line" />}
+                                        {item.id === draft.startId && <FlagIcon size={10} className="text-emerald-400 shrink-0" aria-label="Start line" />}
                                         <span className="truncate">{lineLabel(draft, item.id)}</span>
                                         {item.choices?.length ? <span className="ml-auto shrink-0 text-2xs text-gray-500">{item.choices.length} choices</span> : null}
                                     </button>
@@ -159,7 +159,7 @@ export const DialogueEditorModal: React.FC<DialogueEditorModalProps> = ({ dialog
                                 disabled={draft.lines.length >= DIALOGUE_LIMITS.maxLines}
                                 className="w-full py-1.5 text-xs bg-sky-600/20 hover:bg-sky-600/30 disabled:opacity-40 border border-sky-500/40 rounded text-sky-200 flex items-center justify-center gap-2"
                             >
-                                <Plus size={12} /> Add Line
+                                <PlusIcon size={12} /> Add Line
                             </button>
                         </div>
                     </div>
@@ -170,12 +170,12 @@ export const DialogueEditorModal: React.FC<DialogueEditorModalProps> = ({ dialog
                                 <div className="flex items-center gap-2">
                                     <h3 className="text-xs font-bold text-white">Line {draft.lines.indexOf(line) + 1}</h3>
                                     {line.id === draft.startId
-                                        ? <span className="flex items-center gap-1 text-2xs text-emerald-400"><Flag size={10} /> Start line</span>
+                                        ? <span className="flex items-center gap-1 text-2xs text-emerald-400"><FlagIcon size={10} /> Start line</span>
                                         : <button type="button" onClick={() => setDraft({ ...draft, startId: line.id })} className="text-2xs text-gray-400 hover:text-emerald-300">Start here</button>}
                                     <div className="ml-auto flex items-center gap-1">
-                                        <button type="button" aria-label="Move line up" onClick={() => setDraft(moveLine(draft, line.id, -1))} className="rounded p-1 text-gray-500 hover:bg-gray-800 hover:text-white"><ArrowUp size={12} /></button>
-                                        <button type="button" aria-label="Move line down" onClick={() => setDraft(moveLine(draft, line.id, 1))} className="rounded p-1 text-gray-500 hover:bg-gray-800 hover:text-white"><ArrowDown size={12} /></button>
-                                        <button type="button" aria-label="Delete line" onClick={() => remove(line.id)} className="rounded p-1 text-gray-500 hover:bg-red-900/40 hover:text-red-300"><Trash2 size={12} /></button>
+                                        <button type="button" aria-label="Move line up" onClick={() => setDraft(moveLine(draft, line.id, -1))} className="rounded p-1 text-gray-500 hover:bg-gray-800 hover:text-white"><ArrowUpIcon size={12} /></button>
+                                        <button type="button" aria-label="Move line down" onClick={() => setDraft(moveLine(draft, line.id, 1))} className="rounded p-1 text-gray-500 hover:bg-gray-800 hover:text-white"><ArrowDownIcon size={12} /></button>
+                                        <button type="button" aria-label="Delete line" onClick={() => remove(line.id)} className="rounded p-1 text-gray-500 hover:bg-red-900/40 hover:text-red-300"><TrashIcon size={12} /></button>
                                     </div>
                                 </div>
                                 <Field label="Speaker">
@@ -205,7 +205,7 @@ export const DialogueEditorModal: React.FC<DialogueEditorModalProps> = ({ dialog
                                             disabled={(line.choices?.length ?? 0) >= DIALOGUE_LIMITS.maxChoices}
                                             className="flex items-center gap-1 rounded px-2 py-1 text-2xs text-sky-300 hover:bg-sky-900/30 disabled:opacity-40"
                                         >
-                                            <Plus size={10} /> Add Choice
+                                            <PlusIcon size={10} /> Add Choice
                                         </button>
                                     </div>
                                     {!line.choices?.length && <p className="text-2xs text-gray-500">No choices: the player continues to the next line.</p>}
@@ -214,7 +214,7 @@ export const DialogueEditorModal: React.FC<DialogueEditorModalProps> = ({ dialog
                                             <div className="flex items-center gap-2">
                                                 <span className="text-2xs font-mono text-gray-500">{index + 1}</span>
                                                 <input aria-label={`Choice ${index + 1} text`} value={choice.text} maxLength={DIALOGUE_LIMITS.maxChoiceText} onChange={(event) => setDraft(updateChoice(draft, line.id, choice.id, { text: event.target.value }))} className={INPUT} placeholder="What the player says" />
-                                                <button type="button" aria-label={`Delete choice ${index + 1}`} onClick={() => setDraft(removeChoice(draft, line.id, choice.id))} className="rounded p-1 text-gray-500 hover:bg-red-900/40 hover:text-red-300"><Trash2 size={12} /></button>
+                                                <button type="button" aria-label={`Delete choice ${index + 1}`} onClick={() => setDraft(removeChoice(draft, line.id, choice.id))} className="rounded p-1 text-gray-500 hover:bg-red-900/40 hover:text-red-300"><TrashIcon size={12} /></button>
                                             </div>
                                             <div className="grid grid-cols-2 gap-2">
                                                 <Field label="Leads to">
@@ -245,7 +245,7 @@ export const DialogueEditorModal: React.FC<DialogueEditorModalProps> = ({ dialog
                         <span className={dirty ? 'text-amber-400' : 'text-gray-500'}>{dirty ? 'Unsaved changes' : 'No changes'}</span>
                         {problems.length > 0 && (
                             <span className="flex items-center gap-1 text-amber-300 truncate" title={problems.join('\n')}>
-                                <AlertTriangle size={12} /> {problems[0]}{problems.length > 1 ? ` (+${problems.length - 1} more)` : ''}
+                                <WarningIcon size={12} /> {problems[0]}{problems.length > 1 ? ` (+${problems.length - 1} more)` : ''}
                             </span>
                         )}
                     </div>
@@ -258,7 +258,7 @@ export const DialogueEditorModal: React.FC<DialogueEditorModalProps> = ({ dialog
                 {confirmDiscard && (
                     <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/60">
                         <div role="alertdialog" aria-modal="true" aria-label="Discard changes" className="w-80 space-y-3 rounded-lg border border-gray-700 bg-gray-900 p-4 shadow-2xl">
-                            <div className="flex items-center gap-2 text-sm font-bold text-white"><AlertTriangle size={14} className="text-amber-400" /> Discard changes?</div>
+                            <div className="flex items-center gap-2 text-sm font-bold text-white"><WarningIcon size={14} className="text-amber-400" /> Discard changes?</div>
                             <p className="text-2xs text-gray-400">The edits made to this dialogue have not been saved.</p>
                             <div className="flex justify-end gap-2">
                                 <button type="button" autoFocus onClick={keepEditing} className="rounded border border-gray-700 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-800">Keep Editing</button>

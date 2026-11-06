@@ -1,5 +1,5 @@
 import React, { useState, useRef, useMemo, useCallback, useEffect } from 'react';
-import { Filter, FileCode, FolderOpen } from 'lucide-react';
+import { BlueprintIcon, FilterIcon, FolderOpenIcon } from '../Icons';
 import { useScene } from '../../../context/SceneContext';
 import { useNotification } from '../../../context/NotificationContext';
 import { AssetCategory, AudioData, DEFAULT_MODEL_IMPORT_SETTINGS, LoadedModelData, ModelImportSettings, TextureData } from '../../../types';
@@ -614,8 +614,8 @@ export const ContentBrowser: React.FC = () => {
                             isFolderEmpty ? (
                                 <div className="h-full flex flex-col items-center justify-center text-gray-600 gap-2">
                                     {isSearching || filter !== 'All' || currentFolder === ROOT_FOLDER
-                                        ? <Filter size={32} className="opacity-20" />
-                                        : <FolderOpen size={32} className="opacity-20" />}
+                                        ? <FilterIcon size={32} className="opacity-20" />
+                                        : <FolderOpenIcon size={32} className="opacity-20" />}
                                     <p className="text-sm">
                                         {isSearching || filter !== 'All' || currentFolder === ROOT_FOLDER ? 'No items found.' : 'This folder is empty. Drag assets here to move them.'}
                                     </p>
@@ -639,7 +639,7 @@ export const ContentBrowser: React.FC = () => {
                         {activeTab === 'blueprints' && (
                             filteredBlueprints.length === 0 ? (
                                 <div className="h-full flex flex-col items-center justify-center text-gray-600 gap-2">
-                                    <FileCode size={32} className="opacity-20" />
+                                    <BlueprintIcon size={32} className="opacity-20" />
                                     <p className="text-sm">No blueprints created.</p>
                                 </div>
                             ) : (

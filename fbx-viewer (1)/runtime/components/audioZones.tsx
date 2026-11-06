@@ -1,7 +1,7 @@
 import React, { useContext, useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { useFrame } from '@react-three/fiber';
-import { ArrowDown, ArrowUp, Music, Trash2 } from 'lucide-react';
+import { ArrowDownIcon, ArrowUpIcon, MusicIcon, TrashIcon } from '../../components/UI/Icons';
 import { frontendDiagnostics } from '../../diagnostics/runtime';
 import type { LevelComponent } from '../../types';
 import type { AudioMixer } from '../audioMixer';
@@ -925,7 +925,7 @@ const MusicTracksInspector: React.FC<ComponentInspectorProps> = ({ component, on
     return (
         <div className="space-y-2 rounded border border-gray-700/60 bg-gray-950/40 p-2">
             <div className="flex items-center justify-between text-[10px]">
-                <span className="text-gray-400 flex items-center gap-1"><Music size={10} /> Playlist</span>
+                <span className="text-gray-400 flex items-center gap-1"><MusicIcon size={10} /> Playlist</span>
                 <span className="text-gray-200">{tracks.length} {tracks.length === 1 ? 'track' : 'tracks'}</span>
             </div>
             {tracks.length === 0 ? (
@@ -942,10 +942,10 @@ const MusicTracksInspector: React.FC<ComponentInspectorProps> = ({ component, on
                                     {asset ? asset.name : `Missing: ${track}`}
                                 </span>
                                 <button type="button" onClick={() => move(index, -1)} disabled={index === 0} className={ICON_BUTTON} title="Move up" aria-label={`Move ${name} up`}>
-                                    <ArrowUp size={11} />
+                                    <ArrowUpIcon size={11} />
                                 </button>
                                 <button type="button" onClick={() => move(index, 1)} disabled={index === tracks.length - 1} className={ICON_BUTTON} title="Move down" aria-label={`Move ${name} down`}>
-                                    <ArrowDown size={11} />
+                                    <ArrowDownIcon size={11} />
                                 </button>
                                 <button
                                     type="button"
@@ -954,7 +954,7 @@ const MusicTracksInspector: React.FC<ComponentInspectorProps> = ({ component, on
                                     title="Remove track"
                                     aria-label={`Remove ${name}`}
                                 >
-                                    <Trash2 size={11} />
+                                    <TrashIcon size={11} />
                                 </button>
                             </li>
                         );
