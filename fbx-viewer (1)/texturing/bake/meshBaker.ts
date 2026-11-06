@@ -5,6 +5,14 @@ import type { MeshMapName } from '../graph/nodes/io';
 import type { PartMesh } from '../mesh/partMesh';
 import { MeshTracer, TRACE_MESH_GLSL } from './meshTracer';
 import { UvRaster } from './uvRaster';
+import { TABLE_WIDTH, autoCage, averagedNormals, bakeGroups, supersampled, transferTables, type CageMode, type NamedBox, type Supersample, type TransferMaterial } from './bakeSetup';
+
+/** Maps a bake can make besides the mesh maps graphs read. */
+export const EXTRA_MAPS = ['cavity', 'bentNormal', 'color', 'opacity', 'material'] as const;
+export type ExtraBakeMap = typeof EXTRA_MAPS[number];
+export const EXTRA_MAP_LABELS: Record<ExtraBakeMap, string> = {
+    cavity: 'Cavity', bentNormal: 'Bent normal', color: 'Colour (from the high-poly model)', opacity: 'Opacity (from the high-poly model)', material: 'Materials (from the high-poly model)',
+};
 
 /**
  * MESH MAP BAKING
@@ -36,6 +44,19 @@ export interface BakeSettings {
     /** How strongly curvature shows. */
     curvatureStrength: number;
     idSource: 'mesh' | 'island' | 'vertexColor';
+    /** Where high-poly rays start: a set distance out, a distance found from the models, or a cage mesh. */
+    cage?: CageMode;
+    /** Rays along normals averaged across hard edges, so they leave no gaps there. */
+    averagedNormals?: boolean;
+    /** The normal map's frame: as the renderer works it out (the mesh's tangents when it has them), or always from the UVs. */
+    tangentSpace?: 'renderer' | 'uvs';
+    /** Green pointing up the picture (OpenGL) or down it (DirectX). */
+    normalConvention?: 'openGl' | 'directX';
+    /** Texels baked per texel kept, along each side. */
+    supersample?: Supersample;
+    /** High-poly meshes matched to low-poly ones by name (_low / _high), else by where they are. */
+    matchByName?: boolean;
+    extras?: readonly ExtraBakeMap[];
 }
 
 export const DEFAULT_BAKE_SETTINGS: BakeSettings = {
@@ -47,6 +68,13 @@ export const DEFAULT_BAKE_SETTINGS: BakeSettings = {
     rearDistance: 0.01,
     curvatureStrength: 1,
     idSource: 'island',
+    cage: 'distance',
+    averagedNormals: true,
+    tangentSpace: 'renderer',
+    normalConvention: 'openGl',
+    supersample: 1,
+    matchByName: true,
+    extras: ['cavity'],
 };
 
 /**
@@ -75,8 +103,13 @@ export interface BakeSources {
     space?: PositionSpace;
     /** What casts occlusion and blocks thickness: usually the whole model. */
     occluder: { positions: Float32Array; normals: Float32Array; indices: Uint32Array };
-    /** A detailed model in the same place, whose surface details are carried onto this one. */
-    highPoly?: { positions: Float32Array; normals: Float32Array; indices: Uint32Array };
+    /**
+     * A detailed model in the same place, whose surface details are carried onto this one; with its meshes'
+     * names and each triangle's mesh, for matching, and each triangle's material, for carrying colour over.
+     */
+    highPoly?: { positions: Float32Array; normals: Float32Array; indices: Uint32Array; triangleMesh?: ArrayLike<number>; meshNames?: string[]; triangleMaterial?: ArrayLike<number>; materials?: TransferMaterial[] };
+    /** A cage mesh: per part vertex, the unit way out to its cage vertex and the distance (bakeSetup.meshCage). */
+    cage?: Float32Array | null;
     /** The surface's own normal map, used for its details when there is no high-poly model. */
     normalMap?: THREE.Texture | null;
 }
@@ -84,6 +117,8 @@ export interface BakeSources {
 /** Baked maps for one tile, plus what painting needs to pad its own pictures the same way. */
 export interface TileBake {
     maps: Partial<Record<MeshMapName, GpuImage>>;
+    /** Cavity, bent normals and what was carried over from the high-poly model. */
+    extras?: Partial<Record<ExtraBakeMap, GpuImage>>;
     /** Texels the surface covers (1) and does not (0). */
     coverage: GpuImage;
     /** For every texel, the place of the nearest covered texel (from jump flooding). */
@@ -110,12 +145,144 @@ const throwIfAborted = (signal?: AbortSignal) => {
     if (signal?.aborted) throw Object.assign(new Error('Cancelled'), { name: 'AbortError' });
 };
 
-export const bakeMeshMaps = async (gpu: TextureGpu, sources: BakeSources, settings: BakeSettings, progress: BakeProgress = () => undefined, signal?: AbortSignal): Promise<Map<number, TileBake>> => {
+/**
+ * Bakes the set's maps at `settings.size` (supersampled by its factor, within what the GPU takes), kept at
+ * `outputSize` (the set's size; the bake's own when not given), each block of baked texels averaged
+ * down by how much the surface covers it.
+ */
+export const bakeMeshMaps = async (gpu: TextureGpu, sources: BakeSources, settings: BakeSettings, progress: BakeProgress = () => undefined, signal?: AbortSignal, outputSize = settings.size): Promise<Map<number, TileBake>> => {
+    const plan = supersampled(settings.size, settings.supersample ?? 1, gpu.maxSize);
+    if (plan.size === outputSize) return bakeAtSize(gpu, sources, { ...settings, size: plan.size }, progress, signal);
+    const baked = await bakeAtSize(gpu, sources, { ...settings, size: plan.size }, (fraction, step) => progress(fraction * 0.97, step), signal);
+    try {
+        return await resampleBake(gpu, sources.part, baked, outputSize);
+    } finally {
+        for (const result of baked.values()) releaseTileBake(gpu, result);
+    }
+};
+
+/** Baked maps scaled to `size`: blocks averaged by coverage (normals kept unit length, IDs not blended), or blended up. */
+const RESAMPLE_BAKE = /* glsl */ `
+uniform int uFactor;
+uniform int uMode;
+void main() {
+    ivec2 base = ivec2(gl_FragCoord.xy) * uFactor;
+    if (uFactor <= 0) { outColor = texture(source, vUv); return; }
+    if (uMode == 2) { outColor = texelFetch(source, base + ivec2(uFactor / 2), 0); return; }
+    vec4 sum = vec4(0.0);
+    float weight = 0.0;
+    for (int y = 0; y < 16; y++) {
+        if (y >= uFactor) break;
+        for (int x = 0; x < 16; x++) {
+            if (x >= uFactor) break;
+            ivec2 q = base + ivec2(x, y);
+            float c = texelFetch(cover, q, 0).r;
+            sum += texelFetch(source, q, 0) * c;
+            weight += c;
+        }
+    }
+    vec4 v = weight > 0.0 ? sum / weight : texelFetch(source, base, 0);
+    if (uMode == 1) v = vec4(normalize(v.xyz * 2.0 - 1.0) * 0.5 + 0.5, 1.0);
+    outColor = v;
+}`;
+
+const resampleBake = async (gpu: TextureGpu, part: PartMesh, baked: ReadonlyMap<number, TileBake>, power: number): Promise<Map<number, TileBake>> => {
+    const size = 2 ** power;
+    const raster = new UvRaster(gpu, part);
+    const results = new Map<number, TileBake>();
+    try {
+        for (const [tile, from] of baked) {
+            const coverage = gpu.image(size, size, 'gray', 8);
+            raster.draw(coverage, tile, 'void main() { outColor = vec4(1.0); }', { clear: [0, 0, 0, 1] });
+            const nearest = await jumpFlood(gpu, coverage, size, size, 'm.r >= 0.5');
+            const scaled = (name: string, image: GpuImage): GpuImage => {
+                const factor = image.width > size ? Math.round(image.width / size) : 0;
+                const mode = name === 'normal' || name === 'worldNormal' || name === 'bentNormal' ? 1 : name === 'id' || name === 'material' ? 2 : 0;
+                const out = gpu.image(size, size, image.kind, image.precision);
+                gpu.passNow(out, { fragment: RESAMPLE_BAKE, inputs: { source: image, cover: from.coverage }, uniforms: { uFactor: factor, uMode: mode } });
+                const padded = padImage(gpu, out, coverage, nearest);
+                gpu.release(out);
+                return padded;
+            };
+            const maps: TileBake['maps'] = {};
+            for (const [name, image] of Object.entries(from.maps)) if (image) maps[name as MeshMapName] = scaled(name, image);
+            const extras: NonNullable<TileBake['extras']> = {};
+            for (const [name, image] of Object.entries(from.extras ?? {})) if (image) extras[name as ExtraBakeMap] = scaled(name, image);
+            results.set(tile, { maps, extras, coverage, nearest });
+        }
+        return results;
+    } catch (error) {
+        for (const result of results.values()) releaseTileBake(gpu, result);
+        throw error;
+    } finally {
+        raster.dispose();
+    }
+};
+
+const bakeAtSize = async (gpu: TextureGpu, sources: BakeSources, settings: BakeSettings, progress: BakeProgress, signal?: AbortSignal): Promise<Map<number, TileBake>> => {
     const { part } = sources;
     const size = 2 ** settings.size;
     const raster = new UvRaster(gpu, part);
     const occluder = new MeshTracer(sources.occluder.positions, sources.occluder.normals, sources.occluder.indices);
-    const high = sources.highPoly ? new MeshTracer(sources.highPoly.positions, sources.highPoly.normals, sources.highPoly.indices) : null;
+    const highPoly = sources.highPoly;
+    const extrasWanted = new Set<ExtraBakeMap>(settings.extras ?? []);
+    // Cage rays: towards a cage mesh, or along normals averaged across hard edges.
+    const cageRays = (settings.cage === 'mesh' && sources.cage) ? sources.cage : (settings.averagedNormals ?? true) ? (() => {
+        const averaged = averagedNormals(part.positions, part.indices);
+        const rays = new Float32Array(averaged.length / 3 * 4);
+        for (let v = 0; v < averaged.length / 3; v++) rays.set([averaged[v * 3], averaged[v * 3 + 1], averaged[v * 3 + 2], -1], v * 4);
+        return rays;
+    })() : null;
+    raster.setCage(cageRays);
+    // Which high-poly triangles each low-poly mesh bakes from: one tracer for each different set of them.
+    const boxesOf = (positions: ArrayLike<number>, indices: ArrayLike<number>, triangleMesh: ArrayLike<number>, names: readonly string[]): NamedBox[] => names.map((name, mesh) => {
+        const min: [number, number, number] = [Infinity, Infinity, Infinity];
+        const max: [number, number, number] = [-Infinity, -Infinity, -Infinity];
+        for (let t = 0; t < triangleMesh.length; t++) {
+            if (triangleMesh[t] !== mesh) continue;
+            for (let k = 0; k < 3; k++) for (let a = 0; a < 3; a++) {
+                const value = positions[indices[t * 3 + k] * 3 + a];
+                min[a] = Math.min(min[a], value);
+                max[a] = Math.max(max[a], value);
+            }
+        }
+        return { name, min, max };
+    });
+    const groups: Array<{ lowMesh: number; tracer: MeshTracer; surface: THREE.DataTexture | null; material: THREE.DataTexture | null }> = [];
+    const tracerOf = (triangles: number[] | null) => {
+        if (!highPoly) return null;
+        const pick = triangles ?? Array.from({ length: highPoly.indices.length / 3 }, (_, t) => t);
+        const indices = new Uint32Array(pick.length * 3);
+        pick.forEach((t, i) => indices.set(highPoly.indices.subarray(t * 3, t * 3 + 3), i * 3));
+        const tracer = new MeshTracer(highPoly.positions, highPoly.normals, indices);
+        let surface: THREE.DataTexture | null = null;
+        let material: THREE.DataTexture | null = null;
+        if (highPoly.triangleMaterial && highPoly.materials) {
+            const tables = transferTables(pick.map((t) => highPoly.triangleMaterial![t]), highPoly.materials);
+            surface = new THREE.DataTexture(tables.surface, tables.width, tables.height, THREE.RGBAFormat, THREE.FloatType);
+            material = new THREE.DataTexture(tables.material, tables.width, tables.height, THREE.RGBAFormat, THREE.FloatType);
+            surface.needsUpdate = material.needsUpdate = true;
+        }
+        return { tracer, surface, material };
+    };
+    if (highPoly) {
+        const occluderBox = new THREE.Box3().setFromBufferAttribute(new THREE.BufferAttribute(sources.occluder.positions, 3));
+        const margin = Math.max(settings.frontDistance, settings.rearDistance) * occluderBox.getSize(new THREE.Vector3()).length() * 2;
+        const lowBoxes = part.meshNames.length > 1 && highPoly.triangleMesh && highPoly.meshNames && highPoly.meshNames.length > 1
+            ? boxesOf(part.positions, part.indices, part.triangleMesh, part.meshNames) : null;
+        const highBoxes = lowBoxes ? boxesOf(highPoly.positions, highPoly.indices, highPoly.triangleMesh!, highPoly.meshNames!) : null;
+        const matched = lowBoxes && highBoxes ? bakeGroups(lowBoxes, highBoxes, margin, settings.matchByName ?? true) : null;
+        if (!matched || matched.every((list) => list.length === highBoxes!.length)) groups.push({ lowMesh: -1, ...tracerOf(null)! });
+        else {
+            matched.forEach((meshes, lowMesh) => {
+                const wanted = new Set(meshes);
+                const triangles: number[] = [];
+                for (let t = 0; t < highPoly.triangleMesh!.length; t++) if (wanted.has(highPoly.triangleMesh![t])) triangles.push(t);
+                groups.push({ lowMesh, ...tracerOf(triangles)! });
+            });
+        }
+    }
+    const high = groups[0]?.tracer ?? null;
     const occluderBox = new THREE.Box3().setFromBufferAttribute(new THREE.BufferAttribute(sources.occluder.positions, 3));
     const space = sources.space ?? spaceOfBox(occluderBox);
     const diagonal = Math.max(1e-6, occluderBox.getSize(new THREE.Vector3()).length());
@@ -162,40 +329,96 @@ export const bakeMeshMaps = async (gpu: TextureGpu, sources: BakeSources, settin
                 // Normals at 8 bits show steps across smooth curves once lit: kept in half floats.
                 const tangentNormal = take(gpu.image(size, size, 'color', 16));
                 const height = take(gpu.image(size, size, 'gray', 16));
-                const front = settings.frontDistance * diagonal;
-                const rear = settings.rearDistance * diagonal;
+                let front = settings.frontDistance * diagonal;
+                let rear = settings.rearDistance * diagonal;
+                const frame = { uFrameFromUvs: settings.tangentSpace === 'uvs' ? 1 : 0, uDirectX: settings.normalConvention === 'directX' ? 1 : 0 };
+                const extras: NonNullable<TileBake['extras']> = {};
                 if (high) {
+                    if (settings.cage === 'auto') {
+                        // How far the high-poly surface lies from this one, on a coarse grid of texels, both ways.
+                        const probeSize = Math.min(size, 128);
+                        const probe = gpu.image(probeSize, probeSize, 'color', 32);
+                        raster.draw(probe, tile, `${TRACE_MESH_GLSL}
+    uniform float uReach;
+    uniform int uCageRays;
+    void main() {
+        vec3 n = normalize(vNormal);
+        vec3 dir = uCageRays == 1 && dot(vCage.xyz, vCage.xyz) > 1e-12 ? normalize(vCage.xyz) : n;
+        TraceHit outward;
+        TraceHit inward;
+        bool o = traceMesh(vPos, dir, 0.0, uReach, outward);
+        bool i = traceMesh(vPos, -dir, 0.0, uReach, inward);
+        float gap = o && (!i || outward.t <= inward.t) ? outward.t : i ? -inward.t : 0.0;
+        outColor = vec4(gap, o || i ? 1.0 : 0.0, 0.0, 1.0);
+    }`, { uniforms: { tTris: high.triangles, tNodes: high.nodes, uReach: diagonal * 0.1, uCageRays: cageRays ? 1 : 0 }, clear: [0, 0, 0, 0], edges: false });
+                        const read = gpu.readFloat(probe);
+                        gpu.release(probe);
+                        const gaps: number[] = [];
+                        for (let i = 0; i < read.length; i += 4) if (read[i + 1] > 0.5) gaps.push(read[i]);
+                        ({ front, rear } = autoCage(gaps, front));
+                    }
                     const detail = `${TRACE_MESH_GLSL}
     uniform float uFront;
     uniform float uRear;
     uniform int uMode;
+    uniform int uCageRays;
+    uniform int uOnlyMesh;
+    uniform int uDirectX;
+    uniform sampler2D uSurfaceTable;
+    uniform sampler2D uMaterialTable;
     void main() {
+        if (uOnlyMesh >= 0 && int(vIds.y + 0.5) != uOnlyMesh) discard;
         vec3 n = normalize(vNormal);
+        // Along the cage ray (an averaged normal, or towards the cage mesh) or the texel's own normal.
+        vec3 dir = uCageRays == 1 && dot(vCage.xyz, vCage.xyz) > 1e-12 ? normalize(vCage.xyz) : n;
+        float front = uCageRays == 1 && vCage.w >= 0.0 ? vCage.w : uFront;
         vec3 world = n;
         float offset = 0.0;
         TraceHit hit;
         // From the outside of the cage inwards: the first surface met is the one the eye would see.
-        if (traceMesh(vPos + n * uFront, -n, 0.0, uFront + uRear, hit)) {
+        bool found = traceMesh(vPos + dir * front, -dir, 0.0, front + uRear, hit);
+        if (found) {
             world = hitNormal(hit);
             if (dot(world, n) < 0.0) world = -world;
-            offset = uFront - hit.t;
+            offset = front - hit.t;
         }
         if (uMode == 0) { outColor = vec4(world, 1.0); return; }
         if (uMode == 1) {
-            mat3 frame = surfaceFrame(n);
-            vec3 t = inverse(frame) * world;
-            outColor = vec4(normalize(t) * 0.5 + 0.5, 1.0);
+            vec3 t = normalize(inverse(surfaceFrame(n)) * world);
+            if (uDirectX == 1) t.y = -t.y;
+            outColor = vec4(t * 0.5 + 0.5, 1.0);
             return;
         }
-        outColor = vec4(0.5 + 0.5 * offset / max(max(uFront, uRear), 1e-9));
+        if (uMode == 2) { outColor = vec4(0.5 + 0.5 * offset / max(max(front, uRear), 1e-9)); return; }
+        ivec2 at = ivec2(hit.tri % ${TABLE_WIDTH}, hit.tri / ${TABLE_WIDTH});
+        if (uMode == 3) { outColor = found ? vec4(texelFetch(uSurfaceTable, at, 0).rgb, 1.0) : vec4(0.5, 0.5, 0.5, 1.0); return; }
+        if (uMode == 4) { outColor = vec4(found ? texelFetch(uSurfaceTable, at, 0).a : 1.0); return; }
+        outColor = found ? vec4(texelFetch(uMaterialTable, at, 0).rgb, 1.0) : vec4(0.0, 0.0, 0.0, 1.0);
     }`;
-                    const uniforms = { tTris: high.triangles, tNodes: high.nodes, uFront: front, uRear: rear };
-                    raster.draw(worldNormal, tile, detail, { uniforms: { ...uniforms, uMode: 0 }, clear: [0, 0, 1, 0] });
-                    raster.draw(tangentNormal, tile, detail, { uniforms: { ...uniforms, uMode: 1 }, clear: [0.5, 0.5, 1, 1] });
-                    raster.draw(height, tile, detail, { uniforms: { ...uniforms, uMode: 2 }, clear: [0.5, 0.5, 0.5, 1] });
+                    const targets: Array<{ image: GpuImage; mode: number; clear: [number, number, number, number] }> = [
+                        { image: worldNormal, mode: 0, clear: [0, 0, 1, 0] },
+                        { image: tangentNormal, mode: 1, clear: [0.5, 0.5, 1, 1] },
+                        { image: height, mode: 2, clear: [0.5, 0.5, 0.5, 1] },
+                    ];
+                    const transfers = Boolean(highPoly?.triangleMaterial && highPoly.materials);
+                    if (transfers && extrasWanted.has('color')) targets.push({ image: extras.color = take(gpu.image(size, size, 'color', 8)), mode: 3, clear: [0.5, 0.5, 0.5, 1] });
+                    if (transfers && extrasWanted.has('opacity')) targets.push({ image: extras.opacity = take(gpu.image(size, size, 'gray', 16)), mode: 4, clear: [1, 1, 1, 1] });
+                    if (transfers && extrasWanted.has('material')) targets.push({ image: extras.material = take(gpu.image(size, size, 'color', 8)), mode: 5, clear: [0, 0, 0, 1] });
+                    for (const target of targets) {
+                        groups.forEach((group, g) => {
+                            raster.draw(target.image, tile, detail, {
+                                uniforms: {
+                                    tTris: group.tracer.triangles, tNodes: group.tracer.nodes, uFront: front, uRear: rear, uMode: target.mode, uCageRays: cageRays ? 1 : 0,
+                                    uOnlyMesh: group.lowMesh, ...frame, uSurfaceTable: group.surface ?? gpu.constant('white'), uMaterialTable: group.material ?? gpu.constant('black'),
+                                },
+                                clear: g === 0 ? target.clear : null,
+                            });
+                        });
+                    }
                 } else {
                     const map = sources.normalMap ?? null;
                     const own = `uniform sampler2D uNormalMap;\nuniform int uHasMap;\nuniform vec2 uTile;\nuniform int uMode;
+    uniform int uDirectX;
     void main() {
         vec3 n = normalize(vNormal);
         vec3 t = vec3(0.0, 0.0, 1.0);
@@ -205,9 +428,10 @@ export const bakeMeshMaps = async (gpu: TextureGpu, sources: BakeSources, settin
             t = vec3(xy, sqrt(saturate(1.0 - dot(xy, xy))));
         }
         if (uMode == 0) { outColor = vec4(normalize(surfaceFrame(n) * t), 1.0); return; }
+        if (uDirectX == 1) t.y = -t.y;
         outColor = vec4(t * 0.5 + 0.5, 1.0);
     }`;
-                    const uniforms = { uNormalMap: map ?? gpu.constant('normal'), uHasMap: map ? 1 : 0 };
+                    const uniforms = { uNormalMap: map ?? gpu.constant('normal'), uHasMap: map ? 1 : 0, ...frame };
                     raster.draw(worldNormal, tile, own, { uniforms: { ...uniforms, uMode: 0 }, clear: [0, 0, 1, 0] });
                     raster.draw(tangentNormal, tile, own, { uniforms: { ...uniforms, uMode: 1 }, clear: [0.5, 0.5, 1, 1] });
                     gpu.clear(height, [0.5, 0.5, 0.5, 1]);
@@ -302,8 +526,54 @@ export const bakeMeshMaps = async (gpu: TextureGpu, sources: BakeSources, settin
                     step('Measuring thickness');
                 }
 
+                // Bent normals: the average open direction of occlusion rays round each texel, in the model's space.
+                if (extrasWanted.has('bentNormal')) {
+                    const open = take(gpu.image(size, size, 'color', 32));
+                    gpu.clear(open, [0, 0, 0, 0]);
+                    const rays = Math.min(64, Math.max(16, settings.samples >> 1));
+                    for (let b = 0; b < Math.ceil(rays / 16); b++) {
+                        throwIfAborted(signal);
+                        await gpu.pass(open, {
+                            fragment: `${TRACE_MESH_GLSL}
+    uniform float uDistance;
+    uniform float uBias;
+    uniform float uBatch;
+    void main() {
+        ivec2 p = ivec2(gl_FragCoord.xy);
+        vec4 pos = texelFetch(gPos, p, 0);
+        if (pos.a < 0.5) { outColor = vec4(0.0); return; }
+        vec3 low = normalize(texelFetch(gLow, p, 0).xyz);
+        vec3 n = normalize(texelFetch(gWorld, p, 0).xyz);
+        if (dot(n, low) < 0.05) n = low;
+        vec3 helper = abs(n.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+        vec3 tx = normalize(cross(helper, n));
+        vec3 ty = cross(n, tx);
+        vec3 sum = vec3(0.0);
+        for (int i = 0; i < 16; i++) {
+            vec2 xi = vec2(hash1(p, 300.0 + uBatch * 16.0 + float(i)), hash1(p, 300.5 + uBatch * 16.0 + float(i)));
+            float r = sqrt(xi.x);
+            float a = TAU * xi.y;
+            vec3 d = normalize(tx * r * cos(a) + ty * r * sin(a) + n * sqrt(max(0.0, 1.0 - xi.x)));
+            if (dot(d, low) < 0.0) d = reflect(d, low);
+            TraceHit hit;
+            if (!traceMesh(pos.xyz + low * uBias, d, uBias, uDistance, hit)) sum += d;
+        }
+        outColor = vec4(sum, 0.0);
+    }`,
+                            inputs: { gPos: position, gLow: lowNormal, gWorld: worldNormal, tTris: occluder.triangles, tNodes: occluder.nodes },
+                            uniforms: { uDistance: settings.occlusionDistance * diagonal, uBias: bias, uBatch: b },
+                            blend: 'add',
+                            cost: 16 * 60,
+                        });
+                    }
+                    const bent = take(gpu.image(size, size, 'color', 16));
+                    gpu.passNow(bent, { fragment: 'void main() { ivec2 p = ivec2(gl_FragCoord.xy); vec3 s = texelFetch(source, p, 0).xyz; vec3 n = normalize(texelFetch(low, p, 0).xyz); outColor = vec4((dot(s, s) > 1e-12 ? normalize(s) : n) * 0.5 + 0.5, 1.0); }', inputs: { source: open, low: lowNormal } });
+                    gpu.release(open);
+                    extras.bentNormal = bent;
+                }
+
                 // Curvature: how fast the normal turns towards (bright) or away from (dark) neighbouring texels of the same surface.
-                if (want.has('curvature')) {
+                if (want.has('curvature') || extrasWanted.has('cavity')) {
                     const curvature = take(gpu.image(size, size, 'gray', 16));
                     await gpu.pass(curvature, {
                         fragment: `uniform float uTexel;
@@ -358,7 +628,14 @@ export const bakeMeshMaps = async (gpu: TextureGpu, sources: BakeSources, settin
                         inputs: { source: curvature, cover: coverage },
                     });
                     gpu.release(curvature);
-                    maps.curvature = smooth;
+                    if (extrasWanted.has('cavity')) {
+                        // Cavity: only the hollows (curvature below its middle), opened up.
+                        const cavity = take(gpu.image(size, size, 'gray', 16));
+                        gpu.passNow(cavity, { fragment: 'void main() { outColor = vec4(saturate((0.5 - texelFetch(source, ivec2(gl_FragCoord.xy), 0).r) * 2.0)); }', inputs: { source: smooth } });
+                        extras.cavity = cavity;
+                    }
+                    if (want.has('curvature')) maps.curvature = smooth;
+                    else gpu.release(smooth);
                     step('Reading curvature');
                 }
 
@@ -399,12 +676,17 @@ export const bakeMeshMaps = async (gpu: TextureGpu, sources: BakeSources, settin
                     gpu.release(maps[key]);
                     maps[key] = padded;
                 }
+                for (const key of Object.keys(extras) as ExtraBakeMap[]) {
+                    const padded = take(padImage(gpu, extras[key]!, coverage, nearest));
+                    gpu.release(extras[key]);
+                    extras[key] = padded;
+                }
                 gpu.release(position);
                 gpu.release(lowNormal);
                 gpu.release(worldNormal);
                 gpu.release(tangentNormal);
                 gpu.release(height);
-                results.set(tile, { maps, coverage, nearest });
+                results.set(tile, { maps, extras, coverage, nearest });
                 step('Done');
             } catch (error) {
                 for (const image of Object.values(maps)) gpu.release(image);
@@ -419,12 +701,17 @@ export const bakeMeshMaps = async (gpu: TextureGpu, sources: BakeSources, settin
     } finally {
         raster.dispose();
         occluder.dispose();
-        high?.dispose();
+        for (const group of groups) {
+            group.tracer.dispose();
+            group.surface?.dispose();
+            group.material?.dispose();
+        }
     }
 };
 
 export const releaseTileBake = (gpu: TextureGpu, bake: TileBake): void => {
     for (const image of Object.values(bake.maps)) gpu.release(image);
+    for (const image of Object.values(bake.extras ?? {})) gpu.release(image);
     gpu.release(bake.coverage);
     gpu.release(bake.nearest);
 };

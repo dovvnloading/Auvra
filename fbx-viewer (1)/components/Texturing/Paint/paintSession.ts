@@ -9,7 +9,8 @@ import { bakeMeshMaps, spaceOfBox, type BakeSettings, type PositionSpace } from 
 import { textureGpu, type TextureGpu } from '../../../texturing/gpu/textureGpu';
 import type { GraphEntry, GraphResolver } from '../../../texturing/graph/registry';
 import { readStoredGraph } from '../../../texturing/graph/stored';
-import { buildPartMesh, buildWholeMesh, type PartMesh } from '../../../texturing/mesh/partMesh';
+import { buildHighPoly, buildPartMesh, buildWholeMesh, type PartMesh } from '../../../texturing/mesh/partMesh';
+import { meshCage } from '../../../texturing/bake/bakeSetup';
 import type { SurfacePicker } from '../../../texturing/mesh/picker';
 import { SurfaceSelector } from '../../../texturing/paint/selection';
 import { DEEP_EXPORT, ROLE_LABELS, encodeChannels, materialGraphForTextures, tileAtlas, type ChannelTextureIds, type PictureLayout } from '../../../texturing/materialOutput';
@@ -441,7 +442,11 @@ export class PaintSession {
     // Baking
     // -----------------------------------------------------------------------
 
-    async bake(settings: BakeSettings, highPoly: THREE.Object3D | null, signal?: AbortSignal): Promise<void> {
+    /**
+     * Bakes the mesh maps at the bake's own size (supersampled as it says), kept at the set's size. A cage
+     * model, for a cage from a mesh, must be the low-poly model pushed out: the same vertices in the same order.
+     */
+    async bake(settings: BakeSettings, highPoly: THREE.Object3D | null, signal?: AbortSignal, cageModel: THREE.Object3D | null = null): Promise<void> {
         if (this.busy || !this.usable) return;
         this.busy = 'Baking mesh maps';
         this.progress = 0;
@@ -452,17 +457,32 @@ export class PaintSession {
             // cast from three sides would shift with it: then the position map keeps to the set's box.
             const adopt = !this.stack.document.space && !castsFromThreeSides(this.stack.document.layers);
             const space = adopt ? this.modelSpace : this.stack.space();
+            let cage: Float32Array | null = null;
+            if (settings.cage === 'mesh') {
+                if (!cageModel) throw new Error('Pick the cage model: the low-poly model pushed out past the high-poly one.');
+                const names = new Set(this.target.materialNames);
+                const cageMaterials = new Set<THREE.Material>();
+                cageModel.traverse((child) => {
+                    const mesh = child as THREE.Mesh;
+                    if (!mesh.isMesh) return;
+                    for (const each of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) if (names.has(each.name) || !names.size) cageMaterials.add(each);
+                });
+                const cagePart = buildPartMesh(cageModel, cageMaterials.size ? cageMaterials : null, { udim: this.part.udim });
+                cage = meshCage(this.part.positions, cagePart.positions);
+                if (!cage) throw new Error('The cage model must be this model pushed out, with the same vertices: it has a different number of them.');
+            }
             const result = await bakeMeshMaps(this.gpu, {
                 part: this.part,
                 space: { centre: space.centre, extent: space.extent },
                 occluder: this.occluder,
-                highPoly: highPoly ? buildWholeMesh(highPoly) : undefined,
+                highPoly: highPoly ? buildHighPoly(highPoly) : undefined,
                 normalMap: material ? ownMaps(material).normalMap : null,
-            }, { ...settings, size: this.stack.document.size }, (fraction, step) => {
+                cage,
+            }, settings, (fraction, step) => {
                 this.progress = fraction;
                 this.busy = step;
                 this.emit();
-            }, signal);
+            }, signal, this.stack.document.size);
             // Maps baked across a GPU reset are blank: they are neither used nor kept.
             if (!this.usable) throw new GpuResetError();
             this.stack.setBake(result);

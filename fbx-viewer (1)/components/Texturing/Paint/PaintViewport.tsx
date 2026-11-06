@@ -4,6 +4,7 @@ import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment
 import type { GpuImage, TextureGpu } from '../../../texturing/gpu/textureGpu';
 import { tileGeometry } from '../../../texturing/mesh/partMesh';
 import type { MeshMapName } from '../../../texturing/graph/nodes/io';
+import type { ExtraBakeMap } from '../../../texturing/bake/meshBaker';
 import { MAX_BRUSH_SIZE, lazyFollow, pictureAspect, renderDepth, stencilPlace, Stroke, type BrushSettings, type Dab, type StrokeTarget } from '../../../texturing/paint/strokes';
 import { builtInAlphaTexture } from '../../../texturing/paint/brushLibrary';
 import { layoutAlong, pathLength, sampleAt, samplePath, type SurfacePath, type Vec3 } from '../../../texturing/paint/paths';
@@ -64,7 +65,7 @@ const glyphTexture = (character: string, font: string): { texture: THREE.CanvasT
 
 /** Where a click met the surface: its triangle, the place on the model and its texture coordinates. */
 export interface SurfaceHit { triangle: number; point: THREE.Vector3; uv: THREE.Vector2 }
-export type ViewMode = 'material' | PaintChannel | 'ambientOcclusion' | `mesh:${MeshMapName}` | 'mask' | 'uvChecker' | 'uvStretch';
+export type ViewMode = 'material' | PaintChannel | 'ambientOcclusion' | `mesh:${MeshMapName}` | `extra:${ExtraBakeMap}` | 'mask' | 'uvChecker' | 'uvStretch';
 
 /** A tile's live pictures as the view draws them, each with its smaller versions, made when first needed. */
 interface Preview { base: THREE.WebGLRenderTarget | null; orm: THREE.WebGLRenderTarget | null; emissive: THREE.WebGLRenderTarget | null; normal: THREE.WebGLRenderTarget | null; single: THREE.WebGLRenderTarget | null }
@@ -366,6 +367,7 @@ export const PaintViewport: React.FC<{
                 let image: GpuImage | null | undefined = null;
                 if (view === 'mask') image = maskImage(tile);
                 else if (view.startsWith('mesh:')) image = stack.meshMaps(tile)[view.slice(5) as MeshMapName];
+                else if (view.startsWith('extra:')) image = stack.bakeExtras(tile)[view.slice(6) as ExtraBakeMap];
                 else image = outputs[view as PaintChannel | 'ambientOcclusion'];
                 const single = image ? copyInto(preview, 'single', 'half', COPY, { source: image }) : null;
                 entry.single.uniforms.map.value = single?.texture ?? gpu.constant('black');

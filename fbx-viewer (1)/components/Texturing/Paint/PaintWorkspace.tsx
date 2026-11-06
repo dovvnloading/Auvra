@@ -6,6 +6,7 @@ import { frontendDiagnostics } from '../../../diagnostics/runtime';
 import { materialLibrary } from '../../../runtime/materials/materialLibrary';
 import { overrideTextureFlipY } from '../../../utils/materialOverrides';
 import { MESH_MAP_LABELS, MESH_MAPS } from '../../../texturing/graph/nodes/io';
+import { EXTRA_MAPS, EXTRA_MAP_LABELS } from '../../../texturing/bake/meshBaker';
 import { readStoredGraph } from '../../../texturing/graph/stored';
 import { CHANNEL_LABELS, allLayers, mapLayer, paintId, readPaintDocument, type MaskEffect } from '../../../texturing/paint/paintTypes';
 import type { SurfacePath } from '../../../texturing/paint/paths';
@@ -296,6 +297,7 @@ export const PaintWorkspace: React.FC = () => {
         ...(document?.channels ?? []).map((channel) => ({ value: channel, label: CHANNEL_LABELS[channel] })),
         { value: 'ambientOcclusion', label: 'Ambient occlusion' },
         ...(document?.bake ? MESH_MAPS.map((name) => ({ value: `mesh:${name}`, label: `Mesh map: ${MESH_MAP_LABELS[name]}` })) : []),
+        ...EXTRA_MAPS.filter((name) => document?.bake?.extras?.[name]).map((name) => ({ value: `extra:${name}`, label: `Baked: ${EXTRA_MAP_LABELS[name]}` })),
         ...(layer?.mask?.length ? [{ value: 'mask', label: 'Selected layer\'s mask' }] : []),
         { value: 'uvChecker', label: 'UV checker' },
         { value: 'uvStretch', label: 'UV stretch' },

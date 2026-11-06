@@ -273,6 +273,50 @@ export const buildPartMesh = (root: THREE.Object3D, materials: ReadonlySet<THREE
 };
 
 /** Every mesh of a model as one triangle soup (a high-poly source for baking). */
+/**
+ * A high-poly model for baking: the whole model's triangles, with each one's mesh (and the meshes' names,
+ * for matching) and material (each material's colour, sRGB, and opacity, for carrying over).
+ */
+export const buildHighPoly = (root: THREE.Object3D): {
+    positions: Float32Array; normals: Float32Array; indices: Uint32Array;
+    triangleMesh: Uint16Array; meshNames: string[]; triangleMaterial: Uint16Array; materials: Array<{ color: [number, number, number]; opacity: number }>;
+} => {
+    const whole = buildWholeMesh(root);
+    const triangleMesh: number[] = [];
+    const triangleMaterial: number[] = [];
+    const meshNames: string[] = [];
+    const materials: Array<{ color: [number, number, number]; opacity: number }> = [];
+    const known = new Map<THREE.Material, number>();
+    const materialIndex = (material: THREE.Material | undefined): number => {
+        if (!material) return 0;
+        let index = known.get(material);
+        if (index === undefined) {
+            const standard = material as THREE.MeshStandardMaterial;
+            const color = standard.color ? standard.color.clone().convertLinearToSRGB() : new THREE.Color(1, 1, 1);
+            index = materials.length;
+            materials.push({ color: [color.r, color.g, color.b], opacity: standard.transparent ? standard.opacity : 1 });
+            known.set(material, index);
+        }
+        return index;
+    };
+    // Walked in the same order as buildWholeMesh, triangle by triangle.
+    root.traverse((child) => {
+        const mesh = child as THREE.Mesh;
+        if (!mesh.isMesh || !mesh.geometry?.attributes.position) return;
+        const meshIndex = meshNames.length;
+        meshNames.push(mesh.name || `Mesh ${meshIndex + 1}`);
+        const geometry = mesh.geometry;
+        const count = (geometry.index ? geometry.index.count : geometry.attributes.position.count) / 3;
+        const list = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+        for (let t = 0; t < count; t++) {
+            const group = Array.isArray(mesh.material) ? geometry.groups.find((g) => t * 3 >= g.start && t * 3 < g.start + g.count) : undefined;
+            triangleMesh.push(meshIndex);
+            triangleMaterial.push(materialIndex(list[group?.materialIndex ?? 0]));
+        }
+    });
+    return { ...whole, triangleMesh: new Uint16Array(triangleMesh), meshNames, triangleMaterial: new Uint16Array(triangleMaterial), materials };
+};
+
 export const buildWholeMesh = (root: THREE.Object3D): { positions: Float32Array; normals: Float32Array; indices: Uint32Array } => {
     root.updateWorldMatrix(true, true);
     const rootInverse = root.matrixWorld.clone().invert();
