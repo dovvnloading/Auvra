@@ -96,10 +96,56 @@ export type Supersample = typeof SUPERSAMPLE[number];
  * The size (a power of two) a bake of `size` runs at with `factor` × `factor` supersampling, within what the
  * GPU takes (`maxSize`, a power of two), and the factor that leaves.
  */
-export const supersampled = (size: number, factor: Supersample, maxSize: number): { size: number; factor: number } => {
+export const supersampled = (size: number, factor: Supersample, maxSize: number, bytesPerTexel = 0, budget = BAKE_MEMORY_BUDGET): { size: number; factor: number; limited: boolean } => {
     const most = Math.floor(Math.log2(Math.max(1, maxSize)));
-    const runs = Math.min(most, size + Math.round(Math.log2(factor)));
-    return { size: Math.max(size, runs), factor: 2 ** Math.max(0, runs - size) };
+    const wanted = size + Math.round(Math.log2(factor));
+    let runs = Math.min(most, wanted);
+    // No larger than the graphics card's memory safely holds for the maps baked (never below the set's own size).
+    while (runs > size && bytesPerTexel > 0 && (2 ** runs) ** 2 * bytesPerTexel > budget) runs--;
+    runs = Math.max(size, runs);
+    return { size: runs, factor: 2 ** Math.max(0, runs - size), limited: runs < wanted };
+};
+
+/** Graphics memory a supersampled bake may take while it runs, in bytes. */
+export const BAKE_MEMORY_BUDGET = 640 * 1024 * 1024;
+
+/**
+ * The graphics memory a bake takes per texel while it runs: where each texel is and its normals, the
+ * occlusion and bent-normal sums, and each map asked for (with a spare for padding).
+ */
+export const bakeBytesPerTexel = (maps: readonly string[], extras: readonly string[], highPoly: boolean): number => {
+    const has = (name: string) => maps.includes(name) || extras.includes(name);
+    let bytes = 16 + 8 + 1 + 8 + 8 + 2;
+    if (has('ambientOcclusion')) bytes += 4 + 2;
+    if (has('bentNormal')) bytes += 8 + 8;
+    if (has('thickness')) bytes += 2;
+    if (has('curvature') || has('cavity')) bytes += 4 + (has('cavity') ? 2 : 0);
+    if (has('position')) bytes += 8;
+    if (has('id')) bytes += 4;
+    if (has('worldNormal')) bytes += 8;
+    if (highPoly) bytes += (has('color') ? 4 : 0) + (has('opacity') ? 2 : 0) + (has('material') ? 4 : 0);
+    return bytes + 16;
+};
+
+/**
+ * Steps one ray takes through a model of `triangles` triangles (its tree of boxes is about log2 deep,
+ * and a ray visits a few boxes and triangles at each level): the work a ray pass is banded by.
+ */
+export const traceSteps = (triangles: number): number => Math.ceil(16 + 6 * Math.log2(Math.max(2, triangles)));
+
+/**
+ * Rows of a `width` × `height` pass to draw at once, so that no draw does more than `budget` work at
+ * `cost` per texel (and the GPU is never kept busy long enough to be reset): at least one row.
+ */
+export const bandRows = (width: number, height: number, cost: number, budget: number): number =>
+    Math.max(1, Math.min(height, Math.floor(budget / Math.max(1, width * Math.max(1, cost)))));
+
+/** The bands of `rows` rows that cover `height` rows, as [first, past-last]. */
+export const bandRanges = (height: number, rows: number): Array<[number, number]> => {
+    const bands: Array<[number, number]> = [];
+    const step = Math.max(1, Math.floor(rows));
+    for (let y = 0; y < height; y += step) bands.push([y, Math.min(height, y + step)]);
+    return bands;
 };
 
 /**
