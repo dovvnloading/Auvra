@@ -886,7 +886,8 @@ export class Stroke {
      */
     private sourceFor(key: string, picture: SparsePicture, area: Rect): { image: GpuImage; at: [number, number] } | null {
         const mode = this.brush.mode;
-        if (mode === 'paint' || this.tool === 'erase') return null;
+        // Painting (and a brush saved before it had a mode) lays its values on; erasing always erases.
+        if ((mode !== 'blur' && mode !== 'sharpen' && mode !== 'smudge' && mode !== 'clone') || this.tool === 'erase') return null;
         const shift = mode === 'smudge' ? this.smudgeShift : mode === 'clone' ? this.cloneShift : [0, 0] as [number, number];
         if (!shift) return null;
         const gpu = this.stack.host.gpu;
