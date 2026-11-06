@@ -42,8 +42,17 @@ export const ScrubLabel: React.FC<{ label: string; value: number; step: number; 
     );
 };
 
-/** Ramp stops edited on a gradient bar: click a stop to pick it, drag it along, double-click the bar to add one. */
-export const RampEditor: React.FC<{ label: string; ramp: MaterialRamp; onChange: (ramp: MaterialRamp) => void }> = ({ label, ramp, onChange }) => {
+const CHECKER = 'repeating-conic-gradient(#3f3f46 0% 25%, #18181b 0% 50%) 0 0 / 10px 10px';
+const cssColour = (color: readonly number[]): string => {
+    const [r, g, b] = [0, 1, 2].map((at) => Math.round(Math.min(1, Math.max(0, color[at] ?? 0)) * 255));
+    return `rgba(${r}, ${g}, ${b}, ${Math.min(1, Math.max(0, color[3] ?? 1))})`;
+};
+
+/**
+ * Ramp stops edited on a gradient bar: click a stop to pick it, drag it along, double-click the bar to
+ * add one. With `alpha` each stop has a see-through part too, shown over a checkerboard.
+ */
+export const RampEditor: React.FC<{ label: string; ramp: MaterialRamp; onChange: (ramp: MaterialRamp) => void; alpha?: boolean; maxStops?: number }> = ({ label, ramp, onChange, alpha = false, maxStops = MAX_RAMP_STOPS }) => {
     const bar = useRef<HTMLDivElement>(null);
     const [selected, setSelected] = useState(0);
     const dragging = useRef<number | null>(null);
@@ -69,9 +78,10 @@ export const RampEditor: React.FC<{ label: string; ramp: MaterialRamp; onChange:
         return () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up); };
     }, [onChange, stops]);
 
+    const paint = (color: readonly number[]) => (alpha ? cssColour(color) : toHex(color.slice(0, 3)));
     const gradient = stops.length === 1
-        ? toHex(stops[0].color)
-        : `linear-gradient(to right, ${stops.map(stop => `${toHex(stop.color)} ${(stop.position * 100).toFixed(2)}%`).join(', ')})`;
+        ? `linear-gradient(${paint(stops[0].color)}, ${paint(stops[0].color)})`
+        : `linear-gradient(to right, ${stops.map(stop => `${paint(stop.color)} ${(stop.position * 100).toFixed(2)}%`).join(', ')})`;
 
     const colorAt = (position: number): number[] => {
         const after = stops.findIndex(stop => stop.position >= position);
@@ -92,10 +102,10 @@ export const RampEditor: React.FC<{ label: string; ramp: MaterialRamp; onChange:
                 aria-label={`${label} ramp`}
                 aria-valuenow={stop.position}
                 className="relative h-5 cursor-copy rounded border border-gray-700"
-                style={{ background: gradient }}
+                style={{ background: alpha ? `${gradient}, ${CHECKER}` : gradient }}
                 title="Double-click to add a stop"
                 onDoubleClick={(event) => {
-                    if (stops.length >= MAX_RAMP_STOPS) return;
+                    if (stops.length >= maxStops) return;
                     const rect = event.currentTarget.getBoundingClientRect();
                     const position = Number(Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width)).toFixed(4));
                     const next = [...stops, { position, color: colorAt(position) }].sort((a, b) => a.position - b.position);
@@ -109,13 +119,13 @@ export const RampEditor: React.FC<{ label: string; ramp: MaterialRamp; onChange:
                         key={at}
                         aria-label={`${label} stop ${at + 1}`}
                         className={`absolute top-0 h-3 w-3 -translate-x-1/2 rotate-45 border ${at === index ? 'border-white' : 'border-gray-500'}`}
-                        style={{ left: `${candidate.position * 100}%`, background: toHex(candidate.color) }}
+                        style={{ left: `${candidate.position * 100}%`, background: toHex(candidate.color.slice(0, 3)) }}
                         onMouseDown={(event) => { event.preventDefault(); setSelected(at); dragging.current = at; }}
                     />
                 ))}
             </div>
             <div className="flex items-center gap-2">
-                <ColourFieldRgb label={`${label} stop colour`} value={stop.color} className="h-6 w-10"
+                <ColourFieldRgb label={`${label} stop colour`} value={alpha ? [stop.color[0] ?? 0, stop.color[1] ?? 0, stop.color[2] ?? 0, stop.color[3] ?? 1] : stop.color.slice(0, 3)} alpha={alpha} className="h-6 w-10"
                     onChange={(color) => onChange({ stops: stops.map((candidate, at) => (at === index ? { ...candidate, color: color as typeof candidate.color } : candidate)) })} />
                 <input type="number" aria-label={`${label} stop position`} min={0} max={1} step={0.01} value={stop.position} className={`w-16 ${inputClass}`}
                     onChange={(event) => {
@@ -125,7 +135,7 @@ export const RampEditor: React.FC<{ label: string; ramp: MaterialRamp; onChange:
                         setSelected(order.findIndex(entry => entry.at === index));
                         onChange({ stops: order.map(entry => entry.candidate) });
                     }} />
-                <span className="flex-1 text-2xs text-gray-500">{stops.length}/{MAX_RAMP_STOPS} stops</span>
+                <span className="flex-1 text-2xs text-gray-500">{stops.length}/{maxStops} stops</span>
                 <button aria-label={`Remove ${label} stop`} disabled={stops.length <= 1} className="rounded p-1 text-gray-500 hover:text-red-400 disabled:opacity-30"
                     onClick={() => { onChange({ stops: stops.filter((_, at) => at !== index) }); setSelected(Math.max(0, index - 1)); }}>
                     <TrashIcon size={12} />

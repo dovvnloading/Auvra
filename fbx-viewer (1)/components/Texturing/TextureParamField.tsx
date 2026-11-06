@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { LinkIcon, SigmaIcon, UnlinkIcon, UploadIcon } from '../UI/Icons';
 import { expressionError } from '../../texturing/graph/expressions';
-import { readRamp } from '../../texturing/graph/nodeKit';
+import { MAX_RAMP_STOPS, readRamp } from '../../texturing/graph/nodeKit';
 import { isParamLink, type GraphParameter, type GraphParameterKind, type RampStop, type TexParamDef } from '../../texturing/graph/types';
 import { CodeField, RampEditor, ScrubLabel } from '../Materials/MaterialParamField';
 import { Popover } from '../UI/kit';
@@ -104,9 +104,10 @@ export const ParamControl: React.FC<{
         case 'select':
             return <Select value={String(value ?? param.default)} options={(param.options ?? []).map((option) => ({ value: option.value, label: option.label }))} onChange={(next) => onChange(next)} className="w-full" />;
         case 'ramp': {
+            // Stops keep their alpha: a gradient map can fade to see-through.
             const stops = readRamp(value, (param.default as { stops: RampStop[] }).stops);
-            return <RampEditor label={param.label} ramp={{ stops: stops.map((stop) => ({ position: stop.position, color: stop.color.slice(0, 3) })) }}
-                onChange={(ramp) => onChange({ stops: ramp.stops.map((stop) => ({ position: stop.position, color: [...stop.color.slice(0, 3), 1] })) })} />;
+            return <RampEditor label={param.label} alpha maxStops={MAX_RAMP_STOPS} ramp={{ stops: stops.map((stop) => ({ position: stop.position, color: [...stop.color] })) }}
+                onChange={(ramp) => onChange({ stops: ramp.stops.map((stop) => ({ position: stop.position, color: [stop.color[0] ?? 0, stop.color[1] ?? 0, stop.color[2] ?? 0, stop.color[3] ?? 1] })) })} />;
         }
         case 'curve':
             return <CurveEditor value={value} onChange={onChange} />;
