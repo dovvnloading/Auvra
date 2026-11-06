@@ -1,4 +1,4 @@
-import { anyIn, bool, colorIn, float, grayIn, int, onePass, out, seed, select, vec2 } from '../nodeKit';
+import { bool, colorIn, float, int, onePass, out, seed, select, vec2 } from '../nodeKit';
 import type { TexNodeDef } from '../types';
 import { meshMapKey } from './io';
 
