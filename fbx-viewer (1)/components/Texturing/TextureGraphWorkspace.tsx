@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { CheckCircleIcon, DiceIcon, DownloadIcon, ExternalLinkIcon, RefreshIcon, TrashIcon, WarningIcon } from '../UI/Icons';
+import { CheckCircleIcon, DiceIcon, DownloadIcon, ExternalLinkIcon, InfoIcon, RefreshIcon, TrashIcon, WarningIcon } from '../UI/Icons';
 import { useAssets } from '../../context/AssetContext';
 import { useScene } from '../../context/SceneContext';
 import { frontendDiagnostics } from '../../diagnostics/runtime';
@@ -15,6 +15,7 @@ import { download, makeZip } from '../../texturing/zip';
 import { Button, Segmented, Spinner } from '../UI/kit';
 import { Select } from '../UI/Select';
 import { COMMENT_COLORS, COMMENT_COLOR_NAMES, MAX_COMMENT_TITLE, addSubgraphNode, changeComment, materialHistory, type Point } from './graphEditing';
+import { usePreviewMeshMaps, type PreviewShape } from './previewMeshMaps';
 import { TextureGraphCanvas } from './TextureGraphCanvas';
 import { DraftNumber, DraftText, ParamControl, TextureParamField, exposedKind } from './TextureParamField';
 import { TextureGraphSession } from './textureGraphSession';
@@ -117,7 +118,7 @@ export const TextureGraphWorkspace: React.FC<{
     const libraryVersion = useSyncExternalStore((listener) => materialLibrary.subscribe(listener), () => materialLibrary.version);
     useEffect(() => { session?.refresh(); }, [libraryVersion, entries, session]);
     if (!session) return <div className="flex-1 bg-[#121214]" />;
-    return <Workspace asset={asset} onSave={onSave} onOpenAsset={onOpenAsset} session={session} stored={stored} entries={entries} resolve={resolve} />;
+    return <Workspace asset={asset} onSave={onSave} onOpenAsset={onOpenAsset} session={session} stored={stored} entries={entries} resolve={resolve} libraryVersion={libraryVersion} />;
 };
 
 const Workspace: React.FC<{
@@ -128,7 +129,8 @@ const Workspace: React.FC<{
     stored: StoredTextureGraph;
     entries: Map<string, GraphEntry>;
     resolve: GraphResolver;
-}> = ({ asset, onSave, onOpenAsset, session, stored, entries, resolve }) => {
+    libraryVersion: number;
+}> = ({ asset, onSave, onOpenAsset, session, stored, entries, resolve, libraryVersion }) => {
     const { textures } = useAssets();
     const { models } = useScene();
     const textureStore = useTextureStore();
@@ -142,12 +144,15 @@ const Workspace: React.FC<{
     const [tab, setTab] = useState<InspectorTab>('material');
     const [baking, setBaking] = useState<string | null>(null);
     const [message, setMessage] = useState<{ text: string; tone: 'error' | 'info' } | null>(null);
+    const [shape, setShape] = useState<PreviewShape>('sphere');
+    const [surfaceId, setSurfaceId] = useState<string | null>(null);
     // What could not be opened, read once as the graph opens: the first change saves it without it.
     const [problems, setProblems] = useState(() => readTextureGraph((asset.textureGraph as { graph?: unknown } | undefined)?.graph ?? null).problems);
     const dragBase = useRef<GraphSnapshot | null>(null);
     const [, setHistoryVersion] = useState(0);
     // Kept outside this screen, so it survives switching material and leaving the tab.
     const history = useMemo(() => materialHistory<GraphSnapshot>(asset.id), [asset.id]);
+    const meshMaps = usePreviewMeshMaps(session, graph, resolve, shape, surfaceId, libraryVersion);
 
     // The first output is in the 2D view to begin with.
     useEffect(() => {
@@ -581,6 +586,12 @@ const Workspace: React.FC<{
             </div>
             {graph.size.w !== graph.size.h && <p className="text-2xs text-zinc-500">The pictures keep the graph's proportions: {2 ** outSize.w} × {2 ** outSize.h}.</p>}
             <p className="text-2xs leading-snug text-zinc-500">Packed keeps occlusion, roughness and metallic in one picture's red, green and blue, which the engine reads in one go.</p>
+            {meshMaps.reads && (
+                <div className="flex gap-1.5 rounded border border-zinc-800 bg-zinc-900/60 p-2 text-2xs leading-snug text-zinc-400">
+                    <InfoIcon size={12} className="mt-px shrink-0 text-zinc-500" />
+                    <span>This graph reads mesh maps. The material's pictures are made with stand-ins for them, since the material can go on any model; the maps in the 3D view are for looking only. To draw it with a model's own maps, use the graph as a fill or a smart mask in the Paint tab.</span>
+                </div>
+            )}
             <Button size="sm" className="w-full justify-center" disabled={Boolean(baking) || !hasOutputs} onClick={() => void downloadPictures()} icon={<DownloadIcon size={12} />}>Download pictures</Button>
             {stored.baked && (
                 <div className="space-y-1 border-t border-zinc-800 pt-2">
@@ -624,7 +635,8 @@ const Workspace: React.FC<{
                     })()} />
                 </div>
                 <div className="flex min-h-0 flex-1 flex-col">
-                    <TextureView3D gpu={session.gpu} preview={session.preview} version={session.preview.version} models={models.filter((model) => model.category !== 'Animation')} />
+                    <TextureView3D gpu={session.gpu} preview={session.preview} version={session.preview.version} models={models.filter((model) => model.category !== 'Animation')}
+                        shape={shape} onShapeChange={setShape} meshMaps={meshMaps} onSurfaceChange={setSurfaceId} />
                 </div>
             </div>
             <aside className="flex w-[300px] shrink-0 flex-col border-l border-zinc-800 bg-zinc-950">
