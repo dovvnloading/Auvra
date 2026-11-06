@@ -162,6 +162,9 @@ export const PaintWorkspace: React.FC = () => {
     }, [brush.channels, document, effect, layer]);
 
     const maskImage = useCallback((tile: number) => (session && layer ? session.stack.cachedMask(layer.id, tile) : null), [layer, session]);
+    // The mask view's layer has its mask kept whole while it is shown.
+    const layerId = layer?.id ?? null;
+    useEffect(() => { session?.stack.watchMask(view === 'mask' ? layerId : null); }, [session, view, layerId]);
 
     // UV edits have a history of their own: undo and redo reach it while the 2D UV view or the seam tool is in use.
     const uvVersion = useSyncExternalStore(uv?.subscribe ?? (() => () => undefined), uv?.getVersion ?? (() => 0));

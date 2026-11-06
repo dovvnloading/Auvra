@@ -151,21 +151,10 @@ export const LayerPanel: React.FC<{
     const duplicate = (source: PaintLayer) => {
         const copy = (item: PaintLayer): PaintLayer => {
             const id = paintId('l');
-            for (const channel of Object.keys(item.channels) as PaintChannel[]) {
-                for (const tile of session.stack.tiles) {
-                    const from = `${item.id}:${channel}`;
-                    if (!session.stack.hasPicture(from, tile)) continue;
-                    session.gpu.copy(session.stack.picture(from, tile), session.stack.picture(`${id}:${channel}`, tile));
-                    session.stack.touch(`${id}:${channel}`, tile);
-                }
-            }
+            for (const channel of Object.keys(item.channels) as PaintChannel[]) session.stack.copyPictures(`${item.id}:${channel}`, `${id}:${channel}`);
             const mask = item.mask?.map((effect) => {
                 const effectId = paintId('m');
-                if (effect.kind === 'paint') for (const tile of session.stack.tiles) {
-                    if (!session.stack.hasPicture(effect.id, tile)) continue;
-                    session.gpu.copy(session.stack.picture(effect.id, tile), session.stack.picture(effectId, tile));
-                    session.stack.touch(effectId, tile);
-                }
+                if (effect.kind === 'paint') session.stack.copyPictures(effect.id, effectId);
                 return { ...effect, id: effectId, pictures: {} };
             });
             return { ...structuredClone({ ...item, pictures: {} }), id, name: `${item.name} copy`, ...(mask ? { mask } : {}), ...(item.layers ? { layers: item.layers.map(copy) } : {}) };
