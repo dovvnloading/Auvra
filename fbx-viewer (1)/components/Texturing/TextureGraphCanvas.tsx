@@ -276,6 +276,9 @@ export const TextureGraphCanvas: React.FC<TextureGraphCanvasProps> = (props) => 
     const kindOf = useMemo(() => outputKinds(graph, definition), [definition, graph]);
     const unused = useMemo(() => unusedNodes(graph), [graph]);
 
+    // The pins wires run to: in as "node>pin", out as "node<pin".
+    const wiredPins = useMemo(() => new Set(graph.links.flatMap((link) => [`${link.to}>${link.toInput}`, `${link.from}<${link.fromOutput}`])), [graph.links]);
+
     // Each node's view, the same object while it shows the same (so only changed cards redraw).
     const viewCache = useRef(new Map<string, { key: string; view: NodeView }>());
     const views = useMemo(() => {
@@ -295,8 +298,9 @@ export const TextureGraphCanvas: React.FC<TextureGraphCanvasProps> = (props) => 
                 layout: node.type === REROUTE_NODE_TYPE ? 'dot' : 'edges',
                 width: NODE_WIDTH,
                 body: missing ? 48 : THUMBNAIL_SIZE,
-                inputs: (def?.inputs ?? []).filter((port) => !port.hidden).map((port) => ({ key: port.key, label: port.label, kind: pinKind(port), ...(port.group ? { group: port.group } : {}) })),
-                outputs: (def?.outputs ?? []).filter((port) => !port.hidden).map((port) => ({ key: port.key, label: port.label, kind: kindOf(node.id, port.key) })),
+                // A hidden pin a wire still runs to stays in view, so the wire can be seen and taken away.
+                inputs: (def?.inputs ?? []).filter((port) => !port.hidden || wiredPins.has(`${node.id}>${port.key}`)).map((port) => ({ key: port.key, label: port.label, kind: pinKind(port), ...(port.group ? { group: port.group } : {}) })),
+                outputs: (def?.outputs ?? []).filter((port) => !port.hidden || wiredPins.has(`${node.id}<${port.key}`)).map((port) => ({ key: port.key, label: port.label, kind: kindOf(node.id, port.key) })),
                 ...(unused.has(node.id) ? { unused: true } : {}),
                 ...(error ? { error } : {}),
                 ...(missing ? { missing: true } : {}),
@@ -315,7 +319,7 @@ export const TextureGraphCanvas: React.FC<TextureGraphCanvasProps> = (props) => 
             else { viewCache.current.set(node.id, { key, view }); result.set(node.id, view); }
         }
         return result;
-    }, [definition, graph.nodes, kindOf, opens, placeholders, resolve, session, sessionVersion, unused]);
+    }, [definition, graph.nodes, kindOf, opens, placeholders, resolve, session, sessionVersion, unused, wiredPins]);
 
     const entries = useMemo<readonly FinderEntry[]>(() => [
         ...NODE_ENTRIES,

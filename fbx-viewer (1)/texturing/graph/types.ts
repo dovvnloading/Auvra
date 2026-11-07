@@ -41,7 +41,7 @@ export interface TexPortDef {
     group?: string;
 }
 
-export type TexParamKind = 'float' | 'int' | 'bool' | 'color' | 'vec2' | 'select' | 'ramp' | 'curve' | 'texture' | 'string' | 'code' | 'graph' | 'function' | 'settings';
+export type TexParamKind = 'float' | 'int' | 'bool' | 'color' | 'vec2' | 'select' | 'ramp' | 'curve' | 'texture' | 'string' | 'font' | 'code' | 'graph' | 'function' | 'settings';
 
 export interface RampStop { position: number; color: [number, number, number, number] }
 export interface CurvePoint { x: number; y: number }
@@ -55,13 +55,16 @@ export interface TexParamDef {
     default: unknown;
     min?: number;
     max?: number;
-    /** A slider's end; typing can go past it up to `max`. */
+    /** A slider's ends; typing can go past them up to `min` and `max`. */
+    softMin?: number;
     softMax?: number;
     step?: number;
     options?: ReadonlyArray<{ value: string; label: string }>;
     hint?: string;
     /** Shown only while this holds for the node's other settings. */
     showIf?: (params: Readonly<Record<string, unknown>>) => boolean;
+    /** A heading it is listed under (a graph's parameter group, on a node using the graph). */
+    group?: string;
 }
 
 /** A node setting following the graph's parameters: one of them as it is, or a formula of them. */
@@ -126,7 +129,11 @@ export interface TexGraphComment {
     color: string;
 }
 
-export type GraphParameterKind = 'float' | 'int' | 'bool' | 'color' | 'vec2' | 'select';
+/** What a parameter holds: a number, switch, colour, pair or choice, or a gradient, curves, a picture, text or a font. */
+export type GraphParameterKind = 'float' | 'int' | 'bool' | 'color' | 'vec2' | 'select' | 'ramp' | 'curve' | 'texture' | 'string' | 'font';
+
+/** A parameter value: a number, switch, vector or text, or a gradient's stops or curves. */
+export type GraphParameterValue = number | boolean | number[] | string | { stops: RampStop[] } | CurveSet;
 
 /** A value the graph exposes: set on the material (or wherever the graph is used) and read by nodes. */
 export interface GraphParameter {
@@ -134,13 +141,34 @@ export interface GraphParameter {
     name: string;
     label: string;
     kind: GraphParameterKind;
-    default: number | boolean | number[] | string;
+    default: GraphParameterValue;
+    /** Hard limits: a value never goes past them. */
     min?: number;
     max?: number;
+    /** The slider's ends, inside the hard limits: typing can go past them. */
+    softMin?: number;
+    softMax?: number;
     step?: number;
     options?: Array<{ value: string; label: string }>;
     group?: string;
     description?: string;
+    /** Shown only while this formula of the other parameters holds (is not 0): "pattern == 2", "wear > 0.5". */
+    visibleIf?: string;
+}
+
+/** A heading parameters are listed under, with words about it, and whether it starts folded. */
+export interface GraphParameterGroup {
+    name: string;
+    description?: string;
+    folded?: boolean;
+}
+
+/** Values for some of a graph's parameters (and its seed), kept under a name. */
+export interface GraphPreset {
+    id: string;
+    name: string;
+    values: Record<string, GraphParameterValue>;
+    seed?: number;
 }
 
 export interface TextureGraph {
@@ -158,6 +186,10 @@ export interface TextureGraph {
     precision?: 8 | 16 | 32;
     /** The size the graph's picture stands for in the world, in metres, across and down (1 × 1 unless set). */
     physicalSize?: { w: number; h: number };
+    /** Its parameter groups' words and folding, in the order shown (groups no parameter is in are dropped). */
+    groups?: GraphParameterGroup[];
+    /** Presets kept with the graph: they go wherever it goes and wherever it is used. */
+    presets?: GraphPreset[];
 }
 
 /** Engine material channels an output can feed. */

@@ -1,6 +1,7 @@
 import { evaluateExpression, type ExprValue } from './expressions';
 import { GRAPH_USING_TYPES, INPUT_NODE_TYPE, MESH_READING_NODE_TYPES, OUTPUT_NODE_TYPE, SUBGRAPH_NODE_TYPE } from './nodes/io';
 import { migrateProcessorParams } from './nodes/processors';
+import { PARAMETER_KINDS, RANGED_KINDS, coerceParameter, conditionScope, readGroups, readPresets } from './parameters';
 import { textureNodeDefinitionByType } from './registry';
 import {
     isParamLink,
@@ -132,11 +133,12 @@ const readSize = (value: unknown): NodeSize | undefined => {
     return { mode, w: clamp(Math.round(finite(size.w, mode === 'absolute' ? DEFAULT_SIZE_LOG2 : 0)), low, high), h: clamp(Math.round(finite(size.h, mode === 'absolute' ? DEFAULT_SIZE_LOG2 : 0)), low, high) };
 };
 
+export { coerceParameter } from './parameters';
+
 const readParameter = (value: unknown): GraphParameter | null => {
     const parameter = value as Partial<GraphParameter> | null;
     if (!parameter || typeof parameter.name !== 'string' || !PARAMETER_NAME.test(parameter.name)) return null;
-    const kinds: GraphParameterKind[] = ['float', 'int', 'bool', 'color', 'vec2', 'select'];
-    const kind = kinds.includes(parameter.kind as GraphParameterKind) ? parameter.kind as GraphParameterKind : 'float';
+    const kind = PARAMETER_KINDS.includes(parameter.kind as GraphParameterKind) ? parameter.kind as GraphParameterKind : 'float';
     const options = Array.isArray(parameter.options)
         ? parameter.options.filter((option) => option && typeof option.value === 'string').slice(0, 32).map((option) => ({ value: option.value.slice(0, 64), label: String(option.label ?? option.value).slice(0, 64) }))
         : undefined;
@@ -146,32 +148,27 @@ const readParameter = (value: unknown): GraphParameter | null => {
         kind,
         default: coerceParameter(kind, parameter.default, options),
     };
-    if (typeof parameter.min === 'number' && Number.isFinite(parameter.min)) result.min = parameter.min;
-    if (typeof parameter.max === 'number' && Number.isFinite(parameter.max)) result.max = parameter.max;
+    if (RANGED_KINDS.has(kind)) {
+        const number = (key: 'min' | 'max' | 'softMin' | 'softMax') => (typeof parameter[key] === 'number' && Number.isFinite(parameter[key]) ? parameter[key] as number : undefined);
+        const min = number('min');
+        const max = number('max');
+        if (min !== undefined) result.min = min;
+        if (max !== undefined && (min === undefined || max >= min)) result.max = max;
+        // The slider's ends lie inside the hard limits.
+        const softMin = number('softMin');
+        const softMax = number('softMax');
+        const inside = (x: number) => Math.min(result.max ?? Infinity, Math.max(result.min ?? -Infinity, x));
+        if (softMin !== undefined) result.softMin = inside(softMin);
+        if (softMax !== undefined && (result.softMin === undefined || inside(softMax) > result.softMin)) result.softMax = inside(softMax);
+    }
     if (typeof parameter.step === 'number' && Number.isFinite(parameter.step) && parameter.step > 0) result.step = parameter.step;
+    if (typeof parameter.visibleIf === 'string' && parameter.visibleIf.trim()) result.visibleIf = parameter.visibleIf.trim().slice(0, 200);
     if (options?.length) result.options = options;
     if (typeof parameter.group === 'string' && parameter.group.trim()) result.group = parameter.group.trim().slice(0, 64);
     if (typeof parameter.description === 'string' && parameter.description.trim()) result.description = parameter.description.trim().slice(0, 256);
     return result;
 };
 
-/** A parameter value of the right shape for its kind. */
-export const coerceParameter = (kind: GraphParameterKind, value: unknown, options?: ReadonlyArray<{ value: string }>): GraphParameter['default'] => {
-    switch (kind) {
-        case 'bool': return Boolean(value);
-        case 'int': return Math.round(finite(value, 0));
-        case 'color': {
-            const c = Array.isArray(value) ? value : [0.5, 0.5, 0.5, 1];
-            return [0, 1, 2, 3].map((i) => clamp(finite(c[i], i === 3 ? 1 : 0.5), 0, 1));
-        }
-        case 'vec2': {
-            const v = Array.isArray(value) ? value : [0, 0];
-            return [finite(v[0], 0), finite(v[1], 0)];
-        }
-        case 'select': return typeof value === 'string' && (!options || options.some((option) => option.value === value)) ? value : options?.[0]?.value ?? '';
-        default: return finite(value, 0);
-    }
-};
 
 /**
  * A stored graph made safe to use, with what had to be left out of it said in words. Nodes of a type
@@ -261,6 +258,10 @@ export const readTextureGraph = (value: unknown): { graph: TextureGraph; problem
     if (comments.length) graph.comments = comments;
     if (raw.tiling === 'none' || raw.tiling === 'horizontal' || raw.tiling === 'vertical') graph.tiling = raw.tiling;
     if (raw.precision === 8 || raw.precision === 16 || raw.precision === 32) graph.precision = raw.precision;
+    const groups = readGroups(raw.groups).filter((group) => parameters.some((parameter) => parameter.group === group.name));
+    if (groups.length) graph.groups = groups;
+    const presets = readPresets(raw.presets, parameters);
+    if (presets.length) graph.presets = presets;
     const metres = raw.physicalSize as { w?: unknown; h?: unknown } | undefined;
     if (metres && typeof metres.w === 'number' && typeof metres.h === 'number' && metres.w > 0 && metres.h > 0 && (metres.w !== 1 || metres.h !== 1)) {
         graph.physicalSize = { w: Math.min(10000, metres.w), h: Math.min(10000, metres.h) };
@@ -358,14 +359,8 @@ export const formulaScope = (
     iteration: { index: number; count: number } = { index: 0, count: 1 },
 ): Record<string, ExprValue> => {
     const scope: Record<string, ExprValue> = { $size: width, $width: width, $height: height, $seed: seed, $iteration: iteration.index, $iterations: iteration.count };
-    for (const parameter of graph.parameters) {
-        const value = values[parameter.name];
-        if (typeof value === 'number') scope[parameter.name] = value;
-        else if (typeof value === 'boolean') scope[parameter.name] = value ? 1 : 0;
-        else if (Array.isArray(value)) scope[parameter.name] = value.map(Number);
-        else if (typeof value === 'string') scope[parameter.name] = Math.max(0, parameter.options?.findIndex((option) => option.value === value) ?? 0);
-    }
-    return scope;
+    // Numbers, switches, vectors and choices; gradients, curves, pictures, text and fonts are no numbers.
+    return { ...scope, ...conditionScope(graph.parameters, values) };
 };
 
 /** A setting's value made the right shape for it (and inside its limits). */
@@ -395,6 +390,7 @@ export const coerceParam = (param: TexParamDef, value: unknown): unknown => {
         case 'string':
         case 'code':
         case 'texture':
+        case 'font':
         case 'graph':
             return typeof value === 'string' ? value : param.default;
         case 'function': {
@@ -475,6 +471,8 @@ export const graphTextureIds = (graph: TextureGraph): string[] => {
             if (param.kind === 'texture' && typeof value === 'string' && value) ids.add(value);
         }
     }
+    // Pictures picture parameters start with.
+    for (const parameter of graph.parameters) if (parameter.kind === 'texture' && typeof parameter.default === 'string' && parameter.default) ids.add(parameter.default);
     return [...ids];
 };
 

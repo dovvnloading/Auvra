@@ -3,7 +3,8 @@ import type { GpuImage } from '../../gpu/textureGpu';
 import { MATERIAL_CHANNELS, MATERIAL_DEFAULTS, materialKey, materialResults, outputChannelOf, type MaterialImages } from '../material';
 import { NAMED_RECEIVE_TYPE, NAMED_SEND_TYPE } from '../namedLinks';
 import { anyIn, color, colorIn, float, onePass, out, select, vec2 } from '../nodeKit';
-import { OUTPUT_CHANNELS, OUTPUT_CHANNEL_LABELS, outputNodeKind, type NodeRunContext, type OutputChannel, type PortKind, type TexNodeDef, type TexParamDef } from '../types';
+import { OUTPUT_CHANNELS, OUTPUT_CHANNEL_LABELS, outputNodeKind, type GraphParameter, type NodeRunContext, type OutputChannel, type PortKind, type TexNodeDef, type TexParamDef } from '../types';
+import { parameterSetting } from '../parameters';
 
 /** Where a graph starts and ends, the model's baked maps, project pictures and hand-written pixels. */
 
@@ -161,6 +162,7 @@ export const IO_NODES: TexNodeDef[] = [
             { key: 'name', label: 'Name', kind: 'string', default: 'input' },
             select('kind', 'Kind', 'color', [['color', 'Colour'], ['gray', 'Grey']]),
             select('fallback', 'Without one', 'black', DEFAULT_LOOKS),
+            { key: 'visibleIf', label: 'Shown when', kind: 'string', default: '', hint: 'On a node using this graph, its pin shows only while this formula of the graph\'s parameters holds ("mode == 1"); empty: always.' },
         ],
         sizeFrom: 'graph',
         kindOf: (params) => (params.kind === 'gray' ? 'gray' : 'color'),
@@ -190,6 +192,7 @@ export const IO_NODES: TexNodeDef[] = [
                 showIf: (params) => params.channel === 'custom',
                 hint: 'What the image is: grey for masks and heights, so graphs using this one get a grey pin.',
             }),
+            { key: 'visibleIf', label: 'Shown when', kind: 'string', default: '', hint: 'On a node using this graph, its pin shows only while this formula of the graph\'s parameters holds ("mode == 1"); empty: always.' },
         ],
         sizeFrom: 'input',
         async run(context) {
@@ -258,7 +261,7 @@ export const IO_NODES: TexNodeDef[] = [
         keywords: ['input', 'material input', 'socket', 'sub-graph'],
         inputs: [],
         outputs: [{ key: 'out', label: 'Material', kind: 'material' }],
-        params: [{ key: 'name', label: 'Name', kind: 'string', default: 'material' }],
+        params: [{ key: 'name', label: 'Name', kind: 'string', default: 'material' }, { key: 'visibleIf', label: 'Shown when', kind: 'string', default: '', hint: 'On a node using this graph, its pin shows only while this formula of the graph\'s parameters holds ("mode == 1"); empty: always.' }],
         sizeFrom: 'graph',
         async run(context) {
             const name = String(context.params.name || 'material');
@@ -278,7 +281,7 @@ export const IO_NODES: TexNodeDef[] = [
         keywords: ['output', 'material output', 'sub-graph', 'result'],
         inputs: [{ key: 'in', label: 'Material', kind: 'material' }],
         outputs: [],
-        params: [{ key: 'name', label: 'Name', kind: 'string', default: '' }],
+        params: [{ key: 'name', label: 'Name', kind: 'string', default: '' }, { key: 'visibleIf', label: 'Shown when', kind: 'string', default: '', hint: 'On a node using this graph, its pin shows only while this formula of the graph\'s parameters holds ("mode == 1"); empty: always.' }],
         sizeFrom: 'input',
         async run(context) {
             const material = context.material('in');
@@ -484,16 +487,9 @@ void main() {
     },
 ];
 
-/** The settings a sub-graph node shows: the graph's own exposed parameters. */
-export const subgraphParamDefs = (parameters: ReadonlyArray<{ name: string; label: string; kind: string; default: unknown; min?: number; max?: number; step?: number; options?: Array<{ value: string; label: string }> }>): TexParamDef[] =>
-    parameters.map((parameter) => ({
-        key: parameter.name,
-        label: parameter.label || parameter.name,
-        kind: parameter.kind === 'select' ? 'select' : parameter.kind as TexParamDef['kind'],
-        default: parameter.default,
-        min: parameter.min,
-        max: parameter.max,
-        step: parameter.step,
-        options: parameter.options,
-    }));
+/**
+ * The settings a sub-graph node shows: the graph's own exposed parameters, under their groups, with
+ * their words, ranges and steps, each shown only while its condition holds for the node's values.
+ */
+export const subgraphParamDefs = (parameters: readonly GraphParameter[]): TexParamDef[] => parameters.map((parameter) => parameterSetting(parameter, parameters));
 
