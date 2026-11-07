@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { defaultNodeParams } from '../../texturing/graph/document';
 import { blueNoiseTile } from '../../texturing/graph/noiseMath';
 import { GRUNGE_LOOKS, NOISE_NODES, NOISE_REFERENCES } from '../../texturing/graph/nodes/noises';
+import { PATTERN_NODES, PATTERN_REFERENCES, weaveCount } from '../../texturing/graph/nodes/patterns';
 import { tileSafeDirection } from '../../texturing/graph/safeTransform';
 import { textureNodeDefinitionByType } from '../../texturing/graph/registry';
 
@@ -78,5 +79,49 @@ describe('noises and grunges', () => {
                 expect(Math.max(dx, dy)).toBeGreaterThan(1);
             }
         }
+    });
+});
+
+describe('patterns', () => {
+    it('every pattern tiles and draws something', () => {
+        for (const definition of PATTERN_NODES) {
+            const reference = PATTERN_REFERENCES[definition.type];
+            expect(reference, `${definition.type} has a CPU twin`).toBeTruthy();
+            const { gap, low, high } = edges((u, v) => reference(u, v, withDefaults(definition.type), SEED));
+            expect(gap, `${definition.type} edges`).toBeLessThan(1e-6);
+            expect(low, `${definition.type} low`).toBeGreaterThanOrEqual(0);
+            expect(high, `${definition.type} high`).toBeLessThanOrEqual(1 + 1e-9);
+            expect(high - low, `${definition.type} varies`).toBeGreaterThan(0.05);
+            expect(definition.description.length).toBeGreaterThan(30);
+        }
+        expect(edges((u, v) => PATTERN_REFERENCES.weaveThreads(u, v, withDefaults('weaveGenerator'), SEED)).gap).toBeLessThan(1e-9);
+    });
+
+    it('tiles at odd angles, every weave and odd counts', () => {
+        for (const angle of [13, 29, 47, 71, -100]) {
+            expect(edges((u, v) => PATTERN_REFERENCES.stripes(u, v, withDefaults('stripes', { angle, wave: 0.6, waves: 3 }), SEED)).gap, `stripes at ${angle}`).toBeLessThan(1e-6);
+            expect(edges((u, v) => PATTERN_REFERENCES.axialGradient(u, v, withDefaults('axialGradient', { angle, repeats: 3 }), SEED)).gap).toBeLessThan(1e-6);
+        }
+        for (const weave of ['plain', 'twill', 'satin', 'basket']) {
+            for (const count of [7, 9, 13]) {
+                expect(edges((u, v) => PATTERN_REFERENCES.weaveGenerator(u, v, withDefaults('weaveGenerator', { weave, count }), SEED)).gap, `${weave} ${count}`).toBeLessThan(1e-9);
+            }
+        }
+        expect(weaveCount(7, 2)).toBe(10);
+        expect(weaveCount(16, 1)).toBe(16);
+        for (const rows of [3, 7]) {
+            expect(edges((u, v) => PATTERN_REFERENCES.triangleGrid(u, v, withDefaults('triangleGrid', { rows, columns: 5 }), SEED)).gap, `triangles ${rows} rows`).toBeLessThan(1e-9);
+            expect(edges((u, v) => PATTERN_REFERENCES.arcPavement(u, v, withDefaults('arcPavement', { rows, columns: 3 }), SEED)).gap, `fans ${rows} rows`).toBeLessThan(1e-9);
+        }
+    });
+
+    it('covers the ground with fans, leaving only the gaps between stones', () => {
+        let empty = 0;
+        let total = 0;
+        for (let i = 0; i < 60; i++) for (let j = 0; j < 60; j++) {
+            total++;
+            if (PATTERN_REFERENCES.arcPavement((i + 0.5) / 60, (j + 0.5) / 60, withDefaults('arcPavement', { gap: 0 }), SEED) === 0) empty++;
+        }
+        expect(empty / total).toBeLessThan(0.02);
     });
 });

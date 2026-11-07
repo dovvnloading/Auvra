@@ -59,6 +59,7 @@ const EXEMPT = new Map(Object.entries({
   'texturing/graph/safeTransform.ts': 'pure-utility',
   'texturing/graph/noiseMath.ts': 'pure-utility',
   'texturing/graph/nodes/noises.ts': 'pure-utility',
+  'texturing/graph/nodes/patterns.ts': 'pure-utility',
   'texturing/graph/nodes/text.ts': 'pure-utility',
   'texturing/graph/iterate.ts': 'pure-utility',
   'texturing/graph/nodes/processors.ts': 'pure-utility',
