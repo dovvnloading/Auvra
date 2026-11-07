@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { UvSurfaceLookup } from './uvSurface';
 import { DEFAULT_PARTICLES, throwParticles, type ParticleSettings } from './particles';
-import { decalTriangles } from './decals';
+import { DECAL_TABLE_WIDTH, decalTable, decalTriangles } from './decals';
 import type { GpuImage, TextureGpu } from '../gpu/textureGpu';
 import type { TileBake } from '../bake/meshBaker';
 import { NO_MIRROR, type Mirror } from '../mesh/picker';
@@ -427,24 +427,42 @@ void main() {
 }`;
 
 /**
- * A decal on the UV layout: each texel's place on the decal (vExtra: across and up along the surface,
- * reached), read in the decal's picture (uPlace: width, height, turn, strength). uOut 0 writes how much
- * it covers (the picture's alpha), 1 its colour.
+ * A decal on the UV layout. Each texel's place on the decal (across and up along the surface, reached) is
+ * worked out from its triangle (vIds.z): the triangle's row in the lookup (uDecalSlots), its corners'
+ * places there (uDecalTable), weighted by where the texel lies on the triangle (from its first corner
+ * and its edges); then read in the decal's picture (uPlace: width, height, turn, strength). uOut 0 writes
+ * how much it covers (the picture's alpha), 1 its colour.
  */
 const DECAL_SHADER = /* glsl */ `
 uniform sampler2D uPicture;
+uniform sampler2D uDecalSlots;
+uniform sampler2D uDecalTable;
 uniform vec4 uPlace;
 uniform int uOut;
 uniform int uPictureSrgb;
 uniform int uPictureFlip;
+// A two-channel normal map (BC5 blocks keep red and green only): its blue worked out again.
+uniform int uPictureRg;
+vec4 decalTexel(int i) { return texelFetch(uDecalTable, ivec2(i % ${DECAL_TABLE_WIDTH}, i / ${DECAL_TABLE_WIDTH}), 0); }
 void main() {
-    if (vExtra.z < 0.999) { outColor = vec4(0.0); return; }
-    vec2 q = rotate2(-uPlace.z) * vExtra.xy / uPlace.xy + 0.5;
-    if (q.x < 0.0 || q.x > 1.0 || q.y < 0.0 || q.y > 1.0) { outColor = vec4(0.0); return; }
+    int t = int(vIds.z + 0.5);
+    int slot = int(texelFetch(uDecalSlots, ivec2(t % ${DECAL_TABLE_WIDTH}, t / ${DECAL_TABLE_WIDTH}), 0).r + 0.5) - 1;
+    if (slot < 0) { outColor = vec4(0.0); return; }
+    vec3 d = vPos - decalTexel(slot * 4 + 3).xyz;
+    float d00 = dot(vE1, vE1), d01 = dot(vE1, vE2), d11 = dot(vE2, vE2), d20 = dot(d, vE1), d21 = dot(d, vE2);
+    float denominator = d00 * d11 - d01 * d01;
+    if (abs(denominator) < 1e-30) { outColor = vec4(0.0); return; }
+    float b1 = (d11 * d20 - d01 * d21) / denominator;
+    float b2 = (d00 * d21 - d01 * d20) / denominator;
+    vec3 place = (1.0 - b1 - b2) * decalTexel(slot * 4).xyz + b1 * decalTexel(slot * 4 + 1).xyz + b2 * decalTexel(slot * 4 + 2).xyz;
+    if (place.z < 0.999) { outColor = vec4(0.0); return; }
+    vec2 q = rotate2(-uPlace.z) * place.xy / uPlace.xy + 0.5;
+    if (!(q.x >= 0.0 && q.x <= 1.0 && q.y >= 0.0 && q.y <= 1.0)) { outColor = vec4(0.0); return; }
     // The picture's top row at the top of the decal, however the texture was uploaded.
     vec4 c = texture(uPicture, vec2(q.x, uPictureFlip == 1 ? q.y : 1.0 - q.y));
+    if (uPictureRg == 1) { vec2 n = c.rg * 2.0 - 1.0; c = vec4(c.rg, sqrt(max(0.0, 1.0 - dot(n, n))) * 0.5 + 0.5, 1.0); }
     if (uPictureSrgb == 1) c.rgb = linearToSrgb(c.rgb);
-    outColor = uOut == 0 ? vec4(c.a * uPlace.w) : vec4(c.rgb, 1.0);
+    outColor = uOut == 0 ? vec4(clamp(c.a, 0.0, 1.0) * uPlace.w) : vec4(clamp(c.rgb, 0.0, 1.0), 1.0);
 }`;
 
 /** One batch's coverage laid over what the stroke has gathered so far (blended: batch + mask × (1 − batch)). */
@@ -964,8 +982,13 @@ export class Stroke {
             uOut: out,
             uPictureSrgb: decal.picture.colorSpace === THREE.SRGBColorSpace ? 1 : 0,
             uPictureFlip: decal.picture.flipY ? 1 : 0,
+            uPictureRg: decal.picture.format === THREE.RED_GREEN_RGTC2_Format ? 1 : 0,
         });
-        stack.raster.setExtra(decal.coords);
+        // Each covered triangle's corners' places, looked up by triangle in the shader.
+        const lookup = decalTable(stack.part, decal.coords, triangles);
+        const slots = new THREE.DataTexture(lookup.slots, DECAL_TABLE_WIDTH, lookup.slotRows, THREE.RedFormat, THREE.FloatType);
+        const table = new THREE.DataTexture(lookup.table, DECAL_TABLE_WIDTH, lookup.tableRows, THREE.RGBAFormat, THREE.FloatType);
+        for (const texture of [slots, table]) texture.needsUpdate = true;
         try {
             for (const [tile, rects] of areas) {
                 let colour = this.valueImages.get(tile);
@@ -975,12 +998,13 @@ export class Stroke {
                     this.valueImages.set(tile, colour);
                 }
                 for (const area of rects) {
-                    stack.raster.draw(this.masks.get(tile)!, tile, DECAL_SHADER, { blend: 'max', scissor: area, uniforms: uniforms(0) });
-                    stack.raster.draw(colour, tile, DECAL_SHADER, { blend: 'none', scissor: area, uniforms: uniforms(1) });
+                    stack.raster.draw(this.masks.get(tile)!, tile, DECAL_SHADER, { blend: 'max', scissor: area, uniforms: { ...uniforms(0), uDecalSlots: slots, uDecalTable: table } });
+                    stack.raster.draw(colour, tile, DECAL_SHADER, { blend: 'none', scissor: area, uniforms: { ...uniforms(1), uDecalSlots: slots, uDecalTable: table } });
                 }
             }
         } finally {
-            stack.raster.setExtra(null);
+            slots.dispose();
+            table.dispose();
         }
         this.apply(areas);
     }

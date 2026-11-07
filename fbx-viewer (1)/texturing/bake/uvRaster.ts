@@ -24,7 +24,6 @@ in vec4 tangent;
 in vec3 color;
 in vec3 ids;
 in vec4 cage;
-in vec4 extra;
 out vec3 vPos;
 out vec3 vNormal;
 out vec2 vUv;
@@ -36,7 +35,6 @@ flat out vec3 vE2;
 flat out vec4 vD;
 flat out vec3 vIds;
 out vec4 vCage;
-out vec4 vExtra;
 // A window of the tile (u0, v0, u1, v1) drawn over the whole target, for bakes made in strips; all zero for the whole tile.
 uniform vec4 uWindow;
 void main() {
@@ -51,7 +49,6 @@ void main() {
     vD = uvEdges;
     vIds = ids;
     vCage = cage;
-    vExtra = extra;
     vec2 at = uWindow.z > uWindow.x ? (uv - uWindow.xy) / (uWindow.zw - uWindow.xy) : uv;
     gl_Position = vec4(at * 2.0 - 1.0, 0.0, 1.0);
 }`;
@@ -71,8 +68,6 @@ flat in vec4 vD;
 flat in vec3 vIds;
 // Bakes: the way a cage ray leaves (xyz) and how far out it starts (w, below 0 for the bake's own distance).
 in vec4 vCage;
-// Four numbers per vertex a tool gives the set for a while (a decal's place on the surface), else zero.
-in vec4 vExtra;
 uniform int uHasTangent;
 // Bakes may ask for the frame worked out from texture coordinate slopes even where the mesh has tangents.
 uniform int uFrameFromUvs;
@@ -208,25 +203,9 @@ export class UvRaster {
      * below 0 for the bake's own distance), or takes them away (null).
      */
     setCage(values: Float32Array | null): void {
-        this.setCornerValues('cage', values);
-    }
-
-    /** Four numbers per vertex of the set (null takes them away), read in UV-space shaders as vExtra. */
-    setExtra(values: Float32Array | null): void {
-        this.setCornerValues('extra', values);
-    }
-
-    private setCornerValues(name: 'cage' | 'extra', values: Float32Array | null): void {
         const part = this.part;
         for (const [tile, meshes] of this.tiles) {
-            if (!values) {
-                if (!meshes.geometry.getAttribute(name)) continue;
-                meshes.geometry.deleteAttribute(name);
-                meshes.lines.dispose();
-                meshes.lines = edgeGeometry(meshes.geometry);
-                meshes.edges.geometry = meshes.lines;
-                continue;
-            }
+            if (!values) { meshes.geometry.deleteAttribute('cage'); continue; }
             const corners: number[] = [];
             for (let t = 0; t < part.triangleTile.length; t++) {
                 if (part.triangleTile[t] !== tile) continue;
@@ -234,7 +213,7 @@ export class UvRaster {
             }
             const data = new Float32Array(corners.length * 4);
             corners.forEach((vertex, i) => data.set(values.subarray(vertex * 4, vertex * 4 + 4), i * 4));
-            meshes.geometry.setAttribute(name, new THREE.BufferAttribute(data, 4));
+            meshes.geometry.setAttribute('cage', new THREE.BufferAttribute(data, 4));
             // The lines along the edges share the triangles' corners.
             meshes.lines.dispose();
             const lines = edgeGeometry(meshes.geometry);

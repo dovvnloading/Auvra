@@ -35,13 +35,29 @@ const weldOf = (part: WeldPart): Welded => {
     const vertexCount = positions.length / 3;
     const box = new THREE.Box3().setFromArray(positions);
     const eps = Math.max(1e-9, box.getSize(new THREE.Vector3()).length() * 1e-6);
-    const keys = new Map<string, number>();
+    // Filed by grid cell; a vertex joins one within eps in its own or a neighbouring cell, so two copies
+    // of a place either side of a cell's edge still join.
+    const cells = new Map<string, number[]>();
     const ids = new Uint32Array(vertexCount);
     const welded: number[] = [];
     for (let v = 0; v < vertexCount; v++) {
-        const key = `${Math.round(positions[v * 3] / eps)},${Math.round(positions[v * 3 + 1] / eps)},${Math.round(positions[v * 3 + 2] / eps)}`;
-        let id = keys.get(key);
-        if (id === undefined) { id = welded.length; keys.set(key, id); welded.push(v); }
+        const x = positions[v * 3], y = positions[v * 3 + 1], z = positions[v * 3 + 2];
+        const cx = Math.floor(x / eps), cy = Math.floor(y / eps), cz = Math.floor(z / eps);
+        let id = -1;
+        for (let dx = -1; dx <= 1 && id < 0; dx++) for (let dy = -1; dy <= 1 && id < 0; dy++) for (let dz = -1; dz <= 1 && id < 0; dz++) {
+            for (const other of cells.get(`${cx + dx},${cy + dy},${cz + dz}`) ?? []) {
+                const w = welded[other];
+                if (Math.abs(positions[w * 3] - x) <= eps && Math.abs(positions[w * 3 + 1] - y) <= eps && Math.abs(positions[w * 3 + 2] - z) <= eps) { id = other; break; }
+            }
+        }
+        if (id < 0) {
+            id = welded.length;
+            welded.push(v);
+            const key = `${cx},${cy},${cz}`;
+            const list = cells.get(key);
+            if (list) list.push(id);
+            else cells.set(key, [id]);
+        }
         ids[v] = id;
     }
     const count = welded.length;
@@ -242,4 +258,53 @@ export const decalTriangles = (part: Pick<PartMesh, 'indices' | 'positions'>, co
         if (reached && x1 >= -0.5 && x0 <= 0.5 && y1 >= -0.5 && y0 <= 0.5 && !torn(tri)) triangles.push(tri);
     }
     return triangles;
+};
+
+/** Texels across the decal's lookup pictures. */
+export const DECAL_TABLE_WIDTH = 4096;
+
+/**
+ * What the decal shader reads its places from, by triangle (vIds.z), so no per-vertex attribute is
+ * needed: `slots` gives each triangle of the set its row in `table` plus one (0 for triangles off the
+ * decal), and `table` holds four texels a covered triangle: its three corners' places on the decal
+ * (across, up, reached) and its first corner's position.
+ */
+export const decalTable = (part: Pick<PartMesh, 'indices' | 'positions'>, coords: Float32Array, triangles: readonly number[]): { slots: Float32Array; table: Float32Array; slotRows: number; tableRows: number } => {
+    const count = part.indices.length / 3;
+    const slotRows = Math.max(1, Math.ceil(count / DECAL_TABLE_WIDTH));
+    const tableRows = Math.max(1, Math.ceil((triangles.length * 4) / DECAL_TABLE_WIDTH));
+    const slots = new Float32Array(slotRows * DECAL_TABLE_WIDTH);
+    const table = new Float32Array(tableRows * DECAL_TABLE_WIDTH * 4);
+    triangles.forEach((triangle, slot) => {
+        slots[triangle] = slot + 1;
+        for (let k = 0; k < 3; k++) {
+            const vertex = part.indices[triangle * 3 + k];
+            table.set([coords[vertex * 4], coords[vertex * 4 + 1], coords[vertex * 4 + 2], 0], (slot * 4 + k) * 4);
+        }
+        const first = part.indices[triangle * 3];
+        table.set([part.positions[first * 3], part.positions[first * 3 + 1], part.positions[first * 3 + 2], 0], (slot * 4 + 3) * 4);
+    });
+    return { slots, table, slotRows, tableRows };
+};
+
+/**
+ * The decal shader's sums, on the CPU: the place on the decal (across, up, reached) of a point of a
+ * triangle, from the triangle's id, the point and the triangle's edges from its first corner (as the UV
+ * raster hands them to the shader). Null for a triangle off the decal.
+ */
+export const decalAt = (lookup: ReturnType<typeof decalTable>, triangle: number, position: readonly number[], edge1: readonly number[], edge2: readonly number[]): [number, number, number] | null => {
+    const slot = Math.round(lookup.slots[triangle]) - 1;
+    if (slot < 0) return null;
+    const texel = (i: number) => lookup.table.subarray(i * 4, i * 4 + 4);
+    const p0 = texel(slot * 4 + 3);
+    const d = [position[0] - p0[0], position[1] - p0[1], position[2] - p0[2]];
+    const dot = (a: readonly number[], b: readonly number[]) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    const d00 = dot(edge1, edge1), d01 = dot(edge1, edge2), d11 = dot(edge2, edge2), d20 = dot(d, edge1), d21 = dot(d, edge2);
+    const denominator = d00 * d11 - d01 * d01;
+    if (Math.abs(denominator) < 1e-30) return null;
+    const b1 = (d11 * d20 - d01 * d21) / denominator;
+    const b2 = (d00 * d21 - d01 * d20) / denominator;
+    const c0 = texel(slot * 4), c1 = texel(slot * 4 + 1), c2 = texel(slot * 4 + 2);
+    const at = (i: number) => (1 - b1 - b2) * c0[i] + b1 * c1[i] + b2 * c2[i];
+    return [at(0), at(1), at(2)];
 };

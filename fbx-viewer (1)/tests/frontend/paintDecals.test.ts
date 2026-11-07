@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import { buildPartMesh } from '../../texturing/mesh/partMesh';
 import { SurfacePicker } from '../../texturing/mesh/picker';
-import { decalCoordinates, decalTriangles } from '../../texturing/paint/decals';
+import { decalAt, decalCoordinates, decalTable, decalTriangles } from '../../texturing/paint/decals';
+import { UvRaster } from '../../texturing/bake/uvRaster';
+import type { TextureGpu } from '../../texturing/gpu/textureGpu';
 
 const partOf = (geometry: THREE.BufferGeometry) => {
     const material = new THREE.MeshStandardMaterial();
@@ -66,5 +68,50 @@ describe('decals wrapped onto the mesh', () => {
         const covered = decalTriangles(part, coords, 1, 1, 0);
         expect(covered.length).toBeGreaterThan(0);
         expect(covered.every((t) => [0, 1, 2].every((k) => part.positions[part.indices[t * 3 + k] * 3 + 2] > 0.99))).toBe(true);
+    });
+
+    it('reach the shader by triangle, through the very geometry the UV raster draws, only where the decal lies', () => {
+        // Several meshes in one set, split vertices and all, the decal on the sphere off to one side.
+        const material = new THREE.MeshStandardMaterial();
+        const root = new THREE.Group();
+        const knot = new THREE.Mesh(new THREE.TorusKnotGeometry(1, 0.3, 96, 12), material);
+        const ball = new THREE.Mesh(new THREE.SphereGeometry(0.6, 24, 12), material);
+        ball.position.set(3, 0, 0);
+        const box = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1, 3, 3, 3), material);
+        box.position.set(-3, 0, 0);
+        root.add(knot, ball, box);
+        root.updateMatrixWorld(true);
+        const part = buildPartMesh(root, new Set([material]), { udim: false });
+        const start = startAt(part, new THREE.Vector3(3, 0.1, 5), new THREE.Vector3(0, 0, -1));
+        const width = 0.5;
+        const coords = decalCoordinates(part, start, new THREE.Vector3(1, 0, 0), width);
+        const triangles = decalTriangles(part, coords, width, width, 0);
+        const lookup = decalTable(part, coords, triangles);
+        // The raster's own geometry (it needs no GPU to be laid out).
+        const raster = new UvRaster({} as TextureGpu, part);
+        const tiles = (raster as unknown as { tiles: Map<number, { geometry: THREE.BufferGeometry }> }).tiles;
+        let covered = 0;
+        for (const { geometry } of tiles.values()) {
+            const ids = geometry.getAttribute('ids'), position = geometry.getAttribute('position');
+            const edge1 = geometry.getAttribute('edge1'), edge2 = geometry.getAttribute('edge2');
+            for (let corner = 0; corner < position.count; corner += 3) {
+                // The middle of each triangle as drawn, as a texel there would see it.
+                const triangle = Math.round(ids.getZ(corner));
+                const middle = [0, 1, 2].map((axis) => (position.getComponent(corner, axis) + position.getComponent(corner + 1, axis) + position.getComponent(corner + 2, axis)) / 3);
+                const place = decalAt(lookup, triangle, middle, [edge1.getX(corner), edge1.getY(corner), edge1.getZ(corner)], [edge2.getX(corner), edge2.getY(corner), edge2.getZ(corner)]);
+                if (!place) { expect(triangles).not.toContain(triangle); continue; }
+                // The same as the triangle's own corners' places, averaged.
+                const expected = [0, 1].map((c) => [0, 1, 2].reduce((sum, k) => sum + coords[part.indices[triangle * 3 + k] * 4 + c], 0) / 3);
+                expect(place[0]).toBeCloseTo(expected[0], 4);
+                expect(place[1]).toBeCloseTo(expected[1], 4);
+                expect(place[2]).toBeCloseTo(1, 5);
+                // Inside the decal: on the sphere, near where it was put.
+                if (Math.abs(place[0]) <= width / 2 && Math.abs(place[1]) <= width / 2) {
+                    covered++;
+                    expect(new THREE.Vector3(...middle).distanceTo(start.point)).toBeLessThan(width);
+                }
+            }
+        }
+        expect(covered).toBeGreaterThan(10);
     });
 });
