@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { BrushSettings } from './strokes';
+import { PARTICLE_PRESETS, readParticles, type ParticleSettings } from './particles';
 
 /**
  * THE BRUSH AND ALPHA LIBRARY
@@ -14,7 +15,7 @@ import type { BrushSettings } from './strokes';
 /** The settings a preset carries. */
 export const PRESET_KEYS = [
     'size', 'hardness', 'flow', 'opacity', 'spacing', 'angle', 'followStroke', 'angleJitter', 'sizeJitter', 'scatter', 'flowJitter',
-    'pressureSize', 'pressureFlow', 'pressureCurve', 'tiltAngle', 'lazy', 'shape', 'alphaTexture', 'mode', 'buildUp',
+    'pressureSize', 'pressureFlow', 'pressureCurve', 'tiltAngle', 'lazy', 'shape', 'alphaTexture', 'mode', 'buildUp', 'particles',
 ] as const satisfies ReadonlyArray<keyof BrushSettings>;
 
 export type PresetKey = typeof PRESET_KEYS[number];
@@ -59,7 +60,17 @@ export const BUILT_IN_BRUSHES: readonly BrushPreset[] = [
     { id: 'builtin:sharpen', name: 'Sharpen', builtIn: true, settings: { shape: 'round', hardness: 0.3, flow: 1, spacing: 0.1, mode: 'sharpen', buildUp: false } },
     { id: 'builtin:smudge', name: 'Smudge', builtIn: true, settings: { shape: 'round', hardness: 0.4, flow: 1, spacing: 0.08, mode: 'smudge', buildUp: false } },
     { id: 'builtin:clone', name: 'Clone', builtIn: true, settings: { shape: 'round', hardness: 0.6, flow: 1, spacing: 0.1, mode: 'clone', buildUp: false } },
+    // Particle brushes: the dabs throw particles that run, fall or bounce, painting along their paths.
+    { id: 'builtin:drips', name: 'Drips', builtIn: true, settings: { shape: 'round', hardness: 0.7, flow: 1, spacing: 0.5, sizeJitter: 0.3, scatter: 0, mode: 'paint', buildUp: false, particles: particlePreset('drips') } },
+    { id: 'builtin:leaks', name: 'Leaks', builtIn: true, settings: { shape: 'round', hardness: 0.3, flow: 0.6, spacing: 0.8, sizeJitter: 0.2, scatter: 0.3, mode: 'paint', buildUp: false, particles: particlePreset('leaks') } },
+    { id: 'builtin:dust', name: 'Dust', builtIn: true, settings: { shape: 'round', hardness: 0.4, flow: 0.5, spacing: 0.6, sizeJitter: 0.5, scatter: 0.5, mode: 'paint', buildUp: false, particles: particlePreset('dust') } },
+    { id: 'builtin:splashes', name: 'Splashes', builtIn: true, settings: { shape: 'picture', alphaTexture: 'builtin:splatter', hardness: 0.6, flow: 1, spacing: 1, sizeJitter: 0.4, angleJitter: 1, scatter: 0, mode: 'paint', buildUp: false, particles: particlePreset('splashes') } },
 ];
+
+/** The particle settings of a particle preset. */
+function particlePreset(id: string): ParticleSettings {
+    return structuredClone(PARTICLE_PRESETS.find((preset) => preset.id === id)!.settings);
+}
 
 /** A preset of how `brush` feels now, called `name`. */
 export const presetFrom = (brush: BrushSettings, name: string, id = `brush:${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`): BrushPreset => ({
@@ -75,13 +86,15 @@ export const applyPreset = (brush: BrushSettings, preset: BrushPreset): BrushSet
         const value = preset.settings[key];
         if (value !== undefined) (next as Record<string, unknown>)[key] = structuredClone(value);
     }
+    // A preset without particles is a plain brush: particles go off.
+    if (preset.settings.particles === undefined && next.particles?.enabled) next.particles = { ...next.particles, enabled: false };
     return next;
 };
 
 /** What kind each preset setting holds, for reading stored presets. */
 const DEFAULT_KINDS: Record<PresetKey, unknown> = {
     size: 0, hardness: 0, flow: 0, opacity: 0, spacing: 0, angle: 0, followStroke: false, angleJitter: 0, sizeJitter: 0, scatter: 0, flowJitter: 0,
-    pressureSize: false, pressureFlow: false, pressureCurve: [], tiltAngle: false, lazy: 0, shape: '', alphaTexture: '', mode: '', buildUp: false,
+    pressureSize: false, pressureFlow: false, pressureCurve: [], tiltAngle: false, lazy: 0, shape: '', alphaTexture: '', mode: '', buildUp: false, particles: {},
 };
 
 const finite = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
@@ -99,6 +112,8 @@ export const readPresets = (raw: unknown): BrushPreset[] => {
             const kind = typeof DEFAULT_KINDS[key];
             if (key === 'pressureCurve') {
                 if (Array.isArray(value) && value.length === 4 && value.every(finite)) settings[key] = value.map((v) => Math.min(1, Math.max(0, v)));
+            } else if (key === 'particles') {
+                if (value && typeof value === 'object' && !Array.isArray(value)) settings[key] = readParticles(value);
             } else if (kind === 'number' ? finite(value) : typeof value === kind) settings[key] = value;
         }
         return [{ id: preset.id.slice(0, 64), name: preset.name.slice(0, 48) || 'Brush', settings: settings as PresetSettings }];

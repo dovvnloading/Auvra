@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { PartMesh } from '../mesh/partMesh';
+import { closestOnTriangle, type SurfacePicker } from '../mesh/picker';
 
 /**
  * Where a point of a UV tile lies on the model: the triangle under it, the surface point and normal, the
@@ -77,3 +78,20 @@ export class UvSurfaceLookup {
         return null;
     }
 }
+
+/**
+ * Where a point on (or near) the surface lies on the UV layout: its tile, its place in the tile, and the
+ * UV island it is on; null when no triangle comes within `reach` of it.
+ */
+export const layoutPlaceOf = (part: Pick<PartMesh, 'positions' | 'uvs' | 'indices' | 'triangleTile' | 'triangleShift' | 'triangleIsland'>, picker: SurfacePicker, point: THREE.Vector3, reach: number): { tile: number; u: number; v: number; island: number } | null => {
+    const near = picker.nearest(point, reach);
+    if (!near) return null;
+    const t = near.triangle;
+    const corner = (k: number) => part.indices[t * 3 + k];
+    const p = (v: number, axis: number) => part.positions[v * 3 + axis];
+    const [a, b, c] = [corner(0), corner(1), corner(2)];
+    const { w } = closestOnTriangle(near.point.x, near.point.y, near.point.z, p(a, 0), p(a, 1), p(a, 2), p(b, 0), p(b, 1), p(b, 2), p(c, 0), p(c, 1), p(c, 2));
+    const u = w[0] * part.uvs[a * 2] + w[1] * part.uvs[b * 2] + w[2] * part.uvs[c * 2] - part.triangleShift[t * 2];
+    const v = w[0] * part.uvs[a * 2 + 1] + w[1] * part.uvs[b * 2 + 1] + w[2] * part.uvs[c * 2 + 1] - part.triangleShift[t * 2 + 1];
+    return { tile: part.triangleTile[t], u, v, island: part.triangleIsland[t] };
+};

@@ -604,9 +604,12 @@ const bakeAtSize = async (gpu: TextureGpu, sources: BakeSources, settings: BakeS
         // Along the cage ray (an averaged normal, or towards the cage mesh) or the texel's own normal.
         vec3 dir = uCageRays == 1 && dot(vCage.xyz, vCage.xyz) > 1e-12 ? normalize(vCage.xyz) : n;
         float front = uCageRays == 1 && vCage.w >= 0.0 ? vCage.w : uFront;
-        // Painted fixes: skew leans the ray towards the surface's own normal; the cage offset scales how far out it starts.
+        // Painted fixes: skew leans the ray towards the surface's own normal; the cage offset moves where it
+        // starts out or in by up to as far again as the bake reaches here, whichever cage set the distance
+        // (a set one, one found from the models, or a cage model's).
         dir = normalize(mix(dir, n, texture(uSkewMap, vUv).r));
-        front *= 2.0 * texture(uCageMap, vUv).r;
+        float reach = max(front, uRear);
+        front = max(0.0, front + (texture(uCageMap, vUv).r - 0.5) * 2.0 * reach);
         vec3 world = n;
         float offset = 0.0;
         TraceHit hit;
@@ -624,7 +627,8 @@ const bakeAtSize = async (gpu: TextureGpu, sources: BakeSources, settings: BakeS
             outColor = vec4(t * 0.5 + 0.5, 1.0);
             return;
         }
-        if (uMode == 2) { outColor = vec4(0.5 + 0.5 * offset / max(max(front, uRear), 1e-9)); return; }
+        // Height: how far the high-poly surface lies from this one (whatever the start), on a scale a painted offset leaves alone.
+        if (uMode == 2) { outColor = vec4(0.5 + 0.5 * offset / max(reach, 1e-9)); return; }
         ivec2 at = ivec2(hit.tri % ${TABLE_WIDTH}, hit.tri / ${TABLE_WIDTH});
         if (uMode == 3) { outColor = found ? vec4(texelFetch(uSurfaceTable, at, 0).rgb, 1.0) : vec4(0.5, 0.5, 0.5, 1.0); return; }
         if (uMode == 4) { outColor = vec4(found ? texelFetch(uSurfaceTable, at, 0).a : 1.0); return; }

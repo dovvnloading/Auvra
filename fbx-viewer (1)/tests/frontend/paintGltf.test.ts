@@ -4,7 +4,9 @@ import * as THREE from 'three';
 import { createMaterialGraph, type MaterialGraph } from '../../runtime/materials/materialGraph';
 import { tileAtlasLayout } from '../../texturing/materialOutput';
 import { buildPartMesh } from '../../texturing/mesh/partMesh';
-import { atlasMesh, surfaceOfGraph, writePaintedGlb, type GltfPictures } from '../../texturing/paint/gltfExport';
+import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js';
+import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
+import { atlasMesh, atlasUvs, markPaintedMaterials, surfaceOfGraph, withPaintedMaterials, writePaintedGlb, type GltfPictures } from '../../texturing/paint/gltfExport';
 import { readGlb } from '../../utils/gltfContainer';
 import { loadModelFile } from '../../utils/modelLoader';
 
@@ -139,5 +141,76 @@ describe('a painted set as glTF', () => {
         } finally {
             vi.unstubAllGlobals();
         }
+    });
+
+    it('exports the whole model: every material, painted ones filled in, with its skin and clips, and opens again', async () => {
+        // A rigged body wearing a painted material, and a hat in a plain one.
+        const root = new THREE.Group();
+        root.name = 'Hero';
+        const hips = new THREE.Bone();
+        hips.name = 'Hips';
+        const spine = new THREE.Bone();
+        spine.name = 'Spine';
+        spine.position.y = 0.5;
+        hips.add(spine);
+        root.add(hips);
+        const geometry = new THREE.BoxGeometry(1, 1, 1);
+        const count = geometry.attributes.position.count;
+        geometry.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(new Uint16Array(count * 4), 4));
+        const weights = new Float32Array(count * 4);
+        for (let v = 0; v < count; v++) weights[v * 4] = 1;
+        geometry.setAttribute('skinWeight', new THREE.Float32BufferAttribute(weights, 4));
+        const body = new THREE.SkinnedMesh(geometry, new THREE.MeshStandardMaterial({ name: 'Skin' }));
+        body.name = 'Body';
+        root.add(body);
+        body.bind(new THREE.Skeleton([hips, spine]));
+        const hat = new THREE.Mesh(new THREE.ConeGeometry(0.4, 0.6), new THREE.MeshStandardMaterial({ name: 'Felt', color: 0xff0000 }));
+        hat.name = 'Hat';
+        hat.position.y = 1;
+        root.add(hat);
+        root.animations = [new THREE.AnimationClip('Wave', 1, [new THREE.QuaternionKeyframeTrack('Spine.quaternion', [0, 1], [0, 0, 0, 1, 0, 0.7071, 0, 0.7071])])];
+
+        const copy = cloneSkinned(root);
+        copy.animations = root.animations;
+        expect([...markPaintedMaterials(copy, (material) => (material.name === 'Skin' ? 'open' : null))]).toEqual(['open']);
+        const exported = await new GLTFExporter().parseAsync(copy, { binary: true, animations: copy.animations, onlyVisible: false }) as ArrayBuffer;
+        const surface = surfaceOfGraph(physicalGraph(), 'Skin (painted)', new Set(['baseColor', 'roughness', 'metallic', 'normal']));
+        const glb = withPaintedMaterials(exported, new Map([['open', { name: 'Hero_Skin', surface: { ...surface, roughness: 1, metalness: 1 }, pictures: { baseColor: png(5), orm: { png: png(6), occlusion: false, metallicRoughness: true }, normal: png(7) } }]]));
+
+        vi.stubGlobal('Blob', NodeBlob);
+        vi.stubGlobal('createImageBitmap', async (blob: Blob) => {
+            const view = new DataView(await blob.arrayBuffer());
+            return { width: view.getUint32(16), height: view.getUint32(20), close: () => undefined };
+        });
+        try {
+            const model = await loadModelFile(new File([glb], 'Hero.glb', { type: 'model/gltf-binary' }), { normalize: false, compressTextures: false });
+            const meshes: THREE.Mesh[] = [];
+            model.object.traverse((node) => { if ((node as THREE.Mesh).isMesh) meshes.push(node as THREE.Mesh); });
+            const skinned = meshes.find((mesh) => (mesh as THREE.SkinnedMesh).isSkinnedMesh) as THREE.SkinnedMesh;
+            expect(skinned.skeleton.bones.map((bone) => bone.name).sort()).toEqual(['Hips', 'Spine']);
+            expect(model.animations.map((clip) => clip.tracks.length)).toEqual([1]);
+            const skin = skinned.material as THREE.MeshPhysicalMaterial;
+            expect(skin.name).toBe('Skin');
+            expect(skin.map).toBeTruthy();
+            expect(skin.normalMap).toBeTruthy();
+            expect(skin.roughnessMap).toBe(skin.metalnessMap);
+            expect(skin.clearcoat).toBeCloseTo(0.8);
+            const felt = meshes.find((mesh) => mesh !== skinned)!.material as THREE.MeshStandardMaterial;
+            expect(felt.name).toBe('Felt');
+            expect(felt.map).toBeNull();
+            expect(felt.color.r).toBeCloseTo(1);
+            expect(felt.color.g).toBeCloseTo(0);
+        } finally {
+            vi.unstubAllGlobals();
+        }
+    });
+
+    it('moves the texture coordinates of a UDIM set onto its atlas vertex by vertex', () => {
+        const layout = tileAtlasLayout([1001, 1002], 64, 4096);
+        const stride = layout.cell + 2 * layout.gutter;
+        const uvs = atlasUvs([0.5, 0.5, 1.5, 0.25], layout);
+        expect(uvs[0]).toBeCloseTo((layout.gutter + 0.5 * layout.cell) / (layout.columns * stride), 6);
+        expect(uvs[2]).toBeCloseTo((stride + layout.gutter + 0.5 * layout.cell) / (layout.columns * stride), 6);
+        expect(uvs[3]).toBeCloseTo((layout.gutter + 0.25 * layout.cell) / (layout.rows * stride), 6);
     });
 });
