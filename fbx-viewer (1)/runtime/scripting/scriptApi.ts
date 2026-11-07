@@ -94,6 +94,11 @@ export interface ObjectHandle {
     setScale(x: number | ScriptVec3, y?: number, z?: number): void;
     translate(dx: number | ScriptVec3, dy?: number, dz?: number): void;
     setVisible(visible: boolean): void;
+    /**
+     * Sets one of its materials' values for this object alone while the game plays: a material graph's parameter, or a
+     * texture graph's parameter or its 'Graph seed' (its pictures are then cooked for it). Numbers, or [r, g, b].
+     */
+    setMaterialValue(name: string, value: number | number[]): void;
     /** Impulses issued in one frame add up. */
     applyImpulse(x: number | ScriptVec3, y?: number, z?: number): void;
     destroy(): void;
@@ -807,6 +812,16 @@ export const createScriptHost = (options: ScriptHostOptions = {}): ScriptHost =>
                 const pending = merged.get(`visible:${id}`);
                 if (pending?.type === 'setVisible') pending.visible = visible;
                 else queue(record, { type: 'setVisible', objectId: id, visible }, `visible:${id}`);
+            },
+            setMaterialValue: (name: string, value: number | number[]) => {
+                if (typeof name !== 'string' || !name.trim() || name.length > 128) throw new TypeError('setMaterialValue expects a parameter name');
+                const numbers = typeof value === 'number' ? value : Array.isArray(value) && value.length >= 1 && value.length <= 4 && value.every(item => typeof item === 'number' && Number.isFinite(item)) ? [...value] : null;
+                if (numbers === null || (typeof numbers === 'number' && !Number.isFinite(numbers))) throw new TypeError('setMaterialValue expects a number or up to four numbers');
+                if (!writable()) return;
+                // The last value set this step for a parameter is the one sent.
+                const pending = merged.get(`material:${id}:${name}`);
+                if (pending?.type === 'setMaterialValue') pending.value = numbers;
+                else queue(record, { type: 'setMaterialValue', objectId: id, name, value: numbers }, `material:${id}:${name}`);
             },
             applyImpulse: (x: number | ScriptVec3, y?: number, z?: number) => {
                 const impulse = readVec3('applyImpulse', x, y, z);

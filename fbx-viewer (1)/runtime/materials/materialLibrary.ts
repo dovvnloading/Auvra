@@ -239,6 +239,15 @@ export interface MaterialBinding {
     parameters?: MaterialParameterValues;
 }
 
+/**
+ * Where a use of a texture-graph material takes its pictures from, instead of the asset's baked ones: cooked for its
+ * values by the running game (materialCooking.ts). Undefined keeps the baked pictures.
+ */
+export interface PictureSource {
+    pictures(asset: MaterialAsset, binding: MaterialBinding, material: THREE.Material): Record<string, string> | undefined;
+    release(material: THREE.Material): void;
+}
+
 class MaterialLibrary {
     /** Counts changes to the assets, for subscribers that compare snapshots. */
     version = 0;
@@ -253,12 +262,32 @@ class MaterialLibrary {
     private resolveUrl: TextureUrlResolver = () => undefined;
     private readonly addedUrls = new Map<string, string>();
     private loadTexture: TextureLoad = (url) => new THREE.TextureLoader().loadAsync(url);
+    private pictureSource: PictureSource | null = null;
+
+    /** Where texture-graph materials' uses take their pictures from (null: always the baked ones). Every use draws again. */
+    setPictureSource(source: PictureSource | null): void {
+        if (this.pictureSource) for (const material of this.bound.keys()) this.pictureSource.release(material);
+        this.pictureSource = source;
+        this.rebindAll();
+        this.emit();
+    }
+
+    /** Draws every use of an asset again (its cooked pictures arrived). */
+    rebindAsset(id: string): void {
+        for (const [material, binding] of this.bound) if (binding.materialId === id) this.bindNow(material, binding);
+        this.emit();
+    }
 
     /** Where texture images come from (the open project), and how they load (texturing/materialTextureLoader.ts; tests). */
     setTextureSource(resolveUrl: TextureUrlResolver, load?: TextureLoad): void {
         this.resolveUrl = resolveUrl;
         this.addedUrls.clear();
         if (load) this.loadTexture = load;
+    }
+
+    /** Where a texture's picture is read from (one added since the project opened, else the project's). */
+    textureUrl(textureId: string): string | undefined {
+        return this.addedUrls.get(textureId) ?? this.resolveUrl(textureId);
     }
 
     /** Where a texture added since the project opened comes from. */
@@ -302,6 +331,7 @@ class MaterialLibrary {
         for (const [material, binding] of [...this.bound]) {
             if (binding.materialId !== id) continue;
             this.bound.delete(material);
+            this.pictureSource?.release(material);
             unbindMaterialGraph(material);
         }
         this.emit();
@@ -349,6 +379,7 @@ class MaterialLibrary {
         if (!canBindMaterialGraph(material)) return false;
         if (!materialId) {
             if (this.bound.delete(material)) unbindMaterialGraph(material);
+            this.pictureSource?.release(material);
             return false;
         }
         const binding = { materialId, flipY, parameters };
@@ -372,7 +403,9 @@ class MaterialLibrary {
             unbindMaterialGraph(material);
             return false;
         }
-        bindMaterialGraph(material, withMaterialParameters(withMaterialPictures(asset.graph, asset.pictures), binding.parameters), (textureId, slot) => this.texture(textureId, slot ?? 'map', binding.flipY));
+        // A texture-graph material may draw with pictures cooked for this use (materialCooking.ts).
+        const pictures = this.pictureSource?.pictures(asset, binding, material) ?? asset.pictures;
+        bindMaterialGraph(material, withMaterialParameters(withMaterialPictures(asset.graph, pictures), binding.parameters), (textureId, slot) => this.texture(textureId, slot ?? 'map', binding.flipY));
         return true;
     }
 

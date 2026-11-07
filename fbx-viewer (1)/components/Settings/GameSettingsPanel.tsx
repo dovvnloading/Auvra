@@ -1,6 +1,7 @@
 import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { CrossIcon, HammerIcon, ResetIcon, SaveIcon, SlidersIcon } from '../UI/Icons';
 import { useScene } from '../../context/SceneContext';
+import { Select } from '../UI/Select';
 import { projectService } from '../../utils/projectService';
 import { useNativeProjectDocument } from '../../utils/useNativeProjectDocument';
 import {
@@ -101,6 +102,7 @@ const sanitizeGameSettings = (value: GameSettings): GameSettings => {
       renderScale: clamp(settings.quality.renderScale, LIMITS.renderScale.min, LIMITS.renderScale.max, defaults.quality.renderScale),
       renderer: settings.quality.renderer === 'webgl2' || settings.quality.renderer === 'webgpu' ? settings.quality.renderer : 'auto',
       shadowPages: settings.quality.shadowPages === true,
+      textureGraphCooking: settings.quality.textureGraphCooking === 'always' || settings.quality.textureGraphCooking === 'never' ? settings.quality.textureGraphCooking : 'capable',
     },
     input: {
       mouseSensitivity: clamp(settings.input.mouseSensitivity, LIMITS.mouseSensitivity.min, LIMITS.mouseSensitivity.max, defaults.input.mouseSensitivity),
@@ -294,6 +296,16 @@ export const GameSettingsPanel: React.FC<GameSettingsPanelProps> = ({ onClose })
             <Toggle label="Load assets by level" checked={draft.quality.loadLevelsOnDemand} disabled={disabled} onChange={(loadLevelsOnDemand) => update((current) => ({ ...current, quality: { ...current.quality, loadLevelsOnDemand } }))} />
             <NumberField label="Asset memory (MB)" value={draft.quality.assetMemoryMb} limits={LIMITS.assetMemoryMb} disabled={disabled} onChange={(assetMemoryMb) => update((current) => ({ ...current, quality: { ...current.quality, assetMemoryMb } }))} />
             <Toggle label="Texture compression" checked={draft.quality.textureCompression} disabled={disabled} onChange={(textureCompression) => update((current) => ({ ...current, quality: { ...current.quality, textureCompression } }))} />
+            <div className="block text-2xs text-gray-500" title="Materials made by texture graphs can draw with pictures the game makes from the graph, each object with its own seed and values; otherwise they draw with the pictures baked into the project.">
+              Texture graph pictures
+              <Select value={draft.quality.textureGraphCooking} disabled={disabled} className="mt-1 w-full"
+                options={[
+                  { value: 'capable', label: 'Cook when the device can' },
+                  { value: 'always', label: 'Always cook' },
+                  { value: 'never', label: 'Never: the baked pictures' },
+                ]}
+                onChange={(textureGraphCooking: GameSettings['quality']['textureGraphCooking']) => update((current) => ({ ...current, quality: { ...current.quality, textureGraphCooking } }))} />
+            </div>
             <label className="block text-2xs text-gray-500">Anti-aliasing
               <select aria-label="Anti-aliasing" value={draft.quality.antiAliasing} disabled={disabled} onChange={(event) => { const antiAliasing = event.target.value as GameSettings['quality']['antiAliasing']; update((current) => ({ ...current, quality: { ...current.quality, antiAliasing } })); }} className={`mt-1 ${inputClass}`}>
                 <option value="temporal">Temporal</option>

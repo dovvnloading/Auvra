@@ -179,6 +179,7 @@ export interface ScriptEnvironmentState {
 export type ScriptCommand =
     | { type: 'setTransform'; objectId: string; position?: ScriptVec3; rotation?: ScriptVec3; scale?: ScriptVec3 }
     | { type: 'setVisible'; objectId: string; visible: boolean }
+    | { type: 'setMaterialValue'; objectId: string; name: string; value: number | number[] }
     | { type: 'applyImpulse'; objectId: string; impulse: ScriptVec3 }
     | { type: 'destroy'; objectId: string }
     | { type: 'spawnPrefab'; requestId: string; prefabId: string; position: ScriptVec3 }

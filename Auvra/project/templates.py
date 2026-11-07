@@ -30,7 +30,7 @@ from typing import Any, Iterable
 from .assets import encode_heightfield
 from .errors import InvalidProjectError
 
-TEMPLATE_NAMES = ("blank", "starter", "arena", "courtyard", "outpost")
+TEMPLATE_NAMES = ("blank", "starter", "arena", "courtyard", "outpost", "living-materials")
 _TEMPLATES_ROOT = Path(__file__).resolve().parent / "templates"
 _STARTER_ROOT = _TEMPLATES_ROOT / "starter"
 _ARENA_ROOT = _TEMPLATES_ROOT / "arena"
@@ -1372,4 +1372,147 @@ def _apply_outpost(repository: Any, project_name: str) -> None:
     repository.apply_changes(changes, expected_revision=repository.revision)
 
 
-_BUILDERS = {"starter": _apply_starter, "arena": _apply_arena, "courtyard": _apply_courtyard, "outpost": _apply_outpost}
+# --- living materials lab ---------------------------------------------------------------------
+# A proving ground for materials alive in the game (fbx-viewer runtime/materials/materialCooking.ts): one texture graph
+# makes every crate's wood, and each crate cooks its own pictures from it. The back rows give each crate a seed of its
+# own; the middle row a wetness of its own; the front row's wetness the level blueprint steps up and down over time.
+
+_LIVING_GRAPH_SEED = "Graph seed"
+
+
+def _tex_node(node_id: str, node_type: str, x: float, y: float, **params: Any) -> dict[str, Any]:
+    return {"id": node_id, "type": node_type, "x": x, "y": y, "params": params}
+
+
+def _tex_link(source: str, target: str, pin: str, output: str = "out") -> dict[str, Any]:
+    return {"from": source, "fromOutput": output, "to": target, "toInput": pin}
+
+
+def _living_crate_graph() -> dict[str, Any]:
+    """Wood from a noise and a gradient, darker and shinier as Wetness rises; its seed varies the grain."""
+
+    output = lambda node_id, channel, y: _tex_node(node_id, "output", 900, y, channel=channel, kind="color", name="", visibleIf="")
+    nodes = [
+        _tex_node("grain", "fractalSum", 0, 0, contrast=1, noise="perlin", octaves=5, roughness=0.5, scale=6, seed=0, style="fbm"),
+        _tex_node("wood", "gradientMap", 220, 0, ramp={"stops": [
+            {"position": 0, "color": [0.16, 0.1, 0.06, 1]}, {"position": 0.55, "color": [0.46, 0.31, 0.18, 1]}, {"position": 1, "color": [0.78, 0.6, 0.4, 1]}]}),
+        _tex_node("wet-tint", "uniformColor", 220, -160, color=[0.42, 0.38, 0.35, 1]),
+        _tex_node("wet-colour", "blend", 460, 0, mode="multiply", opacity={"$bind": "Wetness"}, useAlpha=True, clampResult=True),
+        _tex_node("dry", "uniformValue", 220, 200, value=0.85),
+        _tex_node("wet", "uniformValue", 220, 300, value=0.18),
+        _tex_node("wet-roughness", "blend", 460, 220, mode="normal", opacity={"$bind": "Wetness"}, useAlpha=True, clampResult=True),
+        _tex_node("metal", "uniformValue", 460, 420, value=0),
+        _tex_node("bumps", "normalFromHeight", 460, 560, format="opengl", intensity=3),
+        output("out-colour", "baseColor", 0), output("out-roughness", "roughness", 220), output("out-metal", "metallic", 420), output("out-normal", "normal", 560),
+    ]
+    links = [
+        _tex_link("grain", "wood", "in"), _tex_link("wet-tint", "wet-colour", "foreground"), _tex_link("wood", "wet-colour", "background"),
+        _tex_link("wet", "wet-roughness", "foreground"), _tex_link("dry", "wet-roughness", "background"), _tex_link("grain", "bumps", "in"),
+        _tex_link("wet-colour", "out-colour", "in"), _tex_link("wet-roughness", "out-roughness", "in"), _tex_link("metal", "out-metal", "in"), _tex_link("bumps", "out-normal", "in"),
+    ]
+    parameters = [{"name": "Wetness", "label": "Wetness", "kind": "float", "default": 0, "min": 0, "max": 1}]
+    return {"version": 1, "size": {"w": 9, "h": 9}, "seed": 0, "nodes": nodes, "links": links, "parameters": parameters}
+
+
+def _living_crate_material() -> dict[str, Any]:
+    """A material drawing with the pictures its texture graph makes (cooked by the game; nothing baked yet)."""
+
+    picture = lambda node_id, role, y: {"id": node_id, "type": "materialPicture", "x": 140, "y": y, "params": {"output": role}}
+    surface = {
+        "nodes": [{"id": "output", "type": "output", "x": 480, "y": 120, "params": {}},
+                  picture("baseColor", "baseColor", 0), picture("normal", "normal", 160), picture("orm", "orm", 320)],
+        "links": [
+            {"fromNode": "baseColor", "fromOutput": "rgb", "toNode": "output", "toInput": "baseColor"},
+            {"fromNode": "normal", "fromOutput": "normal", "toNode": "output", "toInput": "normal"},
+            {"fromNode": "orm", "fromOutput": "g", "toNode": "output", "toInput": "roughness"},
+            {"fromNode": "orm", "fromOutput": "b", "toNode": "output", "toInput": "metalness"},
+        ],
+    }
+    return {"id": "living-crate", "name": "Living crate", "graph": surface, "textureIds": [],
+            "textureGraph": {"graph": _living_crate_graph(), "values": {"Wetness": 0}, "bakeSize": 9, "layout": "engine"}}
+
+
+def _crate_values(**values: float) -> dict[str, Any]:
+    return {"Wood": {"parameters": [{"name": name.replace("_", " "), "value": value} for name, value in values.items()]}}
+
+
+def _living_logic(front: list[str]) -> dict[str, Any]:
+    """Steps the front row's Wetness through 0, a half, all and a half again, two seconds apart, round and round."""
+
+    pin = lambda node_id, name, kind, way: {"id": f"{node_id}-{_pin_slug(name)}", "name": name, "dataType": kind, "direction": way}
+    nodes: list[dict[str, Any]] = [{"id": "living-begin", "type": "Event", "name": "Event BeginPlay", "position": {"x": 40, "y": 120},
+                                    "inputs": [], "outputs": [pin("living-begin", "Out", "Exec", "Output")]}]
+    connections: list[dict[str, Any]] = []
+    previous = ("living-begin", "living-begin-out")
+    first: tuple[str, str] | None = None
+    x = 300
+    for step, wetness in enumerate((0.0, 0.5, 1.0, 0.5)):
+        for index, object_id in enumerate(front):
+            node_id = f"living-set-{step}-{index}"
+            nodes.append({"id": node_id, "type": "SetMaterialNumber", "name": "Set Material Number", "position": {"x": x, "y": 40 + index * 150},
+                          "inputs": [pin(node_id, "Exec", "Exec", "Input"), pin(node_id, "Actor", "Object", "Input"), pin(node_id, "Value Name", "String", "Input"), pin(node_id, "Number", "Float", "Input")],
+                          "outputs": [pin(node_id, "Out", "Exec", "Output"), pin(node_id, "Materials Changed", "Integer", "Output")],
+                          "data": {"default_Actor": object_id, "default_Value Name": "Wetness", "default_Number": wetness}})
+            connections.append({"id": f"living-wire-{node_id}", "fromNodeId": previous[0], "fromPinId": previous[1], "toNodeId": node_id, "toPinId": f"{node_id}-exec"})
+            if first is None:
+                first = (node_id, f"{node_id}-exec")
+            previous = (node_id, f"{node_id}-out")
+        x += 260
+        delay_id = f"living-wait-{step}"
+        nodes.append({"id": delay_id, "type": "Delay", "name": "Delay", "position": {"x": x, "y": 120},
+                      "inputs": [pin(delay_id, "Exec", "Exec", "Input"), pin(delay_id, "Duration", "Float", "Input")],
+                      "outputs": [pin(delay_id, "Out", "Exec", "Output")], "data": {"default_Duration": 2}})
+        connections.append({"id": f"living-wire-{delay_id}", "fromNodeId": previous[0], "fromPinId": previous[1], "toNodeId": delay_id, "toPinId": f"{delay_id}-exec"})
+        previous = (delay_id, f"{delay_id}-out")
+        x += 260
+    # Round again.
+    assert first is not None
+    connections.append({"id": "living-wire-again", "fromNodeId": previous[0], "fromPinId": previous[1], "toNodeId": first[0], "toPinId": first[1]})
+    return {"nodes": nodes, "connections": connections, "variables": []}
+
+
+def _apply_living_materials(repository: Any, project_name: str) -> None:
+    models = {model_id: _STARTER_MODELS[model_id] for model_id in ("starter-model-crate", "starter-model-character")}
+    asset_ids = {model_id: _store_file(repository, _STARTER_ROOT / "assets" / file_name, FBX_MIME) for model_id, (file_name, _, _, _) in models.items()}
+    heightfield_id = _store_heightfield(repository, [0.0] * (_TERRAIN_SAMPLES * _TERRAIN_SAMPLES), _TERRAIN_SAMPLES, "living-ground.ahf")
+    level_id = "living-level"
+    player = json.loads((_STARTER_ROOT / "player_blueprint.json").read_text(encoding="utf-8"))
+    objects = [
+        _terrain_object("living-terrain", level_id, heightfield_id, _TERRAIN_SAMPLES, _TERRAIN_SIZE),
+        _sky_object("living-sky", level_id),
+        _object("living-player-start", level_id, "Player Start", "player_start", [0.0, 0.0, 9.0]),
+    ]
+    crate = lambda object_id, name, x, z, values: _object(object_id, level_id, name, "prop", [x, 0.0, z], model_id="starter-model-crate", materialOverrides=values)
+    # Two back rows: a seed each, so no two crates' grain is alike.
+    for row in range(2):
+        for column in range(6):
+            seed = row * 6 + column + 1
+            objects.append(crate(f"living-seeded-{seed}", f"Seed {seed}", -7.5 + column * 3.0, -6.0 - row * 3.0, _crate_values(Graph_seed=seed)))
+    # The middle row: one seed, wetter to the right.
+    for column, wetness in enumerate((0.0, 0.25, 0.5, 0.75, 1.0)):
+        objects.append(crate(f"living-wet-{column}", f"Wetness {wetness:g}", -6.0 + column * 3.0, -1.0, _crate_values(Graph_seed=7, Wetness=wetness)))
+    # The front row: the level blueprint steps its wetness over time.
+    front = [f"living-weather-{column}" for column in range(3)]
+    for column, object_id in enumerate(front):
+        objects.append(crate(object_id, f"Weathered {column + 1}", -3.0 + column * 3.0, 3.5, _crate_values(Graph_seed=20 + column)))
+
+    model_documents = [_model_document(model_id, asset_ids[model_id], name, category, size) for model_id, (_, name, category, size) in models.items()]
+    for document in model_documents:
+        if document["id"] == "starter-model-crate":
+            document["materialOverrides"] = {"Wood": {"materialId": "living-crate"}}
+    changes = {
+        "models": model_documents,
+        "materials": [_living_crate_material()],
+        "blueprints": [player],
+        "levels": [{"id": level_id, "name": "Living materials", "createdAt": 0, "blueprint": _living_logic(front)}],
+        "objects": objects,
+        "metadata": [{"id": "game-settings", "settings": {
+            "schema": 1, "name": project_name, "startupLevelId": level_id, "playerBlueprintId": player["id"],
+            "quality": {"textureGraphCooking": "capable"},
+        }}],
+    }
+    repository.apply_changes(changes, expected_revision=repository.revision)
+
+
+_BUILDERS = {"starter": _apply_starter, "arena": _apply_arena, "courtyard": _apply_courtyard, "outpost": _apply_outpost,
+             "living-materials": _apply_living_materials}

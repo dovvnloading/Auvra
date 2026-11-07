@@ -820,7 +820,7 @@ export interface Hittable {
 }
 
 /** Host project template ids accepted by project.create (protocol/v1 projectCreatePayload.template). */
-export type ProjectTemplate = 'blank' | 'starter' | 'arena' | 'courtyard' | 'outpost';
+export type ProjectTemplate = 'blank' | 'starter' | 'arena' | 'courtyard' | 'outpost' | 'living-materials';
 
 export interface SceneContextType {
   models: LoadedModelData[];
