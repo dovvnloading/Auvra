@@ -371,6 +371,7 @@ const EXEMPT = new Map(Object.entries({
   'utils/materialInstances.ts': 'pure-utility',
   'utils/paintedCopies.ts': 'pure-utility',
   'texturing/materialX.ts': 'pure-utility',
+  'texturing/compressionAdvice.ts': 'pure-utility',
   'runtime/materials/materialCooking.ts': 'data-model',
   'runtime/materials/graphCooker.ts': 'renderer-child-boundary',
   'runtime/materials/CookedPictureLod.tsx': 'hot-loop',

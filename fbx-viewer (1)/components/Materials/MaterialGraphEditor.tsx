@@ -18,6 +18,7 @@ import { MATERIALS_DOMAIN, materialAssetDocument, materialAssetUse, materialLibr
 import { LIBRARY_DRAG_TYPE, MyLibraryPanel, useAddToLibrary, useBringIn, useUserLibrary } from './MyLibrary';
 import { MaterialXExportButton, MaterialXImport, type MaterialXImportHandle } from './MaterialXFiles';
 import { ProjectBall } from './ProjectBalls';
+import { CompressionBadge } from './CompressionBadge';
 import { MaterialFromDescription } from './MaterialFromDescription';
 import { STARTER_MATERIALS } from '../../runtime/materials/starterMaterials';
 import { MaterialGraphCanvas } from './MaterialGraphCanvas';
@@ -460,6 +461,7 @@ export const MaterialGraphEditor: React.FC = () => {
                             <button onClick={() => void remove()} aria-label="Delete material" className="rounded p-1 text-gray-500 hover:bg-gray-800 hover:text-red-400"><TrashIcon size={14} /></button>
                         </div>
                         <MaterialPreview assetId={asset.id} graph={shadingGraph ?? graph} previewNodeIds={previewNodeIds} />
+                        <CompressionBadge asset={asset} />
                         {shaderError && (
                             <div role="alert" className="space-y-1 rounded border border-red-900 bg-red-950/60 p-2">
                                 <div className="flex items-center gap-1 text-2xs font-bold text-red-300"><WarningIcon size={12} /> The shader does not compile</div>
