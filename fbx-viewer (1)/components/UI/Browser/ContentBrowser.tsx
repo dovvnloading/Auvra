@@ -15,6 +15,7 @@ import { BreadcrumbBar } from './BreadcrumbBar';
 import { AssetContextMenu, type AssetMenuAction } from './AssetContextMenu';
 import { InlineNameInput, type InlineNameCommitSource } from './InlineNameInput';
 import { ImportOptionsDialog, type ImportChoice } from './ImportOptionsDialog';
+import { TextureSettingsDialog } from './TextureSettingsDialog';
 import { inspectModelFile } from '../../../utils/modelLoader';
 import {
     ASSET_DRAG_TYPE,
@@ -457,6 +458,7 @@ export const ContentBrowser: React.FC = () => {
 
     // --- Import size: an imported model read again from its source at another size ---
     const [sizeTarget, setSizeTarget] = useState<LoadedModelData | null>(null);
+    const [textureTarget, setTextureTarget] = useState<TextureData | null>(null);
 
     const applyImportSize = async ({ settings, images }: ImportChoice) => {
         const model = sizeTarget;
@@ -699,10 +701,13 @@ export const ContentBrowser: React.FC = () => {
                         ? actionState(Boolean(assetActions.reimportModel) && !isLoading, isLoading ? 'Wait for the current import to finish.' : 'Changing a model\'s size is not available yet.')
                         : undefined}
                     onImportSize={() => { closeMenu(); if (menuItem.kind === 'model') setSizeTarget(menuItem.model); }}
+                    textureSettings={menuItem.kind === 'texture' ? actionState(true, '') : undefined}
+                    onTextureSettings={() => { closeMenu(); if (menuItem.kind === 'texture') setTextureTarget(menuItem.texture); }}
                     onClose={closeMenu}
                 />
             )}
 
+            {textureTarget && <TextureSettingsDialog texture={textureTarget} onClose={() => setTextureTarget(null)} />}
             {sizeTarget && (
                 <ImportOptionsDialog
                     name={sizeTarget.name}

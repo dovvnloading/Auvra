@@ -20,6 +20,7 @@ import { STARTER_MATERIALS } from '../../runtime/materials/starterMaterials';
 import { MaterialGraphCanvas } from './MaterialGraphCanvas';
 import { MaterialPreview, clearMaterialShaderError, useMaterialNodeErrors, useMaterialShaderError } from './MaterialPreview';
 import { NodeInspector } from './MaterialNodeInspector';
+import { TextureMemoryDialog } from './TextureMemoryDialog';
 import { GraphHistory, createComment, nodeRect, removeNodes, showsPreview, withComments } from './materialGraphEditing';
 import { Popover } from '../UI/kit';
 import { FRAME_COLOURS, FRAME_COLOUR_NAMES } from '../NodeGraph/frames';
@@ -183,6 +184,7 @@ export const MaterialGraphEditor: React.FC = () => {
     };
     const newButton = useRef<HTMLButtonElement>(null);
     const [newMenu, setNewMenu] = useState(false);
+    const [memoryOpen, setMemoryOpen] = useState(false);
 
     /** A new shader graph from a starter: its own copy, named after it. */
     const createFromStarter = (name: string, starter: MaterialGraph) => {
@@ -288,6 +290,9 @@ export const MaterialGraphEditor: React.FC = () => {
                     <span className="text-xs font-bold text-gray-400">Materials</span>
                     <span className="flex-1" />
                     <MaterialFromDescription onCreated={createFromDescription} />
+                    <button onClick={() => setMemoryOpen(true)} title="What textures take on the graphics card, per level and per material"
+                        className="rounded bg-gray-800 px-2 py-1 text-2xs text-gray-200 hover:bg-gray-700">Memory</button>
+                    {memoryOpen && <TextureMemoryDialog onClose={() => setMemoryOpen(false)} />}
                     <button ref={newButton} onClick={() => setNewMenu(true)} aria-label="New material" className="flex items-center gap-1 rounded bg-gray-800 px-2 py-1 text-2xs text-gray-200 hover:bg-gray-700"><PlusIcon size={12} /> New</button>
                     <Popover anchor={newButton} open={newMenu} onClose={() => setNewMenu(false)} width={280} label="New material">
                         <div className="p-1">
