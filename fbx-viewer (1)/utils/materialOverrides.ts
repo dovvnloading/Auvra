@@ -589,11 +589,63 @@ export const drawAsPaintedTexture = (material: THREE.Material): void => {
  * revert to their imported values. Textures come from `resolveTexture`; they
  * are bound, never disposed here.
  */
+/** Unlit, Lambert, Phong and toon materials as standard ones, kept per material so each converts once. */
+const converted = new WeakMap<THREE.Material, THREE.MeshStandardMaterial>();
+const originals = new WeakMap<THREE.Material, THREE.Material>();
+
+/** Whether a material is of a kind a material asset cannot shade until it is converted. */
+export const convertsForAsset = (material: THREE.Material): boolean => {
+  const m = material as THREE.MeshBasicMaterial & THREE.MeshPhongMaterial & THREE.MeshLambertMaterial & THREE.MeshToonMaterial;
+  return !!(m.isMeshBasicMaterial || m.isMeshPhongMaterial || m.isMeshLambertMaterial || m.isMeshToonMaterial);
+};
+
+/** A standard material keeping another's colour, maps, emission and how it blends (its asset decides the rest). */
+export const standardCopyOf = (material: THREE.Material): THREE.MeshStandardMaterial => {
+  let copy = converted.get(material);
+  if (copy) return copy;
+  const m = material as THREE.MeshPhongMaterial & THREE.MeshBasicMaterial;
+  copy = new THREE.MeshStandardMaterial({
+    name: material.name, color: m.color?.clone() ?? new THREE.Color(1, 1, 1), map: m.map ?? null, alphaMap: m.alphaMap ?? null,
+    emissive: m.emissive?.clone() ?? new THREE.Color(0, 0, 0), emissiveMap: m.emissiveMap ?? null, emissiveIntensity: m.emissiveIntensity ?? 1,
+    normalMap: m.normalMap ?? null, aoMap: m.aoMap ?? null, transparent: material.transparent, opacity: material.opacity,
+    side: material.side, alphaTest: material.alphaTest, vertexColors: material.vertexColors,
+    // Phong's shininess as a roughness, roughly; the others were matte.
+    roughness: m.isMeshPhongMaterial ? Math.max(0.05, 1 - Math.sqrt(Math.min(m.shininess ?? 30, 1000) / 1000)) : 1, metalness: 0,
+  });
+  converted.set(material, copy);
+  originals.set(copy, material);
+  return copy;
+};
+
+/**
+ * Meshes' unlit, Lambert, Phong and toon materials whose override names a material asset, swapped for standard copies
+ * that can take it (Material Overrides' "Convert to a material"); a copy whose override no longer names one gives the
+ * mesh its own material back.
+ */
+const convertForAssets = (root: THREE.Object3D, overrides: MaterialOverrides): void => {
+  root.traverse((child) => {
+    const mesh = child as THREE.Mesh;
+    if (!mesh.isMesh) return;
+    const list = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+    let changed = false;
+    const next = list.map((material) => {
+      if (!material) return material;
+      const wanted = Boolean(material.name && overrides[material.name]?.materialId);
+      if (wanted && convertsForAsset(material)) { changed = true; return standardCopyOf(material); }
+      const original = originals.get(material);
+      if (!wanted && original) { changed = true; return original; }
+      return material;
+    });
+    if (changed) mesh.material = Array.isArray(mesh.material) ? next : next[0];
+  });
+};
+
 export const applyMaterialOverrides = (
   root: THREE.Object3D,
   overrides: MaterialOverrides,
   resolveTexture?: MaterialTextureResolver,
 ): ApplyMaterialOverridesResult => {
+  convertForAssets(root, overrides);
   const result: ApplyMaterialOverridesResult = {
     appliedMaterialNames: new Set(),
     boundTextureKeys: new Set(),
