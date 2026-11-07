@@ -5,7 +5,7 @@ import * as THREE from 'three';
  *
  * Each dab throws particles that run down over the surface (drips, leaks), fall through the air and
  * stick where they land (dust), or bounce where they land (splashes), leaving paint along their paths.
- * Gravity pulls down the model's Y axis; speeds, gravity and reach are in shares of the model's size a
+ * Gravity pulls down the model's Y axis unless set another way; speeds, gravity and reach are in shares of the model's size a
  * second, so a preset behaves the same on a ring and on a tank. The paths are worked out at once (on
  * the CPU, steady for a given seed) and painted as surface dabs.
  */
@@ -34,7 +34,19 @@ export interface ParticleSettings {
     bounce: number;
     /** The brush paints where it is too, not only along the particles' paths. */
     paintAtBrush: boolean;
+    /** The way gravity pulls, in the model's space (down its Y axis unless set). */
+    gravityDirection?: [number, number, number];
 }
+
+/** Ways gravity can pull, offered in the Brush panel. */
+export const GRAVITY_DIRECTIONS: ReadonlyArray<{ key: string; label: string; direction: [number, number, number] }> = [
+    { key: '-y', label: 'Down', direction: [0, -1, 0] },
+    { key: '+y', label: 'Up', direction: [0, 1, 0] },
+    { key: '-x', label: '−X', direction: [-1, 0, 0] },
+    { key: '+x', label: '+X', direction: [1, 0, 0] },
+    { key: '-z', label: '−Z', direction: [0, 0, -1] },
+    { key: '+z', label: '+Z', direction: [0, 0, 1] },
+];
 
 export const DEFAULT_PARTICLES: ParticleSettings = {
     enabled: false, motion: 'flow', count: 3, spread: 0.2, speed: 0.05, gravity: 0.6, life: 1.5, sizeStart: 0.35, sizeEnd: 0.15, wander: 0.2, bounce: 0.5, paintAtBrush: true,
@@ -70,6 +82,8 @@ export const readParticles = (value: unknown): ParticleSettings => {
         wander: number('wander', 0, 1),
         bounce: number('bounce', 0, 1),
         paintAtBrush: raw.paintAtBrush === undefined ? DEFAULT_PARTICLES.paintAtBrush : raw.paintAtBrush === true,
+        ...(Array.isArray(raw.gravityDirection) && raw.gravityDirection.length === 3 && raw.gravityDirection.every((value) => typeof value === 'number' && Number.isFinite(value)) && raw.gravityDirection.some((value) => value !== 0)
+            ? { gravityDirection: raw.gravityDirection.map(Number) as [number, number, number] } : {}),
     };
 };
 
@@ -119,7 +133,7 @@ const MAX_STEPS = 600;
 export const throwParticles = (from: ParticleDab, settings: ParticleSettings, surface: ParticleSurface, modelSize: number, seed: number, maxDabs = 600): ParticleDab[] => {
     const next = randoms(seed);
     const dabs: ParticleDab[] = [];
-    const gravity = new THREE.Vector3(0, -settings.gravity * modelSize, 0);
+    const gravity = new THREE.Vector3(...(settings.gravityDirection ?? [0, -1, 0])).normalize().multiplyScalar(settings.gravity * modelSize);
     const steps = Math.min(MAX_STEPS, Math.ceil(settings.life / STEP));
     const radiusAt = (step: number) => from.worldRadius * THREE.MathUtils.lerp(settings.sizeStart, settings.sizeEnd, Math.min(1, step / Math.max(1, steps)));
     const leave = (point: THREE.Vector3, normal: THREE.Vector3, step: number) => {

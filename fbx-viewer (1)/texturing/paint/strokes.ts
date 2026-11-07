@@ -920,8 +920,11 @@ export class Stroke {
         }
         this.last = { x, y };
         const particles = brush.particles;
-        if (particles?.enabled && !this.view.uvView && dabs.length) {
-            const thrown = this.particleDabs(dabs, particles, hit);
+        if (particles?.enabled && dabs.length) {
+            // On the UV layout the dabs throw from where they lie on the model.
+            const uvView = this.view.uvView;
+            const throwing = uvView ? this.uvCopyDabs(dabs, uvView).dabs : dabs;
+            const thrown = this.particleDabs(throwing, particles, hit);
             if (particles.paintAtBrush) this.draw(dabs);
             if (thrown.length) this.draw(thrown, null, 'surface');
             return;
@@ -1051,12 +1054,14 @@ export class Stroke {
         return { dabs, uv };
     }
 
-    private draw(dabs: Dab[], picked: readonly number[] | null = null, projection: BrushProjection = this.brush.projection): void {
-        // Particle dabs are laid on the surface whatever the brush's own projection.
+    private draw(dabs: Dab[], picked: readonly number[] | null = null, projection?: BrushProjection): void {
+        // Particle dabs are laid on the surface whatever the brush's own projection, in the 2D view too.
+        const forced = projection !== undefined;
+        projection ??= this.brush.projection;
         const brush = projection === this.brush.projection ? this.brush : { ...this.brush, projection };
         const stack = this.stack;
         const gpu = stack.host.gpu;
-        const view = this.view;
+        const view = forced && this.view.uvView ? { ...this.view, uvView: undefined } : this.view;
         // On the UV layout every dab's texel is known straight away.
         if (view.uvView) {
             for (const dab of dabs) {
@@ -1139,7 +1144,8 @@ export class Stroke {
                             uStencilFromUv: dabs.uv ? 1 : 0,
                             uDabsUv: dabs.uv ?? noUv,
                             uStencil: this.stencil ?? gpu.constant('white'),
-                            uHasStencil: stencil.enabled && this.stencil ? 1 : 0,
+                            // Particle dabs thrown in the 2D view have no screen to read a stencil on.
+                            uHasStencil: stencil.enabled && this.stencil && !(forced && this.view.uvView) ? 1 : 0,
                             uStencilPlace: new THREE.Vector4(place.x, place.y, place.width, place.height),
                             uStencilAngle: (place.angle * Math.PI) / 180,
                             uStencilOpacity: stencil.opacity,

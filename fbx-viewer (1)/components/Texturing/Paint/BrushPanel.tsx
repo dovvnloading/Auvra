@@ -12,7 +12,7 @@ import { SliderRow } from './PaintFields';
 import { GraphParameterPanel } from '../GraphParameterPanel';
 import { stampOutputs } from '../../../texturing/paint/graphStamps';
 import type { GraphResolver } from '../../../texturing/graph/registry';
-import { DEFAULT_PARTICLES, PARTICLE_PRESETS, type ParticleMotion, type ParticleSettings } from '../../../texturing/paint/particles';
+import { DEFAULT_PARTICLES, GRAVITY_DIRECTIONS, PARTICLE_PRESETS, type ParticleMotion, type ParticleSettings } from '../../../texturing/paint/particles';
 
 /** The brush: its size and feel, how it is cast onto the model, and what it lays down on each channel. */
 
@@ -250,13 +250,19 @@ export const BrushPanel: React.FC<{
                         <Row label="Spread" value={particles.spread} min={0} max={1} onChange={(spread) => setParticles({ spread })} />
                         <Row label="Speed" value={particles.speed} min={0} max={2} step={0.01} onChange={(speed) => setParticles({ speed })} />
                         <Row label="Gravity" value={particles.gravity} min={0} max={5} step={0.05} onChange={(gravity) => setParticles({ gravity })} />
+                        <div className="flex items-center gap-2">
+                            <span className="w-24 shrink-0 text-2xs text-zinc-400">Pulls</span>
+                            <Segmented value={GRAVITY_DIRECTIONS.find((each) => each.direction.every((value, i) => value === (particles.gravityDirection ?? [0, -1, 0])[i]))?.key ?? '-y'}
+                                options={GRAVITY_DIRECTIONS.map((each) => ({ value: each.key, label: each.label }))}
+                                onChange={(key) => setParticles({ gravityDirection: GRAVITY_DIRECTIONS.find((each) => each.key === key)!.direction })} label="Which way gravity pulls" />
+                        </div>
                         <Row label="Life" value={particles.life} min={0.1} max={6} step={0.1} suffix="s" onChange={(life) => setParticles({ life })} />
                         <Row label="Size at start" value={particles.sizeStart} min={0.01} max={1} onChange={(sizeStart) => setParticles({ sizeStart })} />
                         <Row label="Size at end" value={particles.sizeEnd} min={0.01} max={1} onChange={(sizeEnd) => setParticles({ sizeEnd })} />
                         <Row label="Wander" value={particles.wander} min={0} max={1} onChange={(wander) => setParticles({ wander })} />
                         {particles.motion === 'bounce' && <Row label="Bounce" value={particles.bounce} min={0} max={1} onChange={(bounce) => setParticles({ bounce })} />}
                         <Toggle label="Paint where the brush is too" checked={particles.paintAtBrush} onChange={(paintAtBrush) => setParticles({ paintAtBrush })} />
-                        <p className="text-2xs leading-snug text-zinc-500">Speed and gravity are in shares of the set's size a second; gravity pulls down the model's Y axis. Sizes are shares of the brush. Particles move over this texture set only, in the 3D view.</p>
+                        <p className="text-2xs leading-snug text-zinc-500">Speed and gravity are in shares of the set's size a second; gravity pulls along the model's axes (down its Y unless set). Sizes are shares of the brush. Particles move over this texture set only, in the 3D and 2D views.</p>
                     </>
                 )}
             </section>
