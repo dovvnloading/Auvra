@@ -195,6 +195,7 @@ const EXEMPT = new Map(Object.entries({
   'texturing/paint/stackNode.ts': 'pure-utility',
   'texturing/paint/graphStamps.ts': 'pure-utility',
   'texturing/paint/seams.ts': 'pure-utility',
+  'texturing/mesh/cornerTable.ts': 'pure-utility',
   'components/Texturing/Paint/openMaterial.ts': 'pure-utility',
   'components/Texturing/Paint/graphPictures.ts': 'pure-utility',
   'components/Texturing/Paint/pathLaying.ts': 'pure-utility',
