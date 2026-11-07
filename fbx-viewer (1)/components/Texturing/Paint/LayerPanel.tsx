@@ -175,7 +175,7 @@ export const LayerPanel: React.FC<{
     const [dragging, setDragging] = useState<string | null>(null);
     const layer = allLayers(document.layers).find((candidate) => candidate.id === selection.layerId) ?? null;
     const sections = useMaterialSections({ resolve, graphs, textures });
-    const host: PreviewHost = useMemo(() => ({ resolveGraph: resolve, texture: (id: string) => session.stack.host.texture(id) }), [resolve, session]);
+    const host: PreviewHost = useMemo(() => ({ resolveGraph: resolve, texture: (id: string) => (session.stack.host.graphTexture ?? session.stack.host.texture)(id) }), [resolve, session]);
 
     const change = (layers: PaintLayer[], label: string, extra: Partial<PaintDocument> = {}, coalesce?: string) => session.change({ ...document, ...extra, layers }, label, coalesce);
     // Dragged and typed changes of one layer make one undo step; switches stay a step each.

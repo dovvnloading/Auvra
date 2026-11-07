@@ -22,6 +22,7 @@ import { download, makeZip } from '../../../texturing/zip';
 import { fileName, holdsNormalGreen, planPicture, type ChannelSource, type ExportPicture, type ExportSource, type ExportTemplate } from '../../../texturing/paint/exportTemplates';
 import { colourChannels, extensionOf, linearChannels, writePicture, type PictureData } from '../../../texturing/paint/pictureFiles';
 import { atlasMesh, surfaceOfGraph, writePaintedGlb, type GltfPictures, type GltfSurface } from '../../../texturing/paint/gltfExport';
+import { graphPictureLookup } from './graphPictures';
 
 /** A template's picture packed from up to four maps: each channel a component of one (grey maps hold theirs in red), or a value. */
 const PACK_PICTURE = /* glsl */ `
@@ -288,10 +289,13 @@ export class PaintSession {
             metallic: material?.metalnessMap ?? [material?.metalness ?? 0, material?.metalness ?? 0, material?.metalness ?? 0],
             emissive: material?.emissiveMap ?? color(material?.emissive),
         };
+        // Fill graphs read 16-bit and float pictures at their depth, laid as the model's textures are.
+        const graphPictures = graphPictureLookup(host.texture, overrideTextureFlipY(target.object));
         const stackHost: StackHost = {
             gpu: textureGpu(),
             resolveGraph: paintGraphResolver(),
             texture: host.texture,
+            graphTexture: graphPictures.lookup,
             current,
             fetchPicture: async (assetId) => {
                 const response = await projectService.fetchAsset(assetId);
@@ -300,8 +304,16 @@ export class PaintSession {
             },
             storePicture: (blob) => projectService.uploadAsset(new File([blob], 'painted.png', { type: 'image/png' })),
         };
-        const stack = await PaintStack.open(stackHost, part, document);
-        return new PaintSession(target, host, part, stack, asset, occluder, modelSpace);
+        let stack: PaintStack;
+        try {
+            stack = await PaintStack.open(stackHost, part, document);
+        } catch (error) {
+            graphPictures.dispose();
+            throw error;
+        }
+        const session = new PaintSession(target, host, part, stack, asset, occluder, modelSpace);
+        session.releasePictures = graphPictures.dispose;
+        return session;
     }
 
     subscribe = (listener: () => void): (() => void) => {
@@ -866,8 +878,12 @@ export class PaintSession {
         }
     }
 
+    /** Lets go of the copies of pictures the fill graphs read. */
+    private releasePictures: () => void = () => undefined;
+
     dispose(): void {
         this.stopListening();
+        this.releasePictures();
         // Maps bake steps held for undo go with the set.
         for (const entry of [...this.past, ...this.future]) { this.letGoOfBake(entry.bakeMaps?.before ?? null); this.letGoOfBake(entry.bakeMaps?.after ?? null); }
         this.restoredListeners.clear();
