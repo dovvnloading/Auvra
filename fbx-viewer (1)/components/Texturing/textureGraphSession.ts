@@ -46,6 +46,8 @@ export interface GraphContext {
     parameters: Record<string, unknown>;
     seed?: number;
     size?: { w: number; h: number };
+    /** The Iterate pass it is shown at (a graph opened from an Iterate node: its first). */
+    iteration?: { index: number; count: number };
     /** Changes whenever any of the above does. */
     version: string;
 }
@@ -269,6 +271,7 @@ export class TextureGraphSession {
                 externalVersion: context ? `${this.externalVersion}|${context.version}` : this.externalVersion,
                 ...(context?.seed !== undefined ? { seed: context.seed } : {}),
                 ...(context?.size ? { size: context.size } : {}),
+                ...(context?.iteration ? { iteration: context.iteration } : {}),
                 time: this.time,
                 targets: graph.nodes.map((node) => node.id),
                 signal: controller.signal,

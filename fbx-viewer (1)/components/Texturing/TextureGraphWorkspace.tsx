@@ -5,9 +5,9 @@ import { useScene } from '../../context/SceneContext';
 import { frontendDiagnostics } from '../../diagnostics/runtime';
 import { materialLibrary, type MaterialAsset } from '../../runtime/materials/materialLibrary';
 import { AbortedError, unknownNodeMessage, type ExternalImage, type TextureGraphEvaluator } from '../../texturing/graph/evaluator';
-import { MAX_SIZE_LOG2, MIN_SIZE_LOG2, coerceParameter, formulaScope, parameterValues, readTextureGraph, resolveNodeParams, subgraphRunSeed, unknownNodeTypes } from '../../texturing/graph/document';
+import { MAX_SIZE_LOG2, MIN_SIZE_LOG2, coerceParameter, formulaScope, mixSeeds, parameterValues, readTextureGraph, resolveNodeParams, subgraphRunSeed, unknownNodeTypes } from '../../texturing/graph/document';
 import { ITERATE_NODE_TYPE, OUTPUT_NODE_TYPE, SUBGRAPH_NODE_TYPE, SUBGRAPH_SEED_KEY, SUBGRAPH_VARY_KEY } from '../../texturing/graph/nodes/io';
-import { feedbackPairs } from '../../texturing/graph/iterate';
+import { feedbackPairs, passCount } from '../../texturing/graph/iterate';
 import { describeMatrix, tileSafeDirection, tileSafeMatrix, transformMatrix } from '../../texturing/graph/safeTransform';
 import { PROCESSOR_PICTURES, PROCESSOR_TYPES, defaultFunctionFor, processorUse, readNamedSettings, settingDefault } from '../../texturing/graph/nodes/processors';
 import { compileFunction, readFunctionGraph, type FunctionGraph, type NamedSetting } from '../../texturing/graph/functionGraph';
@@ -129,7 +129,7 @@ export const TextureGraphWorkspace: React.FC<{
             const outer = readStoredGraph(list[list.length - 1].asset.textureGraph).graph;
             const node = outer.nodes.find((candidate) => candidate.id === step.nodeId);
             const inner = assets.find((candidate) => candidate.id === step.assetId && candidate.textureGraph);
-            if (!node || node.type !== SUBGRAPH_NODE_TYPE || node.params.graph !== step.assetId || !inner || list.some((level) => level.asset.id === inner.id)) break;
+            if (!node || (node.type !== SUBGRAPH_NODE_TYPE && node.type !== ITERATE_NODE_TYPE) || node.params.graph !== step.assetId || !inner || list.some((level) => level.asset.id === inner.id)) break;
             list.push({ asset: inner, via: step.nodeId, key: `${list.length}:${inner.id}:${step.nodeId}` });
         }
         return list;
@@ -219,9 +219,13 @@ const contextOf = (outerSession: TextureGraphSession, outer: StoredTextureGraph,
     const values = parameterValues(outer.graph, outer.values);
     const params = resolveNodeParams(definition, node, values, formulaScope(outer.graph, values, width, height));
     const parameters = Object.fromEntries(inner.parameters.map((parameter) => [parameter.name, params[parameter.name]]));
-    const seed = subgraphRunSeed(outer.graph.seed, via, Math.round(Number(params[SUBGRAPH_SEED_KEY]) || 0), params[SUBGRAPH_VARY_KEY] !== false, inner.seed);
+    const runSeed = subgraphRunSeed(outer.graph.seed, via, Math.round(Number(params[SUBGRAPH_SEED_KEY]) || 0), params[SUBGRAPH_VARY_KEY] !== false, inner.seed);
+    // A graph an Iterate node runs is shown at its first pass: the images wired in, pass 1 of its count, the first pass's seed.
+    const iterating = node.type === ITERATE_NODE_TYPE;
+    const seed = iterating && params.newSeed !== false ? mixSeeds(runSeed, 1) : runSeed;
+    const iteration = iterating ? { index: 0, count: passCount(params.passes) } : undefined;
     const size = { w: Math.round(Math.log2(width)), h: Math.round(Math.log2(height)) };
-    return { inputs, parameters, seed, size, version: JSON.stringify([version, parameters, seed, size]) };
+    return { inputs, parameters, seed, size, ...(iteration ? { iteration } : {}), version: JSON.stringify([version, parameters, seed, size, iteration ?? null]) };
 };
 
 /** What the 2D view can show of a node: each image it gives, each channel of a material it gives. */
@@ -432,7 +436,7 @@ const Workspace: React.FC<{
             setTab('node');
             return;
         }
-        const graphId = node?.type === SUBGRAPH_NODE_TYPE ? node.params.graph : undefined;
+        const graphId = node?.type === SUBGRAPH_NODE_TYPE || node?.type === ITERATE_NODE_TYPE ? node.params.graph : undefined;
         if (typeof graphId === 'string' && graphId !== asset.id && entries.has(graphId)) onOpenGraph(graphId, nodeId);
     }, [asset.id, entries, graph.nodes, onOpenGraph]);
 

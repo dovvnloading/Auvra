@@ -331,6 +331,8 @@ export interface TexNodeDef {
     settingsInShader?: boolean;
     /** It reads the graph's time (with these settings): drawn again as the time changes, and the graph animates. */
     readsTime?: (params: Readonly<Record<string, unknown>>) => boolean;
+    /** It reads which Iterate pass it is (with these settings): inside a pass, drawn again each pass. */
+    readsPass?: (params: Readonly<Record<string, unknown>>) => boolean;
     /** The node's own drawing. */
     run(context: NodeRunContext): Promise<Record<string, GpuImage>>;
 }

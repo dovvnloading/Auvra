@@ -6,6 +6,7 @@ import { MATERIAL_CHANNELS, materialKey, materialOf, materialResults, type Mater
 import { withNamedLinks } from './namedLinks';
 import { resolvePrecision, resolveSeed, resolveSize, resolveTiling, tilingAxes } from './inherit';
 import { nodeBindings, valuePinKey } from './nodeKit';
+import { PROCESSOR_TYPES } from './nodes/processors';
 import { ALL_MESH_MAPS, GRAPH_USING_TYPES, INPUT_NODE_TYPE, MATERIAL_INPUT_NODE_TYPE, MATERIAL_OUTPUT_NODE_TYPE, MESH_MAP_NODE_TYPE, MESH_READING_NODE_TYPES, OUTPUT_NODE_TYPE, SUBGRAPH_SEED_KEY, SUBGRAPH_VARY_KEY, meshMapKey } from './nodes/io';
 import { graphAnimates, textureNodeDefinition, type GraphResolver } from './registry';
 import { outputNodeKind, type NodeRunContext, type PortKind, type TexGraphLink, type TexGraphNode, type TexNodeDef, type TextureGraph, type TilingMode } from './types';
@@ -343,11 +344,15 @@ export class TextureGraphEvaluator {
             }
             if (main) extras.push(`bypass:${main}`);
             if (world[0] !== 1 || world[1] !== 1) extras.push(`world:${world[0]}x${world[1]}`);
-            if (request.iteration) extras.push(`pass:${iteration.index}/${iteration.count}`);
+            // Inside an Iterate pass, only what reads the pass is told it (formulas with $iteration change their settings).
+            if (request.iteration && definition.readsPass?.(params)) extras.push(`pass:${iteration.index}/${iteration.count}`);
             // Nodes reading the time (and graphs used as nodes that animate) draw again as it changes; nothing else does.
             const usedGraph = GRAPH_USING_TYPES.has(node.type) && typeof params.graph === 'string' ? this.resolve(params.graph) : undefined;
             if (definition.readsTime?.(params) || (usedGraph && graphAnimates(usedGraph.graph, this.resolve))) extras.push(`time:${time.seconds}/${time.loop}`);
-            const signature = hashText(JSON.stringify([node.type, params, width, height, precision, seed, kinds, inputSignatures, extras, tiling]));
+            // The seed counts only where something follows it (a seed setting, a processor, a graph used as a node), so a
+            // new seed (each Iterate pass's) draws again only those and what they reach.
+            const seeded = definition.params.some((param) => param.key === 'seed') || PROCESSOR_TYPES.has(node.type) || GRAPH_USING_TYPES.has(node.type);
+            const signature = hashText(JSON.stringify([node.type, params, width, height, precision, seeded ? seed : 0, kinds, inputSignatures, extras, tiling]));
             info.set(node.id, { signature, width, height, kinds, precision, tiling, params, warnings, seed, innerSeed, world, iteration, time, ...(value ? { value } : {}) });
         }
         return { plan, info, targets, external, graphSeed };

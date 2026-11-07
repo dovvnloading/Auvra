@@ -327,6 +327,7 @@ export const TextureGraphCanvas: React.FC<TextureGraphCanvasProps> = (props) => 
                 canDelete: true,
                 ...(isOutput ? { output: true } : {}),
                 ...(opens && node.type === SUBGRAPH_NODE_TYPE && typeof node.params.graph === 'string' && resolve(node.params.graph) ? { canOpen: true } : {}),
+                ...(opens && node.type === ITERATE_NODE_TYPE && typeof node.params.graph === 'string' && resolve(node.params.graph) ? { canOpen: true, openLabel: 'Open the graph it runs (at its first pass)' } : {}),
                 ...(opens && PROCESSOR_TYPES.has(node.type) && node.params.mode !== 'code' ? { canOpen: true, openLabel: 'Edit its function graph' } : {}),
                 searchText: `${kindTitle} ${def?.category ?? ''}`,
             };

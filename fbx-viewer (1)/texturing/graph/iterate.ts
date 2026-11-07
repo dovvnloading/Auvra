@@ -1,13 +1,17 @@
-import { INPUT_NODE_TYPE, ITERATE_NODE_TYPE, OUTPUT_NODE_TYPE, SUBGRAPH_SEED_KEY, subgraphParamDefs } from './nodes/io';
+import { INPUT_NODE_TYPE, ITERATE_NODE_TYPE, MATERIAL_INPUT_NODE_TYPE, MATERIAL_OUTPUT_NODE_TYPE, OUTPUT_NODE_TYPE, SUBGRAPH_SEED_KEY, subgraphParamDefs } from './nodes/io';
+import { MATERIAL_CHANNELS, materialKey } from './material';
 import { outputNodeKind, OUTPUT_CHANNEL_LABELS, type OutputChannel, type PortKind, type TexGraphNode, type TexNodeDef, type TexParamDef, type TexPortDef, type TextureGraph } from './types';
 
 /**
  * ITERATE
  *
  * An Iterate node runs a graph of the project a set number of times, each pass's results fed into the
- * next: an Output of the graph feeds the Input of the same name on the next pass, and Inputs with no
- * such Output take what is wired into the node every pass. Each pass knows which pass it is ($iteration
- * in formulas, uIteration in code, the Pass number function node) and runs with a seed of its own.
+ * next: an Output of the graph feeds the Input of the same name on the next pass (a Material output the
+ * Material input of its name, every channel), and Inputs with no such Output take what is wired into
+ * the node every pass. Each pass knows which pass it is ($iteration in formulas, uIteration in code,
+ * the Pass number function node) and runs with a seed of its own. Inside, only what a pass changes
+ * draws again: what its fed-back pictures reach, what reads the pass, and (with a new seed each pass)
+ * what follows the seed; the rest is kept from the pass before.
  */
 
 /** Passes an Iterate node runs at most. */
@@ -21,19 +25,35 @@ const outputName = (node: TexGraphNode): string => {
     return name || OUTPUT_CHANNEL_LABELS[node.params.channel as OutputChannel] || 'Output';
 };
 const inputName = (node: TexGraphNode): string => String(node.params.name || node.id);
+/** A Material output's name as the node shows it. */
+const materialOutputName = (node: TexGraphNode): string => (typeof node.params.name === 'string' ? node.params.name.trim() : '') || 'Material';
 const same = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
 
-/** Which Output feeds which Input on the next pass: those of the same name (letter case aside), each Input once. */
-export const feedbackPairs = (graph: Pick<TextureGraph, 'nodes'>): Array<{ output: string; input: string }> => {
+/**
+ * Which Output feeds which Input on the next pass: those of the same name (letter case aside), each
+ * Input once; a Material output feeds the Material input of its name.
+ */
+export const feedbackPairs = (graph: Pick<TextureGraph, 'nodes'>): Array<{ output: string; input: string; material?: true }> => {
     const inputs = graph.nodes.filter((node) => node.type === INPUT_NODE_TYPE).map(inputName);
-    const pairs: Array<{ output: string; input: string }> = [];
+    const materialInputs = graph.nodes.filter((node) => node.type === MATERIAL_INPUT_NODE_TYPE).map(inputName);
+    const pairs: Array<{ output: string; input: string; material?: true }> = [];
     for (const node of graph.nodes) {
-        if (node.type !== OUTPUT_NODE_TYPE) continue;
-        const input = inputs.find((name) => same(name, outputName(node)));
-        if (input && !pairs.some((pair) => pair.input === input)) pairs.push({ output: node.id, input });
+        if (node.type === OUTPUT_NODE_TYPE) {
+            const input = inputs.find((name) => same(name, outputName(node)));
+            if (input && !pairs.some((pair) => pair.input === input && !pair.material)) pairs.push({ output: node.id, input });
+        } else if (node.type === MATERIAL_OUTPUT_NODE_TYPE) {
+            const input = materialInputs.find((name) => same(name, materialOutputName(node)));
+            if (input && !pairs.some((pair) => pair.input === input && pair.material)) pairs.push({ output: node.id, input, material: true });
+        }
     }
     return pairs;
 };
+
+/** The pairs as the passes feed them: a material's pair once for each of its channels. */
+export const feedKeys = (pairs: ReadonlyArray<{ output: string; input: string; material?: true }>): Array<{ output: string; input: string }> =>
+    pairs.flatMap((pair) => (pair.material
+        ? MATERIAL_CHANNELS.map((channel) => ({ output: materialKey(pair.output, channel), input: materialKey(pair.input, channel) }))
+        : [{ output: pair.output, input: pair.input }]));
 
 /** How many passes a setting asks for, kept from 1 to MAX_PASSES. */
 export const passCount = (value: unknown): number => Math.max(1, Math.min(MAX_PASSES, Math.round(Number(value) || 1)));
@@ -77,10 +97,14 @@ const ITERATE_PARAMS: readonly TexParamDef[] = [
 export const iterateDefinition = (node: Pick<TexGraphNode, 'params'>, resolve: (id: string) => IterateGraphEntry | undefined): TexNodeDef => {
     const entry = typeof node.params.graph === 'string' && node.params.graph ? resolve(node.params.graph) : undefined;
     const graph = entry?.graph;
-    const inputs: TexPortDef[] = (graph?.nodes ?? []).filter((candidate) => candidate.type === INPUT_NODE_TYPE)
-        .map((candidate) => ({ key: inputName(candidate), label: inputName(candidate), kind: (candidate.params.kind === 'gray' ? 'gray' : 'color') as PortKind, fallback: 'black' as const }));
-    const outputs: TexPortDef[] = (graph?.nodes ?? []).filter((candidate) => candidate.type === OUTPUT_NODE_TYPE)
-        .map((candidate) => ({ key: candidate.id, label: outputName(candidate), kind: outputNodeKind(candidate.params) }));
+    const inputs: TexPortDef[] = (graph?.nodes ?? []).filter((candidate) => candidate.type === INPUT_NODE_TYPE || candidate.type === MATERIAL_INPUT_NODE_TYPE)
+        .map((candidate) => (candidate.type === MATERIAL_INPUT_NODE_TYPE
+            ? { key: inputName(candidate), label: String(candidate.params.name || 'Material'), kind: 'material' as const }
+            : { key: inputName(candidate), label: inputName(candidate), kind: (candidate.params.kind === 'gray' ? 'gray' : 'color') as PortKind, fallback: 'black' as const }));
+    const outputs: TexPortDef[] = (graph?.nodes ?? []).filter((candidate) => candidate.type === OUTPUT_NODE_TYPE || candidate.type === MATERIAL_OUTPUT_NODE_TYPE)
+        .map((candidate) => (candidate.type === MATERIAL_OUTPUT_NODE_TYPE
+            ? { key: candidate.id, label: materialOutputName(candidate), kind: 'material' as const }
+            : { key: candidate.id, label: outputName(candidate), kind: outputNodeKind(candidate.params) }));
     const pairs = graph ? feedbackPairs(graph) : [];
     return {
         type: ITERATE_NODE_TYPE,
@@ -98,20 +122,26 @@ export const iterateDefinition = (node: Pick<TexGraphNode, 'params'>, resolve: (
         async run(context) {
             if (!entry) throw new Error(typeof node.params.graph === 'string' && node.params.graph ? 'The graph this node ran is no longer in the project.' : 'Choose the graph it runs in its settings.');
             const outer: Record<string, ReturnType<typeof context.input>> = {};
-            for (const input of inputs) outer[input.key] = context.input(input.key);
+            for (const input of inputs) {
+                if (input.kind !== 'material') { outer[input.key] = context.input(input.key); continue; }
+                // A material goes in as an image per channel, under its input's name and the channel's.
+                const material = context.material(input.key);
+                for (const channel of MATERIAL_CHANNELS) outer[materialKey(input.key, channel)] = material?.[channel] ?? null;
+            }
             const values: Record<string, unknown> = {};
             for (const parameter of graph!.parameters) values[parameter.name] = context.params[parameter.name];
             const count = passCount(context.params.passes);
             const fresh = context.params.newSeed !== false;
-            const results = await runPasses(count, outer, pairs, (given, pass) => context.subgraph(entry.id, values, given, {
+            const results = await runPasses(count, outer, feedKeys(pairs), (given, pass) => context.subgraph(entry.id, values, given, {
                 iteration: { index: pass, count },
                 ...(fresh ? { seedOffset: pass + 1 } : {}),
                 owned: true,
             }), (image) => context.gpu.release(image));
-            // Only its outputs are kept: anything else the graph gave goes back.
+            // Only its outputs are kept (a material output's channels under their keys): anything else the graph gave goes back.
+            const keys = new Set(outputs.flatMap((port) => (port.kind === 'material' ? MATERIAL_CHANNELS.map((channel) => materialKey(port.key, channel)) : [port.key])));
             const kept: typeof results = {};
             for (const [key, image] of Object.entries(results)) {
-                if (outputs.some((port) => port.key === key)) kept[key] = image;
+                if (keys.has(key)) kept[key] = image;
                 else context.gpu.release(image);
             }
             return kept;

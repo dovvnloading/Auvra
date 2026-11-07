@@ -130,6 +130,11 @@ export const migrateProcessorParams = (type: string, own: Readonly<Record<string
 
 // ---- the nodes ----
 
+/** Whether a processor reads which Iterate pass it is: its function graph has a Pass number node, or its code says uIteration. */
+const processorReadsPass = (fallback: () => FunctionGraph) => (params: Readonly<Record<string, unknown>>): boolean => (params.mode === 'code'
+    ? /\buIterations?\b/.test(String(params.code ?? ''))
+    : readFunctionGraph(params.function, fallback).nodes.some((node) => node.type === 'fnPass'));
+
 /** Whether a processor reads the graph's time: its function graph has a Time node, or its code says uTime or uPhase. */
 const processorReadsTime = (fallback: () => FunctionGraph) => (params: Readonly<Record<string, unknown>>): boolean => (params.mode === 'code'
     ? /\buTime\b|\buPhase\b/.test(String(params.code ?? ''))
@@ -164,6 +169,7 @@ export const PIXEL_PROCESSOR: TexNodeDef = {
     inputs: [anyIn('a', 'A'), anyIn('b', 'B'), anyIn('c', 'C'), anyIn('d', 'D')],
     outputs: [out('any')],
     readsTime: processorReadsTime(defaultPixelFunction),
+    readsPass: processorReadsPass(defaultPixelFunction),
     params: [
         select('mode', 'Made with', 'graph', [['graph', 'A function graph'], ['code', 'GLSL code']]),
         functionParam(defaultPixelFunction, (params) => params.mode !== 'code'),
@@ -204,6 +210,7 @@ export const VALUE_PROCESSOR: TexNodeDef = {
     bypass: false,
     settingsInShader: true,
     readsTime: processorReadsTime(defaultValueFunction),
+    readsPass: processorReadsPass(defaultValueFunction),
     async run(context) {
         const image = context.image('color', 1, 1, 32);
         await context.pass(image, functionPass(context.params, 'value', PROCESSOR_PICTURES[VALUE_PROCESSOR_TYPE], defaultValueFunction).fragment);
