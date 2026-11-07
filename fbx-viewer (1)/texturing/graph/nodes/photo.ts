@@ -370,7 +370,7 @@ void main() {
             const input = context.input('in');
             const result = context.image('color');
             if (!input) { context.gpu.clear(result, [0, 0, 0, 1]); return { out: result }; }
-            const { occlusion, height } = lightingRemovalNeeds(context);
+            const { height } = lightingRemovalNeeds(context);
             const gpu = context.gpu;
             // Colour with its occlusion divided out, and the slopes of the height (wrapping).
             const SLOPES = `vec2 slopeAt(vec2 p) {

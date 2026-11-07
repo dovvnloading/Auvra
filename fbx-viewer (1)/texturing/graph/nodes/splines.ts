@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { hash3 } from '../noiseMath';
-import { anyIn, bool, float, grayIn, out, seed, select } from '../nodeKit';
+import { anyIn, bool, float, grayIn, out, seed } from '../nodeKit';
 import {
     nearestOn, pathLength, placementsAlong, readPoints, resample, segmentsOf, simplify, smoothPath, traceOutlines, wrapOffsets,
     type Point, type Segment,

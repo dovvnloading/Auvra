@@ -6,6 +6,15 @@ import type { TileBake } from '../bake/meshBaker';
 import { allLayers, CHANNEL_IS_COLOR, CHANNEL_LABELS, PAINT_CHANNELS, readPaintDocument, type PaintDocument, type PaintLayer } from './paintTypes';
 
 /**
+ * Reads a painted picture the project keeps. The editor sets it at start (index.tsx); a game has none,
+ * since texture graphs run there too and the project's host is the editor's alone.
+ */
+let storedPictureFetcher: ((assetId: string) => Promise<Response>) | null = null;
+export const setPaintStackPictureFetcher = (fetcher: (assetId: string) => Promise<Response>): void => {
+    storedPictureFetcher = fetcher;
+};
+
+/**
  * PAINT STACKS AS GRAPH NODES
  *
  * A texture set's layer stack (or one folder of it) used inside a texture graph. Each painted set, and
@@ -139,12 +148,13 @@ export const PAINT_STACK_NODE: TexNodeDef = {
         const assetId = String(context.params.asset ?? '');
         if (!assetId) throw new Error('Pick a paint stack from the graph list: each painted set and each folder of one is there.');
         if (running.has(assetId)) throw new Error('A paint stack cannot use itself (through a fill or mask graph).');
-        const [{ materialLibrary }, { PaintStack }, { BUILTIN_GRAPHS }, { readStoredGraph }, { projectService }] = await Promise.all([
+        const fetchStored = storedPictureFetcher;
+        if (!fetchStored) throw new Error('A paint stack draws only in the editor, where its painted pictures can be read.');
+        const [{ materialLibrary }, { PaintStack }, { BUILTIN_GRAPHS }, { readStoredGraph }] = await Promise.all([
             import('../../runtime/materials/materialLibrary'),
             import('./paintStack'),
             import('./smartLibrary'),
             import('../graph/stored'),
-            import('../../utils/projectService'),
         ]);
         const asset = materialLibrary.get(assetId);
         const document = asset?.paint ? readPaintDocument(asset.paint) : null;
@@ -169,7 +179,7 @@ export const PAINT_STACK_NODE: TexNodeDef = {
                 texture: (id) => context.texture(id),
                 current: {},
                 fetchPicture: async (pictureId) => {
-                    const response = await projectService.fetchAsset(pictureId);
+                    const response = await fetchStored(pictureId);
                     if (!response.ok) throw new Error('A painted picture could not be read.');
                     return response.blob();
                 },
