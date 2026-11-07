@@ -184,6 +184,12 @@ const brickCapture = (side: number, broad = 0) => {
 };
 
 describe('multi-angle capture of a brick wall', () => {
+    it('turns the lights the right way round where dark bricks stand above light mortar', () => {
+        const wall = brickCapture(128);
+        const estimate = estimateLightAzimuths(wall.shots.map(linearBrightness), 128, 128);
+        estimate.azimuths.forEach((azimuth, k) => expect(turnDifference(azimuth, wall.azimuths[k])).toBeLessThan(15));
+    });
+
     it('takes the broad drift out of the height and keeps the bricks', () => {
         const wall = brickCapture(128, 3);
         const maps = captureMaps(wall.shots, wall.lights, 128, 128);

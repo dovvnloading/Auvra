@@ -1,3 +1,5 @@
+import { brightAndDarkWidths } from './shapeWidths';
+
 /**
  * MULTI-ANGLE CAPTURE: A SURFACE'S NORMAL AND COLOUR FROM PHOTOS LIT FROM DIFFERENT SIDES
  *
@@ -236,6 +238,28 @@ const box3 = (values: Float32Array, width: number, height: number): Float32Array
     return out;
 };
 
+/**
+ * The photos at most `limit` across, each one's exposure taken out, their average, and each one's
+ * difference from it (`smooth`: three by three box blurred).
+ */
+const differencesOf = (brightness: readonly Float32Array[], width: number, height: number, limit: number, smooth: boolean) => {
+    const small = brightness.map((photo) => shrink(photo, width, height, limit));
+    const w = small[0].width, h = small[0].height, n = w * h;
+    const photos = small.map(({ data }) => {
+        let mean = 0;
+        for (let i = 0; i < n; i++) mean += data[i];
+        mean = Math.max(mean / n, 1e-6);
+        return data.map((value) => value / mean);
+    });
+    const average = new Float32Array(n);
+    for (const photo of photos) for (let i = 0; i < n; i++) average[i] += photo[i] / photos.length;
+    const differences = photos.map((photo) => {
+        const difference = photo.map((value, i) => value / Math.max(average[i], 1e-4) - 1);
+        return smooth ? box3(difference, w, h) : difference;
+    });
+    return { width: w, height: h, average, differences };
+};
+
 export interface LightEstimate {
     /** Each photo's light azimuth, in radians. */
     azimuths: number[];
@@ -252,25 +276,18 @@ export interface LightEstimate {
  * proportion to its slope towards that light; so the photos' differences from their average span two
  * pictures, the height's two slopes mixed by the lights. The mix that makes those two pictures the
  * slopes of one height (they must not curl) gives the lights' directions, up to turning them all half
- * round (the same photos come from a relief turned inside out). That is settled by taking the parts dark
- * on average to be the low ones: crevices catch less light whichever side it comes from.
+ * round (the same photos come from a relief turned inside out). That is settled as the photo material's
+ * invert guess settles it: of the height worked out and the same turned over, the one whose low parts
+ * make the thinner shapes (mortar, grout and cracks are thin; bricks and stones are broad). Where
+ * neither is clearly thinner, the parts dark on average are taken to be low, as crevices catch less
+ * light whichever side it comes from.
  */
 export const estimateLightAzimuths = (brightness: readonly Float32Array[], width: number, height: number): LightEstimate => {
     const count = brightness.length;
     if (count < 2) return { azimuths: brightness.map(() => 0), fit: 0 };
     // Worked out on a small copy: the lights are the same all over.
-    const small = brightness.map((photo) => shrink(photo, width, height, 128));
-    const w = small[0].width, h = small[0].height, n = w * h;
-    // Each photo's exposure taken out, then each pixel's difference from the photos' average.
-    const photos = small.map(({ data }) => {
-        let mean = 0;
-        for (let i = 0; i < n; i++) mean += data[i];
-        mean = Math.max(mean / n, 1e-6);
-        return data.map((value) => value / mean);
-    });
-    const average = new Float32Array(n);
-    for (const photo of photos) for (let i = 0; i < n; i++) average[i] += photo[i] / count;
-    const differences = photos.map((photo) => box3(photo.map((value, i) => value / Math.max(average[i], 1e-4) - 1), w, h));
+    const { width: w, height: h, differences } = differencesOf(brightness, width, height, 128, true);
+    const n = w * h;
     // The two pictures that carry most of the differences.
     const covariance = differences.map((a) => differences.map((b) => { let sum = 0; for (let i = 0; i < n; i++) sum += a[i] * b[i]; return sum / n; }));
     const { values, vectors } = symmetricEigen(covariance);
@@ -292,21 +309,44 @@ export const estimateLightAzimuths = (brightness: readonly Float32Array[], width
     let [a, b, c, d] = smallest;
     const det = a * d - b * c;
     if (!Number.isFinite(det) || Math.abs(det) < 1e-12) return { azimuths: brightness.map((_, k) => (k / count) * Math.PI * 2), fit: 0 };
-    // Settle which way round: the height must be low where the photos are dark on average.
-    const slopeX = new Float32Array(n), slopeY = new Float32Array(n);
-    for (let i = 0; i < n; i++) { slopeX[i] = a * u[i] + b * v[i]; slopeY[i] = c * u[i] + d * v[i]; }
-    const side = Math.max(nextPowerOfTwo(w), nextPowerOfTwo(h));
+    // Settle which way round, on a larger copy, where thin crevices still show: the height's low parts
+    // are the thinner shapes, or failing that the darker ones.
+    const fine = differencesOf(brightness, width, height, 256, false);
+    const fw = fine.width, fh = fine.height, fn = fw * fh;
+    const slopeX = new Float32Array(fn), slopeY = new Float32Array(fn);
+    for (let k = 0; k < count; k++) {
+        const along = fine.differences[k];
+        for (let i = 0; i < fn; i++) {
+            const pu = e1[k] * along[i], pv = e2[k] * along[i];
+            slopeX[i] += a * pu + b * pv;
+            slopeY[i] += c * pu + d * pv;
+        }
+    }
+    const side = Math.max(nextPowerOfTwo(fw), nextPowerOfTwo(fh));
     const padded = (values: Float32Array) => {
         const out = new Float32Array(side * side);
-        for (let y = 0; y < side; y++) for (let x = 0; x < side; x++) out[y * side + x] = values[Math.min(h - 1, y) * w + Math.min(w - 1, x)];
+        for (let y = 0; y < side; y++) for (let x = 0; x < side; x++) out[y * side + x] = values[Math.min(fh - 1, y) * fw + Math.min(fw - 1, x)];
         return out;
     };
-    const relief = integrateSlopes(padded(slopeX), padded(slopeY), side, side, false);
-    let agreement = 0;
-    let meanAverage = 0;
-    for (let i = 0; i < n; i++) meanAverage += average[i] / n;
-    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) agreement += relief[y * side + x] * (average[y * w + x] - meanAverage);
-    if (agreement < 0) { a = -a; b = -b; c = -c; d = -d; }
+    const relief = integrateSlopes(padded(slopeX), padded(slopeY), side, side, false, 2.5);
+    const shown = new Float32Array(fn);
+    for (let y = 0; y < fh; y++) for (let x = 0; x < fw; x++) shown[y * fw + x] = relief[y * side + x];
+    let spread = 0;
+    for (let i = 0; i < fn; i++) spread += shown[i] ** 2;
+    spread = Math.sqrt(spread / fn) || 1;
+    for (let i = 0; i < fn; i++) shown[i] /= spread;
+    const { bright: highWidth, dark: lowWidth } = brightAndDarkWidths(shown, fw);
+    let flip: boolean;
+    if (highWidth !== null && lowWidth !== null && Math.max(highWidth, lowWidth) > Math.min(highWidth, lowWidth) * 1.25) {
+        flip = highWidth < lowWidth;
+    } else {
+        let agreement = 0;
+        let meanAverage = 0;
+        for (let i = 0; i < fn; i++) meanAverage += fine.average[i] / fn;
+        for (let i = 0; i < fn; i++) agreement += shown[i] * (fine.average[i] - meanAverage);
+        flip = agreement < 0;
+    }
+    if (flip) { a = -a; b = -b; c = -c; d = -d; }
     // differences = [e1 e2] (u; v) = [e1 e2] M^-1 (slopes): each photo's row says its light's direction (towards the light, against the rise).
     const inverse = [[d / (a * d - b * c), -b / (a * d - b * c)], [-c / (a * d - b * c), a / (a * d - b * c)]];
     const azimuths = Array.from({ length: count }, (_, k) => {
