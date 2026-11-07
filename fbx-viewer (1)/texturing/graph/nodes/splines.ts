@@ -31,7 +31,7 @@ export const curveOf = (params: Params, key = 'points', closedKey = 'closed'): P
     smoothPath(readPoints(params[key], DEFAULT_CURVE), Boolean(params[closedKey]), num(params, 'smoothness', 1));
 
 /** Segments as a float texture: row 0 their ends (a.x, a.y, b.x, b.y), row 1 (start, length, path, path length). */
-const segmentTexture = (segments: readonly Segment[]): THREE.DataTexture => {
+export const segmentTexture = (segments: readonly Segment[]): THREE.DataTexture => {
     const count = Math.max(1, segments.length);
     const data = new Float32Array(count * 2 * 4);
     segments.forEach((segment, i) => {
@@ -45,13 +45,13 @@ const segmentTexture = (segments: readonly Segment[]): THREE.DataTexture => {
 };
 
 /** Offsets as the shaders take them: up to nine, as vec4s. */
-const offsetUniforms = (offsets: readonly Point[]) => ({
+export const offsetUniforms = (offsets: readonly Point[]) => ({
     uOffsets: Array.from({ length: 9 }, (_, i) => new THREE.Vector4(offsets[i]?.[0] ?? 0, offsets[i]?.[1] ?? 0, 0, 0)),
     uOffsetCount: Math.min(9, offsets.length),
 });
 
 /** Nearest point of the segments, and the winding number round a place, with the picture's copies of the curve. */
-const CURVE_GLSL = `uniform sampler2D segs;
+export const CURVE_GLSL = `uniform sampler2D segs;
 uniform int uSegs;
 uniform vec4 uOffsets[9];
 uniform int uOffsetCount;

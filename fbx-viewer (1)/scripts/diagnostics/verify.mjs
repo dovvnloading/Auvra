@@ -158,6 +158,8 @@ const EXEMPT = new Map(Object.entries({
   'texturing/graph/seamCut.ts': 'pure-utility',
   'texturing/graph/curves.ts': 'pure-utility',
   'texturing/graph/nodes/splines.ts': 'pure-utility',
+  'texturing/graph/nodes/vector.ts': 'pure-utility',
+  'texturing/graph/svgPaths.ts': 'pure-utility',
   'texturing/graph/nodes/text.ts': 'pure-utility',
   'texturing/graph/iterate.ts': 'pure-utility',
   'texturing/graph/nodes/processors.ts': 'pure-utility',

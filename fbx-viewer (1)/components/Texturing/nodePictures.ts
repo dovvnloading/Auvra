@@ -85,6 +85,14 @@ const draw = async (gpu: TextureGpu, evaluator: TextureGraphEvaluator, request: 
         );
         const standIns: Record<string, string> = { curvature: 'curvature', cavity: 'curvature', occlusion: 'occlusion', worldNormal: 'normals', thickness: 'sample' };
         for (const port of definition.inputs) if (standIns[port.key]) links.push({ from: standIns[port.key], fromOutput: 'out', to: 'picture', toInput: port.key });
+    } else if (definition.type === 'shapeBoolean') {
+        // Two overlapping shapes' distances, joined smoothly.
+        nodes.unshift(
+            { ...createNode('vectorShape', -200, 0, { shape: 'polygon', sides: 6, centre: [0.4, 0.5], size: 0.6 }), id: 'first' },
+            { ...createNode('vectorShape', -200, 80, { shape: 'ellipse', centre: [0.64, 0.5], size: 0.5 }), id: 'second' },
+        );
+        node.params = { ...node.params, smooth: 0.06 };
+        links.push({ from: 'first', fromOutput: 'distance', to: 'picture', toInput: 'a' }, { from: 'second', fromOutput: 'distance', to: 'picture', toInput: 'b' });
     } else if (definition.category === 'Photo and scans' && main) {
         // A stand-in photo: noise that does not tile, through a colourful gradient (its height as the height).
         nodes.unshift({ ...createNode('perlinNoise', -260, 0), id: 'sample', tiling: 'none' }, { ...createNode('gradientMap', -150, 0, { ramp: COLOURFUL_RAMP }), id: 'colourful' });

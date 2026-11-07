@@ -126,7 +126,8 @@ const handlesFor = (node: TexGraphNode | null | undefined, seed: number | undefi
             const settings = { offset: pair(p.offset, [0, 0]), rotation: num(p.rotation, 0), scale: pair(p.scale, [1, 1]) };
             return { frame: transformFrame(settings), drag: (key, to, uniform) => ({ ...dragTransform(settings, key, to, uniform) }), locked };
         }
-        case 'shape': {
+        case 'shape':
+        case 'vectorShape': {
             const settings = { centre: pair(p.centre, [0.5, 0.5]), size: num(p.size, 0.8), stretch: pair(p.stretch, [1, 1]), rotation: num(p.rotation, 0), tiling: num(p.tiling, 1) };
             return { frame: shapeFrame(settings), drag: (key, to) => ({ ...dragShape(settings, key, to) }), locked };
         }

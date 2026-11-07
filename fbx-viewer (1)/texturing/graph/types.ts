@@ -65,6 +65,8 @@ export interface TexParamDef {
     showIf?: (params: Readonly<Record<string, unknown>>) => boolean;
     /** A heading it is listed under (a graph's parameter group, on a node using the graph). */
     group?: string;
+    /** Text of many lines (an SVG drawing), typed in a box with a button to read it from a file of these types. */
+    multiline?: { accept: string; limit: number };
 }
 
 /** A node setting following the graph's parameters: one of them as it is, or a formula of them. */

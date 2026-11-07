@@ -8,6 +8,8 @@ import { coerceParam } from '../../texturing/graph/document';
 import { nearestOn, placementsAlong, quadPlace, resample, segmentsOf, simplify, smoothPath, traceOutlines, windingAt, wrapOffsets, type Point } from '../../texturing/graph/curves';
 import { SPLINE_NODES, outlinePaths, scatterRows, strokeAt } from '../../texturing/graph/nodes/splines';
 import { addPoint, dragPoint, removePoint, type PointList } from '../../components/Texturing/view2d';
+import { VECTOR_NODES, combineDistances, decodeDistance, encodeDistance, insideByRule, shapeDistance, vectorShapeAt } from '../../texturing/graph/nodes/vector';
+import { fitToPicture, parsePathData, parseSvg } from '../../texturing/graph/svgPaths';
 
 /** A smooth random picture that does not tile: a slope across it and lumps of noise. */
 const photo = (width: number, height: number, seed = 1): Picture => {
@@ -225,6 +227,80 @@ describe('splines and paths', () => {
         expect(scatterRows(params, 3)).toEqual(scatterRows(params, 3));
         expect(scatterRows(params, 3)).not.toEqual(scatterRows(params, 4));
         expect(scatterRows(params, 3).length).toBe(8);
+    });
+});
+
+describe('vector shapes', () => {
+    it('measures exact distances to polygons, stars, rounded boxes and ellipses', () => {
+        // A hexagon with a corner at the top: the corner is on the edge, the middle an apothem inside.
+        expect(shapeDistance([0, 1], 'polygon', 6, 0.5, 0)).toBeCloseTo(0, 9);
+        expect(shapeDistance([0, 0], 'polygon', 6, 0.5, 0)).toBeCloseTo(-Math.cos(Math.PI / 6), 9);
+        expect(shapeDistance([0, 2], 'polygon', 6, 0.5, 0)).toBeCloseTo(1, 9);
+        // A five-pointed star: a tip and a valley on the edge, the middle inside.
+        expect(shapeDistance([0, 1], 'star', 5, 0.4, 0)).toBeCloseTo(0, 9);
+        expect(shapeDistance([0.4 * Math.sin(Math.PI / 5), 0.4 * Math.cos(Math.PI / 5)], 'star', 5, 0.4, 0)).toBeCloseTo(0, 9);
+        expect(shapeDistance([0, 0], 'star', 5, 0.4, 0)).toBeLessThan(0);
+        expect(shapeDistance([0, 0.7], 'star', 5, 0.4, 0)).toBeLessThan(0);
+        expect(shapeDistance([0.5, 0.7], 'star', 5, 0.4, 0)).toBeGreaterThan(0);
+        // A box, then with its corners rounded.
+        expect(shapeDistance([2, 0], 'box', 4, 0.5, 0)).toBeCloseTo(1, 9);
+        expect(shapeDistance([0, 0], 'box', 4, 0.5, 0)).toBeCloseTo(-1, 9);
+        expect(shapeDistance([1, 1], 'box', 4, 0.5, 0.5)).toBeCloseTo(Math.SQRT2 * 0.5 - 0.5, 9);
+        expect(shapeDistance([0.3, 0.4], 'ellipse', 4, 0.5, 0)).toBeCloseTo(-0.5, 9);
+    });
+
+    it('keeps repeated shapes tiling, and turns distances into a picture and back', () => {
+        const params = { shape: 'star', sides: 5, inner: 0.45, rounding: 0.1, centre: [0.37, 0.61], size: 1.1, stretch: [1, 0.8], rotation: 17, tiling: 3, outline: 0 };
+        const edgeGap = (picture: (u: number, v: number) => number) => {
+            let gap = 0;
+            for (let i = 0; i <= 50; i++) { const t = (i + 0.29) / 51; gap = Math.max(gap, Math.abs(picture(0, t) - picture(1, t)), Math.abs(picture(t, 0) - picture(t, 1))); }
+            return gap;
+        };
+        expect(edgeGap((u, v) => vectorShapeAt(params, u, v))).toBeLessThan(1e-9);
+        expect(vectorShapeAt({ shape: 'ellipse', centre: [0.5, 0.5], size: 0.8, tiling: 1 }, 0.5, 0.5)).toBeCloseTo(-0.4, 9);
+        expect(decodeDistance(encodeDistance(-0.123))).toBeCloseTo(-0.123, 12);
+        expect(encodeDistance(0)).toBe(0.5);
+    });
+
+    it('combines shapes: joined, cut, overlapped or not, hard or smooth', () => {
+        expect(combineDistances(-0.1, 0.2, 'union', 0)).toBe(-0.1);
+        expect(combineDistances(-0.1, -0.05, 'subtract', 0)).toBeCloseTo(0.05, 12);
+        expect(combineDistances(-0.1, 0.2, 'intersect', 0)).toBe(0.2);
+        expect(combineDistances(-0.1, -0.2, 'exclude', 0)).toBeCloseTo(0.1, 12);
+        expect(combineDistances(-0.1, 0.3, 'exclude', 0)).toBeCloseTo(-0.1, 12);
+        // Smooth joins fill in where two shapes meet.
+        expect(combineDistances(0.01, 0.01, 'union', 0.05)).toBeLessThan(0.01);
+        expect(combineDistances(0.3, -0.2, 'union', 0.05)).toBe(-0.2);
+    });
+
+    it('reads SVG path data, shapes and transforms, and fits them into the picture', () => {
+        const square = parsePathData('M0 0 L10 0 L10 10 L0 10 Z');
+        expect(square).toEqual([{ points: [[0, 0], [10, 0], [10, 10], [0, 10]], closed: true }]);
+        expect(parsePathData('m 5 5 h 10 v 10 h -10 z')[0].points).toEqual([[5, 5], [15, 5], [15, 15], [5, 15]]);
+        expect(parsePathData('M0,0 10,0 10-5')[0].points).toEqual([[0, 0], [10, 0], [10, -5]]);
+        const curve = parsePathData('M 0 0 C 0 10 10 10 10 0')[0].points;
+        expect(curve[curve.length - 1]).toEqual([10, 0]);
+        const arc = parsePathData('M 0 0 A 50 50 0 0 1 100 0')[0].points;
+        for (const [x, y] of arc) expect(Math.hypot(x - 50, y)).toBeCloseTo(50, 6);
+        expect(arc.some(([x, y]) => Math.abs(x - 50) < 5 && Math.abs(y + 50) < 1)).toBe(true);
+        const drawing = parseSvg('<svg xmlns="http://www.w3.org/2000/svg"><g transform="translate(10 0)"><rect x="0" y="0" width="10" height="5"/></g><circle cx="5" cy="5" r="2"/><defs><path d="M0 0 L1 1"/></defs></svg>');
+        expect(drawing.length).toBe(2);
+        expect(drawing[0].points).toEqual([[10, 0], [20, 0], [20, 5], [10, 5]]);
+        expect(drawing[1].points.length).toBe(64);
+        const fitted = fitToPicture(square, 0.1);
+        const us = fitted[0].points.map((p) => p[0]);
+        const vs = fitted[0].points.map((p) => p[1]);
+        expect(Math.min(...us)).toBeCloseTo(0.1, 9);
+        expect(Math.max(...us)).toBeCloseTo(0.9, 9);
+        // SVG's y runs down: its first point (top left) lands at the top of the picture.
+        expect(fitted[0].points[0][1]).toBeCloseTo(0.9, 9);
+        expect(Math.min(...vs)).toBeCloseTo(0.1, 9);
+        expect(insideByRule(2, 'evenodd')).toBe(false);
+        expect(insideByRule(2, 'nonzero')).toBe(true);
+    });
+
+    it('every node says what it does', () => {
+        for (const definition of VECTOR_NODES) expect(definition.description.length, definition.type).toBeGreaterThan(40);
     });
 });
 
