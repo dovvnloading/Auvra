@@ -89,6 +89,10 @@
   - function graphs, the value processor and the Iterate node;
   - strip-baked supersampling, fixing bakes in place, painting in 2D, brush projections and more UV tools;
   - one material document with painted copies, delete with undo, and compressed textures kept in the project.
+- **Round 6** brought:
+  - parameters and presets at full depth, a variation sheet, safe transform and a deep Bitmap node;
+  - export templates, more file kinds and glTF export;
+  - a material library for every project, phone compression and MaterialX.
 
 See §6.
 
@@ -149,7 +153,7 @@ Auvra goes past those tools where being inside the engine helps:
 ### 2.3 Material graph and the engine's materials
 - **Shader graph:** 90 nodes covering math, vectors, UVs, texture sampling, triplanar, simple noises, colour, logic and custom GLSL, plus comments and reroutes.
   - Named parameters are shared across nodes, with values set per model in Material Overrides.
-  - The graph is compiled to GLSL and patched into the standard three.js material. The unmerged WebGPU renderer (#154) translates the same GLSL to WGSL.
+  - The graph is compiled to GLSL and patched into the standard three.js material. The WebGPU renderer (in main since #154) translates the same GLSL to WGSL.
 - **Authored materials:** base colour, metalness, roughness, normal, AO, emission, opacity (4 blend modes) and world-position offset.
 - **Imported glTF models:** keep coat, sheen, transmission, volume, anisotropy, iridescence and dispersion through three.js, but nothing in the editor can see or change them.
 - **Separate systems:** terrain (8 layers with height blending and cliff projection), colour-only decals, water, and weather and wind patches.
@@ -511,6 +515,27 @@ Fix the defects in §8 that lose work, give wrong results or mislead, before bui
 **Checked by:** a brick wall, a stone path, a parquet floor and a scattered-leaves ground, each built in a few nodes and compared side by side with photos.
 
 ### Stage 4 — Parameters, presets and the material library
+
+**Landed in round 6:**
+- **Exposed parameters:**
+  - groups with descriptions, which fold;
+  - descriptions on hover, and reset;
+  - "Shown" conditions on parameters, and on graph inputs and outputs;
+  - an option editor for choices;
+  - limits, slider ends and steps;
+  - every setting kind exposable, fonts included, through a new Text node.
+
+  Fills and smart masks in Paint use the same panel.
+- **Presets** kept in the graph or shared in the project, and a variation sheet: a grid of the output with one parameter, or the seed, changed across it.
+- **My library:**
+  - materials kept for every project with their pictures, shown as balls drawn on the engine's material path;
+  - search, folders and tags, duplicate, delete with undo, and where each one went;
+  - "Use in this project" brings in a copy with its pictures.
+- **Still to come:**
+  - renaming a parameter's formula name;
+  - balls in the project's own material list;
+  - library entries carrying the graphs they use as nodes;
+  - templates and starter content.
 - **Exposed parameters:**
   - groups and descriptions;
   - show/hide conditions on parameters, inputs and outputs;
@@ -543,6 +568,8 @@ One family per pull request, each with picture tooltips and the wrap-edge tiling
 
 **Can run alongside:** Stages 4 and 6.
 **Checked by:** each family's nodes drawn on real inputs, plus one finished material per family.
+
+**Landed in round 6:** a Safe transform that keeps tiling at any turn and size, by snapping or by blending the seams; "Keep it seamless" on Transform; and a Bitmap node that reads 16-bit and float files at their depth, with colour handling, crop and fitting.
 
 ### Stage 6 — Painting at full depth
 
@@ -640,6 +667,26 @@ One family per pull request, each with picture tooltips and the wrap-edge tiling
 - **Deep path:** Material Overrides' and decals' textures load like material textures, at full depth and compressed by role. Terrain layers are decoded at full depth.
 - **Recognised by name:** normal maps (`_n`, `_nrm`, `_normal`, `_nor`, `_nor_gl`, `_nor_dx`, with DirectX green flipped) and data maps such as roughness, metallic, occlusion and height.
 - **Still to come:** ASTC and ETC2, compressed terrain arrays, a compressed format for light beyond white, and KTX2.
+
+**Landed in round 6:**
+- **Export templates:**
+  - file names with tokens, what goes in each channel, file kind and bit depth, normal convention, padding and sizes;
+  - three built in (glTF for the web, packed ORM, one picture per channel), plus the project's own;
+  - batches by size and by UDIM tile.
+- **File kinds:** PNG at 8 or 16 bits, TGA, TIFF at 8, 16 or 32-bit float, and EXR at half or full float, from Paint and from the texture graph.
+- **glTF export:**
+  - a painted set as a .glb, with its maps and the material's own values;
+  - KHR extensions only where used: clearcoat, sheen, transmission and volume, specular, thin film, anisotropy, emission strength;
+  - read back by Auvra's own importer in a test.
+- **Phones:** ASTC 4×4 and ETC2 encoders for graphics cards without BC. Each texture's phone versions are kept with the project, so built games carry them.
+- **MaterialX:** a material's surface exports as Standard Surface or OpenPBR with its pictures, and a .mtlx file imports into a material.
+- **Terrain:** layer arrays compress by role, as colour, normals, and height with roughness.
+- **Still to come:**
+  - glTF export of a whole model with all its materials and skinning;
+  - MaterialX from a zip;
+  - keeping compressed terrain arrays in the project;
+  - a compressed format for light beyond white;
+  - KTX2.
 - **Export:**
   - templates per target (file names, packing, bit depth, normal convention, padding), starting with a web-first glTF template;
   - EXR, TGA and TIFF;
@@ -782,33 +829,46 @@ File references are relative to `fbx-viewer (1)/`.
   - A UV panel slider was given NaN after unwrapping.
   - The bake rays were unreadable head-on.
 
+### Fixed in round 6
+- **Graph:**
+  - There is a safe transform, and the Bitmap node reads deep files with crop and colour options.
+  - Choice parameters have an option editor; steps, groups and descriptions have a UI.
+- **Baking and painting:**
+  - Strip bakes build their ray structures once.
+  - Symmetry and the stencil work in the 2D painting view.
+- **Materials and textures:**
+  - Terrain arrays compress by role.
+  - The host writes painted copies, and Material Overrides previews through them.
+  - There is ASTC and ETC2 compression for phones.
+- **Found while checking round 6:** Paint's export templates showed as a material in the lists.
+
 ### Still open
 **Texture graph**
-1. There is no safe transform: rotation or fractional scale breaks tiling (`texturing/graph/nodes/transform.ts`).
-2. The Bitmap node always loads as 8-bit sRGB and is stretched to the graph; there's no crop or linear option (`texturing/graph/nodes/io.ts`).
-3. Choice parameters have no option editor, and step, group and description have no UI (Stage 4).
-4. Make it tile is a single cross-fade, so ghosting shows (Stage 5, photo tools).
-5. Update material draws mesh-reading nodes with stand-ins, because a material can go on any model. Per-model results come with Stage 9.
-6. A flood fill box is approximate for an island covering more than about three quarters of a tiling axis.
-7. Function graphs have no WGSL writer yet, and their Noise node has no CPU reference to test against.
-8. Iterate takes picture inputs and outputs only, its graph can't be opened in place, and every node inside redraws on every pass.
+1. Make it tile is a single cross-fade, so ghosting shows (Stage 5, photo tools).
+2. Update material draws mesh-reading nodes with stand-ins, because a material can go on any model. Per-model results come with Stage 9.
+3. A flood fill box is approximate for an island covering more than about three quarters of a tiling axis.
+4. Function graphs have no WGSL writer yet, and their Noise node has no CPU reference to test against.
+5. Iterate takes picture inputs and outputs only, its graph can't be opened in place, and every node inside redraws on every pass.
+6. A parameter's formula name can't be renamed.
+7. Varying a setting that doesn't change the shown output gives a sheet of identical cells with no word why.
+8. Long parameter labels are cut short at ordinary panel widths, and the description field is labelled "Words".
 
 **Painting, baking and UVs**
 9. The paint view's smoothing draws into a render target marked as an XR target. Recheck this when three.js is upgraded (`components/Texturing/Paint/PaintViewport.tsx`).
 10. A triangle that crosses a UDIM tile edge can pick a too-coarse mip at that edge.
 11. Only the most recent bake can be undone. Painted cage offsets assume the "By distance" cage.
-12. With a high-poly model, each strip builds its ray structures again, so bakes with many strips (4×4 at 2048 is about forty) are slow.
-13. Symmetry, the stencil and the other tools work only in the 3D view, not in 2D painting.
+12. Paths, polygon fills and the other tools beyond brushes work only in the 3D view, not in 2D painting.
+13. glTF export writes the open texture set only, not the whole model with its other materials or skinning.
 
 **Material graph, engine materials and textures**
 14. Unlit and Phong materials can't take a material asset (a message says so). Converting them is a later step.
 15. The surface has no coat tint, and car paint has no metal flakes.
-16. BC7 uses one block mode, so a block holding two very different colours blurs a little more than with a full encoder.
-17. Terrain arrays are kept as uncompressed 8-bit pictures; compressing them means splitting colour from height and normal from roughness first.
-18. A texture never drawn in the editor has nothing kept, so a built game compresses it as it loads.
-19. When the host saves a texture it still writes the old painted base map, which becomes a copy on the next override save, and Material Overrides' live preview uses the old painted path.
-20. There is no ASTC or ETC2 compression for phones.
-21. For the WebGPU renderer (#154):
+16. BC7 uses one block mode, and ASTC and ETC2 use simple block modes, so some blocks blur a little more than with full encoders.
+17. A texture never drawn in the editor has nothing kept, so a built game compresses it as it loads. Compressed terrain arrays are made again each time a terrain loads.
+18. My library lives in the editor's own storage on this machine. Graphs a material uses as nodes don't come with it, and painted copies and painting presets can't be added.
+19. MaterialX can't be imported from a zip, and image tiling is ignored.
+20. In a narrow window, the Materials tab's sidebar buttons run under My library's header.
+21. The WebGPU renderer is in main (#154). These were found while it was unmerged, so check them on main and close what is fixed:
     - its graph surface ignores weather and wind;
     - it caches translated shaders per graph object, so every value edit translates again; it should key by graph shape;
     - it should skip the vertex-colour multiply when a graph reads Vertex Color;

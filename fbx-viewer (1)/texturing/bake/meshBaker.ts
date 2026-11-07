@@ -214,6 +214,7 @@ export const rebakeRegion = async (gpu: TextureGpu, sources: BakeSources, settin
         extras: (settings.extras ?? []).filter((name) => name === 'color' || name === 'opacity' || name === 'material'),
     };
     const next = new Map<number, TileBake>();
+    const rays = prepareRays(sources, detail);
     for (const [tile, bake] of current) {
         for (const image of [...Object.values(bake.maps), ...Object.values(bake.extras ?? {})]) if (image) gpu.retain(image);
         next.set(tile, { maps: { ...bake.maps }, extras: { ...(bake.extras ?? {}) }, coverage: gpu.retain(bake.coverage), nearest: gpu.retain(bake.nearest) });
@@ -224,7 +225,7 @@ export const rebakeRegion = async (gpu: TextureGpu, sources: BakeSources, settin
             const into = next.get(tile);
             if (!into) continue;
             const strip = { from: Math.max(0, Math.floor(rect.y0) - 4), to: Math.min(size, Math.ceil(rect.y1) + 4) };
-            const baked = await bakeAtSize(gpu, sources, detail, (fraction, step) => progress((done + fraction) / regions.size, step), signal, true, strip);
+            const baked = await bakeAtSize(gpu, sources, detail, (fraction, step) => progress((done + fraction) / regions.size, step), signal, true, strip, undefined, rays);
             try {
                 assertAlive(gpu);
                 const fresh = baked.get(tile);
@@ -256,6 +257,8 @@ export const rebakeRegion = async (gpu: TextureGpu, sources: BakeSources, settin
         for (const result of next.values()) releaseTileBake(gpu, result);
         if (gpu.renderer.getContext().isContextLost()) throw new BakeLostError();
         throw error;
+    } finally {
+        rays.dispose();
     }
 };
 
@@ -349,13 +352,15 @@ const bakeInStrips = async (gpu: TextureGpu, sources: BakeSources, settings: Bak
     const kept = new Map<number, { maps: Partial<Record<string, GpuImage>>; extras: Partial<Record<string, GpuImage>> }>();
     // Worked out once, in the first strip, for the whole tile.
     const memo = new Map<number, { front: number; rear: number }>();
+    // One set of ray structures (the whole model, cage rays, high-poly groups) for every strip.
+    const rays = prepareRays(sources, settings);
     const release = () => { for (const tile of kept.values()) for (const image of [...Object.values(tile.maps), ...Object.values(tile.extras)]) gpu.release(image); };
     try {
         for (let k = 0; k < strips.length; k++) {
             throwIfAborted(signal);
             const strip = strips[k];
             const label = strips.length > 1 ? ` (strip ${k + 1} of ${strips.length})` : '';
-            const baked = await bakeAtSize(gpu, sources, settings, (fraction, step) => progress(((k + fraction) / strips.length) * 0.95, step + label), signal, true, strip, memo);
+            const baked = await bakeAtSize(gpu, sources, settings, (fraction, step) => progress(((k + fraction) / strips.length) * 0.95, step + label), signal, true, strip, memo, rays);
             try {
                 assertAlive(gpu);
                 const { sourceRow, targetRow } = stripOffsets(strip);
@@ -397,20 +402,23 @@ const bakeInStrips = async (gpu: TextureGpu, sources: BakeSources, settings: Bak
         return results;
     } finally {
         release();
+        rays.dispose();
     }
 };
 
-const bakeAtSize = async (gpu: TextureGpu, sources: BakeSources, settings: BakeSettings, progress: BakeProgress, signal?: AbortSignal, scaledAfter = false,
-    strip?: Pick<BakeStrip, 'from' | 'to'>, memo?: Map<number, { front: number; rear: number }>): Promise<Map<number, TileBake>> => {
+/** What a bake traces rays against, made once and shared by every strip (and region) of one bake. */
+export interface BakeRays {
+    occluder: MeshTracer;
+    cageRays: Float32Array | null;
+    groups: Array<{ lowMesh: number; tracer: MeshTracer; surface: THREE.DataTexture | null; material: THREE.DataTexture | null }>;
+    dispose: () => void;
+}
+
+/** The ray structures a bake needs: the whole model for occlusion, cage rays, and the high-poly groups. */
+export const prepareRays = (sources: BakeSources, settings: BakeSettings): BakeRays => {
     const { part } = sources;
-    const size = 2 ** settings.size;
-    // A strip bakes its rows (and margins) of the whole square: as tall as they are, as wide as the square.
-    const tall = strip ? strip.to - strip.from : size;
-    const raster = new UvRaster(gpu, part);
-    raster.window = strip ? [0, strip.from / size, 1, strip.to / size] : null;
     const occluder = new MeshTracer(sources.occluder.positions, sources.occluder.normals, sources.occluder.indices);
     const highPoly = sources.highPoly;
-    const extrasWanted = new Set<ExtraBakeMap>(settings.extras ?? []);
     // Cage rays: towards a cage mesh, or along normals averaged across hard edges.
     const cageRays = (settings.cage === 'mesh' && sources.cage) ? sources.cage : (settings.averagedNormals ?? true) ? (() => {
         const averaged = averagedNormals(part.positions, part.indices);
@@ -418,7 +426,6 @@ const bakeAtSize = async (gpu: TextureGpu, sources: BakeSources, settings: BakeS
         for (let v = 0; v < averaged.length / 3; v++) rays.set([averaged[v * 3], averaged[v * 3 + 1], averaged[v * 3 + 2], -1], v * 4);
         return rays;
     })() : null;
-    raster.setCage(cageRays);
     // Which high-poly triangles each low-poly mesh bakes from: one tracer for each different set of them.
     const boxesOf = (positions: ArrayLike<number>, indices: ArrayLike<number>, triangleMesh: ArrayLike<number>, names: readonly string[]): NamedBox[] => names.map((name, mesh) => {
         const min: [number, number, number] = [Infinity, Infinity, Infinity];
@@ -467,6 +474,35 @@ const bakeAtSize = async (gpu: TextureGpu, sources: BakeSources, settings: BakeS
             });
         }
     }
+    return {
+        occluder,
+        cageRays,
+        groups,
+        dispose: () => {
+            occluder.dispose();
+            for (const group of groups) {
+                group.tracer.dispose();
+                group.surface?.dispose();
+                group.material?.dispose();
+            }
+        },
+    };
+};
+
+const bakeAtSize = async (gpu: TextureGpu, sources: BakeSources, settings: BakeSettings, progress: BakeProgress, signal?: AbortSignal, scaledAfter = false,
+    strip?: Pick<BakeStrip, 'from' | 'to'>, memo?: Map<number, { front: number; rear: number }>, shared?: BakeRays): Promise<Map<number, TileBake>> => {
+    const { part } = sources;
+    const size = 2 ** settings.size;
+    // A strip bakes its rows (and margins) of the whole square: as tall as they are, as wide as the square.
+    const tall = strip ? strip.to - strip.from : size;
+    const raster = new UvRaster(gpu, part);
+    raster.window = strip ? [0, strip.from / size, 1, strip.to / size] : null;
+    const extrasWanted = new Set<ExtraBakeMap>(settings.extras ?? []);
+    // The ray structures: shared when given (strips of one bake), else made here and let go of after.
+    const rays = shared ?? prepareRays(sources, settings);
+    const { occluder, cageRays, groups } = rays;
+    const highPoly = sources.highPoly;
+    raster.setCage(cageRays);
     const high = groups[0]?.tracer ?? null;
     const occluderBox = new THREE.Box3().setFromBufferAttribute(new THREE.BufferAttribute(sources.occluder.positions, 3));
     const space = sources.space ?? spaceOfBox(occluderBox);
@@ -912,12 +948,7 @@ const bakeAtSize = async (gpu: TextureGpu, sources: BakeSources, settings: BakeS
         throw error;
     } finally {
         raster.dispose();
-        occluder.dispose();
-        for (const group of groups) {
-            group.tracer.dispose();
-            group.surface?.dispose();
-            group.material?.dispose();
-        }
+        if (!shared) rays.dispose();
     }
 };
 

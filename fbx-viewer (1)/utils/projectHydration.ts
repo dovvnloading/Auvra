@@ -30,7 +30,7 @@ import { MATERIALS_DOMAIN, materialLibrary, readMaterialAsset, type MaterialAsse
 import { loadSkinPaint } from './skinPaint/modelSkin';
 import { applyLayout, decodeLayout } from '../texturing/uv/uvLayout';
 import { setLightVolumeSource } from '../runtime/lighting/lightVolumeLoader';
-import { normalizeTextureSettings, setTextureSettings, setTextureSourceAsset, textureSettingsOf } from '../texturing/textureSettings';
+import { PHONE_SUPPORTS, normalizeTextureSettings, setTextureSettings, setTextureSourceAsset, textureSettingsOf } from '../texturing/textureSettings';
 import { createMaterialTextureLoader, setProjectTextureLoader, type CompressedTextureCache } from '../texturing/materialTextureLoader';
 
 /** The HUD document in the project 'hud' domain. */
@@ -324,7 +324,8 @@ export function createGameContentLoader(
         },
         keep: options.keepCompressedTexture,
       };
-      projectTextureLoader = createMaterialTextureLoader({ compress: compressTextures, cache });
+      // Where compressed textures can be kept (the editor), their phone versions are kept too, for built games.
+      projectTextureLoader = createMaterialTextureLoader({ compress: compressTextures, cache, ...(options.keepCompressedTexture ? { alsoKeepFor: PHONE_SUPPORTS } : {}) });
       setProjectTextureLoader(projectTextureLoader);
       materialLibrary.setTextureSource((textureId) => textureAssetUrls.get(textureId), projectTextureLoader);
       materialLibrary.replaceAll(documents(MATERIALS_DOMAIN).map(readMaterialAsset).filter((asset): asset is MaterialAsset => asset !== null));

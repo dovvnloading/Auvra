@@ -6,7 +6,7 @@ import { createMaterialGraph } from '../../../runtime/materials/materialGraph';
 import { projectService } from '../../../utils/projectService';
 import { overrideTextureFlipY, type MaterialOverrides } from '../../../utils/materialOverrides';
 import { bakeMeshMaps, rebakeRegion, releaseTileBake, spaceOfBox, type BakeSettings, type PositionSpace, type TileBake } from '../../../texturing/bake/meshBaker';
-import { textureGpu, type TextureGpu } from '../../../texturing/gpu/textureGpu';
+import { textureGpu, type GpuImage, type TextureGpu } from '../../../texturing/gpu/textureGpu';
 import type { GraphEntry, GraphResolver } from '../../../texturing/graph/registry';
 import { readStoredGraph } from '../../../texturing/graph/stored';
 import { buildHighPoly, buildPartMesh, buildWholeMesh, type PartMesh } from '../../../texturing/mesh/partMesh';
@@ -19,6 +19,33 @@ import { BUILTIN_GRAPHS } from '../../../texturing/paint/smartLibrary';
 import { applyPixelHistory, trimmedHistory, type HistoryEntry } from '../../../texturing/paint/strokes';
 import { castsFromThreeSides, createPaintDocument, newFillLayer, paintId, readPaintDocument, type PaintChannel, type PaintDocument } from '../../../texturing/paint/paintTypes';
 import { download, makeZip } from '../../../texturing/zip';
+import { fileName, holdsNormalGreen, planPicture, type ChannelSource, type ExportPicture, type ExportSource, type ExportTemplate } from '../../../texturing/paint/exportTemplates';
+import { colourChannels, extensionOf, linearChannels, writePicture, type PictureData } from '../../../texturing/paint/pictureFiles';
+import { atlasMesh, surfaceOfGraph, writePaintedGlb, type GltfPictures, type GltfSurface } from '../../../texturing/paint/gltfExport';
+import { graphPictureLookup } from './graphPictures';
+
+/** A template's picture packed from up to four maps: each channel a component of one (grey maps hold theirs in red), or a value. */
+const PACK_PICTURE = /* glsl */ `
+uniform vec4 uSlot;
+uniform vec4 uComponent;
+uniform vec4 uValue;
+uniform vec4 uFlip;
+uniform vec4 uGray;
+uniform int uPadding;
+float pick(int c) {
+    if (uSlot[c] < 0.0) return uValue[c];
+    int slot = int(uSlot[c] + 0.5);
+    vec4 t = slot == 0 ? texture(s0, vUv) : slot == 1 ? texture(s1, vUv) : slot == 2 ? texture(s2, vUv) : texture(s3, vUv);
+    int k = int(uComponent[c] + 0.5);
+    float v = uGray[slot] > 0.5 ? (k == 3 ? 1.0 : t.r) : t[k];
+    return uFlip[c] > 0.5 ? 1.0 - v : v;
+}
+void main() {
+    vec4 o = vec4(pick(0), pick(1), pick(2), pick(3));
+    // Without padding, black past the islands.
+    if (uPadding == 0 && texture(cover, vUv).r < 0.5) o.rgb = vec3(0.0);
+    outColor = o;
+}`;
 import type { PartMaterial } from '../../Tools/Retexture/parts';
 
 /**
@@ -262,10 +289,13 @@ export class PaintSession {
             metallic: material?.metalnessMap ?? [material?.metalness ?? 0, material?.metalness ?? 0, material?.metalness ?? 0],
             emissive: material?.emissiveMap ?? color(material?.emissive),
         };
+        // Fill graphs read 16-bit and float pictures at their depth, laid as the model's textures are.
+        const graphPictures = graphPictureLookup(host.texture, overrideTextureFlipY(target.object));
         const stackHost: StackHost = {
             gpu: textureGpu(),
             resolveGraph: paintGraphResolver(),
             texture: host.texture,
+            graphTexture: graphPictures.lookup,
             current,
             fetchPicture: async (assetId) => {
                 const response = await projectService.fetchAsset(assetId);
@@ -274,8 +304,16 @@ export class PaintSession {
             },
             storePicture: (blob) => projectService.uploadAsset(new File([blob], 'painted.png', { type: 'image/png' })),
         };
-        const stack = await PaintStack.open(stackHost, part, document);
-        return new PaintSession(target, host, part, stack, asset, occluder, modelSpace);
+        let stack: PaintStack;
+        try {
+            stack = await PaintStack.open(stackHost, part, document);
+        } catch (error) {
+            graphPictures.dispose();
+            throw error;
+        }
+        const session = new PaintSession(target, host, part, stack, asset, occluder, modelSpace);
+        session.releasePictures = graphPictures.dispose;
+        return session;
     }
 
     subscribe = (listener: () => void): (() => void) => {
@@ -672,6 +710,150 @@ export class PaintSession {
         }
     }
 
+    /**
+     * One picture packed on the GPU from the maps it reads (missing maps at their usual blank values), read
+     * back as rows from the top of the UV square unless `flipRows`; past the islands black unless `padding`.
+     */
+    private packPicture(picture: ExportPicture, images: Partial<Record<ExportSource, GpuImage>>, coverage: GpuImage | null, width: number, height: number, options: { directX: boolean; padding: boolean; flipRows: boolean }): PictureData {
+        const fallback: Record<ExportSource, 'white' | 'black' | 'mid' | 'normal'> = { baseColor: 'mid', normal: 'normal', roughness: 'mid', metallic: 'black', height: 'mid', emissive: 'black', opacity: 'white', ambientOcclusion: 'white' };
+        const plan = planPicture(picture);
+        const slotOf = (c: number) => { const channel = plan.channels[c]; return channel && 'slot' in channel ? channel.slot : -1; };
+        const packed = this.gpu.image(width, height, 'color', 32);
+        this.gpu.passNow(packed, {
+            fragment: PACK_PICTURE,
+            inputs: {
+                ...Object.fromEntries([0, 1, 2, 3].map((slot) => {
+                    const source = plan.sources[slot];
+                    return [`s${slot}`, source ? images[source] ?? this.gpu.constant(fallback[source]) : this.gpu.constant('black')];
+                })),
+                cover: coverage ?? this.gpu.constant('white'),
+            },
+            uniforms: {
+                uSlot: new THREE.Vector4(slotOf(0), slotOf(1), slotOf(2), slotOf(3)),
+                uComponent: new THREE.Vector4(...[0, 1, 2, 3].map((c) => { const channel = plan.channels[c]; return channel && 'component' in channel ? channel.component : 0; })),
+                uValue: new THREE.Vector4(...[0, 1, 2, 3].map((c) => { const channel = plan.channels[c]; return channel && 'value' in channel ? channel.value : c === 3 ? 1 : 0; })),
+                uFlip: new THREE.Vector4(...[0, 1, 2, 3].map((c) => (options.directX && picture.channels[c] && holdsNormalGreen(picture.channels[c]) ? 1 : 0))),
+                uGray: new THREE.Vector4(...[0, 1, 2, 3].map((slot) => { const source = plan.sources[slot]; return source && images[source]?.kind === 'gray' ? 1 : 0; })),
+                uPadding: options.padding || !coverage ? 1 : 0,
+            },
+        });
+        const floats = this.gpu.readFloat(packed);
+        this.gpu.release(packed);
+        if (!this.usable) throw new GpuResetError();
+        const channels = picture.channels.length as 1 | 3 | 4;
+        const data = new Float32Array(width * height * channels);
+        for (let y = 0; y < height; y++) {
+            // Read bottom row first: the file's first row is the top of the UV square unless flipped.
+            const row = options.flipRows ? height - 1 - y : y;
+            for (let x = 0; x < width; x++) for (let c = 0; c < channels; c++) data[(y * width + x) * channels + c] = floats[(row * width + x) * 4 + c];
+        }
+        return { width, height, channels, data };
+    }
+
+    /**
+     * The painted set as a binary glTF with its material: the painted maps (base colour and opacity,
+     * occlusion-roughness-metallic, normal, emission) inside the file, and the factors and KHR extensions
+     * the material document uses. A set over several UDIM tiles goes on one atlas, its UVs moved to match.
+     */
+    async exportGltf(): Promise<void> {
+        if (this.busy || !this.usable) return;
+        this.busy = 'Making the glTF model';
+        this.emit();
+        try {
+            await this.stack.compose();
+            if (!this.usable) throw new GpuResetError();
+            const model = this.target.modelName.replace(/\.[^.]+$/, '');
+            const set = this.target.partName;
+            const name = fileName('$model_$set', { set, model, tile: 1001, size: 0 });
+            const tiles = this.stack.tiles;
+            const size = this.stack.size;
+            const idleBefore = this.gpu.memory.idle;
+            const atlas = tiles.length > 1 ? tileAtlas(this.gpu, tiles, (tile) => this.stack.channelImages(tile), size) : null;
+            const pictures: GltfPictures = {};
+            let surface: GltfSurface;
+            try {
+                const images = (atlas ? atlas.images : this.stack.channelImages(tiles[0])) as Partial<Record<ExportSource, GpuImage>>;
+                const coverage = atlas ? null : this.stack.coverage(tiles[0]);
+                const width = atlas ? atlas.width : size;
+                const height = atlas ? atlas.height : size;
+                const painted = new Set(Object.keys(images) as ExportSource[]);
+                surface = surfaceOfGraph((materialLibrary.get(this.asset.id) ?? this.asset).graph, `${set} (painted)`, painted);
+                // glTF reads the first row of a picture at the top of the UV square: rows as they are.
+                const png = async (picture: ExportPicture) => new Uint8Array(await (await writePicture(this.packPicture(picture, images, coverage, width, height, { directX: false, padding: true, flipRows: false }), 'png8')).arrayBuffer());
+                const map = (from: ExportSource, component: 0 | 1 | 2 | 3 = 0): ChannelSource => ({ from, component });
+                const colour = painted.has('baseColor');
+                if (colour || painted.has('opacity')) {
+                    pictures.baseColor = await png({ name, channels: [colour ? map('baseColor', 0) : { value: 1 }, colour ? map('baseColor', 1) : { value: 1 }, colour ? map('baseColor', 2) : { value: 1 }, ...(painted.has('opacity') ? [map('opacity')] : [])] });
+                }
+                const metallicRoughness = painted.has('roughness') || painted.has('metallic');
+                if (metallicRoughness || painted.has('ambientOcclusion')) {
+                    // A map the set does not paint takes the material's own value (its factor then stays at one).
+                    pictures.orm = {
+                        png: await png({ name, channels: [painted.has('ambientOcclusion') ? map('ambientOcclusion') : { value: 1 }, painted.has('roughness') ? map('roughness') : { value: surface.roughness }, painted.has('metallic') ? map('metallic') : { value: surface.metalness }] }),
+                        occlusion: painted.has('ambientOcclusion'),
+                        metallicRoughness,
+                    };
+                    if (metallicRoughness) surface = { ...surface, roughness: 1, metalness: 1 };
+                }
+                if (painted.has('normal')) pictures.normal = await png({ name, channels: [map('normal', 0), map('normal', 1), map('normal', 2)] });
+                if (painted.has('emissive')) pictures.emissive = await png({ name, channels: [map('emissive', 0), map('emissive', 1), map('emissive', 2)] });
+            } finally {
+                if (atlas) {
+                    for (const image of Object.values(atlas.images)) this.gpu.release(image);
+                    this.gpu.trimPool(idleBefore);
+                }
+            }
+            const mesh = atlas ? atlasMesh(this.part, atlas) : this.part;
+            const glb = writePaintedGlb({ name, mesh, surface, pictures });
+            download(new Blob([glb], { type: 'model/gltf-binary' }), `${name}.glb`);
+            this.status = `Downloaded ${name}.glb${atlas ? ` (its ${tiles.length} UDIM tiles on one picture)` : ''}.`;
+        } catch (error) {
+            if (!(error instanceof GpuResetError)) frontendDiagnostics.failure('paint_gltf_export_failed', error);
+            this.status = error instanceof Error ? error.message : 'The glTF model could not be made.';
+        } finally {
+            this.busy = null;
+            this.emit();
+        }
+    }
+
+    /**
+     * A ZIP of the set's pictures as an export template lays them out: each picture packed on the GPU from
+     * the maps it reads, at each size the template asks for, for every tile, written as the template's file
+     * kind. Rows run from the top of the UV square unless `flipRows` (bottom-left UV origins).
+     */
+    async exportWithTemplate(template: ExportTemplate, flipRows: boolean): Promise<void> {
+        if (this.busy || !this.usable) return;
+        this.busy = 'Making the pictures';
+        this.emit();
+        try {
+            await this.stack.compose();
+            const model = this.target.modelName.replace(/\.[^.]+$/, '');
+            const set = this.target.partName;
+            const sizes = template.sizes.length ? template.sizes : [this.stack.document.size];
+            const tiles = this.stack.tiles;
+            const files: Array<{ name: string; data: Blob }> = [];
+            for (const power of sizes) {
+                const size = 2 ** power;
+                for (const tile of tiles) {
+                    const images = this.stack.channelImages(tile) as Partial<Record<ExportSource, GpuImage>>;
+                    const coverage = this.stack.coverage(tile);
+                    for (const picture of template.pictures) {
+                        const packed = this.packPicture(picture, images, coverage, size, size, { directX: template.normal === 'directX', padding: template.padding, flipRows });
+                        let name = fileName(picture.name, { set, model, tile, size });
+                        if (tiles.length > 1 && !picture.name.includes('$tile')) name += `.${tile}`;
+                        files.push({ name: `${sizes.length > 1 ? `${size}/` : ''}${name}.${extensionOf(template.format)}`, data: await writePicture(linearChannels(packed, colourChannels(picture, template.format)), template.format) });
+                    }
+                }
+            }
+            download(await makeZip(files), `${fileName('$model_$set', { set, model, tile: tiles[0], size: 2 ** sizes[0] })}_${fileName(template.name, { set, model, tile: tiles[0], size: 0 })}.zip`);
+        } catch (error) {
+            this.status = error instanceof Error ? error.message : 'The pictures could not be made.';
+        } finally {
+            this.busy = null;
+            this.emit();
+        }
+    }
+
     /** A ZIP of every channel of every tile, named as texture sets usually are. */
     async exportPictures(layout: PictureLayout, flipRows: boolean): Promise<void> {
         if (this.busy || !this.usable) return;
@@ -696,8 +878,12 @@ export class PaintSession {
         }
     }
 
+    /** Lets go of the copies of pictures the fill graphs read. */
+    private releasePictures: () => void = () => undefined;
+
     dispose(): void {
         this.stopListening();
+        this.releasePictures();
         // Maps bake steps held for undo go with the set.
         for (const entry of [...this.past, ...this.future]) { this.letGoOfBake(entry.bakeMaps?.before ?? null); this.letGoOfBake(entry.bakeMaps?.after ?? null); }
         this.restoredListeners.clear();

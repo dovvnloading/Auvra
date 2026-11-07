@@ -20,7 +20,27 @@ export interface StoredTextureGraph {
     baked?: { textures: ChannelTextureIds; signature: string; size: number; at: number };
     /** Whether this graph is meant to be used inside other graphs rather than drawn on models. */
     library?: boolean;
+    /** The pictures its picture parameters name (worked out on saving, so the project keeps them). */
+    textures?: Record<string, string>;
 }
+
+/**
+ * The stored graph with a record of the pictures its picture parameters name (their defaults, this
+ * material's values and its presets'), under `textures`, where the project looks for pictures a
+ * material uses.
+ */
+export const withParameterPictures = (stored: StoredTextureGraph): StoredTextureGraph => {
+    const textures: Record<string, string> = {};
+    const add = (key: string, value: unknown) => { if (typeof value === 'string' && value) textures[key] = value; };
+    for (const parameter of stored.graph.parameters) {
+        if (parameter.kind !== 'texture') continue;
+        add(parameter.name, stored.values[parameter.name]);
+        add(`${parameter.name}:default`, parameter.default);
+        for (const preset of stored.graph.presets ?? []) add(`${parameter.name}:${preset.id}`, preset.values[parameter.name]);
+    }
+    const { textures: _old, ...rest } = stored;
+    return Object.keys(textures).length ? { ...rest, textures } : rest;
+};
 
 export const readStoredGraph = (value: unknown): StoredTextureGraph => {
     const raw = (value && typeof value === 'object' ? value : {}) as Partial<StoredTextureGraph>;

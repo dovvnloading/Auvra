@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { ArrowLeftIcon, CheckCircleIcon, ChevronRightIcon, DiceIcon, DownloadIcon, ExternalLinkIcon, FlowIcon, InfoIcon, LayersIcon, RefreshIcon, TrashIcon, WarningIcon } from '../UI/Icons';
+import { ArrowLeftIcon, CheckCircleIcon, ChevronRightIcon, DiceIcon, ExternalLinkIcon, FlowIcon, InfoIcon, LayersIcon, RefreshIcon, WarningIcon } from '../UI/Icons';
 import { useAssets } from '../../context/AssetContext';
 import { useScene } from '../../context/SceneContext';
 import { frontendDiagnostics } from '../../diagnostics/runtime';
@@ -8,24 +8,33 @@ import { AbortedError, unknownNodeMessage, type ExternalImage, type TextureGraph
 import { MAX_SIZE_LOG2, MIN_SIZE_LOG2, coerceParameter, formulaScope, parameterValues, readTextureGraph, resolveNodeParams, subgraphRunSeed, unknownNodeTypes } from '../../texturing/graph/document';
 import { ITERATE_NODE_TYPE, OUTPUT_NODE_TYPE, SUBGRAPH_NODE_TYPE, SUBGRAPH_SEED_KEY, SUBGRAPH_VARY_KEY } from '../../texturing/graph/nodes/io';
 import { feedbackPairs } from '../../texturing/graph/iterate';
+import { describeMatrix, tileSafeMatrix, transformMatrix } from '../../texturing/graph/safeTransform';
 import { PROCESSOR_PICTURES, PROCESSOR_TYPES, defaultFunctionFor, processorUse, readNamedSettings, settingDefault } from '../../texturing/graph/nodes/processors';
 import { compileFunction, readFunctionGraph, type FunctionGraph, type NamedSetting } from '../../texturing/graph/functionGraph';
+import { PARAMETER_KINDS, PARAMETER_KIND_LABELS, applyPreset, presetFrom, putPreset, removePreset, renamePreset } from '../../texturing/graph/parameters';
 import { VALUE_SETTING_KINDS, valuePinKey } from '../../texturing/graph/nodeKit';
 import { textureNodeDefinition, type GraphEntry, type GraphResolver } from '../../texturing/graph/registry';
-import { bakeSignature, readStoredGraph, type StoredTextureGraph } from '../../texturing/graph/stored';
+import { bakeSignature, readStoredGraph, withParameterPictures, type StoredTextureGraph } from '../../texturing/graph/stored';
 import { MATERIAL_CHANNELS, MATERIAL_CHANNEL_LABELS, materialKey, materialOf } from '../../texturing/graph/material';
 import { TILING_MODES } from '../../texturing/graph/inherit';
-import { OUTPUT_CHANNELS, OUTPUT_CHANNEL_LABELS, type GraphParameter, type GraphParameterKind, type OutputChannel, type TexGraphNode, type TexNodeDef, type TexParamDef, type TextureGraph, type TilingMode } from '../../texturing/graph/types';
-import { DEEP_EXPORT, ROLE_LABELS, encodeChannels, rewriteMaterialPictures, type ChannelImages, type ChannelTextureIds, type MaterialChannel, type PictureLayout, materialReadsPicture } from '../../texturing/materialOutput';
-import { download, makeZip } from '../../texturing/zip';
+import { OUTPUT_CHANNELS, OUTPUT_CHANNEL_LABELS, isParamLink, type GraphParameter, type GraphParameterKind, type GraphPreset, type OutputChannel, type TexGraphNode, type TexNodeDef, type TexParamDef, type TextureGraph, type TilingMode } from '../../texturing/graph/types';
+import { ROLE_LABELS, encodeChannels, rewriteMaterialPictures, type ChannelImages, type ChannelTextureIds, type MaterialChannel, type PictureLayout, materialReadsPicture } from '../../texturing/materialOutput';
+import { downloadChannelPictures } from '../../texturing/paint/channelDownload';
+import type { PictureFormat } from '../../texturing/paint/pictureFiles';
+import { DownloadPicturesButton } from './Paint/DownloadPicturesButton';
 import { Button, IconButton, Segmented, Spinner } from '../UI/kit';
 import { Select } from '../UI/Select';
 import { COMMENT_COLORS, COMMENT_COLOR_NAMES, MAX_COMMENT_TITLE, addSubgraphNode, changeComment, materialHistory, type Point } from './graphEditing';
 import { FunctionGraphCanvas, FunctionNodeInspector, NamedSettingsEditor } from './FunctionGraphEditor';
+import { deepPictures } from './deepPictures';
 import { FunctionPreviews } from './functionPreviews';
+import { GraphParameterPanel, PresetBar, type PlacedPreset, type PresetPlace } from './GraphParameterPanel';
+import { ConditionEditor, ParameterEditor } from './ParameterEditor';
+import { sharedPresets } from './projectPresets';
+import { VariationSheet } from './VariationSheet';
 import { usePreviewMeshMaps, type PreviewShape } from './previewMeshMaps';
 import { TextureGraphCanvas } from './TextureGraphCanvas';
-import { DraftNumber, DraftText, ParamControl, TextureParamField, exposedKind } from './TextureParamField';
+import { DraftNumber, DraftText, TextureParamField, exposedKind } from './TextureParamField';
 import { TextureGraphSession, type GraphContext } from './textureGraphSession';
 import { TextureView2D } from './TextureView2D';
 import type { Histogram } from './view2d';
@@ -51,11 +60,6 @@ const FIXED_SIZES = Array.from({ length: MAX_SIZE_LOG2 - MIN_SIZE_LOG2 + 1 }, (_
 const RELATIVE_SIZES = [-6, -5, -4, -3, -2, -1, 0, 1, 2, 3, 4].map((offset) => ({ value: offset, label: offset === 0 ? 'Same' : offset < 0 ? `1/${2 ** -offset}` : `× ${2 ** offset}` }));
 /** Sizes of the material's pictures (their longest side). */
 const PICTURE_SIZES = [8, 9, 10, 11, 12, 13].map((log2) => ({ value: log2, label: `${2 ** log2}` }));
-const PARAMETER_KINDS: ReadonlyArray<{ value: GraphParameterKind; label: string }> = [
-    { value: 'float', label: 'Number' }, { value: 'int', label: 'Whole number' }, { value: 'bool', label: 'Switch' },
-    { value: 'color', label: 'Colour' }, { value: 'vec2', label: 'Pair of numbers' }, { value: 'select', label: 'Choice' },
-];
-
 type InspectorTab = 'node' | 'graph' | 'material';
 
 /** What an undo step brings back: everything about the material's graph but the pictures last made from it. */
@@ -80,18 +84,6 @@ const pictureSize = (graph: TextureGraph, bakeSize: number): { w: number; h: num
     return { w: side(graph.size.w), h: side(graph.size.h) };
 };
 
-/** A graph parameter's value control, by its kind; its range is the one set for it. */
-const parameterDef = (parameter: GraphParameter): TexParamDef => ({
-    key: parameter.name,
-    label: parameter.label,
-    kind: parameter.kind,
-    default: parameter.default,
-    min: parameter.min,
-    max: parameter.max,
-    step: parameter.step,
-    options: parameter.options,
-});
-
 /** A graph open in the workspace: the material's own, or one opened in place from a node using it. */
 interface Level {
     asset: MaterialAsset;
@@ -114,9 +106,12 @@ export const TextureGraphWorkspace: React.FC<{
     }, [assets]);
     const resolve: GraphResolver = useCallback((id) => entries.get(id), [entries]);
     const textureLookup = useMemo(() => materialLibrary.textureLookup(false), []);
-    const lookup = useCallback((id: string) => textureLookup(id, 'map'), [textureLookup]);
-    // A picture finishing loading, or a used graph changing, redraws what depends on it.
-    const libraryVersion = useSyncExternalStore((listener) => materialLibrary.subscribe(listener), () => materialLibrary.version);
+    // Pictures at their own depth (16-bit, floating point) once read; the project's textures meanwhile.
+    const lookup = useMemo(() => deepPictures.lookup((id: string) => textureLookup(id, 'map')), [textureLookup]);
+    // A picture finishing loading (or being read at its depth), or a used graph changing, redraws what depends on it.
+    const materialsVersion = useSyncExternalStore((listener) => materialLibrary.subscribe(listener), () => materialLibrary.version);
+    const deepVersion = useSyncExternalStore(deepPictures.subscribe, deepPictures.getVersion);
+    const libraryVersion = materialsVersion + deepVersion;
 
     // Graphs opened in place, outermost first, each with the node it was opened from. A step whose node
     // is gone (or uses another graph now) closes it and those inside it.
@@ -258,6 +253,8 @@ const Workspace: React.FC<{
     const { textures } = useAssets();
     const { models } = useScene();
     const textureStore = useTextureStore();
+    const pictureLookup = useMemo(() => materialLibrary.textureLookup(false), []);
+    const lookup = useMemo(() => deepPictures.lookup((id: string) => pictureLookup(id, 'map')), [pictureLookup]);
     const stored = useMemo(() => readStoredGraph(asset.textureGraph), [asset.textureGraph]);
     const graph = stored.graph;
     const sessionVersion = useSyncExternalStore(session.subscribe, session.getVersion);
@@ -314,6 +311,21 @@ const Workspace: React.FC<{
         if (editedProcessor) functionPreviews.update(graph, stored.values, editedProcessor.id);
     }, [editedProcessor, functionPreviews, graph, sessionVersion, stored.values]);
 
+    // The graph's parameters: shown as a finished panel, or edited; and its presets.
+    const [parameterView, setParameterView] = useState<'panel' | 'edit'>('panel');
+    const [variations, setVariations] = useState(false);
+    useEffect(() => { sharedPresets.load(); }, []);
+    const sharedVersion = useSyncExternalStore(sharedPresets.subscribe, sharedPresets.getVersion);
+    const placedPresets = useMemo<PlacedPreset[]>(() => {
+        void sharedVersion;
+        return [...(graph.presets ?? []).map((preset) => ({ preset, place: 'graph' as const })), ...sharedPresets.of(asset.id).map((preset) => ({ preset, place: 'project' as const }))];
+    }, [asset.id, graph.presets, sharedVersion]);
+    // Choice parameters a node select follows: their options are the node's, so their keys stay.
+    const boundChoices = useMemo(() => new Set(graph.nodes.flatMap((node) => {
+        const definition = textureNodeDefinition(node, resolve);
+        return Object.entries(node.params).filter(([key, value]) => isParamLink(value) && '$bind' in value && definition?.params.find((param) => param.key === key)?.kind === 'select').map(([, value]) => (value as { $bind: string }).$bind);
+    })), [graph.nodes, resolve]);
+
     // The first output is in the 2D view to begin with.
     useEffect(() => {
         if (viewed && graph.nodes.some((node) => node.id === viewed)) return;
@@ -325,7 +337,7 @@ const Workspace: React.FC<{
 
     const commitStored = useCallback((next: StoredTextureGraph, immediately = false) => {
         const current = materialLibrary.get(asset.id) ?? asset;
-        const updated: MaterialAsset = { ...current, textureGraph: next as unknown as Record<string, unknown> };
+        const updated: MaterialAsset = { ...current, textureGraph: withParameterPictures(next) as unknown as Record<string, unknown> };
         materialLibrary.upsert(updated);
         onSave(updated, immediately);
         setProblems((list) => (list.length ? [] : list));
@@ -519,7 +531,7 @@ const Workspace: React.FC<{
         }
     };
 
-    const downloadPictures = async () => {
+    const downloadPictures = async (format: PictureFormat = 'png8') => {
         if (baking) return;
         setBaking('Drawing pictures to download…');
         let done = () => undefined as void;
@@ -529,10 +541,8 @@ const Workspace: React.FC<{
         try {
             const rendered = await renderChannels(size);
             done = rendered.done;
-            const pictures = await encodeChannels(session.gpu, rendered.images, width, height, 'separate', true, DEEP_EXPORT);
             const base = asset.name.replace(/[^\w-]+/g, '_') || 'material';
-            const zip = await makeZip(pictures.map((picture) => ({ name: `${base}_${picture.role}.png`, data: picture.blob })));
-            download(zip, `${base}_${width === height ? width : `${width}x${height}`}.zip`);
+            await downloadChannelPictures(session.gpu, rendered.images, width, height, base, format);
         } catch (error) {
             if (!(error instanceof AbortedError)) setMessage({ text: error instanceof Error ? error.message : 'The pictures could not be made.', tone: 'error' });
         } finally {
@@ -607,9 +617,6 @@ const Workspace: React.FC<{
         }, true);
     };
 
-    const changeParameter = (index: number, patch: Partial<GraphParameter>, coalesce?: string) =>
-        change({ graph: { ...graph, parameters: graph.parameters.map((parameter, at) => (at === index ? { ...parameter, ...patch } : parameter)) } }, coalesce);
-
     const expose = (node: TexGraphNode, param: TexParamDef) => {
         const kind = exposedKind(param);
         if (!kind) return;
@@ -622,7 +629,9 @@ const Workspace: React.FC<{
             kind,
             default: coerceParameter(kind, node.params[param.key] ?? param.default, param.options),
             ...(param.min !== undefined ? { min: param.min } : {}),
-            ...(param.softMax ?? param.max) !== undefined ? { max: param.softMax ?? param.max } : {},
+            ...(param.max !== undefined ? { max: param.max } : {}),
+            ...(param.softMin !== undefined ? { softMin: param.softMin } : {}),
+            ...(param.softMax !== undefined ? { softMax: param.softMax } : {}),
             ...(param.step !== undefined ? { step: param.step } : {}),
             ...(param.options ? { options: param.options.map((option) => ({ ...option })) } : {}),
         };
@@ -633,6 +642,29 @@ const Workspace: React.FC<{
         };
         update(nextGraph, true);
         setMessage({ text: `"${parameter.label}" is now a parameter of the graph: set it in Graph.`, tone: 'info' });
+    };
+
+    /** A preset applied: its values (and its seed, when it keeps one), as one undo step. */
+    const applyGraphPreset = (preset: GraphPreset) => {
+        const values = applyPreset(preset, graph.parameters, currentStored().values);
+        change(preset.seed !== undefined ? { values, graph: { ...graph, seed: preset.seed } } : { values });
+        setMessage({ text: `Preset "${preset.name}" applied.`, tone: 'info' });
+    };
+    const saveGraphPreset = (name: string, place: PresetPlace, withSeed: boolean) => {
+        const preset = presetFrom(name, graph.parameters, currentStored().values, withSeed ? graph.seed : undefined);
+        if (place === 'graph') update({ ...graph, presets: putPreset(graph.presets ?? [], preset) }, true);
+        else void sharedPresets.put(asset.id, preset).then((done) => setMessage(done ? { text: `"${preset.name}" is kept in the project for this graph.`, tone: 'info' } : { text: 'The preset could not be kept in the project.', tone: 'error' }));
+    };
+    const renameGraphPreset = (item: PlacedPreset, name: string) => {
+        if (item.place === 'graph') update({ ...graph, presets: renamePreset(graph.presets ?? [], item.preset.id, name) }, true);
+        else void sharedPresets.rename(item.preset.id, name);
+    };
+    const deleteGraphPreset = (item: PlacedPreset) => {
+        if (item.place === 'graph') {
+            const presets = removePreset(graph.presets ?? [], item.preset.id);
+            const { presets: _old, ...rest } = graph;
+            update(presets.length ? { ...rest, presets } : rest, true);
+        } else void sharedPresets.remove(item.preset.id);
     };
 
     const commentInspector = (current: NonNullable<typeof comment>) => (
@@ -715,12 +747,22 @@ const Workspace: React.FC<{
                     </div>
                 )}
                 {state?.error && <div className="flex gap-1.5 rounded border border-bad/40 bg-bad/10 p-1.5 text-2xs text-bad"><WarningIcon size={12} className="mt-px shrink-0" /><span className="whitespace-pre-wrap font-mono">{state.error}</span></div>}
-                {single.type === SUBGRAPH_NODE_TYPE && typeof single.params.graph === 'string' && entries.has(single.params.graph) && (
-                    <div className="flex flex-wrap gap-1.5">
-                        <Button size="sm" icon={<LayersIcon size={12} />} onClick={() => openGraph(single.id)}>Open the graph inside</Button>
-                        <Button size="sm" variant="ghost" icon={<ExternalLinkIcon size={12} />} onClick={() => onOpenAsset(single.params.graph as string)}>Go to {entries.get(single.params.graph)!.name}</Button>
-                    </div>
-                )}
+                {single.type === SUBGRAPH_NODE_TYPE && typeof single.params.graph === 'string' && entries.has(single.params.graph) && (() => {
+                    const used = entries.get(single.params.graph as string)!;
+                    const presets: PlacedPreset[] = [...(used.graph.presets ?? []).map((preset) => ({ preset, place: 'graph' as const })), ...sharedPresets.of(used.id).map((preset) => ({ preset, place: 'project' as const }))];
+                    return (
+                        <>
+                            <div className="flex flex-wrap gap-1.5">
+                                <Button size="sm" icon={<LayersIcon size={12} />} onClick={() => openGraph(single.id)}>Open the graph inside</Button>
+                                <Button size="sm" variant="ghost" icon={<ExternalLinkIcon size={12} />} onClick={() => onOpenAsset(used.id)}>Go to {used.name}</Button>
+                            </div>
+                            {presets.length > 0 && (
+                                <PresetBar presets={presets} parameters={used.graph.parameters} values={single.params}
+                                    onApply={(preset) => changeNode({ ...single, params: { ...applyPreset(preset, used.graph.parameters, single.params), ...(preset.seed !== undefined ? { [SUBGRAPH_SEED_KEY]: preset.seed } : {}) } })} />
+                            )}
+                        </>
+                    );
+                })()}
                 {single.type === ITERATE_NODE_TYPE && (() => {
                     const ran = typeof single.params.graph === 'string' ? entries.get(single.params.graph) : undefined;
                     const pairs = ran ? feedbackPairs(ran.graph) : [];
@@ -769,8 +811,23 @@ const Workspace: React.FC<{
                                 onRemove={(index) => changeSettings(single, settings.filter((_, at) => at !== index), settings[index].key)} />
                         );
                     }
+                    if (param.key === 'visibleIf' && param.kind === 'string') {
+                        return (
+                            <div key={param.key} className="space-y-1" title={param.hint}>
+                                <span className="text-2xs text-ink-2">Pin shown on nodes using this graph</span>
+                                <ConditionEditor value={String(single.params.visibleIf ?? '')} parameters={graph.parameters}
+                                    onChange={(condition) => changeNode({ ...single, params: { ...single.params, visibleIf: condition } })} />
+                            </div>
+                        );
+                    }
                     const pinnable = VALUE_SETTING_KINDS.has(param.kind) && !isOutput;
+                    // A heading where a new group of settings starts (a used graph's parameter groups).
+                    const shownParams = definition.params.filter((other) => other.kind !== 'graph' && (!other.showIf || other.showIf(single.params)));
+                    const before = shownParams[shownParams.indexOf(param) - 1];
+                    const heading = param.group && param.group !== before?.group ? <div className="border-t border-line pt-2 text-2xs font-semibold text-ink-2">{param.group}</div> : null;
                     return (
+                        <React.Fragment key={param.key}>
+                        {heading}
                         <TextureParamField
                             key={param.key}
                             param={param}
@@ -787,8 +844,19 @@ const Workspace: React.FC<{
                                 onToggle: () => togglePin(single, param.key),
                             } : undefined}
                         />
+                        </React.Fragment>
                     );
                 })}
+                {((single.type === 'transform' && single.params.safe === true) || (single.type === 'safeTransform' && single.params.mode !== 'blend'))
+                    && typeof single.params.rotation === 'number' && Array.isArray(single.params.scale) && (() => {
+                    const seamless = describeMatrix(tileSafeMatrix(transformMatrix(single.params.rotation as number, single.params.scale as number[])));
+                    const size = (value: number) => String(Number(value.toFixed(3)));
+                    return (
+                        <p className="rounded border border-line bg-well px-1.5 py-1 text-2xs leading-snug text-ink-2">
+                            Seamless as: turned {seamless.rotation}°, scaled {size(seamless.scale[0])} × {size(seamless.scale[1])}{seamless.slant ? ', slanted a little' : ''}.
+                        </p>
+                    );
+                })()}
                 {!isOutput && (
                     <div className="space-y-1.5 border-t border-line pt-2">
                         <div className="text-2xs font-semibold text-ink-2">Size, bit depth, tiling and seed</div>
@@ -858,53 +926,54 @@ const Workspace: React.FC<{
             </div>
             {Math.max(graph.size.w, graph.size.h) >= 12 && <p className="text-2xs leading-snug text-ink-3">Large editing sizes redraw slowly; the material's pictures can be larger than the editing size.</p>}
             <div className="space-y-2 border-t border-line pt-2">
-                <div className="flex items-center">
+                <div className="flex items-center gap-1.5">
                     <span className="flex-1 text-2xs font-semibold text-ink-2">Parameters</span>
-                    <Select value="" placeholder="Add…" options={[...PARAMETER_KINDS]} onChange={(kind) => {
+                    {graph.parameters.length > 0 && (
+                        <Segmented value={parameterView} label="Parameters shown" onChange={setParameterView} options={[
+                            { value: 'panel', label: 'Panel', hint: 'As whatever uses the graph sees them' },
+                            { value: 'edit', label: 'Edit', hint: 'Groups, words, conditions, ranges and options' },
+                        ]} />
+                    )}
+                    <Select value="" placeholder="Add…" options={PARAMETER_KINDS.map((kind) => ({ value: kind, label: PARAMETER_KIND_LABELS[kind] }))} onChange={(kind: GraphParameterKind) => {
                         let name = 'value';
                         for (let n = 2; graph.parameters.some((parameter) => parameter.name === name); n++) name = `value${n}`;
-                        const parameter: GraphParameter = { name, label: name, kind, default: coerceParameter(kind, kind === 'select' ? 'a' : kind === 'float' ? 0.5 : undefined, kind === 'select' ? [{ value: 'a' }] : undefined), ...(kind === 'float' ? { min: 0, max: 1 } : kind === 'int' ? { min: 0, max: 10 } : {}), ...(kind === 'select' ? { options: [{ value: 'a', label: 'First' }, { value: 'b', label: 'Second' }] } : {}) };
+                        const choice = [{ value: 'first', label: 'First' }, { value: 'second', label: 'Second' }];
+                        const parameter: GraphParameter = {
+                            name, label: PARAMETER_KIND_LABELS[kind], kind,
+                            default: coerceParameter(kind, kind === 'float' ? 0.5 : kind === 'select' ? 'first' : undefined, kind === 'select' ? choice : undefined),
+                            ...(kind === 'float' ? { min: 0, max: 1 } : kind === 'int' ? { min: 0, max: 10 } : kind === 'vec2' ? { min: -1, max: 1 } : {}),
+                            ...(kind === 'select' ? { options: choice } : {}),
+                        };
                         change({ graph: { ...graph, parameters: [...graph.parameters, parameter] } });
+                        setParameterView('edit');
                     }} className="w-24" />
                 </div>
-                {graph.parameters.length === 0 && <p className="text-2xs leading-snug text-ink-3">None yet. Use the link button beside any node setting to expose it here; materials using this graph set them.</p>}
-                {graph.parameters.map((parameter, index) => (
-                    <div key={parameter.name} className="space-y-1.5 rounded border border-line bg-well p-2">
-                        <div className="flex items-center gap-1">
-                            <DraftText label="Parameter label" value={parameter.label} className="min-w-0 flex-1" onCommit={(label) => changeParameter(index, { label: label.trim().slice(0, 64) || parameter.name })} />
-                            <button aria-label={`Remove ${parameter.label}`} onClick={() => {
-                                // Settings that followed it keep the value it had.
-                                const value = stored.values[parameter.name] ?? parameter.default;
-                                const nextGraph = { ...graph, parameters: graph.parameters.filter((_, i) => i !== index), nodes: graph.nodes.map((node) => ({ ...node, params: Object.fromEntries(Object.entries(node.params).map(([key, v]) => [key, v && typeof v === 'object' && (v as { $bind?: string }).$bind === parameter.name ? structuredClone(value) : v])) })) };
-                                update(nextGraph, true);
-                            }} className="rounded p-1 text-ink-3 hover:text-bad"><TrashIcon size={12} /></button>
-                        </div>
-                        <div className="flex items-center gap-1 text-2xs text-ink-3">
-                            <span>Name in formulas</span>
-                            <span className="font-mono text-ink-2">{parameter.name}</span>
-                            <span className="flex-1" />
-                            <span>{PARAMETER_KINDS.find((kind) => kind.value === parameter.kind)?.label}</span>
-                        </div>
-                        {(parameter.kind === 'float' || parameter.kind === 'int') && (
-                            <div className="flex items-center gap-1 text-2xs text-ink-3">
-                                <span>From</span>
-                                {/* Typed, then kept on Enter or on leaving the box: one undo step, never a half-typed number. */}
-                                <DraftNumber label="Lowest" value={parameter.min ?? 0} integer={parameter.kind === 'int'} className="w-14"
-                                    onCommit={(min) => changeParameter(index, { min, max: Math.max(min, parameter.max ?? 1) })} />
-                                <span>to</span>
-                                <DraftNumber label="Highest" value={parameter.max ?? 1} integer={parameter.kind === 'int'} className="w-14"
-                                    onCommit={(max) => changeParameter(index, { max, min: Math.min(max, parameter.min ?? 0) })} />
-                            </div>
-                        )}
-                        <div className="flex items-center gap-2">
-                            <span className="text-2xs text-ink-2">Value</span>
-                            <div className="min-w-0 flex-1">
-                                <ParamControl param={parameterDef(parameter)} value={stored.values[parameter.name] ?? parameter.default} textures={textures}
-                                    onChange={(value) => change({ values: { ...currentStored().values, [parameter.name]: coerceParameter(parameter.kind, value, parameter.options) } }, `value:${parameter.name}`)} />
-                            </div>
-                        </div>
-                    </div>
-                ))}
+                {graph.parameters.length === 0 && <p className="text-2xs leading-snug text-ink-3">None yet. Use the link button beside any node setting to expose it here (any kind: numbers, colours, choices, gradients, curves, pictures, text, fonts); materials and nodes using this graph set them.</p>}
+                {graph.parameters.length > 0 && parameterView === 'panel' && (
+                    <>
+                        <PresetBar presets={placedPresets} parameters={graph.parameters} values={stored.values}
+                            onApply={applyGraphPreset} onSave={saveGraphPreset} onRename={renameGraphPreset} onDelete={deleteGraphPreset}
+                            onVariations={() => setVariations(true)} />
+                        <GraphParameterPanel parameters={graph.parameters} groups={graph.groups} values={stored.values} textures={textures}
+                            onChange={(values, coalesce) => change({ values }, coalesce)} />
+                    </>
+                )}
+                {graph.parameters.length > 0 && parameterView === 'edit' && (
+                    <ParameterEditor parameters={graph.parameters} groups={graph.groups ?? []} textures={textures} boundChoices={boundChoices}
+                        onParameters={(parameters, coalesce) => update({ ...graph, parameters }, true, coalesce)}
+                        onGroups={(groups, renamed) => {
+                            const parameters = renamed ? graph.parameters.map((parameter) => (parameter.group === renamed.from ? { ...parameter, group: renamed.to } : parameter)) : graph.parameters;
+                            const { groups: _old, ...rest } = graph;
+                            update(groups.length ? { ...rest, parameters, groups } : { ...rest, parameters }, true);
+                        }}
+                        onRemove={(index) => {
+                            const parameter = graph.parameters[index];
+                            // Settings that followed it keep the value it had.
+                            const value = stored.values[parameter.name] ?? parameter.default;
+                            const nextGraph = { ...graph, parameters: graph.parameters.filter((_, i) => i !== index), nodes: graph.nodes.map((node) => ({ ...node, params: Object.fromEntries(Object.entries(node.params).map(([key, v]) => [key, v && typeof v === 'object' && (v as { $bind?: string }).$bind === parameter.name ? structuredClone(value) : v])) })) };
+                            update(nextGraph, true);
+                        }} />
+                )}
             </div>
             <div className="space-y-1 border-t border-line pt-2">
                 <label className="flex items-center gap-2 text-2xs text-ink-2">
@@ -941,7 +1010,7 @@ const Workspace: React.FC<{
                     <span>This graph reads mesh maps. The material's pictures are made with stand-ins for them, since the material can go on any model; the maps in the 3D view are for looking only. To draw it with a model's own maps, use the graph as a fill or a smart mask in the Paint tab.</span>
                 </div>
             )}
-            <Button size="sm" className="w-full justify-center" disabled={Boolean(baking) || !hasOutputs} onClick={() => void downloadPictures()} icon={<DownloadIcon size={12} />}>Download pictures</Button>
+            <DownloadPicturesButton disabled={Boolean(baking) || !hasOutputs} onDownload={(format) => void downloadPictures(format)} />
             {stored.baked && (
                 <div className="space-y-1 border-t border-line pt-2">
                     <div className="text-2xs font-semibold text-ink-2">Pictures the material draws with</div>
@@ -956,7 +1025,22 @@ const Workspace: React.FC<{
     const depth = path.length - 1;
     return (
         <div className={`min-h-0 min-w-0 flex-1 ${hidden ? 'hidden' : 'flex'}`}>
-            <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+            <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+                {variations && (() => {
+                    const shownNode = graph.nodes.find((node) => node.id === viewed) ?? graph.nodes.find((node) => node.type === OUTPUT_NODE_TYPE);
+                    if (!shownNode) return null;
+                    const label = shownNode.name || (shownNode.type === OUTPUT_NODE_TYPE ? `Output: ${OUTPUT_CHANNEL_LABELS[shownNode.params.channel as OutputChannel] ?? ''}` : textureNodeDefinition(shownNode, resolve)?.label ?? 'the node');
+                    return (
+                        <VariationSheet session={session} graph={graph} values={stored.values} nodeId={shownNode.id} nodeLabel={label} resolve={resolve} texture={lookup}
+                            onClose={() => setVariations(false)}
+                            onKeep={(cell) => {
+                                if ('seed' in cell.keep) update({ ...graph, seed: cell.keep.seed }, true);
+                                else change({ values: { ...currentStored().values, [cell.keep.name]: cell.keep.value } });
+                                setMessage({ text: `Kept ${cell.label}.`, tone: 'info' });
+                                setVariations(false);
+                            }} />
+                    );
+                })()}
                 {depth > 0 && (
                     <nav aria-label="Graphs open" className="flex h-8 shrink-0 items-center gap-1 border-b border-line bg-panel px-1.5 text-2xs">
                         <IconButton label={`Back out to ${path[depth - 1]}`} onClick={() => onClose(depth - 1)}><ArrowLeftIcon size={13} /></IconButton>

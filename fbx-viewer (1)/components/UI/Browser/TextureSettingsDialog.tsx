@@ -9,6 +9,7 @@ import { decodePictureOffPage, encodeTextureOffPage } from '../../../texturing/t
 import {
     FORMAT_WORDS,
     MAX_SIZE_CHOICES,
+    PHONE_SUPPORTS,
     keptFormat,
     limitedSize,
     wholeFormat,
@@ -93,6 +94,8 @@ export const TextureSettingsDialog: React.FC<{ texture: TextureData; onClose: ()
         channels: picture?.channels ?? source?.channels ?? 4, depth, hdr, ...drawn,
     });
     const onThisDevice = keptFormat(role, settings, support, { channels: picture?.channels ?? source?.channels ?? 4, depth, hdr, ...drawn });
+    // What most phones and tablets take it as (kept with the project, so built games carry it).
+    const onPhones = keptFormat(role, settings, PHONE_SUPPORTS[0], { channels: picture?.channels ?? source?.channels ?? 4, depth, hdr, ...drawn });
     const mips = settings.mips !== false;
     const wholeBytes = textureMemoryBytes(texture.dimensions.width || 1, texture.dimensions.height || 1, wholeFormat({ depth, hdr }), mips);
     const keptBytes = textureMemoryBytes(drawn.width, drawn.height, format, mips);
@@ -228,7 +231,14 @@ export const TextureSettingsDialog: React.FC<{ texture: TextureData; onClose: ()
                             </div>
                         )}
                         {onThisDevice !== format && (
-                            <p className="mt-1 text-2xs leading-snug text-ink-3">This computer's graphics card cannot take that compression, so here it is kept whole; a computer that can takes it compressed.</p>
+                            <p className="mt-1 text-2xs leading-snug text-ink-3">
+                                {onThisDevice === 'rgba8' || onThisDevice === 'half'
+                                    ? 'This computer\'s graphics card cannot take that compression, so here it is kept whole; a computer that can takes it compressed.'
+                                    : `This graphics card takes it as: ${FORMAT_WORDS[onThisDevice]}.`}
+                            </p>
+                        )}
+                        {onPhones !== format && onPhones !== 'rgba8' && onPhones !== 'half' && (
+                            <p className="mt-1 text-2xs leading-snug text-ink-3">On phones and tablets: {FORMAT_WORDS[onPhones]}, kept with the project so built games carry it.</p>
                         )}
                         {hdr && <p className="mt-1 text-2xs leading-snug text-ink-3">Light beyond white is kept as 16-bit floating point: no compression keeps it yet.</p>}
                         {!hdr && depth === 32 && role === 'colour' && format === 'half' && (

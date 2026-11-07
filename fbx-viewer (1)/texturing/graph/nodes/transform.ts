@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import type { GpuImage } from '../../gpu/textureGpu';
 import { anyIn, bool, colorIn, float, grayIn, int, onePass, out, select, vec2 } from '../nodeKit';
 import type { NodeRunContext, TexNodeDef } from '../types';
+import { SEAM_BLEND, TRANSFORM_READ, tileSafeMatrix, transformMatrix } from '../safeTransform';
 
 /** Moving, repeating and bending images, and blurring and sharpening them. */
 
@@ -60,25 +61,69 @@ export const gaussianBlur = async (context: Pick<NodeRunContext, 'gpu'>, input: 
 const sigmaOf = (radius: unknown, image: GpuImage): number => (Number(radius) || 0) * image.width / 3;
 
 export const TRANSFORM_NODES: TexNodeDef[] = [
-    onePass({
-        type: 'transform',
-        label: 'Transform',
-        category: 'Transforms',
-        description: 'Moves, turns and scales the image, repeating it or leaving empty space around it.',
-        keywords: ['move', 'offset', 'rotate', 'scale', 'translate', 'transformation 2d'],
-        inputs: [anyIn('in', 'Input')],
-        outputs: [out('any')],
-        params: [vec2('offset', 'Offset', [0, 0], -1, 1), float('rotation', 'Turn (degrees)', 0, -360, 360, { step: 1 }), vec2('scale', 'Scale', [1, 1], 0.01, 16), bool('repeat', 'Repeat', true)],
-        sizeFrom: 'input',
-        kindFrom: 'in',
-        glsl: `void main() {
-    vec2 p = vUv - 0.5 - p_offset;
-    p = rotate2(radians(p_rotation)) * p;
-    p = p / max(abs(p_scale), vec2(1e-4)) * sign(p_scale + 1e-9) + 0.5;
+    {
+        ...onePass({
+            type: 'transform',
+            label: 'Transform',
+            category: 'Transforms',
+            description: 'Moves, turns and scales the image, repeating it or leaving empty space around it. Keep it seamless snaps the turn and size to the nearest ones that still tile.',
+            keywords: ['move', 'offset', 'rotate', 'scale', 'translate', 'transformation 2d'],
+            inputs: [anyIn('in', 'Input')],
+            outputs: [out('any')],
+            params: [
+                vec2('offset', 'Offset', [0, 0], -1, 1), float('rotation', 'Turn (degrees)', 0, -360, 360, { step: 1 }), vec2('scale', 'Scale', [1, 1], 0.01, 16), bool('repeat', 'Repeat', true),
+                bool('safe', 'Keep it seamless', false, { hint: 'Snaps the turn and size to the nearest ones a repeating picture stays seamless under (the inspector says which).' }),
+            ],
+            sizeFrom: 'input',
+            kindFrom: 'in',
+            glsl: '',
+        }),
+        async run(context) {
+            const image = context.image(context.outputKind('out'));
+            const exact = transformMatrix(Number(context.params.rotation) || 0, (context.params.scale as number[]) ?? [1, 1]);
+            const m = context.params.safe ? tileSafeMatrix(exact) : exact;
+            await context.pass(image, `${TRANSFORM_READ}
+void main() {
+    vec2 p = transformed(vUv);
     if (p_repeat == 0 && (p.x < 0.0 || p.y < 0.0 || p.x > 1.0 || p.y > 1.0)) { outColor = vec4(0.0); return; }
     outColor = c_in(p);
-}`,
-    }),
+}`, { uniforms: { uMatrix: new THREE.Vector4(...m) } });
+            return { out: image };
+        },
+    },
+    {
+        ...onePass({
+            type: 'safeTransform',
+            label: 'Safe transform',
+            category: 'Transforms',
+            description: 'Moves, turns and scales a repeating picture so it still repeats seamlessly, at any turn and size: by snapping them to the nearest that tile, or by keeping them exactly and blending the seams.',
+            keywords: ['tile safe', 'seamless', 'rotate', 'scale', 'tiling transform', 'wrap'],
+            inputs: [anyIn('in', 'Input')],
+            outputs: [out('any')],
+            params: [
+                vec2('offset', 'Offset', [0, 0], -1, 1), float('rotation', 'Turn (degrees)', 0, -360, 360, { step: 1 }), vec2('scale', 'Scale', [1, 1], 0.01, 16),
+                select('mode', 'Keeps tiling by', 'snap', [['snap', 'Snapping turn and size'], ['blend', 'Blending the seams']], {
+                    hint: 'Snapping: the turn and size move to the nearest that tile, and the picture stays sharp. Blending: they stay as set, and the picture mixes with itself near its edges.',
+                }),
+                float('blend', 'Seam blend', 0.15, 0.01, 0.5, { showIf: (params) => params.mode === 'blend', hint: 'How much of the picture, at its far edges, mixes with itself a picture back.' }),
+            ],
+            sizeFrom: 'input',
+            kindFrom: 'in',
+            glsl: '',
+        }),
+        // It reads its input as repeating whatever the node's tiling: the result is meant to repeat.
+        async run(context) {
+            const image = context.image(context.outputKind('out'));
+            const exact = transformMatrix(Number(context.params.rotation) || 0, (context.params.scale as number[]) ?? [1, 1]);
+            const blend = context.params.mode === 'blend';
+            const m = blend ? exact : tileSafeMatrix(exact);
+            const fragment = blend
+                ? `${TRANSFORM_READ}\nvec4 transformedColour(vec2 uv) { return texture(t_in, fract(transformed(uv))); }\n${SEAM_BLEND}\nvoid main() { outColor = blended(vUv); }`
+                : `${TRANSFORM_READ}\nvoid main() { outColor = texture(t_in, fract(transformed(vUv))); }`;
+            await context.pass(image, fragment, { uniforms: { uMatrix: new THREE.Vector4(...m), uBlend: Math.max(0.01, Math.min(0.5, Number(context.params.blend) || 0.15)) }, cost: blend ? 4 : 1 });
+            return { out: image };
+        },
+    },
     onePass({
         type: 'tile',
         label: 'Repeat',
