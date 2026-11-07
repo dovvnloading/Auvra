@@ -72,7 +72,10 @@ describe('ASTC 4×4', () => {
     });
 
     it('writes valid blocks: a 4×4 weight grid, one partition, colour end points at 8 bits', () => {
-        const opaque = encodeAstcBlock(picture(4, 4, false));
+        // Colour along one line, as most blocks are.
+        const line = new Uint8Array(64);
+        for (let i = 0; i < 16; i++) line.set([100 + i * 2, 50 + i, 30 + i * 2, 255], i * 4);
+        const opaque = encodeAstcBlock(line);
         expect(bitsOf(opaque, 0, 11)).toBe(0b00001010011);
         expect(bitsOf(opaque, 11, 2)).toBe(0);
         expect(bitsOf(opaque, 13, 4)).toBe(8);
@@ -88,13 +91,54 @@ describe('ASTC 4×4', () => {
     });
 
     it('never asks the decoder for blue contraction', () => {
+        let split = 0;
         for (let seed = 1; seed < 200; seed++) {
             const block = new Uint8Array(64).map((_, i) => ((i * 37 + seed * 101) * 2654435761) >>> 24);
             for (let i = 3; i < 64; i += 4) block[i] = 255;
             const bytes = encodeAstcBlock(block);
-            const v = Array.from({ length: 6 }, (_, k) => bitsOf(bytes, 17 + k * 8, 8));
-            expect(v[1] + v[3] + v[5]).toBeGreaterThanOrEqual(v[0] + v[2] + v[4]);
+            if (bitsOf(bytes, 11, 2) === 0) {
+                const v = Array.from({ length: 6 }, (_, k) => bitsOf(bytes, 17 + k * 8, 8));
+                expect(v[1] + v[3] + v[5]).toBeGreaterThanOrEqual(v[0] + v[2] + v[4]);
+                continue;
+            }
+            split++;
+            // Two partitions in mode 8 keep 4-bit end points, (r0, r1, g0, g1, b0, b1) each; mode 6 has no contraction.
+            if (bitsOf(bytes, 25, 4) !== 8) continue;
+            for (let part = 0; part < 2; part++) {
+                const v = Array.from({ length: 6 }, (_, k) => bitsOf(bytes, 29 + (part * 6 + k) * 4, 4));
+                expect(v[1] + v[3] + v[5]).toBeGreaterThanOrEqual(v[0] + v[2] + v[4]);
+            }
         }
+        // Noise has no one line of colour: most of these blocks are split.
+        expect(split).toBeGreaterThan(50);
+    });
+
+    it('keeps two colours of one brightness apart', () => {
+        // A red and a blue that sum alike: a search for their line started from grey would find none, and blur both.
+        const block = new Uint8Array(64);
+        for (let i = 0; i < 16; i++) block.set((i & 3) < 2 ? [220, 30, 40, 255] : [20, 60, 210, 255], i * 4);
+        const out = new Uint8Array(64);
+        decodeAstcBlock(encodeAstcBlock(block), out);
+        expect(difference(block, out, [0, 1, 2]).max).toBeLessThanOrEqual(1);
+    });
+
+    it('splits a block of colours one line cannot hold in two partitions, and decodes them as a graphics card does', () => {
+        // Red on the left; green over blue on the right.
+        const block = new Uint8Array(64);
+        for (let i = 0; i < 16; i++) block.set((i & 3) < 2 ? [220, 30, 40, 255] : (i >> 2) < 2 ? [40, 200, 60, 255] : [20, 60, 210, 255], i * 4);
+        const bytes = encodeAstcBlock(block);
+        expect(bitsOf(bytes, 11, 2)).toBe(1);
+        // Both partitions take one colour endpoint mode (the field's low bits 0).
+        expect(bitsOf(bytes, 23, 2)).toBe(0);
+        expect([6, 8]).toContain(bitsOf(bytes, 25, 4));
+        const out = new Uint8Array(64);
+        decodeAstcBlock(bytes, out);
+        expect(difference(block, out, [0, 1, 2]).max).toBeLessThanOrEqual(8);
+        expect(difference(block, out, [3]).max).toBe(0);
+        // On a picture of hard-edged shapes, splitting keeps the colours far closer.
+        const shapes = new Uint8Array(32 * 32 * 4);
+        for (let y = 0; y < 32; y++) for (let x = 0; x < 32; x++) shapes.set((x * 3 + y * 5) % 23 < 11 ? [235, 225, 210, 255] : [30, 90, 160, 255], (y * 32 + x) * 4);
+        expect(difference(shapes, roundTrip('astc', shapes, 32, 32), [0, 1, 2]).rms).toBeLessThan(6);
     });
 });
 
