@@ -271,6 +271,12 @@ uniform float uStencilOpacity;
 uniform int uStencilSrgb;
 uniform int uStencilFlip;
 uniform vec3 uPlanarAxis;
+// A colour stamp (a graph brush laying its colour): the dabs' shape is the stamp's alpha, and uOutColour
+// writes the colour laid (weighted by coverage) instead of the coverage.
+uniform int uStampColour;
+uniform int uOutColour;
+// The colour of the dabs laid so far at this texel, each over the last by its shape.
+vec3 gColour = vec3(0.0);
 uniform int uSelecting;
 uniform sampler2D uSelection;
 
@@ -307,7 +313,8 @@ float shapeAt(vec2 local, float radiusPixels) {
     if (uShape == 2) {
         vec4 c = texture(uAlpha, local * 0.5 + 0.5);
         if (uAlphaSrgb == 1) c.rgb = linearToSrgb(c.rgb);
-        a *= luma(c.rgb) * c.a;
+        a *= uStampColour == 1 ? c.a : luma(c.rgb) * c.a;
+        if (uStampColour == 1) gColour = mix(gColour, c.rgb, a);
     }
     return a;
 }
@@ -426,7 +433,8 @@ void main() {
         float b = coverageAt((uCopies[i] * vec4(vPos, 1.0)).xyz, normalize(mat3(uCopies[i]) * n));
         a = 1.0 - (1.0 - a) * (1.0 - b);
     }
-    outColor = vec4(a);
+    // The colour laid, weighted by how much is laid (laid over the stroke's colour so far by its coverage).
+    outColor = uOutColour == 1 ? vec4(gColour * a, a) : vec4(a);
 }`;
 
 /**
@@ -469,6 +477,10 @@ void main() {
 }`;
 
 /** One batch's coverage laid over what the stroke has gathered so far (blended: batch + mask × (1 − batch)). */
+/** A batch's colour (weighted by its coverage) laid over the stroke's colour so far. */
+const GATHER_COLOUR = /* glsl */ `
+void main() { outColor = texelFetch(batch, ivec2(gl_FragCoord.xy), 0); }`;
+
 const GATHER_SHADER = /* glsl */ `
 void main() { outColor = vec4(texelFetch(batch, ivec2(gl_FragCoord.xy), 0).r); }`;
 
@@ -487,12 +499,15 @@ uniform int uHasBefore;
 uniform vec4 uFill;
 uniform int uSource;
 uniform vec2 uSourceAt;
-// A value for every texel (a decal's colour) instead of uValueSet.
+// A value for every texel (a decal's colour, or a colour stamp's) instead of uValueSet.
 uniform int uValueImage;
+// The values are weighted by their coverage (alpha): divided by it to read.
+uniform int uValueWeighted;
 void main() {
     ivec2 p = ivec2(gl_FragCoord.xy);
     vec4 b = uHasBefore == 1 ? texelFetch(before, p, 0) : uFill;
-    vec3 laid = uValueImage == 1 ? texelFetch(valueImage, p + ivec2(uAt), 0).rgb : uValueSet;
+    vec4 given = texelFetch(valueImage, p + ivec2(uAt), 0);
+    vec3 laid = uValueImage == 0 ? uValueSet : uValueWeighted == 1 ? (given.a > 1e-4 ? given.rgb / given.a : uValueSet) : given.rgb;
     float c = clamp(texelFetch(stroke, p + ivec2(uAt), 0).r * uOpacity, 0.0, 1.0);
     // Blur, sharpen, smudge and clone lay on what is painted already, worked out round the area
     // (colour weighted by coverage, a mask as it is), read where this texel takes it from.
@@ -792,8 +807,10 @@ export class Stroke {
      * covered), so the batch is drawn here keeping the largest value, then laid over the stroke once.
      */
     private readonly batch: GpuImage;
-    /** A decal's colour on each tile it reaches (its colour channels take it texel by texel). */
+    /** A decal's colour (or a colour stamp's) on each tile it reaches (its colour channels take it texel by texel). */
     private readonly valueImages = new Map<number, GpuImage>();
+    /** The value images are weighted by coverage (a colour stamp's are; a decal's are not). */
+    private valuesWeighted = false;
     /** Dabs that have thrown particles in this stroke (each throw its own seed). */
     private particleCount = 0;
     /** The 2D view's tile, looked up by UV (for its dabs' copies on the model). */
@@ -1086,6 +1103,9 @@ export class Stroke {
         const planarAxis = this.brush.planarAxis === 'x' ? new THREE.Vector3(1, 0, 0) : this.brush.planarAxis === 'y' ? new THREE.Vector3(0, 1, 0) : this.brush.planarAxis === 'z' ? new THREE.Vector3(0, 0, 1)
             : new THREE.Vector3().crossVectors(view.cameraRight ?? new THREE.Vector3(1, 0, 0), view.cameraUp ?? new THREE.Vector3(0, 1, 0)).negate().normalize();
         const alpha = this.stampAlpha !== undefined ? this.stampAlpha : this.brush.shape === 'picture' || this.brush.shape === 'graph' ? this.alpha : null;
+        // A graph brush laying its colour (not stamping along a path, which brings its own alpha).
+        const stampColour = Boolean(alpha && this.stampAlpha === undefined && this.brush.shape === 'graph' && this.brush.graphStamp?.colour && this.target.kind === 'layer');
+        if (stampColour) this.valuesWeighted = true;
         const copyMatrices = Array.from({ length: MAX_COPIES }, (_, i) => (copies[i]?.matrix ? new THREE.Matrix4().fromArray(copies[i].matrix!) : new THREE.Matrix4()));
         const batches: Dab[][] = [];
         for (let i = 0; i < dabs.length; i += MAX_DABS) batches.push(dabs.slice(i, i + MAX_DABS));
@@ -1116,11 +1136,7 @@ export class Stroke {
         const drawReach = (reach: Map<number, Rect[]>, dabs: { d1: THREE.Vector4[]; d2: THREE.Vector4[]; d3: THREE.Vector4[]; count: number; uv?: THREE.Vector4[] }, projection: number, copyCount: number, skipPlain: boolean) => {
             for (const [tile, rects] of reach) {
                 for (const area of rects) {
-                    stack.raster.draw(this.batch, tile, DAB_SHADER, {
-                        blend: 'max',
-                        clear: [0, 0, 0, 0],
-                        scissor: area,
-                        uniforms: {
+                    const uniforms = {
                             uViewProj: view.viewProjection,
                             uViewport: new THREE.Vector2(view.width, view.height),
                             uDepth: view.depth ?? gpu.constant('white'),
@@ -1153,9 +1169,24 @@ export class Stroke {
                             uStencilFlip: this.stencil?.flipY ? 1 : 0,
                             uSelecting: selection ? 1 : 0,
                             uSelection: selection ?? gpu.constant('black'),
-                        },
-                    });
+                            uStampColour: stampColour ? 1 : 0,
+                            uOutColour: 0,
+                    };
+                    stack.raster.draw(this.batch, tile, DAB_SHADER, { blend: 'max', clear: [0, 0, 0, 0], scissor: area, uniforms });
                     gpu.passNow(this.masks.get(tile)!, { fragment: GATHER_SHADER, inputs: { batch: this.batch }, blend: 'alpha', scissor: scissorOf(area) });
+                    if (stampColour) {
+                        // The colour the dabs lay, gathered over the stroke's colour so far (kept weighted by coverage).
+                        const colourBatch = gpu.image(stack.size, stack.size, 'color', 16);
+                        stack.raster.draw(colourBatch, tile, DAB_SHADER, { blend: 'max', clear: [0, 0, 0, 0], scissor: area, uniforms: { ...uniforms, uOutColour: 1 } });
+                        let colour = this.valueImages.get(tile);
+                        if (!colour) {
+                            colour = gpu.image(stack.size, stack.size, 'color', 16);
+                            gpu.clear(colour, [0, 0, 0, 0]);
+                            this.valueImages.set(tile, colour);
+                        }
+                        gpu.passNow(colour, { fragment: GATHER_COLOUR, inputs: { batch: colourBatch }, blend: 'alpha', scissor: scissorOf(area) });
+                        gpu.release(colourBatch);
+                    }
                     // Building up: this batch is laid over the picture as it is now, at once.
                     if (this.brush.buildUp) this.apply(new Map([[tile, [area]]]), true);
                 }
@@ -1311,6 +1342,7 @@ export class Stroke {
                                 uMask: this.target.kind === 'mask' ? 1 : 0,
                                 uValueSet: new THREE.Vector3(...(channel && !CHANNEL_IS_COLOR[channel] ? [value[0], value[0], value[0]] : value)),
                                 uValueImage: valueImage ? 1 : 0,
+                                uValueWeighted: this.valuesWeighted ? 1 : 0,
                                 uOpacity: this.brush.opacity,
                                 uAt: new THREE.Vector2(bounds.x0, bounds.y0),
                                 uHasBefore: before ? 1 : 0,

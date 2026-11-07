@@ -166,12 +166,13 @@ export const BrushPanel: React.FC<{
                             return (
                                 <>
                                     {outputs.length > 1 && <Select value={current.output || outputs[0].id} options={outputs.map((output) => ({ value: output.id, label: output.label }))} onChange={(output) => set({ graphStamp: { ...current, output: String(output) } })} className="w-full" />}
+                                    <Toggle label="Lay its colour (base colour and emission), not only its shape" checked={Boolean(current.colour)} onChange={(colour) => set({ graphStamp: { ...current, colour } })} />
                                     {entry && <GraphParameterPanel parameters={entry.graph.parameters} groups={entry.graph.groups} values={current.values} textures={textures} onChange={(values) => set({ graphStamp: { ...current, values } })} />}
                                     {stamp.status && <p className="text-2xs leading-snug text-zinc-500">{stamp.status}</p>}
                                 </>
                             );
                         })()}
-                        <p className="text-2xs leading-snug text-zinc-500">Each dab stamps the graph's output (its brightness), turned and sized as the brush is; the brush's values are what it lays on.</p>
+                        <p className="text-2xs leading-snug text-zinc-500">Each dab stamps the graph's output, turned and sized as the brush is: its brightness as the dab's shape and the brush's values laid on, or, with its colour laid, its own colour (its alpha as the shape) on base colour and emission and the brush's values on the other channels.</p>
                     </div>
                 )}
                 {brush.shape === 'picture' && <Select value={brush.alphaTexture} placeholder="Pick an alpha (its brightness)" options={[...BUILT_IN_ALPHAS.map((alpha) => ({ value: alpha.id, label: alpha.name })), ...textures.map((texture) => ({ value: texture.id, label: texture.name }))]} onChange={(alphaTexture) => set({ alphaTexture: String(alphaTexture) })} className="w-full" />}
