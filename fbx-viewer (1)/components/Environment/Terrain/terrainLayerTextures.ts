@@ -43,6 +43,9 @@ export interface TerrainLayerArrays {
   rayMaps: THREE.Texture[];
 }
 
+/** The arrays as they are built, before any are compressed. */
+type UncompressedArrays = TerrainLayerArrays & { albedo: THREE.DataArrayTexture; detail: THREE.DataArrayTexture; surface: THREE.DataArrayTexture };
+
 /** A layer's picture, decoded at its own depth and ready to draw. */
 type LayerPicture = CanvasImageSource & { width: number; height: number };
 
@@ -170,7 +173,7 @@ type Encode = (rgba: Uint8Array, width: number, height: number, format: Material
 
 /** Compressed versions of the arrays, made by role, layer by layer (off the page in the editor). */
 export const compressTerrainArrays = async (
-  arrays: Pick<TerrainLayerArrays, 'albedo' | 'detail' | 'surface'>,
+  arrays: Pick<UncompressedArrays, 'albedo' | 'detail' | 'surface'>,
   layers: number,
   size: number,
   formats: Record<keyof typeof CHANNELS, MaterialTextureFormat>,
@@ -214,7 +217,7 @@ export const useTerrainLayerArrays = (sources: readonly TerrainLayerSources[]): 
   const [compressed, setCompressed] = useState<{ key: string; arrays: TerrainLayerArrays } | null>(null);
   const count = sources.length;
 
-  const arrays = useMemo<TerrainLayerArrays | null>(() => {
+  const arrays = useMemo<UncompressedArrays | null>(() => {
     if (count === 0) return null;
     return {
       albedo: createArray(TERRAIN_LAYER_TEXTURE_SIZE, count, THREE.SRGBColorSpace, CHANNELS.albedo),
