@@ -64,6 +64,29 @@ class CaptureRenderer {
     }
   }
 
+  /**
+   * Runs `work` with the capture renderer at the given size (captures are serialized): for pictures drawn
+   * with a scene of the caller's own, such as material balls.
+   */
+  drawWith<T>(width: number, height: number, work: (renderer: THREE.WebGLRenderer) => T): T {
+    if (this.busy) throw new Error("Capture renderer is busy; captures are serialized");
+    if (!Number.isInteger(width) || !Number.isInteger(height) || width < 1 || height < 1 || width > 8192 || height > 8192) throw new Error("Capture dimensions are invalid");
+    this.busy = true;
+    try {
+      const renderer = this.ensureRenderer();
+      renderer.setSize(width, height, false);
+      renderer.clear();
+      return work(renderer);
+    } catch (error) {
+      frontendDiagnostics.record("renderer", "renderer.capture_failed", {
+        code: "scene_capture_failed", errorType: diagnosticErrorType(error),
+      }, {}, true);
+      throw error;
+    } finally {
+      this.busy = false;
+    }
+  }
+
   dispose(): void {
     if (this.renderer) {
       if (this.canvas && this.onContextLost) this.canvas.removeEventListener("webglcontextlost", this.onContextLost);
