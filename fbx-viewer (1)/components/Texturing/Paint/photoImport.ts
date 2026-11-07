@@ -1,6 +1,7 @@
 import { MATERIALS_DOMAIN, materialAssetDocument, materialLibrary, type MaterialAsset } from '../../../runtime/materials/materialLibrary';
 import { createMaterialGraph } from '../../../runtime/materials/materialGraph';
 import { projectService } from '../../../utils/projectService';
+import type { TextureGraph } from '../../../texturing/graph/types';
 import { guessInvertHeight, photoMaterialGraph, photoMaterialName } from '../../../texturing/paint/photoMaterial';
 import { newTextureGraphStored } from '../TextureGraphWorkspace';
 
@@ -42,10 +43,15 @@ export const createPhotoMaterial = async (file: File, store: StorePicture): Prom
     const textureId = await store(file, base, size, 'Photos');
     // The graph's size: the photo's, between 512 and 2048 across.
     const power = Math.min(11, Math.max(9, Math.round(Math.log2(Math.max(size.width, size.height)))));
+    return keepGraphMaterial(base, photoMaterialGraph(textureId, power, { invertHeight }));
+};
+
+/** A new texture graph material kept in the project, named `base` (numbered when the name is taken). */
+export const keepGraphMaterial = async (base: string, graph: TextureGraph): Promise<MaterialAsset> => {
     const taken = new Set(materialLibrary.list().map((asset) => asset.name));
     let name = base;
     for (let n = 2; taken.has(name); n++) name = `${base} ${n}`;
-    const asset: MaterialAsset = { id: crypto.randomUUID(), name, graph: createMaterialGraph(), textureGraph: newTextureGraphStored(photoMaterialGraph(textureId, power, { invertHeight })) };
+    const asset: MaterialAsset = { id: crypto.randomUUID(), name, graph: createMaterialGraph(), textureGraph: newTextureGraphStored(graph) };
     materialLibrary.upsert(asset);
     try {
         await projectService.applyChanges([{ domain: MATERIALS_DOMAIN, operation: 'upsert', id: asset.id, value: materialAssetDocument(asset) }]);

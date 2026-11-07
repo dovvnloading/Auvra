@@ -36,9 +36,13 @@ const hashOf = (text: string): string => {
     return (h >>> 0).toString(36);
 };
 
-/** The synthetic graph a paint stack (or folder) is offered as: its node, wired to an Output per channel. */
+/**
+ * The synthetic graph a paint stack (or folder) is offered as: its node, wired to an Output per channel.
+ * Its revision follows the saved layers and, while the set is open in Paint, each change drawn there.
+ */
 const stackGraph = (assetId: string, folderId: string, document: PaintDocument): TextureGraph => {
-    const node: TexGraphNode = { id: 'stack', type: PAINT_STACK_NODE_TYPE, x: 0, y: 0, params: { asset: assetId, folder: folderId, revision: hashOf(JSON.stringify(document.layers)) } };
+    const revision = `${hashOf(JSON.stringify(document.layers))}:${openChanges.get(assetId) ?? 0}`;
+    const node: TexGraphNode = { id: 'stack', type: PAINT_STACK_NODE_TYPE, x: 0, y: 0, params: { asset: assetId, folder: folderId, revision } };
     const channels = PAINT_CHANNELS.filter((channel) => document.channels.includes(channel));
     const outputs: TexGraphNode[] = channels.map((channel, i) => ({ id: `out:${channel}`, type: 'output', x: 320, y: i * 120, params: { channel, name: '', kind: CHANNEL_IS_COLOR[channel] ? 'color' : 'gray', visibleIf: '' } }));
     return {
@@ -58,10 +62,47 @@ export const setName = (assetName: string): string =>
 /** Paint stacks open in Paint now, by their asset: a graph using one draws from it instead of building its own. */
 const openStacks = new Map<string, import('./paintStack').PaintStack>();
 
-/** Says a set's stack is open in Paint (graphs draw from it); gives back what says it has closed. */
+/** How many changes each set has had drawn while open in Paint: a part of its graphs' revision. */
+const openChanges = new Map<string, number>();
+const changeListeners = new Set<() => void>();
+let changesVersion = 0;
+let changeTimer: ReturnType<typeof setTimeout> | null = null;
+/** A set's change drawn in Paint, passed on to graphs at most four times a second (a stroke draws every frame). */
+const noteChange = (assetId: string) => {
+    openChanges.set(assetId, (openChanges.get(assetId) ?? 0) + 1);
+    if (changeTimer) return;
+    changeTimer = setTimeout(() => {
+        changeTimer = null;
+        changesVersion++;
+        for (const listener of changeListeners) listener();
+    }, 250);
+};
+
+/** Hears when a set open in Paint has changed (graphs using its stack then build their graph list again). */
+export const subscribeOpenStacks = (listener: () => void): (() => void) => {
+    changeListeners.add(listener);
+    return () => changeListeners.delete(listener);
+};
+/** Goes up as sets open in Paint change. */
+export const openStacksVersion = (): number => changesVersion;
+
+/**
+ * Says a set's stack is open in Paint: graphs draw from it, and draw again as what it draws changes,
+ * not only when the set is saved. Gives back what says it has closed.
+ */
 export const registerOpenStack = (assetId: string, stack: import('./paintStack').PaintStack): (() => void) => {
     openStacks.set(assetId, stack);
-    return () => { if (openStacks.get(assetId) === stack) openStacks.delete(assetId); };
+    let seen = stack.drawnCount;
+    const stop = stack.subscribe(() => {
+        // Only a round that drew something: a graph asking the stack to compose sets off a round that draws nothing.
+        if (stack.drawnCount === seen) return;
+        seen = stack.drawnCount;
+        noteChange(assetId);
+    });
+    return () => {
+        stop();
+        if (openStacks.get(assetId) === stack) openStacks.delete(assetId);
+    };
 };
 
 /**
@@ -184,9 +225,10 @@ export const PAINT_STACK_NODE: TexNodeDef = {
             const found = materialLibrary.get(id);
             return found?.textureGraph ? { id, name: found.name, graph: readStoredGraph(found.textureGraph).graph } : undefined;
         };
-        /** A stack's channels (of tile 1001, or its first) put into the node's outputs at the graph's size. */
-        const outputsOf = async (from: import('./paintStack').PaintStack): Promise<Record<string, GpuImage>> => {
-            const images = from.channelImages(from.tiles.includes(1001) ? 1001 : from.tiles[0]) as Partial<Record<string, GpuImage>>;
+        /** A stack's tile the node shows: 1001, or its first. */
+        const tileOf = (from: import('./paintStack').PaintStack) => (from.tiles.includes(1001) ? 1001 : from.tiles[0]);
+        /** Channels' pictures put into the node's outputs at the graph's size. */
+        const outputsOf = async (images: Partial<Record<string, GpuImage>>): Promise<Record<string, GpuImage>> => {
             const out: Record<string, GpuImage> = {};
             for (const port of PAINT_STACK_NODE.outputs) {
                 const target = context.image(port.kind === 'color' ? 'color' : 'gray');
@@ -197,11 +239,21 @@ export const PAINT_STACK_NODE: TexNodeDef = {
             }
             return out;
         };
-        // The set open in Paint: its stack is put together already (with the set's own bake).
-        const open = !String(context.params.folder ?? '') ? openStacks.get(assetId) : undefined;
+        // The set open in Paint: its stack is put together already (with the set's own bake), and a folder
+        // of it is put together from the same pictures.
+        const folderId = String(context.params.folder ?? '');
+        const open = openStacks.get(assetId);
         if (open && open.usable) {
             await open.compose();
-            return outputsOf(open);
+            if (!folderId) return outputsOf(open.channelImages(tileOf(open)) as Partial<Record<string, GpuImage>>);
+            const alone = await open.composeFolderAlone(folderId, tileOf(open));
+            if (alone) {
+                try {
+                    return await outputsOf(alone);
+                } finally {
+                    for (const image of Object.values(alone)) context.gpu.release(image);
+                }
+            }
         }
         running.add(assetId);
         let stack: import('./paintStack').PaintStack | null = null;
@@ -227,7 +279,7 @@ export const PAINT_STACK_NODE: TexNodeDef = {
                 for (const result of own?.values() ?? []) releaseTileBake(context.gpu, result);
             }
             await stack.compose();
-            return await outputsOf(stack);
+            return await outputsOf(stack.channelImages(tileOf(stack)) as Partial<Record<string, GpuImage>>);
         } finally {
             stack?.dispose();
             running.delete(assetId);

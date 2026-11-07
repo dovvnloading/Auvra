@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { BookIcon, ChipIcon, CommentAddIcon, CrossIcon, ExternalLinkIcon, FlowIcon, GraphIcon, ImageIcon, PlusIcon, TrashIcon, WarningIcon } from '../UI/Icons';
+import { BookIcon, CameraIcon, ChipIcon, CommentAddIcon, CrossIcon, ExternalLinkIcon, FlowIcon, GraphIcon, ImageIcon, PlusIcon, TrashIcon, WarningIcon } from '../UI/Icons';
 import { useAssets } from '../../context/AssetContext';
 import { projectService } from '../../utils/projectService';
 import { frontendDiagnostics } from '../../diagnostics/runtime';
@@ -37,6 +37,7 @@ import { isExportTemplatesAsset } from '../../texturing/paint/exportTemplates';
 import { createFunctionGraph, createTextureGraph } from '../../texturing/graph/document';
 import { TextureGraphWorkspace, newTextureGraphStored } from '../Texturing/TextureGraphWorkspace';
 import { PhotoMaterialPicker, type PhotoMaterialPickerHandle } from '../Texturing/Paint/PhotoMaterialPicker';
+import { CAPTURE_MENU_TEXT, CaptureMaterialPicker, type CaptureMaterialPickerHandle } from '../Texturing/Paint/CaptureMaterialPicker';
 
 /**
  * MATERIAL GRAPH EDITOR (the Materials tab)
@@ -227,6 +228,7 @@ export const MaterialGraphEditor: React.FC = () => {
     };
     const newButton = useRef<HTMLButtonElement>(null);
     const photoPicker = useRef<PhotoMaterialPickerHandle>(null);
+    const capturePicker = useRef<CaptureMaterialPickerHandle>(null);
     const [newMenu, setNewMenu] = useState(false);
     const [memoryOpen, setMemoryOpen] = useState(false);
 
@@ -368,6 +370,7 @@ export const MaterialGraphEditor: React.FC = () => {
                                 { key: 'shader', icon: <FlowIcon size={14} />, title: 'Shader graph', text: 'Maths worked out for every pixel as the model draws: moving, glowing and view-dependent looks.', run: create },
                                 { key: 'function', icon: <GraphIcon size={14} />, title: 'Graph for other graphs', text: 'A texture graph with an input, made to be used as one node inside others (a smart mask, a filter).', run: () => createTextureGraph_(true) },
                                 { key: 'photo', icon: <ImageIcon size={14} />, title: 'From a photo', text: 'A photo of a surface made into a texture graph: tiled, lighting taken out, with height, normal and roughness worked out. Or drop a photo on the list.', run: () => photoPicker.current?.pick() },
+                                { key: 'capture', icon: <CameraIcon size={14} />, title: 'From photos lit from several sides', text: CAPTURE_MENU_TEXT, run: () => capturePicker.current?.pick() },
                                 { key: 'materialx', icon: <ExternalLinkIcon size={14} />, title: 'From a MaterialX file', text: 'Pick a .mtlx file together with its pictures: its surface becomes a shader graph.', run: () => materialXImport.current?.pick() },
                             ].map((item) => (
                                 <button key={item.key} onClick={() => { setNewMenu(false); item.run(); }} className="flex w-full gap-2 rounded px-2 py-1.5 text-left hover:bg-gray-800">
@@ -407,6 +410,7 @@ export const MaterialGraphEditor: React.FC = () => {
                     }}
                 >
                     <PhotoMaterialPicker ref={photoPicker} className="mb-1 px-1" onMade={(made) => { setSelectedId(made.id); select([]); }} />
+                    <CaptureMaterialPicker ref={capturePicker} className="mb-1 px-1" onMade={(made) => { setSelectedId(made.id); select([]); }} />
                     {dropping && <p className="mb-1 px-1 text-2xs text-accent">Drop to bring it into this project</p>}
                     {assets.length === 0 && <p className="px-1 text-2xs text-gray-500">No materials yet. A material is a node graph; give one to a model's material in Properties › Material Overrides.</p>}
                     {assets.map(candidate => (

@@ -1,8 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { graphContentKey } from '../../texturing/graph/document';
 import { textureNodeDefinition } from '../../texturing/graph/registry';
 import { createPaintDocument, newFillLayer, newFolder, newPaintLayer, type PaintDocument } from '../../texturing/paint/paintTypes';
-import { PAINT_STACK_NODE, PAINT_STACK_NODE_TYPE, paintStackEntries, paintStackEntry, setName, stackLayers } from '../../texturing/paint/stackNode';
+import type { PaintStack } from '../../texturing/paint/paintStack';
+import { PAINT_STACK_NODE, PAINT_STACK_NODE_TYPE, openStacksVersion, paintStackEntries, paintStackEntry, registerOpenStack, setName, stackLayers, subscribeOpenStacks } from '../../texturing/paint/stackNode';
 
 const painted = (): PaintDocument => {
     const document = createPaintDocument('model', ['Body'], 10);
@@ -36,6 +37,40 @@ describe('paint stacks as graph nodes', () => {
         const changed = { ...document, layers: [...document.layers, newPaintLayer(document, 'Scratches')] };
         const after = paintStackEntries([{ id: 'helmet', name: 'Helmet', paint: changed as unknown as Record<string, unknown> }])[0].graph;
         expect(graphContentKey(after, () => undefined, () => true)).not.toBe(graphContentKey(before, () => undefined, () => true));
+    });
+
+    it('draw again as the set open in Paint changes, not only when it is saved', () => {
+        vi.useFakeTimers();
+        try {
+            const document = painted();
+            const asset = { id: 'open-set', name: 'Open set', paint: document as unknown as Record<string, unknown> };
+            const revision = () => paintStackEntries([asset])[0].graph.nodes[0].params.revision;
+            // A stand-in for the open stack: it says when a round is done, and how many rounds drew anything.
+            const listeners = new Set<() => void>();
+            const stack = { drawnCount: 0, subscribe: (listener: () => void) => { listeners.add(listener); return () => listeners.delete(listener); } };
+            const close = registerOpenStack(asset.id, stack as unknown as PaintStack);
+            const heard = vi.fn();
+            const stop = subscribeOpenStacks(heard);
+            const before = revision();
+            const version = openStacksVersion();
+            // A round that drew nothing (a graph asking the stack to compose) changes nothing.
+            for (const listener of listeners) listener();
+            vi.advanceTimersByTime(300);
+            expect(heard).not.toHaveBeenCalled();
+            expect(revision()).toBe(before);
+            // Strokes drawing: passed on once, a quarter of a second later, however many rounds drew.
+            for (let round = 0; round < 5; round++) { stack.drawnCount++; for (const listener of listeners) listener(); }
+            expect(heard).not.toHaveBeenCalled();
+            vi.advanceTimersByTime(300);
+            expect(heard).toHaveBeenCalledTimes(1);
+            expect(openStacksVersion()).toBe(version + 1);
+            expect(revision()).not.toBe(before);
+            stop();
+            close();
+            expect(listeners.size).toBe(0);
+        } finally {
+            vi.useRealTimers();
+        }
     });
 
     it('put a folder together on its own, and are a node the graph knows', () => {

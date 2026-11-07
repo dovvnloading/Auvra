@@ -21,7 +21,7 @@ import { TILING_MODES } from '../../texturing/graph/inherit';
 import { OUTPUT_CHANNELS, OUTPUT_CHANNEL_LABELS, isParamLink, type GraphParameter, type GraphParameterKind, type GraphPreset, type OutputChannel, type TexGraphNode, type TexNodeDef, type TexParamDef, type TextureGraph, type TilingMode } from '../../texturing/graph/types';
 import { ROLE_LABELS, encodeChannels, rewriteMaterialPictures, type ChannelImages, type ChannelTextureIds, type MaterialChannel, type PictureLayout, materialReadsPicture } from '../../texturing/materialOutput';
 import { downloadChannelPictures } from '../../texturing/paint/channelDownload';
-import { paintStackEntries } from '../../texturing/paint/stackNode';
+import { openStacksVersion, paintStackEntries, subscribeOpenStacks } from '../../texturing/paint/stackNode';
 import type { PictureFormat } from '../../texturing/paint/pictureFiles';
 import { DownloadPicturesButton } from './Paint/DownloadPicturesButton';
 import { Button, IconButton, Segmented, Spinner } from '../UI/kit';
@@ -42,6 +42,7 @@ import { TextureView2D } from './TextureView2D';
 import type { Histogram } from './view2d';
 import { TextureView3D } from './TextureView3D';
 import { useTextureStore } from './useTextureStore';
+import { RefineWithAi } from './Paint/RefineWithAi';
 import type { GpuImage } from '../../texturing/gpu/textureGpu';
 
 /**
@@ -104,13 +105,15 @@ export const TextureGraphWorkspace: React.FC<{
     onSave: (next: MaterialAsset, immediately?: boolean) => void | Promise<boolean>;
     onOpenAsset: (id: string) => void;
 }> = ({ asset, assets, onSave, onOpenAsset }) => {
-    // Other graph materials, usable as nodes.
+    // Other graph materials, usable as nodes; paint stacks too, again as a set open in Paint changes.
+    const openStacks = useSyncExternalStore(subscribeOpenStacks, openStacksVersion);
     const entries = useMemo(() => {
+        void openStacks;
         const map = new Map<string, GraphEntry>();
         for (const candidate of assets) if (candidate.textureGraph) map.set(candidate.id, { id: candidate.id, name: candidate.name, graph: readStoredGraph(candidate.textureGraph).graph });
         for (const entry of paintStackEntries(assets)) map.set(entry.id, entry);
         return map;
-    }, [assets]);
+    }, [assets, openStacks]);
     const resolve: GraphResolver = useCallback((id) => entries.get(id), [entries]);
     const textureLookup = useMemo(() => materialLibrary.textureLookup(false), []);
     // Pictures at their own depth (16-bit, floating point) once read; the project's textures meanwhile.
@@ -1005,6 +1008,7 @@ const Workspace: React.FC<{
                     </div>
                 );
             })()}
+            <RefineWithAi session={session} graph={graph} name={asset.name} onGraph={(next) => update(next, true)} />
             <div className="space-y-2 border-t border-line pt-2">
                 <div className="flex items-center gap-1.5">
                     <span className="flex-1 text-2xs font-semibold text-ink-2">Parameters</span>

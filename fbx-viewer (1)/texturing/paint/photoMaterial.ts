@@ -177,3 +177,73 @@ export const photoMaterialName = (fileName: string): string => {
     const words = fileName.replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim();
     return (words ? words.charAt(0).toUpperCase() + words.slice(1) : 'Photo').slice(0, 120);
 };
+
+/** A graph made from photos (a photo material or a capture): one AI matching maps can refine. */
+export const isPhotoGraph = (graph: TextureGraph): boolean => graph.nodes.some((node) => node.type === 'bitmap' && (node.name === 'Photo' || node.name === 'Captured colour'));
+
+/** The node whose picture the base colour output takes: in a photo material, the tiled colour with its lighting taken out. */
+export const baseColourSource = (graph: TextureGraph): TexGraphNode | null => {
+    const output = graph.nodes.find((node) => node.type === 'output' && node.params.channel === 'baseColor');
+    const link = output && graph.links.find((each) => each.to === output.id && each.toInput === 'in');
+    return (link && graph.nodes.find((node) => node.id === link.from)) ?? null;
+};
+
+/** The maps an AI step gives back for a colour, by what each is. */
+export type AiMapRole = 'normal' | 'roughness' | 'metalness' | 'height';
+
+const AI_MAPS: Record<AiMapRole, { channel: string; name: string; mixed: string; grey: boolean }> = {
+    normal: { channel: 'normal', name: 'AI normal', mixed: 'Normal with the AI\'s', grey: false },
+    roughness: { channel: 'roughness', name: 'AI roughness', mixed: 'Roughness with the AI\'s', grey: true },
+    metalness: { channel: 'metallic', name: 'AI metallic', mixed: 'Metallic with the AI\'s', grey: true },
+    height: { channel: 'height', name: 'AI height', mixed: 'Height with the AI\'s', grey: true },
+};
+
+export const AI_GROUP: GraphParameterGroup = { name: 'AI maps', description: 'Maps an AI made from the tiled colour, mixed with the ones worked out here.' };
+export const AI_MIX_PARAMETER: GraphParameter = {
+    name: 'aiMix', label: 'AI maps mixed in', kind: 'float', default: 0.5, min: 0, max: 1, step: 0.01, group: AI_GROUP.name,
+    description: 'How much of the AI\'s maps is mixed with the ones worked out here: 0 leaves them out, 1 takes the AI\'s alone.',
+};
+
+/**
+ * The graph with maps an AI made (project textures, by role) offered beside its own: each comes in by a
+ * Bitmap and is mixed over what fed that output before, as strongly as an AI maps parameter says (a
+ * normal is put back to unit length after). Its own maps stay as they were, under the mix. Maps given
+ * again replace the pictures of the AI Bitmaps already there.
+ */
+export const withAiMaps = (graph: TextureGraph, maps: readonly { role: AiMapRole; texture: string }[]): TextureGraph => {
+    const next: TextureGraph = structuredClone(graph);
+    if (!next.parameters.some((parameter) => parameter.name === AI_MIX_PARAMETER.name)) next.parameters = [...next.parameters, structuredClone(AI_MIX_PARAMETER) as GraphParameter];
+    if (!(next.groups ?? []).some((group) => group.name === AI_GROUP.name)) next.groups = [...(next.groups ?? []), { ...AI_GROUP }];
+    for (const map of maps) {
+        const spec = AI_MAPS[map.role];
+        if (!spec) continue;
+        const already = next.nodes.find((node) => node.type === 'bitmap' && node.name === spec.name);
+        if (already) { already.params = { ...already.params, texture: map.texture }; continue; }
+        const output = next.nodes.find((node) => node.type === 'output' && node.params.channel === spec.channel);
+        const feed = output && next.links.find((link) => link.to === output.id && link.toInput === 'in');
+        if (!output || !feed) continue;
+        const add = (type: string, x: number, y: number, params: Record<string, unknown>, name: string) => {
+            const node = createNode(type, x, y, params);
+            node.name = name;
+            next.nodes.push(node);
+            return node;
+        };
+        const bitmap = add('bitmap', output.x - 720, output.y + 70, { texture: map.texture, fit: 'fill' }, spec.name);
+        let ai = bitmap;
+        if (spec.grey) {
+            ai = add('grayscale', output.x - 480, output.y + 70, { mode: 'luminance' }, `${spec.name}, grey`);
+            next.links.push({ from: bitmap.id, fromOutput: 'out', to: ai.id, toInput: 'in' });
+        }
+        const mix = add('blend', output.x - 240, output.y, { mode: 'normal', opacity: { $bind: AI_MIX_PARAMETER.name } }, spec.mixed);
+        next.links.push({ from: ai.id, fromOutput: 'out', to: mix.id, toInput: 'foreground' });
+        next.links.push({ from: feed.from, fromOutput: feed.fromOutput, to: mix.id, toInput: 'background' });
+        let last = mix;
+        if (map.role === 'normal') {
+            last = add('normalAdjust', output.x - 120, output.y + 40, { strength: 1 }, 'Normal mix, unit length');
+            next.links.push({ from: mix.id, fromOutput: 'out', to: last.id, toInput: 'in' });
+        }
+        feed.from = last.id;
+        feed.fromOutput = 'out';
+    }
+    return next;
+};

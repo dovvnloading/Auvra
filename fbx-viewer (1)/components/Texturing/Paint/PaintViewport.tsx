@@ -12,7 +12,7 @@ import { pathLength, samplePath, type SurfacePath, type Vec3 } from '../../../te
 
 import type { PaintChannel } from '../../../texturing/paint/paintTypes';
 import { PICK_LABELS, type PickMode } from '../../../texturing/paint/selection';
-import type { PaintSession } from './paintSession';
+import { COMPARED_CHANNELS, type ComparedChannel, type PaintSession } from './paintSession';
 import type { UvSession } from './uvSession';
 import { layPathAlong } from './pathLaying';
 import { brushAlpha } from './brushAlpha';
@@ -73,6 +73,9 @@ const pictureReady = (texture: THREE.Texture | null): texture is THREE.Texture =
 /** Where a click met the surface: its triangle, the place on the model and its texture coordinates. */
 export interface SurfaceHit { triangle: number; point: THREE.Vector3; uv: THREE.Vector2 }
 export type ViewMode = 'material' | PaintChannel | 'ambientOcclusion' | `mesh:${MeshMapName}` | `extra:${ExtraBakeMap}` | 'mask' | 'uvChecker' | 'uvStretch';
+
+/** Every view of the model splits for a comparison; the layout views show the layout, which steps don't change. */
+const comparesIn = (view: ViewMode) => view !== 'uvChecker' && view !== 'uvStretch';
 
 /** A tile's live pictures as the view draws them, each with its smaller versions, made when first needed. */
 interface Preview { base: THREE.WebGLRenderTarget | null; orm: THREE.WebGLRenderTarget | null; emissive: THREE.WebGLRenderTarget | null; normal: THREE.WebGLRenderTarget | null; single: THREE.WebGLRenderTarget | null }
@@ -257,15 +260,17 @@ export const PaintViewport: React.FC<{
             copy.matrix.multiplyMatrices(inverse, mesh.matrixWorld);
             root.add(copy);
         });
-        const tiles = new Map<number, { mesh: THREE.Mesh; lit: THREE.MeshStandardMaterial; single: THREE.ShaderMaterial; preview: Preview; compareLit: THREE.MeshStandardMaterial; comparePreview: Preview }>();
+        const tiles = new Map<number, { mesh: THREE.Mesh; lit: THREE.MeshStandardMaterial; single: THREE.ShaderMaterial; preview: Preview; compareLit: THREE.MeshStandardMaterial; compareSingle: THREE.ShaderMaterial; comparePreview: Preview }>();
         for (const tile of stack.tiles) {
             const lit = new THREE.MeshStandardMaterial({ roughness: 1, metalness: 1, side: THREE.DoubleSide });
             const compareLit = new THREE.MeshStandardMaterial({ roughness: 1, metalness: 1, side: THREE.DoubleSide });
             const single = SINGLE_VIEW.clone();
             single.toneMapped = false;
+            const compareSingle = SINGLE_VIEW.clone();
+            compareSingle.toneMapped = false;
             const mesh = new THREE.Mesh(tileGeometry(session.part, tile), lit);
             root.add(mesh);
-            tiles.set(tile, { mesh, lit, single, preview: { base: null, orm: null, emissive: null, normal: null, single: null }, compareLit, comparePreview: { base: null, orm: null, emissive: null, normal: null, single: null } });
+            tiles.set(tile, { mesh, lit, single, preview: { base: null, orm: null, emissive: null, normal: null, single: null }, compareLit, compareSingle, comparePreview: { base: null, orm: null, emissive: null, normal: null, single: null } });
         }
         const layoutMesh = new THREE.Mesh(new THREE.BufferGeometry(), LAYOUT_VIEW);
         layoutMesh.visible = false;
@@ -293,6 +298,7 @@ export const PaintViewport: React.FC<{
             entry.lit.dispose();
             entry.compareLit.dispose();
             entry.single.dispose();
+            entry.compareSingle.dispose();
             for (const target of Object.values(entry.preview)) target?.dispose();
             for (const target of Object.values(entry.comparePreview)) target?.dispose();
         }
@@ -393,6 +399,15 @@ export const PaintViewport: React.FC<{
                 entry.single.uniforms.map.value = single?.texture ?? gpu.constant('black');
                 entry.single.uniforms.gray.value = image?.kind === 'gray' ? 1 : 0;
                 entry.mesh.material = entry.single;
+                // The step compared with, for the other side of the wipe: the same view as it stood then
+                // (pictures painting doesn't change, such as the model's own maps, are the same both sides).
+                if (comparison) {
+                    const kept = comparison.images.get(tile) ?? {};
+                    const then = (view === 'mask' ? kept.mask : (COMPARED_CHANNELS as readonly string[]).includes(view) ? kept[view as ComparedChannel] : null) ?? image;
+                    const shown = then ? copyInto(entry.comparePreview, 'single', 'half', COPY, { source: then }) : null;
+                    entry.compareSingle.uniforms.map.value = shown?.texture ?? gpu.constant('black');
+                    entry.compareSingle.uniforms.gray.value = then?.kind === 'gray' ? 1 : 0;
+                }
             }
         }
         // The layout views: the proposed coordinates (or the current ones) on the model.
@@ -538,17 +553,18 @@ export const PaintViewport: React.FC<{
             renderer.setRenderTarget(target);
             renderer.render(world.scene, world.camera);
             const comparison = session.comparison;
-            if (comparison && view === 'material') {
+            if (comparison && comparesIn(view)) {
                 // The step compared with, drawn the same way, on the left of the wipe; the set now on its right.
                 let other = compareTarget.current;
                 if (!other || other.width !== width || other.height !== height) {
                     other?.dispose();
                     other = compareTarget.current = viewTarget(gpu, width, height);
                 }
-                for (const entry of world.tiles.values()) entry.mesh.material = entry.compareLit;
+                const lit = view === 'material';
+                for (const entry of world.tiles.values()) entry.mesh.material = lit ? entry.compareLit : entry.compareSingle;
                 renderer.setRenderTarget(other);
                 renderer.render(world.scene, world.camera);
-                for (const entry of world.tiles.values()) entry.mesh.material = entry.lit;
+                for (const entry of world.tiles.values()) entry.mesh.material = lit ? entry.lit : entry.single;
                 renderer.setRenderTarget(null);
                 gpu.drawToScreen({
                     fragment: 'uniform float uWipe;\nuniform float uPixel;\nvoid main() { vec4 c = vUv.x < uWipe ? texture(chosen, vUv) : texture(current, vUv); float line = 1.0 - smoothstep(uPixel, uPixel * 2.0, abs(vUv.x - uWipe)); outColor = mix(c, vec4(1.0), line * 0.9); }',
@@ -793,7 +809,7 @@ export const PaintViewport: React.FC<{
         }
         if (event.button !== 0) return;
         // Comparing: the wipe's line is dragged, wherever the tool.
-        if (session.comparison && view === 'material' && Math.abs(x - session.comparison.wipe * size.width) < 10 * size.ratio) {
+        if (session.comparison && comparesIn(view) && Math.abs(x - session.comparison.wipe * size.width) < 10 * size.ratio) {
             gesture.current = { kind: 'wipe' };
             return;
         }
@@ -1045,7 +1061,7 @@ export const PaintViewport: React.FC<{
             onContextMenu={(event) => event.preventDefault()}
         >
             <canvas ref={canvas} className="absolute inset-0 h-full w-full" />
-            {session.comparison && view === 'material' && (
+            {session.comparison && comparesIn(view) && (
                 <>
                     <div className="pointer-events-none absolute top-2 max-w-[45%] truncate rounded bg-zinc-900/85 px-2 py-0.5 text-2xs text-zinc-200" style={{ right: `calc(${(1 - session.comparison.wipe) * 100}% + 8px)` }}>{session.comparison.label}</div>
                     <div className="pointer-events-none absolute top-2 rounded bg-zinc-900/85 px-2 py-0.5 text-2xs text-zinc-200" style={{ left: `calc(${session.comparison.wipe * 100}% + 8px)` }}>Now</div>

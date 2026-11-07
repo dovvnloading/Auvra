@@ -606,6 +606,7 @@ export class PaintStack {
     private abandoned = false;
     /** The layer whose mask is kept whole for the mask view, and that mask by tile. */
     private watched: string | null = null;
+    private drawn = 0;
     private readonly watchedMasks = new Map<number, GpuImage>();
     /** Each triangle's box of texture coordinates within its tile: lowest u, v, highest u, v. */
     private triangleUvBoxes: Float32Array | null = null;
@@ -1265,6 +1266,51 @@ export class PaintStack {
         if (layerId) this.invalidate();
     }
 
+    /** How many compose rounds have drawn anything: changes when what the set looks like may have. */
+    get drawnCount(): number { return this.drawn; }
+
+    /**
+     * One folder's layers put together on their own over a whole tile, as a stack of just that folder draws
+     * them, from this stack's pictures and bake: each channel the set draws, padded past the islands, the
+     * normal laid over the bake as the set's own is. The pictures are the caller's to release; null when the
+     * folder (or the tile) is not there.
+     */
+    async composeFolderAlone(folderId: string, tile: number): Promise<Partial<Record<PaintChannel, GpuImage>> | null> {
+        const folder = allLayers(this.document.layers).find((layer) => layer.id === folderId && layer.kind === 'folder');
+        if (!folder || !this.tiles.includes(tile)) return null;
+        const rect: Rect = { x0: 0, y0: 0, x1: this.size, y1: this.size };
+        const area: Area = { tile, rect, inner: rect, width: this.size, height: this.size, at: new THREE.Vector2(0, 0) };
+        const accs = new Map<PaintChannel, GpuImage>();
+        for (const channel of new Set<PaintChannel>([...this.document.channels, 'normal'])) {
+            const acc = this.gpu.image(this.size, this.size, CHANNEL_IS_COLOR[channel] ? 'color' : 'gray', 16);
+            const base = CHANNEL_DEFAULT[channel];
+            this.gpu.clear(acc, [base[0], base[1], base[2], 1]);
+            accs.set(channel, acc);
+        }
+        try {
+            await this.composeLayers([folder], area, accs);
+        } catch (error) {
+            for (const image of accs.values()) this.gpu.release(image);
+            throw error;
+        }
+        const padding = this.padding.get(tile);
+        const out: Partial<Record<PaintChannel, GpuImage>> = {};
+        for (const [channel, image] of accs) {
+            if (!padding) { out[channel] = image; continue; }
+            out[channel] = padImage(this.gpu, image, padding.coverage, padding.nearest);
+            this.gpu.release(image);
+        }
+        if (out.normal) {
+            const finished = this.finalNormal(tile, out.normal, out.height ?? null);
+            this.gpu.release(out.normal);
+            out.normal = finished;
+        }
+        return out;
+    }
+
+    /** The layer whose mask is watched (shown), if any. */
+    get watchedLayer(): string | null { return this.watched; }
+
     /** The watched layer's mask on a tile as last worked out (for showing it). */
     cachedMask(layerId: string, tile: number): GpuImage | null {
         return layerId === this.watched ? this.watchedMasks.get(tile) ?? null : null;
@@ -1294,6 +1340,7 @@ export class PaintStack {
                         if (this.abandoned) return;
                         await this.composeTile(tile, byChannel);
                     }
+                    if (work.length) this.drawn++;
                     this.problem = null;
                     this.emit();
                 } while (this.again);

@@ -31,17 +31,26 @@ export interface View2DCommands {
 
 const tileOfTriangle = (part: PaintSession['part'], triangle: number): number => part.triangleTile[triangle];
 
-/** A tile's picture over the view, panned and zoomed (uView: left, top, pixels per UV unit), dark round it. */
+/**
+ * A tile's picture over the view, panned and zoomed (uView: left, top, pixels per UV unit), dark round it.
+ * Comparing, the step compared with (other) shows left of the wipe (uWipe, a share of the width).
+ */
 const SHOW = /* glsl */ `
 uniform vec4 uView;
 uniform vec2 uPixels;
 uniform int uGray;
+uniform int uOtherGray;
+uniform int uCompare;
+uniform float uWipe;
 void main() {
     vec2 px = vUv * uPixels;
     vec2 uv = vec2((px.x - uView.x) / uView.z, 1.0 - ((uPixels.y - px.y) - uView.y) / uView.z);
-    if (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) { outColor = vec4(0.078, 0.078, 0.086, 1.0); return; }
-    vec4 c = texture(source, uv);
-    outColor = vec4(uGray == 1 ? vec3(c.r) : c.rgb, 1.0);
+    bool then = uCompare == 1 && vUv.x < uWipe;
+    float line = uCompare == 1 ? 1.0 - smoothstep(1.0, 2.0, abs(px.x - uWipe * uPixels.x)) : 0.0;
+    if (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) { outColor = mix(vec4(0.078, 0.078, 0.086, 1.0), vec4(1.0), line * 0.9); return; }
+    vec4 c = then ? texture(other, uv) : texture(source, uv);
+    bool gray = then ? uOtherGray == 1 : uGray == 1;
+    outColor = mix(vec4(gray ? vec3(c.r) : c.rgb, 1.0), vec4(1.0), line * 0.9);
 }`;
 
 /**
@@ -142,11 +151,18 @@ export const PaintView2D: React.FC<{
         element.width = lines.width = Math.round(size.width * ratio);
         element.height = lines.height = Math.round(size.height * ratio);
         const image = show === 'mask' ? maskImage(tile) : session.stack.outputs.get(tile)?.[show] ?? null;
+        // Comparing: this picture as it stood at the step compared with.
+        const comparison = session.comparison;
+        const kept = comparison?.images.get(tile);
+        const then = comparison ? (show === 'mask' ? kept?.mask : kept?.[show]) ?? image : null;
         gpu.present(element, (width, height) => {
             gpu.drawToScreen({
                 fragment: SHOW,
-                inputs: { source: image ?? gpu.constant('mid') },
-                uniforms: { uView: new THREE.Vector4(view.x * ratio, view.y * ratio, scale * ratio, 0), uPixels: new THREE.Vector2(width, height), uGray: image?.kind === 'gray' ? 1 : 0 },
+                inputs: { source: image ?? gpu.constant('mid'), other: then ?? image ?? gpu.constant('mid') },
+                uniforms: {
+                    uView: new THREE.Vector4(view.x * ratio, view.y * ratio, scale * ratio, 0), uPixels: new THREE.Vector2(width, height), uGray: image?.kind === 'gray' ? 1 : 0,
+                    uOtherGray: then?.kind === 'gray' ? 1 : 0, uCompare: comparison ? 1 : 0, uWipe: comparison?.wipe ?? 0.5,
+                },
             });
         });
         const g = lines.getContext('2d')!;
@@ -443,6 +459,21 @@ export const PaintView2D: React.FC<{
         >
             <canvas ref={picture} className="absolute inset-0 h-full w-full" />
             <canvas ref={overlay} className="pointer-events-none absolute inset-0 h-full w-full" />
+            {session.comparison && (
+                <>
+                    <div className="pointer-events-none absolute top-2 max-w-[45%] truncate rounded bg-zinc-900/85 px-2 py-0.5 text-2xs text-zinc-200" style={{ right: `calc(${(1 - session.comparison.wipe) * 100}% + 8px)` }}>{session.comparison.label}</div>
+                    <div className="pointer-events-none absolute top-2 rounded bg-zinc-900/85 px-2 py-0.5 text-2xs text-zinc-200" style={{ left: `calc(${session.comparison.wipe * 100}% + 8px)` }}>Now</div>
+                    <div className="absolute bottom-0 top-0 w-4 -translate-x-1/2 cursor-ew-resize" style={{ left: `${session.comparison.wipe * 100}%` }} title="Drag to move the wipe"
+                        onPointerDown={(event) => { event.stopPropagation(); event.currentTarget.setPointerCapture(event.pointerId); }}
+                        onPointerMove={(event) => {
+                            if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
+                            event.stopPropagation();
+                            const box = host.current?.getBoundingClientRect();
+                            if (box) session.setCompareWipe((event.clientX - box.left) / Math.max(1, box.width));
+                        }}
+                        onPointerUp={(event) => event.stopPropagation()} />
+                </>
+            )}
             {stencilTexture && <StencilOverlay texture={stencilTexture} place={stencilPlace(brush.stencil, pictureAspect(stencilTexture), size.width, size.height)} />}
             <div className="absolute right-3 top-3 flex items-center gap-2" onPointerDown={(event) => event.stopPropagation()}>
                 <label className="flex items-center gap-1.5 rounded bg-zinc-900/90 px-2 py-1 text-2xs text-zinc-300">
