@@ -301,6 +301,11 @@ export interface TexNodeDef {
     /** How the editor shows its images. */
     preview?: 'normal';
     /**
+     * Bits a channel its images need from its settings, when more than its kind says (a Bitmap of a
+     * 16-bit or floating-point picture); used when the node is not set to a depth of its own.
+     */
+    precisionOf?: (params: Readonly<Record<string, unknown>>, texture: (textureId: string) => THREE.Texture | null) => ImagePrecision | undefined;
+    /**
      * Its settings are read only by its shaders (through the kit), so a setting following a value
      * wired in reads it on the GPU; other nodes read such a value back first.
      */

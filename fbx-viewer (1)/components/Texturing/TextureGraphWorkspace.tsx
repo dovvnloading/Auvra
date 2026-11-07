@@ -24,6 +24,7 @@ import { Button, IconButton, Segmented, Spinner } from '../UI/kit';
 import { Select } from '../UI/Select';
 import { COMMENT_COLORS, COMMENT_COLOR_NAMES, MAX_COMMENT_TITLE, addSubgraphNode, changeComment, materialHistory, type Point } from './graphEditing';
 import { FunctionGraphCanvas, FunctionNodeInspector, NamedSettingsEditor } from './FunctionGraphEditor';
+import { deepPictures } from './deepPictures';
 import { FunctionPreviews } from './functionPreviews';
 import { GraphParameterPanel, PresetBar, type PlacedPreset, type PresetPlace } from './GraphParameterPanel';
 import { ConditionEditor, ParameterEditor } from './ParameterEditor';
@@ -103,9 +104,12 @@ export const TextureGraphWorkspace: React.FC<{
     }, [assets]);
     const resolve: GraphResolver = useCallback((id) => entries.get(id), [entries]);
     const textureLookup = useMemo(() => materialLibrary.textureLookup(false), []);
-    const lookup = useCallback((id: string) => textureLookup(id, 'map'), [textureLookup]);
-    // A picture finishing loading, or a used graph changing, redraws what depends on it.
-    const libraryVersion = useSyncExternalStore((listener) => materialLibrary.subscribe(listener), () => materialLibrary.version);
+    // Pictures at their own depth (16-bit, floating point) once read; the project's textures meanwhile.
+    const lookup = useMemo(() => deepPictures.lookup((id: string) => textureLookup(id, 'map')), [textureLookup]);
+    // A picture finishing loading (or being read at its depth), or a used graph changing, redraws what depends on it.
+    const materialsVersion = useSyncExternalStore((listener) => materialLibrary.subscribe(listener), () => materialLibrary.version);
+    const deepVersion = useSyncExternalStore(deepPictures.subscribe, deepPictures.getVersion);
+    const libraryVersion = materialsVersion + deepVersion;
 
     // Graphs opened in place, outermost first, each with the node it was opened from. A step whose node
     // is gone (or uses another graph now) closes it and those inside it.
@@ -248,7 +252,7 @@ const Workspace: React.FC<{
     const { models } = useScene();
     const textureStore = useTextureStore();
     const pictureLookup = useMemo(() => materialLibrary.textureLookup(false), []);
-    const lookup = useCallback((id: string) => pictureLookup(id, 'map'), [pictureLookup]);
+    const lookup = useMemo(() => deepPictures.lookup((id: string) => pictureLookup(id, 'map')), [pictureLookup]);
     const stored = useMemo(() => readStoredGraph(asset.textureGraph), [asset.textureGraph]);
     const graph = stored.graph;
     const sessionVersion = useSyncExternalStore(session.subscribe, session.getVersion);
