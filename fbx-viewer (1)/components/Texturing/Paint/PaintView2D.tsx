@@ -8,6 +8,7 @@ import { pathLength, samplePath, type SurfacePath } from '../../../texturing/pai
 import { PICK_LABELS, type PickMode } from '../../../texturing/paint/selection';
 import { UvSurfaceLookup, layoutPlaceOf } from '../../../texturing/paint/uvSurface';
 import { layPathAlong } from './pathLaying';
+import { strokeLabel } from '../../../texturing/paint/history';
 import { Select } from '../../UI/Select';
 import type { PaintSession } from './paintSession';
 import { StencilOverlay, type PaintTool, type PathEdit } from './PaintViewport';
@@ -421,7 +422,7 @@ export const PaintView2D: React.FC<{
             onPointerUp={() => {
                 const current = gesture.current;
                 gesture.current = null;
-                if (current?.kind === 'stroke') session.record(current.stroke.finish(tool === 'erase' ? 'Erase' : 'Paint'));
+                if (current?.kind === 'stroke') session.record(current.stroke.finish(strokeLabel(tool === 'erase' ? 'erase' : 'paint', brush)));
             }}
             onPointerLeave={() => setCursor(null)}
             onContextMenu={(event) => event.preventDefault()}

@@ -1,6 +1,7 @@
 import type { TileBake } from '../bake/meshBaker';
 import type { GpuImage } from '../gpu/textureGpu';
-import type { HistoryEntry } from './strokes';
+import type { BrushSettings, HistoryEntry } from './strokes';
+import { PARTICLE_PRESETS } from './particles';
 
 /**
  * THE PAINT HISTORY, AS A LIST
@@ -20,10 +21,25 @@ export const historyKind = (entry: Pick<HistoryEntry, 'label' | 'pixels' | 'bake
         if (label.startsWith('erase')) return 'erase';
         if (label.startsWith('fill')) return 'fill';
         if (label.includes('decal')) return 'decal';
-        if (label.includes('particle') || label.includes('drip') || label.includes('dust') || label.includes('leak')) return 'particles';
+        if (label.includes('particle') || label.includes('drip') || label.includes('dust') || label.includes('leak') || label.includes('splash')) return 'particles';
         return 'paint';
     }
     return 'change';
+};
+
+/**
+ * The name a brush stroke goes into the history under, by what it did: erasing; a particle brush by its
+ * preset's name (Drips, Leaks, Dust, Splashes) or by how its particles move; blurring, sharpening,
+ * smudging or cloning; else painting.
+ */
+export const strokeLabel = (tool: 'paint' | 'erase', brush: Pick<BrushSettings, 'mode' | 'particles'>): string => {
+    if (tool === 'erase') return 'Erase';
+    const particles = brush.particles;
+    if (particles?.enabled) {
+        const preset = PARTICLE_PRESETS.find((each) => JSON.stringify(each.settings) === JSON.stringify(particles));
+        return preset ? preset.name : { flow: 'Running particles', fall: 'Falling particles', bounce: 'Bouncing particles' }[particles.motion];
+    }
+    return { paint: 'Paint', blur: 'Blur', sharpen: 'Sharpen', smudge: 'Smudge', clone: 'Clone' }[brush.mode] ?? 'Paint';
 };
 
 /** Bytes a GPU image holds. */

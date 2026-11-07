@@ -7,6 +7,7 @@ import type { MeshMapName } from '../../../texturing/graph/nodes/io';
 import type { BakeSettings, ExtraBakeMap } from '../../../texturing/bake/meshBaker';
 import { MAX_BRUSH_SIZE, lazyFollow, pictureAspect, renderDepth, stencilPlace, Stroke, type BrushSettings, type HistoryEntry, type StrokeTarget } from '../../../texturing/paint/strokes';
 import { decalCoordinates, type DecalStart } from '../../../texturing/paint/decals';
+import { strokeLabel } from '../../../texturing/paint/history';
 import { builtInAlphaTexture } from '../../../texturing/paint/brushLibrary';
 import { pathLength, samplePath, type SurfacePath, type Vec3 } from '../../../texturing/paint/paths';
 
@@ -678,7 +679,9 @@ export const PaintViewport: React.FC<{
     showDecalRef.current = showDecal;
     /** Shows the decal again at the next frame (dragging gives many moves a frame). */
     const showDecalSoon = () => {
-        if (decalFrame.current === null) decalFrame.current = requestAnimationFrame(() => showDecalRef.current());
+        // The last frame asked for gives way to this one, so nothing waits on a frame that never comes.
+        if (decalFrame.current !== null) cancelAnimationFrame(decalFrame.current);
+        decalFrame.current = requestAnimationFrame(() => showDecalRef.current());
     };
 
     /** Puts the decal where the pointer meets the surface, its way across the screen's. */
@@ -833,7 +836,7 @@ export const PaintViewport: React.FC<{
         const current = gesture.current;
         gesture.current = null;
         if (current?.kind === 'stroke') {
-            const entry = current.stroke.finish(tool === 'erase' ? 'Erase' : 'Paint');
+            const entry = current.stroke.finish(strokeLabel(tool === 'erase' ? 'erase' : 'paint', brush));
             gpu.release(current.depth);
             session.record(entry);
         }
@@ -911,13 +914,15 @@ export const PaintViewport: React.FC<{
     };
     const paintPathRef = useRef(paintPath);
     paintPathRef.current = paintPath;
+    const onMessageRef = useRef(onMessage);
+    onMessageRef.current = onMessage;
     const keepDecalRef = useRef(keepDecal);
     keepDecalRef.current = keepDecal;
     const dropDecalRef = useRef(dropDecal);
     dropDecalRef.current = dropDecal;
     useEffect(() => {
         if (!commands) return undefined;
-        commands.current = { paintPath: (path, how) => paintPathRef.current(path, how), keepDecal: () => keepDecalRef.current(), dropDecal: () => dropDecalRef.current(true) };
+        commands.current = { paintPath: (path, how) => paintPathRef.current(path, how), keepDecal: () => keepDecalRef.current(), dropDecal: () => { dropDecalRef.current(true); onMessageRef.current('Decal given up. The decal tool stays picked: click the model to place another.'); } };
         return () => { commands.current = null; };
     }, [commands]);
 
