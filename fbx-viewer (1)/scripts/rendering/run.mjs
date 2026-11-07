@@ -8,14 +8,13 @@
 //   node scripts/rendering/run.mjs --renderer webgpu
 //                                             the same on the WebGPU renderer, with pictures of its own in
 //                                             tests/visual/references/webgpu/ and its output in tests/visual/output/webgpu/
-import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
-import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import react from '@vitejs/plugin-react';
 import { build } from 'vite';
+import { SOFTWARE_WEBGL, closeBrowser, openPage, pageErrors, pageSaid as saidSince, serve } from './browser.mjs';
 
 const args = process.argv.slice(2);
 const updating = args.includes('--update');
@@ -37,86 +36,6 @@ const PIXEL_TOLERANCE = 10;
 /** The share of a picture that may differ. */
 const MOST_DIFFERING = 0.005;
 const SCENE_LIMIT_MS = 600_000;
-
-const browserPath = () => {
-  const candidates = [
-    process.env.AUVRA_BROWSER,
-    '/usr/bin/google-chrome',
-    '/usr/bin/chromium-browser',
-    '/usr/bin/chromium',
-    '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-    'C:/Program Files/Google/Chrome/Application/chrome.exe',
-    'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
-  ];
-  const found = candidates.find((candidate) => candidate && existsSync(candidate));
-  if (!found) throw new Error('No browser found: set AUVRA_BROWSER to one');
-  return found;
-};
-
-const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.wasm': 'application/wasm', '.png': 'image/png', '.json': 'application/json' };
-
-const serve = (root) => new Promise((resolve) => {
-  const server = createServer((request, response) => {
-    const file = path.join(root, decodeURIComponent(new URL(request.url, 'http://local').pathname));
-    if (!file.startsWith(root) || !existsSync(file)) {
-      response.writeHead(404).end();
-      return;
-    }
-    response.writeHead(200, { 'content-type': MIME[path.extname(file)] ?? 'application/octet-stream' });
-    response.end(readFileSync(file));
-  });
-  server.listen(0, '127.0.0.1', () => resolve(server));
-});
-
-// On Windows a file the browser is still writing cannot be opened at all (EBUSY): it is read again, as one not there yet.
-const readIfReady = (file) => {
-  try {
-    return existsSync(file) ? readFileSync(file, 'utf8') : '';
-  } catch (error) {
-    if (error.code === 'EBUSY' || error.code === 'EPERM' || error.code === 'EACCES') return '';
-    throw error;
-  }
-};
-
-const waitForFile = async (file, limitMs) => {
-  const start = Date.now();
-  let text = readIfReady(file);
-  while (!text.includes('\n')) {
-    if (Date.now() - start > limitMs) throw new Error('The browser did not start');
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    text = readIfReady(file);
-  }
-  return text;
-};
-
-/** Just enough of the browser's debugging protocol: one page, and running script in it. */
-const connect = async (url) => {
-  const socket = new WebSocket(url);
-  await new Promise((resolve, reject) => {
-    socket.addEventListener('open', resolve, { once: true });
-    socket.addEventListener('error', () => reject(new Error('Could not reach the browser')), { once: true });
-  });
-  let nextId = 1;
-  const waiting = new Map();
-  const events = [];
-  socket.addEventListener('message', (message) => {
-    const data = JSON.parse(message.data);
-    if (data.id && waiting.has(data.id)) {
-      const { resolve, reject } = waiting.get(data.id);
-      waiting.delete(data.id);
-      if (data.error) reject(new Error(data.error.message));
-      else resolve(data.result);
-    } else if (data.method) {
-      events.push(data);
-    }
-  });
-  const send = (method, params = {}, sessionId) => new Promise((resolve, reject) => {
-    const id = nextId++;
-    waiting.set(id, { resolve, reject });
-    socket.send(JSON.stringify({ id, method, params, sessionId }));
-  });
-  return { send, events, close: () => socket.close() };
-};
 
 const main = async () => {
   const siteDir = mkdtempSync(path.join(tmpdir(), 'auvra-visual-site-'));
@@ -142,49 +61,16 @@ const main = async () => {
     const linuxVulkan = process.platform === 'linux' ? ['--use-angle=vulkan', '--disable-vulkan-surface'] : [];
     const softwareGpu = onWebGpu
       ? ['--enable-unsafe-webgpu', '--enable-features=Vulkan', '--use-vulkan=swiftshader', '--use-webgpu-adapter=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist', ...linuxVulkan]
-      : ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'];
+      : SOFTWARE_WEBGL;
     const gpuFlags = realGpu ? ['--ignore-gpu-blocklist', ...(onWebGpu ? ['--enable-unsafe-webgpu'] : [])] : softwareGpu;
-    browser = spawn(browserPath(), [
-      '--headless=new',
-      `--user-data-dir=${profileDir}`,
-      '--remote-debugging-port=0',
-      '--no-first-run',
-      '--no-default-browser-check',
-      '--disable-extensions',
-      '--disable-background-networking',
-      '--disable-renderer-backgrounding',
-      '--disable-backgrounding-occluded-windows',
-      '--disable-background-timer-throttling',
-      '--force-device-scale-factor=1',
-      '--force-color-profile=srgb',
-      '--window-size=800,600',
-      ...(process.env.CI ? ['--no-sandbox'] : []),
-      ...gpuFlags,
-      'about:blank',
-    ], { stdio: 'ignore' });
-    const portLines = await waitForFile(path.join(profileDir, 'DevToolsActivePort'), 30_000);
-    const [port, browserPathPart] = portLines.split('\n');
-    const client = await connect(`ws://127.0.0.1:${port}${browserPathPart}`);
-    const { targetId } = await client.send('Target.createTarget', { url: 'about:blank' });
-    const { sessionId } = await client.send('Target.attachToTarget', { targetId, flatten: true });
-    const send = (method, params) => client.send(method, params, sessionId);
-    await send('Runtime.enable');
-    await send('Page.enable');
-    await send('Emulation.setFocusEmulationEnabled', { enabled: true });
     const { address, port: sitePort } = server.address();
-    await send('Page.navigate', { url: `http://${address}:${sitePort}/index.html?renderer=${renderer}` });
-
-    const run = async (expression) => {
-      const result = await Promise.race([
-        send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true }),
-        new Promise((_, reject) => { setTimeout(() => reject(new Error('A scene took too long')), SCENE_LIMIT_MS).unref(); }),
-      ]);
-      if (result.exceptionDetails) throw new Error(result.exceptionDetails.exception?.description ?? result.exceptionDetails.text);
-      return result.result.value;
-    };
+    const page = await openPage({ profileDir, gpuFlags, url: `http://${address}:${sitePort}/index.html?renderer=${renderer}` });
+    browser = page.browser;
+    const { client } = page;
+    const run = (expression) => page.run(expression, SCENE_LIMIT_MS, 'A scene took too long');
     const start = Date.now();
     while (!(await run('!!window.auvraVisual'))) {
-      if (Date.now() - start > 60_000) throw new Error(`The test page did not load:\n${client.events.filter((event) => event.method === 'Runtime.exceptionThrown').map((event) => event.params.exceptionDetails.exception?.description).join('\n')}`);
+      if (Date.now() - start > 60_000) throw new Error(`The test page did not load:\n${pageErrors(client).join('\n')}`);
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
 
@@ -195,11 +81,7 @@ const main = async () => {
     const numbers = {};
     const rows = [];
     // What the page itself warned of since `from`: the renderer reports its own trouble there.
-    const pageSaid = (from) => client.events
-      .slice(from)
-      .filter((event) => event.method === 'Runtime.consoleAPICalled' && ['error', 'warning'].includes(event.params.type))
-      .map((event) => event.params.args.map((arg) => arg.value ?? arg.description ?? '').join(' '))
-      .slice(-30);
+    const pageSaid = (from) => saidSince(client, from);
     const said = (lines) => (lines.length ? `\nThe page said:\n  ${lines.join('\n  ')}` : '');
     for (const name of names) {
       const sceneStart = client.events.length;
@@ -247,19 +129,8 @@ const main = async () => {
     }
   } finally {
     server?.close();
-    if (browser && browser.exitCode === null) {
-      // A browser still closing holds its profile's files on Windows: it is waited for, a few seconds at most.
-      const exited = new Promise((resolve) => browser.once('exit', resolve));
-      browser.kill();
-      await Promise.race([exited, new Promise((resolve) => setTimeout(resolve, 5000))]);
-    }
+    await closeBrowser(browser, profileDir);
     rmSync(siteDir, { recursive: true, force: true });
-    try {
-      rmSync(profileDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 });
-    } catch (error) {
-      // What is left is in the system's temporary folder; the pictures are what this run is for.
-      console.warn(`Could not remove the browser profile ${profileDir}: ${error.message}`);
-    }
   }
 };
 
