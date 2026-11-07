@@ -1201,7 +1201,7 @@ export class Stroke {
      * it is now round the area, with the tile texel its first texel stands for; null to lay the brush's
      * values on (painting, erasing, or a smudge or clone with nowhere to take from yet).
      */
-    private sourceFor(key: string, picture: SparsePicture, area: Rect): { image: GpuImage; at: [number, number] } | null {
+    private sourceFor(key: string, picture: SparsePicture, area: Rect, tile: number): { image: GpuImage; at: [number, number] } | null {
         const mode = this.brush.mode;
         // Painting (and a brush saved before it had a mode) lays its values on; erasing always erases.
         if ((mode !== 'blur' && mode !== 'sharpen' && mode !== 'smudge' && mode !== 'clone') || this.tool === 'erase') return null;
@@ -1216,7 +1216,17 @@ export class Stroke {
         const width = region.x1 - region.x0;
         const height = region.y1 - region.y0;
         const raw = gpu.image(width, height, 'color', 16);
-        picture.drawInto(raw, region, [region.x0, region.y0]);
+        const size = this.stack.size;
+        if (this.stack.reachesSeams(tile, region, 0)) {
+            // By a UV seam: the whole tile read, the gaps by its seams filled from across them, and the region
+            // taken from that, so blur, sharpen and smudge read the surface on both sides.
+            const whole = gpu.image(size, size, 'color', 16);
+            picture.drawInto(whole, { x0: 0, y0: 0, x1: size, y1: size }, [0, 0]);
+            const across = this.stack.acrossSeams(whole, tile, { x0: 0, y0: 0, x1: size, y1: size });
+            gpu.release(whole);
+            gpu.passNow(raw, { fragment: 'uniform vec2 uAt;\nvoid main() { outColor = texelFetch(source, ivec2(gl_FragCoord.xy + uAt), 0); }', inputs: { source: across }, uniforms: { uAt: new THREE.Vector2(region.x0, region.y0) } });
+            gpu.release(across);
+        } else picture.drawInto(raw, region, [region.x0, region.y0]);
         let image = raw;
         // A layer's colour is weighted by its coverage; a mask is a value alone.
         if (key.includes(':')) {
@@ -1263,7 +1273,7 @@ export class Stroke {
                 let kept = this.before.get(`${key}|${tile}`);
                 if (!kept) this.before.set(`${key}|${tile}`, kept = new Map());
                 for (const area of rects) {
-                    const source = this.sourceFor(key, picture, area);
+                    const source = this.sourceFor(key, picture, area, tile);
                     for (const [px, py] of pagesOfArea(area, picture)) {
                         const index = py * picture.columns + px;
                         if (!kept.has(index)) {
