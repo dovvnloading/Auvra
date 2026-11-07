@@ -5,14 +5,17 @@ import type { GpuImage, TextureGpu } from '../../../texturing/gpu/textureGpu';
 import { tileGeometry } from '../../../texturing/mesh/partMesh';
 import type { MeshMapName } from '../../../texturing/graph/nodes/io';
 import type { BakeSettings, ExtraBakeMap } from '../../../texturing/bake/meshBaker';
-import { MAX_BRUSH_SIZE, lazyFollow, pictureAspect, renderDepth, stencilPlace, Stroke, type BrushSettings, type Dab, type HistoryEntry, type StrokeTarget } from '../../../texturing/paint/strokes';
+import { MAX_BRUSH_SIZE, lazyFollow, pictureAspect, renderDepth, stencilPlace, Stroke, type BrushSettings, type HistoryEntry, type StrokeTarget } from '../../../texturing/paint/strokes';
+import { decalCoordinates, type DecalStart } from '../../../texturing/paint/decals';
+import { strokeLabel } from '../../../texturing/paint/history';
 import { builtInAlphaTexture } from '../../../texturing/paint/brushLibrary';
-import { layoutAlong, pathLength, sampleAt, samplePath, type SurfacePath, type Vec3 } from '../../../texturing/paint/paths';
+import { pathLength, samplePath, type SurfacePath, type Vec3 } from '../../../texturing/paint/paths';
 
 import type { PaintChannel } from '../../../texturing/paint/paintTypes';
 import { PICK_LABELS, type PickMode } from '../../../texturing/paint/selection';
 import type { PaintSession } from './paintSession';
 import type { UvSession } from './uvSession';
+import { layPathAlong } from './pathLaying';
 
 /**
  * The painting view: the model in its rest pose, the texture set being painted drawn with its live
@@ -25,7 +28,18 @@ import type { UvSession } from './uvSession';
  * smoothed onto the screen, so its edges are clean.
  */
 
-export type PaintTool = 'paint' | 'erase' | 'island' | 'polygon' | 'path' | 'pick' | 'seam';
+export type PaintTool = 'paint' | 'erase' | 'island' | 'polygon' | 'path' | 'pick' | 'seam' | 'decal';
+
+/** A decal as the Brush panel sets it: its picture, its width as a share of the set's size, its turn in degrees and its strength. */
+export interface DecalSettings {
+    textureId: string;
+    size: number;
+    angle: number;
+    strength: number;
+}
+
+/** Why painting waits while a decal is placed (the Brush panel knows a decal is placed by it). */
+export const DECAL_LOCK = 'A decal is being placed: lay it on or give it up first.';
 
 /** The path tool: the path being drawn, its selected point, and what clicks do to it. */
 export interface PathEdit {
@@ -41,27 +55,14 @@ export interface PathEdit {
 export interface ViewportCommands {
     /** Lays a path on the selected paint layer or painted mask: along it, or filling inside it (seen from here). */
     paintPath: (path: SurfacePath, how: 'along' | 'fill') => Promise<void>;
+    /** Keeps the decal being placed as a step of the history. */
+    keepDecal: () => void;
+    /** Gives up the decal being placed. */
+    dropDecal: () => void;
 }
 
 /** Fonts the browser has, for text along a path. */
 export const PATH_FONTS = ['sans-serif', 'serif', 'monospace', 'cursive', 'Arial', 'Georgia', 'Times New Roman', 'Courier New', 'Verdana', 'Trebuchet MS', 'Impact'];
-
-/** One letter, white on black, as an alpha for a dab. */
-const glyphTexture = (character: string, font: string): { texture: THREE.CanvasTexture; advance: number } => {
-    const canvas = document.createElement('canvas');
-    canvas.width = canvas.height = 128;
-    const context = canvas.getContext('2d')!;
-    context.fillStyle = 'black';
-    context.fillRect(0, 0, 128, 128);
-    context.fillStyle = 'white';
-    context.font = `96px ${font}`;
-    context.textAlign = 'center';
-    context.textBaseline = 'middle';
-    context.fillText(character, 64, 70);
-    const texture = new THREE.CanvasTexture(canvas);
-    texture.colorSpace = THREE.NoColorSpace;
-    return { texture, advance: context.measureText(character).width / 128 };
-};
 
 /** Where a click met the surface: its triangle, the place on the model and its texture coordinates. */
 export interface SurfaceHit { triangle: number; point: THREE.Vector3; uv: THREE.Vector2 }
@@ -211,7 +212,9 @@ export const PaintViewport: React.FC<{
     /** Bake settings whose rays are shown where the model is clicked (null: clicks do as the tool does). */
     bakeRays?: BakeSettings | null;
     commands?: React.MutableRefObject<ViewportCommands | null>;
-}> = ({ session, tool, brush, target, view, maskImage, onBrushSize, onPick, onMessage, frameSignal, uv, pickMode, onSurfacePick, pathEdit, commands, picking = false, bakeRays = null }) => {
+    /** The decal the decal tool places. */
+    decal?: DecalSettings | null;
+}> = ({ session, tool, brush, target, view, maskImage, onBrushSize, onPick, onMessage, frameSignal, uv, pickMode, onSurfacePick, pathEdit, commands, picking = false, bakeRays = null, decal = null }) => {
     const uvVersion = useSyncExternalStore(uv?.subscribe ?? NO_SUBSCRIBE, uv?.getVersion ?? ZERO);
     const host = useRef<HTMLDivElement>(null);
     const canvas = useRef<HTMLCanvasElement>(null);
@@ -533,7 +536,7 @@ export const PaintViewport: React.FC<{
     }, [draw, updateMaterials, version, uvVersion]);
 
     // ---- pointer ----
-    const gesture = useRef<{ kind: 'orbit' | 'pan'; x: number; y: number } | { kind: 'stroke'; stroke: Stroke; depth: GpuImage; anchor: { x: number; y: number } } | { kind: 'pathPoint'; index: number } | null>(null);
+    const gesture = useRef<{ kind: 'orbit' | 'pan'; x: number; y: number } | { kind: 'stroke'; stroke: Stroke; depth: GpuImage; anchor: { x: number; y: number } } | { kind: 'pathPoint'; index: number } | { kind: 'decal' } | null>(null);
     /** Clone: where strokes copy from (Ctrl-click sets it). */
     const cloneSource = useRef<{ triangle: number; uv: THREE.Vector2 } | null>(null);
 
@@ -614,6 +617,103 @@ export const PaintViewport: React.FC<{
         onPick([value[0], value[1], value[2]]);
     };
 
+
+    // ---- Decals: placed by clicking and dragging on the model, shown laid on, kept or given up ----
+
+    /** Where the decal sits (the surface point, and the way across it was placed with), or null. */
+    const decalPlace = useRef<{ start: DecalStart; hint: THREE.Vector3 } | null>(null);
+    /** The decal laid on for showing: a stroke not yet kept, given up on before every change. */
+    const decalLive = useRef<Stroke | null>(null);
+    /** Each vertex's place on the decal, kept while the decal stays where it is. */
+    const decalCoords = useRef<{ start: DecalStart; reach: number; coords: Float32Array } | null>(null);
+    const decalFrame = useRef<number | null>(null);
+
+    /** Gives up the decal shown (the pictures as they were) and lets painting go on. */
+    const dropDecal = useCallback((forget: boolean) => {
+        if (decalFrame.current !== null) { cancelAnimationFrame(decalFrame.current); decalFrame.current = null; }
+        const live = decalLive.current;
+        decalLive.current = null;
+        if (live) live.cancel();
+        if (forget) { decalPlace.current = null; decalCoords.current = null; }
+        if (session.locked === DECAL_LOCK) session.unlock();
+    }, [session]);
+
+    /** Lays the decal on again where it is now, as it is now set (the last showing given up first). */
+    const showDecal = () => {
+        decalFrame.current = null;
+        const live = decalLive.current;
+        decalLive.current = null;
+        if (live) live.cancel();
+        const place = decalPlace.current;
+        if (!place || !decal) return;
+        if (!session.usable) return;
+        if (session.locked && session.locked !== DECAL_LOCK) { onMessage(session.locked); return; }
+        if (!target) { onMessage('Pick a paint layer, or a painted mask effect, to lay the decal on.'); return; }
+        const picture = decal.textureId ? session.host.texture(decal.textureId) : null;
+        if (!picture) { onMessage(decal.textureId ? 'The decal\'s picture is still loading: move the decal again in a moment.' : 'Pick the decal\'s picture in the Brush panel first.'); return; }
+        const modelSize = Math.max(1e-6, session.part.bounds.getSize(new THREE.Vector3()).length());
+        const width = decal.size * modelSize;
+        const height = width / pictureAspect(picture);
+        const reach = Math.hypot(width, height) * 0.75;
+        let cached = decalCoords.current;
+        if (!cached || cached.start !== place.start || cached.reach < reach) {
+            cached = { start: place.start, reach, coords: decalCoordinates(session.part, place.start, place.hint, reach) };
+            decalCoords.current = cached;
+        }
+        if (session.locked !== DECAL_LOCK) session.lock(DECAL_LOCK);
+        placeCamera();
+        const stroke = new Stroke(stack, target, 'paint', brush, {
+            viewProjection: new THREE.Matrix4().multiplyMatrices(world.camera.projectionMatrix, world.camera.matrixWorldInverse),
+            cameraPosition: world.camera.position.clone(),
+            width: size.width,
+            height: size.height,
+            depth: null,
+            perspective: (size.height / 2) / Math.tan(THREE.MathUtils.degToRad(world.camera.fov / 2)),
+        }, null, null);
+        stroke.layDecal({ coords: cached.coords, picture, width, height, angle: THREE.MathUtils.degToRad(decal.angle), strength: decal.strength });
+        decalLive.current = stroke;
+        onMessage('Drag the decal over the model; set its size and turn in the Brush panel. Enter or "Lay it on" keeps it, Escape gives it up.');
+        draw();
+    };
+    const showDecalRef = useRef(showDecal);
+    showDecalRef.current = showDecal;
+    /** Shows the decal again at the next frame (dragging gives many moves a frame). */
+    const showDecalSoon = () => {
+        // The last frame asked for gives way to this one, so nothing waits on a frame that never comes.
+        if (decalFrame.current !== null) cancelAnimationFrame(decalFrame.current);
+        decalFrame.current = requestAnimationFrame(() => showDecalRef.current());
+    };
+
+    /** Puts the decal where the pointer meets the surface, its way across the screen's. */
+    const placeDecal = (x: number, y: number) => {
+        const hit = hitAt(x, y);
+        if (!hit) return;
+        decalPlace.current = { start: { point: hit.point, normal: hit.normal, triangle: hit.triangle }, hint: new THREE.Vector3().setFromMatrixColumn(world.camera.matrixWorld, 0).normalize() };
+        showDecalSoon();
+    };
+
+    /** Keeps the decal shown as a step of the history. */
+    const keepDecal = () => {
+        const live = decalLive.current;
+        if (!live) { onMessage('Click the model to place the decal first.'); return; }
+        decalLive.current = null;
+        decalPlace.current = null;
+        decalCoords.current = null;
+        if (session.locked === DECAL_LOCK) session.unlock();
+        session.record(live.finish('Lay decal'));
+        onMessage('Decal laid on. Click the model to place another.');
+    };
+
+    // A change to the decal's picture, size, turn or strength shows it again; another tool or target gives it up.
+    useEffect(() => {
+        if (tool === 'decal' && decalPlace.current) showDecalSoon();
+    }, [decal?.textureId, decal?.size, decal?.angle, decal?.strength]); // eslint-disable-line react-hooks/exhaustive-deps
+    useEffect(() => {
+        if (tool !== 'decal') dropDecal(true);
+    }, [tool, dropDecal]);
+    const targetKey = target ? (target.kind === 'layer' ? `layer:${target.layerId}:${target.channels.join(',')}` : `mask:${target.effectId}`) : '';
+    useEffect(() => () => dropDecal(true), [targetKey, dropDecal]);
+
     const onPointerDown = (event: React.PointerEvent) => {
         try { host.current?.setPointerCapture(event.pointerId); } catch { /* a pointer the page did not see start */ }
         const { x, y } = toPixels(event);
@@ -647,6 +747,11 @@ export const PaintViewport: React.FC<{
                 cloneSource.current = { triangle: hit.triangle, uv: hit.uv.clone() };
                 onMessage('Copying from there: paint where the copy goes. The copy keeps its distance on the picture.');
             }
+            return;
+        }
+        if (tool === 'decal') {
+            placeDecal(x, y);
+            gesture.current = { kind: 'decal' };
             return;
         }
         // Showing bake rays: a click shows the rays at that spot and its triangle's corners.
@@ -689,6 +794,10 @@ export const PaintViewport: React.FC<{
         setCursor({ x: x / size.ratio, y: y / size.ratio });
         const current = gesture.current;
         if (!current) return;
+        if (current.kind === 'decal') {
+            placeDecal(x, y);
+            return;
+        }
         if (current.kind === 'pathPoint') {
             const hit = hitAt(x, y);
             if (hit && pathEdit) pathEdit.onMove(current.index, [hit.point.x, hit.point.y, hit.point.z], [hit.normal.x, hit.normal.y, hit.normal.z]);
@@ -727,7 +836,7 @@ export const PaintViewport: React.FC<{
         const current = gesture.current;
         gesture.current = null;
         if (current?.kind === 'stroke') {
-            const entry = current.stroke.finish(tool === 'erase' ? 'Erase' : 'Paint');
+            const entry = current.stroke.finish(strokeLabel(tool === 'erase' ? 'erase' : 'paint', brush));
             gpu.release(current.depth);
             session.record(entry);
         }
@@ -793,54 +902,11 @@ export const PaintViewport: React.FC<{
                 keep(stroke.finish(`Fill inside ${path.name}`));
                 return;
             }
-            const style = path.style;
-            const sizes = path.points.map((point) => point.size);
-            const smallest = Math.max(1e-6, Math.min(...sizes));
-            const gap = path.gap ?? 0.2;
-            const surface: BrushSettings = style === 'ribbon' ? { ...plain, projection: 'surface', shape: 'square', hardness: 1 } : { ...plain, projection: 'surface' };
-            const alpha = style === 'brush' && brush.shape === 'picture' && brush.alphaTexture ? builtInAlphaTexture(brush.alphaTexture) ?? session.host.texture(brush.alphaTexture) : null;
-            const stroke = new Stroke(stack, target, 'paint', surface, view, alpha, null);
-            const dabOf = (sample: { position: Vec3; normal: Vec3; size: number; opacity: number; tangent: Vec3 }, scale = 1, follow = true): Dab => {
-                const point = new THREE.Vector3(...sample.position);
-                const worldRadius = sample.size * scale;
-                return {
-                    x: 0, y: 0, angle: 0,
-                    radius: (worldRadius * perspective) / Math.max(1e-6, world.camera.position.distanceTo(point)),
-                    flow: brush.flow * sample.opacity,
-                    point, normal: new THREE.Vector3(...sample.normal), worldRadius,
-                    ...(follow ? { across: new THREE.Vector3(...sample.tangent) } : {}),
-                };
-            };
-            if (style === 'text') {
-                const text = (path.text ?? '').trim() ? path.text! : 'Text';
-                const font = path.font ?? 'sans-serif';
-                const height = smallest * 2;
-                const glyphs = [...text].map((character) => ({ character, ...glyphTexture(character, font) }));
-                for (const glyph of glyphs) disposables.push(glyph.texture);
-                const samples = samplePath(path.points, Math.max(smallest / 20, 1e-6), path.closed);
-                const total = samples.length ? samples[samples.length - 1].distance : 0;
-                const places = layoutAlong(glyphs.map((glyph) => Math.max(glyph.advance, 0.25) * height), total, gap * height * 0.25);
-                glyphs.forEach((glyph, i) => {
-                    const at = places[i];
-                    const sample = at === null ? null : sampleAt(samples, at);
-                    if (sample && glyph.character.trim()) stroke.stamp([dabOf(sample)], glyph.texture);
-                });
-                if (places.some((place) => place === null)) onMessage('The path is too short for all of the text: the rest was left off.');
-            } else if (style === 'stitches') {
-                const entry = path.graphId ? session.stack.host.resolveGraph(path.graphId) : undefined;
-                const output = entry?.graph.nodes.find((node) => node.type === 'output');
-                if (!entry || !output) { onMessage('Pick a texture graph to make the stitches from: each stitch is its first output.'); return; }
-                const image = await stack.graphOutput(path.graphId!, output.params.channel === 'custom' ? output.id : String(output.params.channel), {}, stack.tiles[0], `path:${path.id}`);
-                if (!image) { onMessage('The stitch graph could not be drawn.'); return; }
-                const samples = samplePath(path.points, smallest * 2 * (1 + gap), path.closed);
-                stroke.stamp(samples.map((sample) => dabOf(sample)), image.target.texture);
-            } else {
-                const step = style === 'ribbon' ? smallest * 0.2 : Math.max(smallest * 2 * brush.spacing, smallest * 0.05);
-                const samples = samplePath(path.points, step, path.closed);
-                const dabs = samples.map((sample) => dabOf(sample, 1, style === 'ribbon' || brush.followStroke));
-                for (let i = 0; i < dabs.length; i += 64) stroke.stamp(dabs.slice(i, i + 64), alpha);
-            }
-            keep(stroke.finish(`Paint ${path.name}`));
+            const laid = await layPathAlong({
+                session, target, brush, path, view, onMessage,
+                pixelsAt: (point, worldRadius) => (worldRadius * perspective) / Math.max(1e-6, world.camera.position.distanceTo(point)),
+            });
+            if (laid) keep(laid);
         } finally {
             gpu.release(depth);
             for (const texture of disposables) texture.dispose();
@@ -848,9 +914,15 @@ export const PaintViewport: React.FC<{
     };
     const paintPathRef = useRef(paintPath);
     paintPathRef.current = paintPath;
+    const onMessageRef = useRef(onMessage);
+    onMessageRef.current = onMessage;
+    const keepDecalRef = useRef(keepDecal);
+    keepDecalRef.current = keepDecal;
+    const dropDecalRef = useRef(dropDecal);
+    dropDecalRef.current = dropDecal;
     useEffect(() => {
         if (!commands) return undefined;
-        commands.current = { paintPath: (path, how) => paintPathRef.current(path, how) };
+        commands.current = { paintPath: (path, how) => paintPathRef.current(path, how), keepDecal: () => keepDecalRef.current(), dropDecal: () => { dropDecalRef.current(true); onMessageRef.current('Decal given up. The decal tool stays picked: click the model to place another.'); } };
         return () => { commands.current = null; };
     }, [commands]);
 
@@ -885,7 +957,7 @@ export const PaintViewport: React.FC<{
         <div
             ref={host}
             className="relative min-h-0 min-w-0 flex-1 overflow-hidden"
-            style={{ cursor: picking || tool === 'pick' || tool === 'polygon' ? 'crosshair' : showCursor ? 'none' : 'default' }}
+            style={{ cursor: picking || tool === 'pick' || tool === 'polygon' || tool === 'decal' ? 'crosshair' : showCursor ? 'none' : 'default' }}
             onPointerDown={onPointerDown}
             onPointerMove={onPointerMove}
             onPointerUp={onPointerUp}

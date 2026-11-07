@@ -23,6 +23,33 @@ const moved = (m: readonly number[], x: number, y: number, z: number): [number, 
 
 export const NO_MIRROR: Mirror = { signs: [1, 1, 1], centre: [0, 0, 0] };
 
+/** The point of triangle abc nearest to p, with its weights for a, b and c. */
+export const closestOnTriangle = (px: number, py: number, pz: number, ax: number, ay: number, az: number, bx: number, by: number, bz: number, cx: number, cy: number, cz: number): { x: number; y: number; z: number; w: [number, number, number] } => {
+    const abx = bx - ax, aby = by - ay, abz = bz - az;
+    const acx = cx - ax, acy = cy - ay, acz = cz - az;
+    const apx = px - ax, apy = py - ay, apz = pz - az;
+    const at = (u: number, v: number): { x: number; y: number; z: number; w: [number, number, number] } => ({ x: ax + abx * u + acx * v, y: ay + aby * u + acy * v, z: az + abz * u + acz * v, w: [1 - u - v, u, v] });
+    const d1 = abx * apx + aby * apy + abz * apz, d2 = acx * apx + acy * apy + acz * apz;
+    if (d1 <= 0 && d2 <= 0) return at(0, 0);
+    const bpx = px - bx, bpy = py - by, bpz = pz - bz;
+    const d3 = abx * bpx + aby * bpy + abz * bpz, d4 = acx * bpx + acy * bpy + acz * bpz;
+    if (d3 >= 0 && d4 <= d3) return at(1, 0);
+    const vc = d1 * d4 - d3 * d2;
+    if (vc <= 0 && d1 >= 0 && d3 <= 0) return at(d1 / (d1 - d3), 0);
+    const cpx = px - cx, cpy = py - cy, cpz = pz - cz;
+    const d5 = abx * cpx + aby * cpy + abz * cpz, d6 = acx * cpx + acy * cpy + acz * cpz;
+    if (d6 >= 0 && d5 <= d6) return at(0, 1);
+    const vb = d5 * d2 - d1 * d6;
+    if (vb <= 0 && d2 >= 0 && d6 <= 0) return at(0, d2 / (d2 - d6));
+    const va = d3 * d6 - d5 * d4;
+    if (va <= 0 && d4 - d3 >= 0 && d5 - d6 >= 0) {
+        const w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
+        return at(1 - w, w);
+    }
+    const denominator = 1 / (va + vb + vc);
+    return at(vb * denominator, vc * denominator);
+};
+
 /** Screen place of a model-space point (pixels from the top left), or null behind the eye. */
 const toScreen = (m: ArrayLike<number>, x: number, y: number, z: number, width: number, height: number): [number, number] | null => {
     const w = m[3] * x + m[7] * y + m[11] * z + m[15];
@@ -187,6 +214,34 @@ export class SurfacePicker {
             }
             if (near(min, max)) visit(triangle);
         });
+    }
+
+    /**
+     * The nearest point of the surface to `point` within `reach` (its smooth normal there and its triangle),
+     * or null when no triangle comes that close.
+     */
+    nearest(point: THREE.Vector3, reach: number): { point: THREE.Vector3; normal: THREE.Vector3; triangle: number } | null {
+        const { positions, indices, normals } = this.part;
+        let best = reach * reach;
+        let found: { triangle: number; x: number; y: number; z: number; w: [number, number, number] } | null = null;
+        this.trianglesNear(point, reach, NO_MIRROR, (triangle) => {
+            const a = indices[triangle * 3] * 3, b = indices[triangle * 3 + 1] * 3, c = indices[triangle * 3 + 2] * 3;
+            const closest = closestOnTriangle(point.x, point.y, point.z,
+                positions[a], positions[a + 1], positions[a + 2], positions[b], positions[b + 1], positions[b + 2], positions[c], positions[c + 1], positions[c + 2]);
+            const dx = closest.x - point.x, dy = closest.y - point.y, dz = closest.z - point.z;
+            const d = dx * dx + dy * dy + dz * dz;
+            if (d <= best) { best = d; found = { triangle, ...closest }; }
+        });
+        if (!found) return null;
+        const hit = found as { triangle: number; x: number; y: number; z: number; w: [number, number, number] };
+        const normal = new THREE.Vector3();
+        for (let k = 0; k < 3; k++) {
+            const v = indices[hit.triangle * 3 + k] * 3;
+            normal.x += normals[v] * hit.w[k];
+            normal.y += normals[v + 1] * hit.w[k];
+            normal.z += normals[v + 2] * hit.w[k];
+        }
+        return { point: new THREE.Vector3(hit.x, hit.y, hit.z), normal: normal.normalize(), triangle: hit.triangle };
     }
 
     /**

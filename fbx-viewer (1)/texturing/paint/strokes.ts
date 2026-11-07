@@ -1,5 +1,7 @@
 import * as THREE from 'three';
 import { UvSurfaceLookup } from './uvSurface';
+import { DEFAULT_PARTICLES, throwParticles, type ParticleSettings } from './particles';
+import { DECAL_TABLE_WIDTH, decalTable, decalTriangles } from './decals';
 import type { GpuImage, TextureGpu } from '../gpu/textureGpu';
 import type { TileBake } from '../bake/meshBaker';
 import { NO_MIRROR, type Mirror } from '../mesh/picker';
@@ -91,6 +93,8 @@ export interface BrushSettings {
     channels: PaintChannel[];
     /** For masks: the grey painted. */
     maskValue: number;
+    /** Particles each dab throws (drips, leaks, dust, splashes); left out by brushes saved before them. */
+    particles?: ParticleSettings;
 }
 
 /** The largest brush radius, in screen pixels: the size sliders and the ] key stop here. */
@@ -143,6 +147,7 @@ export const DEFAULT_BRUSH: BrushSettings = {
     },
     channels: ['baseColor', 'roughness', 'metallic'],
     maskValue: 1,
+    particles: DEFAULT_PARTICLES,
 };
 
 /**
@@ -223,6 +228,8 @@ export interface StrokeView {
 }
 
 const MAX_DABS = 16;
+/** The most dabs the particles of one pointer move leave. */
+const MAX_PARTICLE_DABS = 1500;
 
 /** The most copies a brush paints with: mirrored and turned, the brush itself included. */
 export const MAX_COPIES = 16;
@@ -419,6 +426,45 @@ void main() {
     outColor = vec4(a);
 }`;
 
+/**
+ * A decal on the UV layout. Each texel's place on the decal (across and up along the surface, reached) is
+ * worked out from its triangle (vIds.z): the triangle's row in the lookup (uDecalSlots), its corners'
+ * places there (uDecalTable), weighted by where the texel lies on the triangle (from its first corner
+ * and its edges); then read in the decal's picture (uPlace: width, height, turn, strength). uOut 0 writes
+ * how much it covers (the picture's alpha), 1 its colour.
+ */
+const DECAL_SHADER = /* glsl */ `
+uniform sampler2D uPicture;
+uniform sampler2D uDecalSlots;
+uniform sampler2D uDecalTable;
+uniform vec4 uPlace;
+uniform int uOut;
+uniform int uPictureSrgb;
+uniform int uPictureFlip;
+// A two-channel normal map (BC5 blocks keep red and green only): its blue worked out again.
+uniform int uPictureRg;
+vec4 decalTexel(int i) { return texelFetch(uDecalTable, ivec2(i % ${DECAL_TABLE_WIDTH}, i / ${DECAL_TABLE_WIDTH}), 0); }
+void main() {
+    int t = int(vIds.z + 0.5);
+    int slot = int(texelFetch(uDecalSlots, ivec2(t % ${DECAL_TABLE_WIDTH}, t / ${DECAL_TABLE_WIDTH}), 0).r + 0.5) - 1;
+    if (slot < 0) { outColor = vec4(0.0); return; }
+    vec3 d = vPos - decalTexel(slot * 4 + 3).xyz;
+    float d00 = dot(vE1, vE1), d01 = dot(vE1, vE2), d11 = dot(vE2, vE2), d20 = dot(d, vE1), d21 = dot(d, vE2);
+    float denominator = d00 * d11 - d01 * d01;
+    if (abs(denominator) < 1e-30) { outColor = vec4(0.0); return; }
+    float b1 = (d11 * d20 - d01 * d21) / denominator;
+    float b2 = (d00 * d21 - d01 * d20) / denominator;
+    vec3 place = (1.0 - b1 - b2) * decalTexel(slot * 4).xyz + b1 * decalTexel(slot * 4 + 1).xyz + b2 * decalTexel(slot * 4 + 2).xyz;
+    if (place.z < 0.999) { outColor = vec4(0.0); return; }
+    vec2 q = rotate2(-uPlace.z) * place.xy / uPlace.xy + 0.5;
+    if (!(q.x >= 0.0 && q.x <= 1.0 && q.y >= 0.0 && q.y <= 1.0)) { outColor = vec4(0.0); return; }
+    // The picture's top row at the top of the decal, however the texture was uploaded.
+    vec4 c = texture(uPicture, vec2(q.x, uPictureFlip == 1 ? q.y : 1.0 - q.y));
+    if (uPictureRg == 1) { vec2 n = c.rg * 2.0 - 1.0; c = vec4(c.rg, sqrt(max(0.0, 1.0 - dot(n, n))) * 0.5 + 0.5, 1.0); }
+    if (uPictureSrgb == 1) c.rgb = linearToSrgb(c.rgb);
+    outColor = uOut == 0 ? vec4(clamp(c.a, 0.0, 1.0) * uPlace.w) : vec4(clamp(c.rgb, 0.0, 1.0), 1.0);
+}`;
+
 /** One batch's coverage laid over what the stroke has gathered so far (blended: batch + mask × (1 − batch)). */
 const GATHER_SHADER = /* glsl */ `
 void main() { outColor = vec4(texelFetch(batch, ivec2(gl_FragCoord.xy), 0).r); }`;
@@ -431,16 +477,19 @@ void main() { outColor = vec4(texelFetch(batch, ivec2(gl_FragCoord.xy), 0).r); }
 const APPLY_SHADER = /* glsl */ `
 uniform int uErase;
 uniform int uMask;
-uniform vec3 uValue;
+uniform vec3 uValueSet;
 uniform float uOpacity;
 uniform vec2 uAt;
 uniform int uHasBefore;
 uniform vec4 uFill;
 uniform int uSource;
 uniform vec2 uSourceAt;
+// A value for every texel (a decal's colour) instead of uValueSet.
+uniform int uValueImage;
 void main() {
     ivec2 p = ivec2(gl_FragCoord.xy);
     vec4 b = uHasBefore == 1 ? texelFetch(before, p, 0) : uFill;
+    vec3 laid = uValueImage == 1 ? texelFetch(valueImage, p + ivec2(uAt), 0).rgb : uValueSet;
     float c = clamp(texelFetch(stroke, p + ivec2(uAt), 0).r * uOpacity, 0.0, 1.0);
     // Blur, sharpen, smudge and clone lay on what is painted already, worked out round the area
     // (colour weighted by coverage, a mask as it is), read where this texel takes it from.
@@ -452,12 +501,12 @@ void main() {
         return;
     }
     if (uMask == 1) {
-        outColor = vec4(vec3(mix(b.r, uErase == 1 ? 0.0 : uValue.x, c)), 1.0);
+        outColor = vec4(vec3(mix(b.r, uErase == 1 ? 0.0 : laid.x, c)), 1.0);
         return;
     }
     if (uErase == 1) { outColor = vec4(b.rgb, b.a * (1.0 - c)); return; }
     float alpha = b.a + c * (1.0 - b.a);
-    vec3 value = alpha > 0.0 ? (b.rgb * b.a * (1.0 - c) + uValue * c) / alpha : uValue;
+    vec3 value = alpha > 0.0 ? (b.rgb * b.a * (1.0 - c) + laid * c) / alpha : laid;
     outColor = vec4(value, alpha);
 }`;
 
@@ -559,6 +608,8 @@ export interface PixelPatch {
 
 export interface HistoryEntry {
     label: string;
+    /** When the step was made (ms since 1970), for the history list. */
+    at?: number;
     document?: { before: PaintDocument; after: PaintDocument };
     pixels?: PixelPatch[];
     /** A bake: the maps before and after it, held on the GPU so undo and redo can put either back. */
@@ -738,6 +789,10 @@ export class Stroke {
      * covered), so the batch is drawn here keeping the largest value, then laid over the stroke once.
      */
     private readonly batch: GpuImage;
+    /** A decal's colour on each tile it reaches (its colour channels take it texel by texel). */
+    private readonly valueImages = new Map<number, GpuImage>();
+    /** Dabs that have thrown particles in this stroke (each throw its own seed). */
+    private particleCount = 0;
     /** The 2D view's tile, looked up by UV (for its dabs' copies on the model). */
     private uvSurface: UvSurfaceLookup | null = null;
     /**
@@ -861,7 +916,43 @@ export class Stroke {
             this.travelled = length - (along - step);
         }
         this.last = { x, y };
+        const particles = brush.particles;
+        if (particles?.enabled && !this.view.uvView && dabs.length) {
+            const thrown = this.particleDabs(dabs, particles, hit);
+            if (particles.paintAtBrush) this.draw(dabs);
+            if (thrown.length) this.draw(thrown, null, 'surface');
+            return;
+        }
         if (dabs.length) this.draw(dabs);
+    }
+
+    /**
+     * The dabs the particles thrown by `dabs` leave along their paths, as surface dabs (each the size its
+     * particle has then, in the same pixels to the model unit as the dab that threw it).
+     */
+    private particleDabs(dabs: readonly Dab[], settings: ParticleSettings, hit: SurfaceProbe): Dab[] {
+        const part = this.stack.part;
+        const modelSize = Math.max(1e-6, part.bounds.getSize(new THREE.Vector3()).length());
+        const picker = this.stack.picker;
+        const surface = { cast: (origin: THREE.Vector3, direction: THREE.Vector3) => picker.cast(origin, direction), nearest: (point: THREE.Vector3, reach: number) => picker.nearest(point, reach) };
+        const out: Dab[] = [];
+        for (const dab of dabs) {
+            let { point, normal, worldRadius } = dab;
+            if (!point || !normal || !worldRadius) {
+                const found = hit(dab.x, dab.y);
+                if (!found) continue;
+                point = found.point;
+                normal = found.normal;
+                worldRadius = (dab.radius * found.distance) / this.view.perspective;
+            }
+            const pixelsPerUnit = dab.radius / Math.max(1e-9, worldRadius);
+            const seed = this.seed + (this.particleCount += 1) * 7919;
+            for (const left of throwParticles({ point, normal, worldRadius, flow: dab.flow }, settings, surface, modelSize, seed, Math.max(0, MAX_PARTICLE_DABS - out.length))) {
+                out.push({ x: dab.x, y: dab.y, radius: Math.max(0.5, left.worldRadius * pixelsPerUnit), angle: random(seed + out.length) * Math.PI * 2, flow: left.flow, point: left.point, normal: left.normal, worldRadius: left.worldRadius });
+            }
+            if (out.length >= MAX_PARTICLE_DABS) break;
+        }
+        return out;
     }
 
     /** Lays dabs placed by the caller (along a path), with their own alpha if one is given. */
@@ -872,6 +963,50 @@ export class Stroke {
         } finally {
             this.stampAlpha = undefined;
         }
+    }
+
+    /**
+     * Lays a decal: its picture wrapped over the surface by each vertex's place on it (decalCoordinates),
+     * `width` × `height` model units across, turned by `angle` (radians) and laid on at `strength`. Colour
+     * channels take the picture's colour, the brush's other channels its values, all through its alpha.
+     */
+    layDecal(decal: { coords: Float32Array; picture: THREE.Texture; width: number; height: number; angle: number; strength: number }): void {
+        const stack = this.stack;
+        const gpu = stack.host.gpu;
+        const triangles = decalTriangles(stack.part, decal.coords, decal.width, decal.height, decal.angle);
+        if (!triangles.length) return;
+        const areas = footprint(stack, [], this.view, this.brush, triangles);
+        const uniforms = (out: 0 | 1) => ({
+            uPicture: decal.picture,
+            uPlace: new THREE.Vector4(decal.width, decal.height, decal.angle, decal.strength),
+            uOut: out,
+            uPictureSrgb: decal.picture.colorSpace === THREE.SRGBColorSpace ? 1 : 0,
+            uPictureFlip: decal.picture.flipY ? 1 : 0,
+            uPictureRg: decal.picture.format === THREE.RED_GREEN_RGTC2_Format ? 1 : 0,
+        });
+        // Each covered triangle's corners' places, looked up by triangle in the shader.
+        const lookup = decalTable(stack.part, decal.coords, triangles);
+        const slots = new THREE.DataTexture(lookup.slots, DECAL_TABLE_WIDTH, lookup.slotRows, THREE.RedFormat, THREE.FloatType);
+        const table = new THREE.DataTexture(lookup.table, DECAL_TABLE_WIDTH, lookup.tableRows, THREE.RGBAFormat, THREE.FloatType);
+        for (const texture of [slots, table]) texture.needsUpdate = true;
+        try {
+            for (const [tile, rects] of areas) {
+                let colour = this.valueImages.get(tile);
+                if (!colour) {
+                    colour = gpu.image(stack.size, stack.size, 'color', 16);
+                    gpu.clear(colour, [0, 0, 0, 0]);
+                    this.valueImages.set(tile, colour);
+                }
+                for (const area of rects) {
+                    stack.raster.draw(this.masks.get(tile)!, tile, DECAL_SHADER, { blend: 'max', scissor: area, uniforms: { ...uniforms(0), uDecalSlots: slots, uDecalTable: table } });
+                    stack.raster.draw(colour, tile, DECAL_SHADER, { blend: 'none', scissor: area, uniforms: { ...uniforms(1), uDecalSlots: slots, uDecalTable: table } });
+                }
+            }
+        } finally {
+            slots.dispose();
+            table.dispose();
+        }
+        this.apply(areas);
     }
 
     /** Fills a whole UV island with the brush. */
@@ -913,7 +1048,9 @@ export class Stroke {
         return { dabs, uv };
     }
 
-    private draw(dabs: Dab[], picked: readonly number[] | null = null): void {
+    private draw(dabs: Dab[], picked: readonly number[] | null = null, projection: BrushProjection = this.brush.projection): void {
+        // Particle dabs are laid on the surface whatever the brush's own projection.
+        const brush = projection === this.brush.projection ? this.brush : { ...this.brush, projection };
         const stack = this.stack;
         const gpu = stack.host.gpu;
         const view = this.view;
@@ -1018,7 +1155,7 @@ export class Stroke {
         };
         for (const batch of batches) {
             // Only the texels these dabs can reach are drawn.
-            const reach = view.uvView && !picked ? uvFootprint(stack.size, view.uvView, batch, this.brush.shape) : footprint(stack, batch, view, this.brush, picked);
+            const reach = view.uvView && !picked ? uvFootprint(stack.size, view.uvView, batch, this.brush.shape) : footprint(stack, batch, view, brush, picked);
             const d1 = Array.from({ length: MAX_DABS }, () => new THREE.Vector4());
             const d2 = Array.from({ length: MAX_DABS }, () => new THREE.Vector4());
             const d3 = Array.from({ length: MAX_DABS }, () => new THREE.Vector4());
@@ -1031,13 +1168,13 @@ export class Stroke {
                 });
             } else {
                 batch.forEach((dab, i) => {
-                    if (this.brush.projection === 'screen' || !dab.point) {
+                    if (projection === 'screen' || !dab.point) {
                         d1[i].set(dab.x, dab.y, dab.radius, dab.angle);
                         d2[i].set(dab.flow, 0, 0, 0);
-                    } else surfaceDab(dab, i, d1, d2, d3, this.brush.projection);
+                    } else surfaceDab(dab, i, d1, d2, d3, projection);
                 });
             }
-            if (reach.size) drawReach(reach, { d1, d2, d3, count: batch.length }, view.uvView ? 4 : { screen: 0, surface: 1, planar: 2, triplanar: 3 }[this.brush.projection] ?? 0, view.uvView ? 1 : copies.length, false);
+            if (reach.size) drawReach(reach, { d1, d2, d3, count: batch.length }, view.uvView ? 4 : { screen: 0, surface: 1, planar: 2, triplanar: 3 }[projection] ?? 0, view.uvView ? 1 : copies.length, false);
             // The 2D view's mirrored and turned copies: each dab sent to where it lies on the model and drawn
             // there as a surface dab through the copies, as the 3D view would (the brush itself is drawn above).
             if (view.uvView && !picked && copies.length > 1) {
@@ -1118,6 +1255,8 @@ export class Stroke {
                 const picture = this.pictureOf(key, tile);
                 const channel = this.target.kind === 'layer' ? key.split(':')[1] as PaintChannel : null;
                 const value = this.target.kind === 'mask' ? [this.brush.maskValue, 0, 0] : this.brush.values[channel!];
+                // A decal's colour goes on its colour channels; its other channels take the brush's values.
+                const valueImage = channel && (channel === 'baseColor' || channel === 'emissive') ? this.valueImages.get(tile) ?? null : null;
                 let kept = this.before.get(`${key}|${tile}`);
                 if (!kept) this.before.set(`${key}|${tile}`, kept = new Map());
                 for (const area of rects) {
@@ -1147,11 +1286,12 @@ export class Stroke {
                         }
                         gpu.passNow(page, {
                             fragment: APPLY_SHADER,
-                            inputs: { before: before ?? gpu.constant('clear'), stroke: buildUp ? this.batch : this.masks.get(tile)!, source: source?.image ?? gpu.constant('clear') },
+                            inputs: { before: before ?? gpu.constant('clear'), stroke: buildUp ? this.batch : this.masks.get(tile)!, source: source?.image ?? gpu.constant('clear'), valueImage: valueImage ?? gpu.constant('black') },
                             uniforms: {
                                 uErase: this.tool === 'erase' ? 1 : 0,
                                 uMask: this.target.kind === 'mask' ? 1 : 0,
-                                uValue: new THREE.Vector3(...(channel && !CHANNEL_IS_COLOR[channel] ? [value[0], value[0], value[0]] : value)),
+                                uValueSet: new THREE.Vector3(...(channel && !CHANNEL_IS_COLOR[channel] ? [value[0], value[0], value[0]] : value)),
+                                uValueImage: valueImage ? 1 : 0,
                                 uOpacity: this.brush.opacity,
                                 uAt: new THREE.Vector2(bounds.x0, bounds.y0),
                                 uHasBefore: before ? 1 : 0,
@@ -1245,6 +1385,8 @@ void main() { ivec2 base = (ivec2(gl_FragCoord.xy) + ivec2(uFirst)) * ${BLOCK}; 
     private release(): void {
         const gpu = this.stack.host.gpu;
         for (const image of this.masks.values()) gpu.release(image);
+        for (const image of this.valueImages.values()) gpu.release(image);
+        this.valueImages.clear();
         for (const kept of this.before.values()) for (const image of kept.values()) gpu.release(image);
         gpu.release(this.batch);
         this.masks.clear();

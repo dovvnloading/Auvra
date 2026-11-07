@@ -48,9 +48,10 @@ export const GraphParameterPanel: React.FC<{
         const value = values[parameter.name] ?? parameter.default;
         const control = <ParamControl param={parameterSetting(parameter)} value={value} textures={textures} onChange={(next) => set(parameter, next)} />;
         const label = (
-            <span className="flex min-w-0 items-center gap-1 text-2xs text-ink-2" title={parameter.description}>
-                <span className="truncate">{parameter.label}</span>
-                {parameter.description && <InfoIcon size={10} className="shrink-0 text-ink-3" />}
+            // Long labels wrap rather than being cut; the label and its description show in full on hover.
+            <span className="flex min-w-0 items-start gap-1 text-2xs leading-tight text-ink-2" title={parameter.description ? `${parameter.label}: ${parameter.description}` : parameter.label}>
+                <span className="min-w-0 break-words">{parameter.label}</span>
+                {parameter.description && <InfoIcon size={10} className="mt-px shrink-0 text-ink-3" />}
             </span>
         );
         const reset = changed(parameter, values[parameter.name]) && (
@@ -63,7 +64,7 @@ export const GraphParameterPanel: React.FC<{
                 {control}
             </div>
         ) : (
-            <div key={parameter.name} className="grid grid-cols-[minmax(0,2fr)_minmax(0,3fr)_auto] items-center gap-1.5">
+            <div key={parameter.name} className="grid grid-cols-[minmax(0,2fr)_minmax(0,3fr)_auto] items-center gap-x-1.5 gap-y-0.5">
                 {label}
                 <div className="min-w-0">{control}</div>
                 <span className="w-4">{reset}</span>

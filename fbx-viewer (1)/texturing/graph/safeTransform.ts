@@ -86,3 +86,26 @@ vec4 blended(vec2 uv) {
     return (1.0 - w.x) * (1.0 - w.y) * transformedColour(uv) + w.x * (1.0 - w.y) * transformedColour(uv - vec2(1.0, 0.0))
         + (1.0 - w.x) * w.y * transformedColour(uv - vec2(0.0, 1.0)) + w.x * w.y * transformedColour(uv - vec2(1.0));
 }`;
+
+const gcd = (a: number, b: number): number => (b === 0 ? Math.abs(a) : gcd(b, a % b));
+
+/**
+ * The nearest direction to `degrees` a repeating picture stays seamless along: a step of whole numbers
+ * (a, b) across and down, at most `limit` each, with no common factor. Along it, a pattern repeating a
+ * whole number of times meets itself at the picture's edges.
+ */
+export const tileSafeDirection = (degrees: number, limit = 6): { step: [number, number]; degrees: number } => {
+    const wanted = degrees * Math.PI / 180;
+    let best: [number, number] = [1, 0];
+    let gap = Infinity;
+    for (let a = -limit; a <= limit; a++) {
+        for (let b = -limit; b <= limit; b++) {
+            if ((a === 0 && b === 0) || gcd(a, b) !== 1) continue;
+            const angle = Math.atan2(b, a);
+            const off = Math.abs(Math.atan2(Math.sin(angle - wanted), Math.cos(angle - wanted)));
+            // Of two as near, the shorter step (broader pattern).
+            if (off < gap - 1e-9 || (Math.abs(off - gap) < 1e-9 && Math.hypot(a, b) < Math.hypot(...best))) { gap = off; best = [a, b]; }
+        }
+    }
+    return { step: best, degrees: Number((Math.atan2(best[1], best[0]) * 180 / Math.PI).toFixed(2)) };
+};

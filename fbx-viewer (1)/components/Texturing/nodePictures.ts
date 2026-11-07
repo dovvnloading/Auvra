@@ -36,6 +36,16 @@ const subscribe = (listener: () => void): (() => void) => {
 /** One entry's picture, once drawn (a component using it redraws when its own picture arrives, and only then). */
 export const useNodePicture = (key: string): NodePicture | undefined => useSyncExternalStore(subscribe, () => pictures.get(key));
 
+/** Nodes about colour, shown changing a colourful sample (noise through a colourful gradient). */
+const COLOUR_SAMPLED: ReadonlySet<string> = new Set(['channelMixer', 'colourMatch', 'colourLookup', 'palette', 'quantize', 'histogramShift', 'histogramEqualize', 'levelsPerChannel', 'hsl', 'replaceColor', 'colorToMask', 'grayscale']);
+/** Nodes about ID colours, shown changing islands of random colours. */
+const ID_SAMPLED: ReadonlySet<string> = new Set(['idToMask']);
+
+const COLOURFUL_RAMP = { stops: [
+    { position: 0, color: [0.12, 0.2, 0.55, 1] }, { position: 0.35, color: [0.15, 0.6, 0.45, 1] },
+    { position: 0.65, color: [0.95, 0.75, 0.2, 1] }, { position: 1, color: [0.85, 0.2, 0.25, 1] },
+] };
+
 /** The sample a node changing images is shown with. */
 const sampleFor = (definition: TexNodeDef): string => {
     if (definition.category === 'Edges and distance' || definition.type.startsWith('flood')) return 'tiles';
@@ -58,10 +68,41 @@ const draw = async (gpu: TextureGpu, evaluator: TextureGraphEvaluator, request: 
     const nodes = [node];
     const links: TexGraphLink[] = [];
     const main = mainInput(definition) ?? (definition.type === 'makeMaterial' ? 'baseColor' : null);
-    if (main) {
-        const sample = sampleFor(definition);
+    if (definition.category === 'Weathering') {
+        // Weathering is shown on stand-in model maps made from the cells as a height: its curvature (also
+        // as the cavity), occlusion, normals (as the way each place faces) and the height as thickness.
+        nodes.unshift(
+            { ...createNode('cells', -260, 0), id: 'sample' },
+            { ...createNode('normalFromHeight', -200, 0), id: 'normals' },
+            { ...createNode('curvature', -150, 0, { intensity: 4 }), id: 'curvature' },
+            { ...createNode('aoFromHeight', -150, 80), id: 'occlusion' },
+        );
+        links.push(
+            { from: 'sample', fromOutput: 'out', to: 'normals', toInput: 'in' },
+            { from: 'normals', fromOutput: 'out', to: 'curvature', toInput: 'in' },
+            { from: 'sample', fromOutput: 'out', to: 'occlusion', toInput: 'in' },
+        );
+        const standIns: Record<string, string> = { curvature: 'curvature', cavity: 'curvature', occlusion: 'occlusion', worldNormal: 'normals', thickness: 'sample' };
+        for (const port of definition.inputs) if (standIns[port.key]) links.push({ from: standIns[port.key], fromOutput: 'out', to: 'picture', toInput: port.key });
+    } else if (main) {
+        const sample = ID_SAMPLED.has(definition.type) ? 'tiles' : sampleFor(definition);
         nodes.unshift({ ...createNode(sample, -200, 0), id: 'sample' });
-        if (definition.inputs.find((port) => port.key === main)?.kind === 'material') {
+        if (definition.inputs.find((port) => port.key === main)?.fallback === 'normal') {
+            // A node changing normals is shown changing a normal map (of the cells).
+            nodes.unshift({ ...createNode('normalFromHeight', -150, 0), id: 'normals' });
+            links.push({ from: 'sample', fromOutput: 'out', to: 'normals', toInput: 'in' }, { from: 'normals', fromOutput: 'out', to: 'picture', toInput: main });
+        } else if (COLOUR_SAMPLED.has(definition.type) || ID_SAMPLED.has(definition.type)) {
+            // A colourful sample: the noise through a colourful gradient, or islands each a random colour.
+            const colourful = ID_SAMPLED.has(definition.type) ? { ...createNode('floodFill', -150, 0), id: 'islands' } : { ...createNode('gradientMap', -150, 0, { ramp: COLOURFUL_RAMP }), id: 'colourful' };
+            nodes.unshift(colourful);
+            if (colourful.id === 'islands') {
+                nodes.unshift({ ...createNode('floodRandomColor', -120, 0), id: 'colourful' });
+                links.push({ from: 'sample', fromOutput: 'out', to: 'islands', toInput: 'mask' }, { from: 'islands', fromOutput: 'out', to: 'colourful', toInput: 'in' });
+            } else {
+                links.push({ from: 'sample', fromOutput: 'out', to: 'colourful', toInput: 'in' });
+            }
+            links.push({ from: 'colourful', fromOutput: 'out', to: 'picture', toInput: main });
+        } else if (definition.inputs.find((port) => port.key === main)?.kind === 'material') {
             // A material node is shown changing a sample material: the noise as its colour and height.
             nodes.unshift({ ...createNode('makeMaterial', -100, 0), id: 'sampleMaterial' });
             links.push({ from: 'sample', fromOutput: 'out', to: 'sampleMaterial', toInput: 'baseColor' }, { from: 'sample', fromOutput: 'out', to: 'sampleMaterial', toInput: 'height' });

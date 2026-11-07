@@ -1,6 +1,7 @@
 import { getMaterialNodeDefinition, materialGraphFeatures, normalizeMaterialGraph, OUTPUT_NODE_TYPE, readParam, type MaterialGraph } from '../../runtime/materials/materialGraph';
 import type { TileLayout } from '../materialOutput';
-import { writeGlb } from '../../utils/gltfContainer';
+import * as THREE from 'three';
+import { readGlb, readGlbBinary, writeGlb } from '../../utils/gltfContainer';
 import type { ExportSource } from './exportTemplates';
 
 /**
@@ -182,6 +183,34 @@ const unitNormals = (normals: Float32Array): Float32Array => {
     return out;
 };
 
+/**
+ * A painted surface's glTF material: its factors, its pictures (each handed to `addTexture`, which gives
+ * back the texture's index) and its extensions.
+ */
+export const paintedMaterial = (surface: GltfSurface, pictures: GltfPictures, name: string, addTexture: (png: Uint8Array, name: string) => number): Record<string, unknown> => {
+    const pbr: Record<string, unknown> = {
+        baseColorFactor: [...surface.baseColor, surface.opacity].map(round),
+        metallicFactor: round(surface.metalness),
+        roughnessFactor: round(surface.roughness),
+    };
+    const material: Record<string, unknown> = { name: surface.name, pbrMetallicRoughness: pbr };
+    if (pictures.baseColor) pbr.baseColorTexture = { index: addTexture(pictures.baseColor, `${name}_baseColor`) };
+    if (pictures.orm) {
+        const index = addTexture(pictures.orm.png, `${name}_occlusionRoughnessMetallic`);
+        if (pictures.orm.metallicRoughness) pbr.metallicRoughnessTexture = { index };
+        if (pictures.orm.occlusion) material.occlusionTexture = { index };
+    }
+    if (pictures.normal) material.normalTexture = { index: addTexture(pictures.normal, `${name}_normal`) };
+    if (pictures.emissive) material.emissiveTexture = { index: addTexture(pictures.emissive, `${name}_emissive`) };
+    const emissive = surface.emissive.map(round);
+    if (emissive.some((value) => value > 0)) material.emissiveFactor = emissive;
+    if (surface.alphaMode !== 'OPAQUE') material.alphaMode = surface.alphaMode;
+    if (surface.alphaMode === 'MASK') material.alphaCutoff = round(surface.alphaCutoff);
+    if (surface.doubleSided) material.doubleSided = true;
+    if (Object.keys(surface.extensions).length) material.extensions = surface.extensions;
+    return material;
+};
+
 /** The painted set as a GLB: one node, one mesh, one material, every picture inside the file. */
 export const writePaintedGlb = (input: { name: string; mesh: GltfMesh; surface: GltfSurface; pictures: GltfPictures }): ArrayBuffer => {
     const { mesh, surface, pictures } = input;
@@ -224,27 +253,8 @@ export const writePaintedGlb = (input: { name: string; mesh: GltfMesh; surface: 
         textures.push({ source: images.length - 1, sampler: 0, name });
         return textures.length - 1;
     };
-    const pbr: Record<string, unknown> = {
-        baseColorFactor: [...surface.baseColor, surface.opacity].map(round),
-        metallicFactor: round(surface.metalness),
-        roughnessFactor: round(surface.roughness),
-    };
-    const material: Record<string, unknown> = { name: surface.name, pbrMetallicRoughness: pbr };
-    if (pictures.baseColor) pbr.baseColorTexture = { index: texture(pictures.baseColor, `${input.name}_baseColor`) };
-    if (pictures.orm) {
-        const index = texture(pictures.orm.png, `${input.name}_occlusionRoughnessMetallic`);
-        if (pictures.orm.metallicRoughness) pbr.metallicRoughnessTexture = { index };
-        if (pictures.orm.occlusion) material.occlusionTexture = { index };
-    }
-    if (pictures.normal) material.normalTexture = { index: texture(pictures.normal, `${input.name}_normal`) };
-    if (pictures.emissive) material.emissiveTexture = { index: texture(pictures.emissive, `${input.name}_emissive`) };
-    const emissive = surface.emissive.map(round);
-    if (emissive.some((value) => value > 0)) material.emissiveFactor = emissive;
-    if (surface.alphaMode !== 'OPAQUE') material.alphaMode = surface.alphaMode;
-    if (surface.alphaMode === 'MASK') material.alphaCutoff = round(surface.alphaCutoff);
-    if (surface.doubleSided) material.doubleSided = true;
+    const material = paintedMaterial(surface, pictures, input.name, texture);
     const used = Object.keys(surface.extensions);
-    if (used.length) material.extensions = surface.extensions;
 
     const binary = new Uint8Array(length);
     let at = 0;
@@ -263,4 +273,110 @@ export const writePaintedGlb = (input: { name: string; mesh: GltfMesh; surface: 
         buffers: [{ byteLength: length }],
     };
     return writeGlb(json, binary);
+};
+
+/** What a material of a whole model's export is to become: a painted surface and its pictures. */
+export interface PaintedMaterial { name: string; surface: GltfSurface; pictures: GltfPictures }
+
+/** The extras key a material carries through a glTF export to be given its painted material afterwards. */
+export const PAINTED_KEY = 'auvraPainted';
+
+/**
+ * Marks the materials of a model (a copy of it) that painted materials are to take the place of: each
+ * becomes a plain material carrying its key (`keyOf` gives the key, or null to leave it as it is), so a
+ * glTF export keeps its place and `withPaintedMaterials` can fill it in.
+ */
+export const markPaintedMaterials = (root: THREE.Object3D, keyOf: (material: THREE.Material) => string | null): Set<string> => {
+    const keys = new Set<string>();
+    const swapped = new Map<THREE.Material, THREE.Material>();
+    const swap = (material: THREE.Material): THREE.Material => {
+        const key = keyOf(material);
+        if (!key) return material;
+        keys.add(key);
+        let plain = swapped.get(material);
+        if (!plain) {
+            plain = new THREE.MeshStandardMaterial({ name: material.name });
+            plain.userData = { [PAINTED_KEY]: key };
+            swapped.set(material, plain);
+        }
+        return plain;
+    };
+    root.traverse((node) => {
+        const mesh = node as THREE.Mesh;
+        if (!mesh.isMesh) return;
+        mesh.material = Array.isArray(mesh.material) ? mesh.material.map(swap) : swap(mesh.material);
+    });
+    return keys;
+};
+
+/**
+ * A GLB (from a glTF export of a marked model) with each marked material given its painted material:
+ * factors, extensions and pictures, the pictures added to the file's binary chunk.
+ */
+export const withPaintedMaterials = (glb: ArrayBuffer, painted: ReadonlyMap<string, PaintedMaterial>): ArrayBuffer => {
+    const { json: document, jsonEnd } = readGlb(glb);
+    const json = document as Record<string, unknown> & {
+        materials?: Array<Record<string, unknown> & { extras?: Record<string, unknown> }>;
+        images?: Array<Record<string, unknown>>;
+        textures?: Array<Record<string, unknown>>;
+        samplers?: Array<Record<string, unknown>>;
+        bufferViews?: Array<Record<string, unknown>>;
+        buffers?: Array<{ byteLength: number }>;
+        extensionsUsed?: string[];
+    };
+    const binary = readGlbBinary(glb, jsonEnd) ?? new Uint8Array(0);
+    const added: Uint8Array[] = [];
+    let length = align4(binary.byteLength);
+    json.bufferViews ??= [];
+    json.images ??= [];
+    json.textures ??= [];
+    json.samplers ??= [];
+    const sampler = json.samplers.push({ magFilter: 9729, minFilter: 9987, wrapS: 10497, wrapT: 10497 }) - 1;
+    const addTexture = (png: Uint8Array, name: string): number => {
+        const offset = length;
+        added.push(png);
+        length = align4(offset + png.byteLength);
+        if (length > offset + png.byteLength) added.push(new Uint8Array(length - offset - png.byteLength));
+        const view = json.bufferViews!.push({ buffer: 0, byteOffset: offset, byteLength: png.byteLength }) - 1;
+        const image = json.images!.push({ bufferView: view, mimeType: 'image/png', name }) - 1;
+        return json.textures!.push({ source: image, sampler, name }) - 1;
+    };
+    const used = new Set(json.extensionsUsed ?? []);
+    json.materials = (json.materials ?? []).map((material) => {
+        const key = material.extras?.[PAINTED_KEY];
+        const paint = typeof key === 'string' ? painted.get(key) : undefined;
+        if (!paint) return material;
+        for (const name of Object.keys(paint.surface.extensions)) used.add(name);
+        return paintedMaterial({ ...paint.surface, name: typeof material.name === 'string' ? material.name : paint.surface.name }, paint.pictures, paint.name, addTexture);
+    });
+    if (!json.images.length) { delete json.images; delete json.textures; }
+    if (json.samplers.length === 1 && !json.textures) delete json.samplers;
+    if (used.size) json.extensionsUsed = [...used];
+    const out = new Uint8Array(length);
+    out.set(binary, 0);
+    let at = align4(binary.byteLength);
+    for (const part of added) { out.set(part, at); at += part.byteLength; }
+    json.buffers = [{ byteLength: length }];
+    return writeGlb(json, out);
+};
+
+/**
+ * Texture coordinates of a set over several UDIM tiles moved onto their atlas (tileAtlasLayout), vertex by
+ * vertex: each vertex goes into the cell of the tile its own coordinates fall in.
+ */
+export const atlasUvs = (uvs: ArrayLike<number>, layout: TileLayout): Float32Array => {
+    const stride = layout.cell + 2 * layout.gutter;
+    const width = layout.columns * stride;
+    const height = layout.rows * stride;
+    const out = new Float32Array(uvs.length);
+    for (let i = 0; i < uvs.length; i += 2) {
+        const u = uvs[i], v = uvs[i + 1];
+        const tile = 1001 + Math.min(9, Math.max(0, Math.floor(u))) + 10 * Math.max(0, Math.floor(v));
+        const cell = Math.max(0, layout.tiles.indexOf(tile));
+        const left = (cell % layout.columns) * stride + layout.gutter;
+        const bottom = Math.floor(cell / layout.columns) * stride + layout.gutter;
+        out[i] = (left + (u - Math.floor(u)) * layout.cell) / width;
+        out[i + 1] = (bottom + (v - Math.floor(v)) * layout.cell) / height;
+    }
+    return out;
 };

@@ -93,6 +93,10 @@
   - parameters and presets at full depth, a variation sheet, safe transform and a deep Bitmap node;
   - export templates, more file kinds and glTF export;
   - a material library for every project, phone compression and MaterialX.
+- **Round 7** brought:
+  - six families of new nodes (91 nodes), weathering from mesh maps among them;
+  - a history panel, particle brushes, wrapped decals and whole-model glTF export;
+  - material features drawing on WebGPU as on WebGL2, and balls in the material list.
 
 See §6.
 
@@ -442,6 +446,15 @@ Fix the defects in §8 that lose work, give wrong results or mislead, before bui
   - the material lists don't show copies.
 - **Deleting a material** names what uses it and can be undone.
 
+**Landed in round 7: WebGPU parity.**
+- **Checked on main:** weather and wind, the shape-keyed shader cache and the vertex-colour rule already worked on WebGPU.
+- **Fixed:**
+  - specular, index of refraction and thin film now draw there, as an approximation, since WebGPU's surface buffer keeps only albedo, normal, roughness and metalness;
+  - "Keep the model's own maps" works there;
+  - one-channel BC4 textures upload.
+- **Covered:** a picture-test scene for physical lobes, picture-reading materials and painted copies runs on both renderers.
+- **Still to come:** anisotropy on WebGPU, and specular below 4% there.
+
 **Designed in round 4: one material document.**
 - Each material holds its surface (today's shader graph, always there), plus an optional texture graph and an optional paint stack. Each of those writes named outputs, such as base colour, normal and height, as textures.
 - The surface reads those outputs by name through Material Picture nodes, not by fixed texture ids. So Update material and Paint's apply rewrite only the outputs.
@@ -536,6 +549,8 @@ Fix the defects in §8 that lose work, give wrong results or mislead, before bui
   - balls in the project's own material list;
   - library entries carrying the graphs they use as nodes;
   - templates and starter content.
+
+**Landed in round 7:** balls beside every material in the project's list, redrawn when a material changes; library entries that carry the graphs they use as nodes; and the Materials sidebar's buttons as icons that fit a narrow window.
 - **Exposed parameters:**
   - groups and descriptions;
   - show/hide conditions on parameters, inputs and outputs;
@@ -571,6 +586,33 @@ One family per pull request, each with picture tooltips and the wrap-edge tiling
 
 **Landed in round 6:** a Safe transform that keeps tiling at any turn and size, by snapping or by blending the seams; "Keep it seamless" on Transform; and a Bitmap node that reads 16-bit and float files at their depth, with colour handling, crop and fitting.
 
+**Landed in round 7: families 1 to 6, 91 new nodes.** Every one has a finder picture, a plain description and a tiling test where it makes a tiling picture.
+1. **Noises and grunges:**
+   - clouds, simplex, blue noise, dirt, spots, crystal, fibres, moisture, liquid, plasma, caustics;
+   - directional noise and scratches;
+   - 14 grunge looks;
+   - a disorder setting.
+2. **Patterns:** stripes, starburst, arc pavement, triangle grid, a weave generator, and radial, axial and circular gradients.
+3. **Adjustments and colour:** histogram select, shift and equalize, channel mixer, colour match, colour lookup, palette, quantize colours, ID to mask, and levels per channel.
+4. **Blurs, warps and transforms:**
+   - anisotropic, non-uniform, radial and median blurs, and edge-preserving smoothing;
+   - multi-directional and map-driven directional warps, and vector morph;
+   - skew, symmetry, trapezoid, quad transform, rotate by map, auto crop, clone and noise upscale.
+5. **Geometry and normals:**
+   - smooth bevel, directional distance, smooth curvature, traced occlusion and shadows from height;
+   - glow, shape outline, glow and shadow;
+   - reaction-diffusion and diffusion;
+   - normal uncombine, rotation and transform, bent normals from height, and a higher-quality height from normal.
+6. **Weathering from mesh maps:**
+   - edge wear, damage, notches, crevice dirt;
+   - cloth, leather and metal wear;
+   - dust, grease, leaks, dripping rust, sun bleach;
+   - a mask builder.
+
+   They read wired maps, then baked ones, then stand-ins.
+
+**Still to come:** families 7 to 11 (photo processing, splines, vector shapes, SDF shapes, PBR checks), fur, lighting removal and the HDR range view.
+
 ### Stage 6 — Painting at full depth
 
 **Landed in round 2:** painting with whole materials; filter layers; fills and masks that read the layers below; layer opacity and folder blends; saved smart materials, opened as texture graph copies, with rendered previews; recombining only changed areas; sparse pictures; and unwrapping in a worker. Still to come: new mask kinds, the brush engine (alphas, paths, clone, smudge, particles), projections, the 2D painting view and 8K.
@@ -587,6 +629,13 @@ One family per pull request, each with picture tooltips and the wrap-edge tiling
 - **2D painting view:** paint on the UV layout instead of, or beside, the 3D view, with the same brushes, layers and masks. Island edges are drawn, and a faint wireframe can be turned on.
 - **Brush projections:** flat along an axis, cast through like a decal, and from three sides.
 - **Still to come:** symmetry and the stencil in the 2D view, warp grids, decals wrapped onto the mesh, and particle brushes.
+
+**Landed in round 7:**
+- **A history panel:** every step named by what it did, such as Drips or Lay decal. Click a step to go back to it.
+- **Particle brushes:** particles that run down, fall or bounce, with Drips, Leaks, Dust and Splashes presets.
+- **Wrapped decals:** a picture placed on the model and dragged; it follows the surface over curves and across UV seams, and is laid on as one step.
+- **2D painting:** symmetry, the stencil, polygon fills and paths.
+- **Still to come:** warp grids, particles in the 2D view and along any gravity, and particle paths that run over time.
 
 - **Paint with anything:** materials, textures and smart materials in every channel. Extended channels follow Stage 2.
 - **Layers:**
@@ -687,6 +736,8 @@ One family per pull request, each with picture tooltips and the wrap-edge tiling
   - keeping compressed terrain arrays in the project;
   - a compressed format for light beyond white;
   - KTX2.
+
+**Landed in round 7:** glTF export of a whole model: every mesh with its skin and clips, every material, and its painted sets. Bake undo now reaches older bakes within a memory cap.
 - **Export:**
   - templates per target (file names, packing, bit depth, normal convention, padding), starting with a web-first glTF template;
   - EXR, TGA and TIFF;
@@ -842,6 +893,26 @@ File references are relative to `fbx-viewer (1)/`.
   - There is ASTC and ETC2 compression for phones.
 - **Found while checking round 6:** Paint's export templates showed as a material in the lists.
 
+### Fixed in round 7
+- **Graph:**
+  - Long parameter labels wrap, the description field says "Description", and a variation sheet of identical cells says why.
+  - Graphs from smart materials group their parameters by layer.
+- **Painting and baking:**
+  - Paths and polygon fills work in 2D painting.
+  - glTF export writes the whole model.
+  - Painted cage offsets move the ray start for every cage kind.
+- **Materials:**
+  - The Materials sidebar fits a narrow window.
+  - Library entries carry their node graphs.
+  - The WebGPU items from before #154 merged are checked, and the missing physical inputs added.
+- **Found while checking round 7:**
+  - The wrapped decal at first painted most of the model a flat colour.
+  - The decal tool stopped answering after "Give it up".
+  - Arc pavement had straight cuts between rows.
+  - The rust grunge was soft cloud.
+  - Shape glow's shader didn't compile.
+  - A new picture-test scene changed another scene on WebGPU when run before it; it now runs last.
+
 ### Still open
 **Texture graph**
 1. Make it tile is a single cross-fade, so ghosting shows (Stage 5, photo tools).
@@ -850,29 +921,27 @@ File references are relative to `fbx-viewer (1)/`.
 4. Function graphs have no WGSL writer yet, and their Noise node has no CPU reference to test against.
 5. Iterate takes picture inputs and outputs only, its graph can't be opened in place, and every node inside redraws on every pass.
 6. A parameter's formula name can't be renamed.
-7. Varying a setting that doesn't change the shown output gives a sheet of identical cells with no word why.
-8. Long parameter labels are cut short at ordinary panel widths, and the description field is labelled "Words".
+7. Edge-based weathering (edge wear, notches, metal wear) shows black on the Materials tab's stand-ins unless a curvature map is wired, and says nothing about why.
+8. Leaks and dripping rust are placed by noise and slope, not run down the model.
+9. Read-around filters are checked for tiling by reading their shaders, not by measuring pixels.
 
 **Painting, baking and UVs**
-9. The paint view's smoothing draws into a render target marked as an XR target. Recheck this when three.js is upgraded (`components/Texturing/Paint/PaintViewport.tsx`).
-10. A triangle that crosses a UDIM tile edge can pick a too-coarse mip at that edge.
-11. Only the most recent bake can be undone. Painted cage offsets assume the "By distance" cage.
-12. Paths, polygon fills and the other tools beyond brushes work only in the 3D view, not in 2D painting.
-13. glTF export writes the open texture set only, not the whole model with its other materials or skinning.
+10. The paint view's smoothing draws into a render target marked as an XR target. Recheck this when three.js is upgraded (`components/Texturing/Paint/PaintViewport.tsx`).
+11. A triangle that crosses a UDIM tile edge can pick a too-coarse mip at that edge.
+12. The first click after picking a deep (EXR) picture for a decal places nothing, while the picture is still being read.
+13. Mesh-cage bakes pass their cage rays through a per-vertex attribute, the way the first decal did; check them in the editor.
+14. Particles work only in the 3D view, fall only down the model's Y axis, and are painted at once rather than over time.
+15. The whole-model glTF keeps only the main maps of the model's other painted sets, and a UDIM set's vertex exactly on a tile edge can land in the wrong cell.
 
 **Material graph, engine materials and textures**
-14. Unlit and Phong materials can't take a material asset (a message says so). Converting them is a later step.
-15. The surface has no coat tint, and car paint has no metal flakes.
-16. BC7 uses one block mode, and ASTC and ETC2 use simple block modes, so some blocks blur a little more than with full encoders.
-17. A texture never drawn in the editor has nothing kept, so a built game compresses it as it loads. Compressed terrain arrays are made again each time a terrain loads.
-18. My library lives in the editor's own storage on this machine. Graphs a material uses as nodes don't come with it, and painted copies and painting presets can't be added.
-19. MaterialX can't be imported from a zip, and image tiling is ignored.
-20. In a narrow window, the Materials tab's sidebar buttons run under My library's header.
-21. The WebGPU renderer is in main (#154). These were found while it was unmerged, so check them on main and close what is fixed:
-    - its graph surface ignores weather and wind;
-    - it caches translated shaders per graph object, so every value edit translates again; it should key by graph shape;
-    - it should skip the vertex-colour multiply when a graph reads Vertex Color;
-    - its graph translator doesn't know the physical surface inputs or emission strength yet, so physical graphs draw as plain surfaces there.
+16. Unlit and Phong materials can't take a material asset (a message says so). Converting them is a later step.
+17. The surface has no coat tint, and car paint has no metal flakes.
+18. BC7 uses one block mode, and ASTC and ETC2 use simple block modes, so some blocks blur a little more than with full encoders.
+19. A texture never drawn in the editor has nothing kept, so a built game compresses it as it loads. Compressed terrain arrays are made again each time a terrain loads.
+20. My library lives in the editor's own storage on this machine; painted copies and painting presets can't be added.
+21. MaterialX can't be imported from a zip, and image tiling is ignored.
+22. On WebGPU, anisotropy isn't drawn, and specular can't go below 4%.
+23. On WebGPU, a scene drawn before a ray-traced one can still change it slightly (a leak across scenes on one device), seen in the picture tests.
 
 ## 9. Sources and references
 

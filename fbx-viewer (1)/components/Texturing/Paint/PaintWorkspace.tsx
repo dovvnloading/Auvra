@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { BrushIcon, BucketIcon, CompareIcon, EraserIcon, EyedropperIcon, FrameIcon, RedoIcon, ScissorsIcon, SelectBoxIcon, SplineIcon, UndoIcon, WarningIcon } from '../../UI/Icons';
-import { PaintView2D } from './PaintView2D';
+import { BrushIcon, BucketIcon, CompareIcon, EraserIcon, EyedropperIcon, FrameIcon, ImageIcon, RedoIcon, ScissorsIcon, SelectBoxIcon, SplineIcon, UndoIcon, WarningIcon } from '../../UI/Icons';
+import { DecalPanel } from './DecalPanel';
+import { PaintView2D, type View2DCommands } from './PaintView2D';
 import { useAssets } from '../../../context/AssetContext';
 import { useScene } from '../../../context/SceneContext';
 import { frontendDiagnostics } from '../../../diagnostics/runtime';
@@ -28,8 +29,9 @@ import { BrushPanel } from './BrushPanel';
 import { LayerPanel, type LayerSelection } from './LayerPanel';
 import { useMaterialSections, type MaterialChoice } from './MaterialPicker';
 import { SliderRow } from './PaintFields';
-import { PaintSession, findPaintAsset, paintGraphResolver, type PaintTarget } from './paintSession';
-import { PaintViewport, type PaintTool, type PathEdit, type SurfaceHit, type ViewMode, type ViewportCommands } from './PaintViewport';
+import { HISTORY_BYTES, HISTORY_LIMIT, PaintSession, findPaintAsset, paintGraphResolver, type PaintTarget } from './paintSession';
+import { HistoryPanel } from './HistoryPanel';
+import { DECAL_LOCK, PaintViewport, type DecalSettings, type PaintTool, type PathEdit, type SurfaceHit, type ViewMode, type ViewportCommands } from './PaintViewport';
 import { SetPanel } from './SetPanel';
 import { UvPanel } from './UvPanel';
 import { UvSession } from './uvSession';
@@ -154,6 +156,9 @@ export const PaintWorkspace: React.FC = () => {
     void sessionVersion;
 
     const [tool, setTool] = useState<PaintTool>('paint');
+    const [decal, setDecal] = useState<DecalSettings>({ textureId: '', size: 0.15, angle: 0, strength: 1 });
+    const latestTool = useRef(tool);
+    latestTool.current = tool;
     const [pickMode, setPickMode] = useState<PickMode>('quad');
     const [raySettings, setRaySettings] = useState<BakeSettings | null>(null);
     // A bake fix being painted: strokes go into it, and the view shows it.
@@ -171,7 +176,7 @@ export const PaintWorkspace: React.FC = () => {
     const [brush, setBrushState] = useState<BrushSettings>(rememberedBrush);
     const setBrush = useCallback((next: BrushSettings) => { rememberedBrush = next; setBrushState(next); }, []);
     const [selection, setSelection] = useState<LayerSelection>({ layerId: null, effectId: null });
-    const [panel, setPanel] = useState<'layers' | 'brush' | 'set' | 'uvs'>('layers');
+    const [panel, setPanel] = useState<'layers' | 'brush' | 'set' | 'uvs' | 'history'>('layers');
     const [view, setView] = useState<ViewMode | 'uv2d' | 'paint2d'>('material');
     // Painting on the UV layout beside the 3D view.
     const [beside, setBeside] = useState(false);
@@ -243,6 +248,8 @@ export const PaintWorkspace: React.FC = () => {
 
     // Paths: kept in the set's document; the path tool adds, picks and drags their points.
     const viewportCommands = useRef<ViewportCommands | null>(null);
+    // The 2D painting view lays paths on when it is shown alone.
+    const view2dCommands = useRef<View2DCommands | null>(null);
     const [pathId, setPathId] = useState<string | null>(null);
     const [pathPoint, setPathPoint] = useState<number | null>(null);
     const paths = useMemo(() => document?.paths ?? [], [document]);
@@ -302,7 +309,11 @@ export const PaintWorkspace: React.FC = () => {
             if ((event.ctrlKey || event.metaKey) && key === 'y') { event.preventDefault(); steps?.redo(); return; }
             if ((event.ctrlKey || event.metaKey) && key === 's') { event.preventDefault(); void session.save(); return; }
             if (event.ctrlKey || event.metaKey || event.altKey) return;
+            // Placing a decal: Enter keeps it, Escape gives it up.
+            if (latestTool.current === 'decal' && key === 'enter') { event.preventDefault(); viewportCommands.current?.keepDecal(); return; }
+            if (latestTool.current === 'decal' && key === 'escape') { event.preventDefault(); viewportCommands.current?.dropDecal(); return; }
             if (key === 'b') setTool('paint');
+            else if (key === 'd') setTool('decal');
             else if (key === 'e') setTool('erase');
             else if (key === 'g') setTool('island');
             else if (key === 'q') setTool('polygon');
@@ -360,6 +371,7 @@ export const PaintWorkspace: React.FC = () => {
                     <IconButton label="Fill polygons: a triangle, a quad, a mesh part, a UV piece or an edge loop" shortcut="Q" active={tool === 'polygon'} onClick={() => setTool('polygon')}><SelectBoxIcon size={14} /></IconButton>
                     {tool === 'polygon' && !pickingParts && <Select value={pickMode} options={PICK_MODES.map((mode) => ({ value: mode, label: PICK_LABELS[mode] }))} onChange={(mode) => setPickMode(mode as PickMode)} className="w-28" />}
                     <IconButton label="Draw a path on the surface: paint along it, fill it, ribbons, stitches and text" shortcut="L" active={tool === 'path'} onClick={() => { setTool('path'); setPanel('brush'); }}><SplineIcon size={14} /></IconButton>
+                    <IconButton label="Place a decal: a picture wrapped onto the surface, moved by dragging" shortcut="D" active={tool === 'decal'} onClick={() => { setTool('decal'); setPanel('brush'); }}><ImageIcon size={14} /></IconButton>
                     <IconButton label="Pick a colour" shortcut="P" active={tool === 'pick'} onClick={() => setTool('pick')}><EyedropperIcon size={14} /></IconButton>
                     <IconButton label="Mark or clear seams (Shift clears)" shortcut="S" active={tool === 'seam'} onClick={() => setTool('seam')}><ScissorsIcon size={14} /></IconButton>
                     <span className="mx-1 h-4 w-px bg-zinc-800" />
@@ -384,10 +396,11 @@ export const PaintWorkspace: React.FC = () => {
                             onBrushSize={(size) => setBrush({ ...brush, size })}
                             onPick={(color) => { setBrush({ ...brush, values: { ...brush.values, baseColor: color } }); setTool('paint'); }}
                             onMessage={setMessage} frameSignal={frameSignal} uv={uv} pickMode={pickMode} onSurfacePick={onSurfacePick} picking={pickingParts} bakeRays={raySettings}
-                            pathEdit={tool === 'path' ? pathEdit : null} commands={viewportCommands} />}
+                            pathEdit={tool === 'path' ? pathEdit : null} commands={viewportCommands} decal={decal} />}
                         {(view === 'paint2d' || beside) && (
                             <div className={`flex min-h-0 min-w-0 flex-1 ${view !== 'paint2d' ? 'border-l border-zinc-800' : ''}`}>
                                 <PaintView2D session={session} tool={tool} brush={brush} target={target} maskImage={maskImage} onMessage={setMessage}
+                                    pickMode={pickMode} pathEdit={tool === 'path' ? pathEdit : null} commands={view2dCommands}
                                     show={view === 'mask' || bakeFix ? 'mask' : (session.document.channels as readonly string[]).includes(view) ? view as PaintChannel : 'baseColor'} />
                             </div>
                         )}
@@ -417,19 +430,23 @@ export const PaintWorkspace: React.FC = () => {
             <PanelEdge side="right" width={side.width} onResize={side.setWidth} onDone={side.save} label="Resize the layers panel" />
             <aside className="flex shrink-0 flex-col border-l border-zinc-800" style={{ width: side.width }}>
                 <div className="border-b border-zinc-800 p-2">
-                    <Segmented value={panel} options={[{ value: 'layers', label: 'Layers' }, { value: 'brush', label: 'Brush' }, { value: 'set', label: 'Texture set' }, { value: 'uvs', label: 'UVs' }]} onChange={setPanel} label="Panel" />
+                    <Segmented value={panel} options={[{ value: 'layers', label: 'Layers' }, { value: 'brush', label: 'Brush' }, { value: 'set', label: 'Texture set' }, { value: 'uvs', label: 'UVs' }, { value: 'history', label: 'History' }]} onChange={setPanel} label="Panel" />
                 </div>
                 {session ? (
                     panel === 'layers' ? <LayerPanel session={session} selection={selection} onSelect={setSelection} resolve={resolve} graphs={graphs} textures={textures} onPaintWith={paintWith} onMessage={setMessage} />
-                        : panel === 'brush' ? <div className="min-h-0 flex-1 overflow-y-auto">{tool === 'path' && (
+                        : panel === 'brush' ? <div className="min-h-0 flex-1 overflow-y-auto">{tool === 'decal' && (
+                            <DecalPanel decal={decal} onChange={setDecal} textures={textures} placed={session.locked === DECAL_LOCK}
+                                onKeep={() => viewportCommands.current?.keepDecal()} onDrop={() => viewportCommands.current?.dropDecal()} />
+                        )}{tool === 'path' && (
                             <PathPanel paths={paths} path={activePath} point={pathPoint} extent={extent} graphs={graphs} onPick={(id) => { setPathId(id); setPathPoint(null); }}
                                 onNew={() => { setPathId(null); setPathPoint(null); setMessage('Click the model to start the new path.'); }}
                                 onChange={(next, label, coalesce) => changePaths(paths.map((each) => (each.id === next.id ? next : each)), label, coalesce)}
                                 onDelete={(id) => { changePaths(paths.filter((each) => each.id !== id), 'Delete path'); setPathId(null); setPathPoint(null); }}
                                 onSelectPoint={setPathPoint}
-                                onPaint={(how) => { if (activePath) void viewportCommands.current?.paintPath(activePath, how); }} />
+                                onPaint={(how) => { if (activePath) void (viewportCommands.current ?? view2dCommands.current)?.paintPath(activePath, how); }} />
                         )}<BrushPanel brush={brush} onChange={setBrush} channels={session.document.channels} paintingMask={target?.kind === 'mask'} textures={textures} onPick={() => setTool('pick')}
                             paintWith={previewHost ? { sections: brushSections, host: previewHost, onPick: paintWith, onMessage: setMessage } : undefined} onMessage={setMessage} /></div>
+                            : panel === 'history' ? <HistoryPanel session={session} stepLimit={HISTORY_LIMIT} memoryMb={HISTORY_BYTES / 1024 / 1024} />
                             : panel === 'uvs' && uv ? <div className="min-h-0 flex-1 overflow-y-auto"><UvPanel uv={uv} otherSets={otherSets} densityOf={densityOf} onSeamTool={() => setTool('seam')} onApplied={() => { if (!uv.proposal) { putOnAfterOpen.current = uv.putOnWhenOpen; setReopen((value) => value + 1); } }} /></div>
                                 : <div className="min-h-0 flex-1 overflow-y-auto"><SetPanel session={session} models={paintable} onReopen={() => setReopen((value) => value + 1)} onShowRays={setRaySettings} showingRays={Boolean(raySettings)}
                                     paintingFix={bakeFix} onPaintFix={(fix) => { setBakeFix(fix); if (fix) { setTool('paint'); setMessage(fix === 'skew' ? 'Painting skew: white leans bake rays to the surface\'s own normals (set the grey in the Brush panel).' : 'Painting cage offset: mid grey leaves the cage as it is, white pushes it out, black pulls it in (set the grey in the Brush panel).'); } }} /></div>

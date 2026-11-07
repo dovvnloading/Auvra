@@ -202,7 +202,15 @@ class GraphBuilder {
             for (let n = 2; this.parameters.some((other) => other.name === name); n++) name = `${parameter.name}_${n}`;
             renamed.set(parameter.name, name);
             const value = values[parameter.name];
-            this.parameters.push({ ...structuredClone(parameter), name, label: `${label}: ${parameter.label}`.slice(0, 80), default: value === undefined ? parameter.default : value as GraphParameter['default'] });
+            // Under a group named after the layer, so long "Layer: setting" labels need not be read.
+            this.parameters.push({ ...structuredClone(parameter), name, label: parameter.label, group: label.trim().slice(0, 64) || parameter.group, default: value === undefined ? parameter.default : value as GraphParameter['default'] });
+        }
+        // Conditions name the parameters as renamed.
+        for (const parameter of this.parameters.slice(-graph.parameters.length)) {
+            if (!parameter.visibleIf) continue;
+            let condition = parameter.visibleIf;
+            for (const [from, to] of renamed) if (from !== to) condition = condition.replace(new RegExp(`\\b${from}\\b`, 'g'), to);
+            parameter.visibleIf = condition;
         }
         const relink = (value: unknown): unknown => {
             if (!isParamLink(value)) return value;

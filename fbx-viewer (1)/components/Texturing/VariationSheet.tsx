@@ -29,6 +29,23 @@ export interface VariationCell {
     keep: { name: string; value: GraphParameterValue } | { seed: number };
 }
 
+/** A short fingerprint of a cell's pixels, for telling whether every cell came out the same. */
+export const pictureFingerprint = (pixels: ArrayLike<number>): string => {
+    let h1 = 0x811c9dc5;
+    let h2 = 0x01000193;
+    for (let i = 0; i < pixels.length; i++) {
+        h1 = Math.imul(h1 ^ pixels[i], 0x01000193) >>> 0;
+        h2 = Math.imul(h2 ^ pixels[i], 0x85ebca6b) >>> 0;
+    }
+    return `${h1.toString(36)}${h2.toString(36)}`;
+};
+
+/** True when there is more than one cell and every drawn cell came out the same. */
+export const allCellsSame = (fingerprints: ReadonlyArray<string | undefined>): boolean => {
+    const drawn = fingerprints.filter((print): print is string => Boolean(print));
+    return drawn.length > 1 && drawn.length === fingerprints.length && drawn.every((print) => print === drawn[0]);
+};
+
 /** A sheet's cells: the parameter's values (or seeds), each with a label. */
 export const variationCells = (graph: TextureGraph, choice: string, count: number, values: Readonly<Record<string, unknown>>): VariationCell[] => {
     if (choice === SEED) return variationSeeds(graph.seed, count).map((seed) => ({ label: `Seed ${seed}`, keep: { seed } }));
@@ -73,6 +90,8 @@ export const VariationSheet: React.FC<{
     const cells = useMemo(() => variationCells(graph, choice, Number(count), values), [choice, count, graph, values]);
     const [pictures, setPictures] = useState<Array<ImageData | undefined>>([]);
     const [drawing, setDrawing] = useState(false);
+    // Every cell came out the same: the parameter does not reach the node shown.
+    const [same, setSame] = useState(false);
     const evaluator = useMemo(() => new TextureGraphEvaluator(session.gpu, resolve, texture), [resolve, session.gpu, texture]);
     useEffect(() => () => evaluator.dispose(), [evaluator]);
 
@@ -80,7 +99,9 @@ export const VariationSheet: React.FC<{
         const controller = new AbortController();
         setPictures([]);
         setDrawing(true);
+        setSame(false);
         const gpu = session.gpu;
+        const fingerprints: Array<string | undefined> = cells.map(() => undefined);
         void (async () => {
             for (let index = 0; index < cells.length; index++) {
                 if (controller.signal.aborted) return;
@@ -115,6 +136,7 @@ void main() {
                     const row = CELL * 4;
                     const flipped = new Uint8ClampedArray(pixels.length);
                     for (let y = 0; y < CELL; y++) flipped.set(pixels.subarray((CELL - 1 - y) * row, (CELL - y) * row), y * row);
+                    fingerprints[index] = pictureFingerprint(flipped);
                     const picture = new ImageData(flipped, CELL, CELL);
                     setPictures((current) => { const next = [...current]; next[index] = picture; return next; });
                 } catch (error) {
@@ -122,7 +144,9 @@ void main() {
                     frontendDiagnostics.failure('texture_graph_variation_failed', error);
                 }
             }
-            if (!controller.signal.aborted) setDrawing(false);
+            if (controller.signal.aborted) return;
+            setDrawing(false);
+            setSame(allCellsSame(fingerprints));
         })();
         return () => controller.abort();
     }, [cells, evaluator, graph, nodeId, session, values]);
@@ -140,6 +164,11 @@ void main() {
                 <IconButton label="Close the variations" onClick={onClose}><CrossIcon size={13} /></IconButton>
             </div>
             <div className="min-h-0 flex-1 overflow-auto p-3">
+                {same && (
+                    <p role="status" className="mx-auto mb-3 max-w-[900px] rounded border border-warn/40 bg-warn/10 px-2 py-1.5 text-2xs text-warn">
+                        {choice === SEED ? 'The random seed' : `"${choices.find((option) => option.value === choice)?.label ?? 'This setting'}"`} doesn't change {nodeLabel}: every cell comes out the same. Pick another output (double-click a node to show it) or another setting.
+                    </p>
+                )}
                 {cells.length === 0
                     ? <p className="text-2xs text-ink-3">This parameter cannot be varied: choose a number, switch, choice, colour or pair, or the random seed.</p>
                     : (

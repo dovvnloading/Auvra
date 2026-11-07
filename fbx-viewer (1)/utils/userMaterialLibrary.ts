@@ -8,7 +8,8 @@ import { normalizeTextureSettings, type TextureSettings } from '../texturing/tex
  * with the pictures it draws with and a ball rendered on the engine's material path. Entries have a plain
  * name, a folder and tags; they can be searched, duplicated and deleted (with undo), and brought into the
  * open project, which takes its own copy of the material and its pictures. Each entry remembers where it
- * was brought in (where-used).
+ * was brought in (where-used). A texture graph's entry also keeps the graphs it uses as nodes (and those
+ * they use), which come into the project with it.
  *
  * Storage is behind LibraryStorage (IndexedDB in the editor, memory in tests).
  */
@@ -42,8 +43,10 @@ export interface LibraryEntry {
     tags: string[];
     /** The material document (as a project keeps it), naming its pictures by their ids. */
     material: unknown;
-    /** Ids of the pictures kept with it. */
+    /** Ids of the pictures kept with it (its own and its node graphs'). */
     pictureIds: string[];
+    /** The material documents of the graphs it uses as nodes, and those they use; absent when none. */
+    nodeGraphs?: unknown[];
     /** Its ball, rendered on the engine's material path (PNG). */
     thumbnail?: Blob;
     /** The project material it was added from, so adding it again updates it. */
@@ -94,6 +97,52 @@ export const libraryMaterial = (entry: LibraryEntry): MaterialAsset | null => {
     if (!asset) return null;
     const { owner: _owner, ...shared } = asset;
     return shared;
+};
+
+/** The graphs an entry uses as nodes, as materials. */
+export const libraryNodeGraphs = (entry: LibraryEntry): MaterialAsset[] =>
+    (entry.nodeGraphs ?? []).map(readMaterialAsset).filter((asset): asset is MaterialAsset => asset !== null).map(({ owner: _owner, ...shared }) => shared);
+
+/** Every other graph a material names as a node (a `graph` setting naming an asset `known` holds), however deep. */
+const namedGraphs = (value: unknown, known: (id: string) => boolean, into: Set<string>, key = ''): void => {
+    if (typeof value === 'string') {
+        if (key === 'graph' && value && known(value)) into.add(value);
+        return;
+    }
+    if (Array.isArray(value)) {
+        for (const item of value) namedGraphs(item, known, into);
+        return;
+    }
+    if (!value || typeof value !== 'object') return;
+    for (const [childKey, child] of Object.entries(value as Record<string, unknown>)) namedGraphs(child, known, into, childKey);
+};
+
+/** The graphs a material uses as nodes, and those they use, from `lookup` (the open project's materials). */
+export const usedNodeGraphs = (asset: MaterialAsset, lookup: (id: string) => MaterialAsset | undefined): MaterialAsset[] => {
+    const found = new Map<string, MaterialAsset>();
+    const visit = (from: MaterialAsset) => {
+        const named = new Set<string>();
+        namedGraphs(from.textureGraph, (id) => id !== asset.id && lookup(id) !== undefined, named);
+        for (const id of named) {
+            if (found.has(id)) continue;
+            const graph = lookup(id)!;
+            found.set(id, graph);
+            visit(graph);
+        }
+    };
+    visit(asset);
+    return [...found.values()];
+};
+
+/** A material with the graphs it names as nodes renamed (one it does not rename is left as it is). */
+export const withRenamedNodeGraphs = (asset: MaterialAsset, rename: ReadonlyMap<string, string>): MaterialAsset => {
+    const renamed = (value: unknown, key = ''): unknown => {
+        if (typeof value === 'string') return key === 'graph' && rename.has(value) ? rename.get(value) : value;
+        if (Array.isArray(value)) return value.map((item) => renamed(item));
+        if (!value || typeof value !== 'object') return value;
+        return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([childKey, child]) => [childKey, renamed(child, childKey)]));
+    };
+    return asset.textureGraph ? { ...asset, textureGraph: renamed(asset.textureGraph) as Record<string, unknown> } : asset;
 };
 
 /** What a search, folder and tag pick out. */
@@ -199,8 +248,8 @@ export class UserMaterialLibrary {
         return () => this.listeners.delete(listener);
     }
 
-    /** Adds a material with its pictures and ball. */
-    async add(input: { asset: MaterialAsset; pictures: readonly LibraryPicture[]; thumbnail?: Blob; source?: LibraryEntry['source']; folder?: string; tags?: readonly string[] }): Promise<LibraryEntry> {
+    /** Adds a material with its pictures, the graphs it uses as nodes, and its ball. */
+    async add(input: { asset: MaterialAsset; pictures: readonly LibraryPicture[]; nodeGraphs?: readonly MaterialAsset[]; thumbnail?: Blob; source?: LibraryEntry['source']; folder?: string; tags?: readonly string[] }): Promise<LibraryEntry> {
         await this.load();
         const at = this.now();
         const { owner: _owner, ...asset } = input.asset;
@@ -211,6 +260,7 @@ export class UserMaterialLibrary {
             tags: tidyTags(input.tags ?? []),
             material: materialAssetDocument(asset),
             pictureIds: input.pictures.map(picture => picture.id),
+            ...(input.nodeGraphs?.length ? { nodeGraphs: input.nodeGraphs.map(graph => materialAssetDocument(graph)) } : {}),
             ...(input.thumbnail ? { thumbnail: input.thumbnail } : {}),
             ...(input.source ? { source: input.source } : {}),
             uses: [],
@@ -224,13 +274,15 @@ export class UserMaterialLibrary {
     }
 
     /** Puts a newer version of its material, pictures and ball into an entry, keeping its name, folder, tags and uses. */
-    async replaceMaterial(id: string, input: { asset: MaterialAsset; pictures: readonly LibraryPicture[]; thumbnail?: Blob }): Promise<LibraryEntry> {
+    async replaceMaterial(id: string, input: { asset: MaterialAsset; pictures: readonly LibraryPicture[]; nodeGraphs?: readonly MaterialAsset[]; thumbnail?: Blob }): Promise<LibraryEntry> {
         const entry = this.require(id);
         const { owner: _owner, ...asset } = input.asset;
+        const { nodeGraphs: _before, ...kept } = entry;
         const next: LibraryEntry = {
-            ...entry,
+            ...kept,
             material: materialAssetDocument(asset),
             pictureIds: input.pictures.map(picture => picture.id),
+            ...(input.nodeGraphs?.length ? { nodeGraphs: input.nodeGraphs.map(graph => materialAssetDocument(graph)) } : {}),
             ...(input.thumbnail ? { thumbnail: input.thumbnail } : {}),
             updated: this.now(),
         };

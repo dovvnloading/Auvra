@@ -169,7 +169,7 @@ export const SetPanel: React.FC<{
             {document.bake && onPaintFix && (
                 <section className="space-y-2">
                     <div className="text-2xs font-semibold text-zinc-300">Fix the bake in place</div>
-                    <p className="text-2xs leading-snug text-zinc-500">Paint onto the model where the bake went wrong: skew (white) leans rays to the surface's own normals, for slanted detail; cage offset (mid grey leaves it, white pushes the cage out to twice as far, black pulls it in), for missed or doubled detail. The fixes are kept with the set and read by every bake.</p>
+                    <p className="text-2xs leading-snug text-zinc-500">Paint onto the model where the bake went wrong: skew (white) leans rays to the surface's own normals, for slanted detail; cage offset (mid grey leaves it; white pushes the cage out by as far again as the bake reaches, black pulls it in as far), for missed or doubled detail, with any kind of cage. The fixes are kept with the set and read by every bake.</p>
                     <div className="grid grid-cols-2 gap-1.5">
                         <Button size="sm" variant={paintingFix === 'skew' ? 'primary' : 'default'} onClick={() => onPaintFix(paintingFix === 'skew' ? null : 'skew')}>Paint skew</Button>
                         <Button size="sm" variant={paintingFix === 'cage' ? 'primary' : 'default'} onClick={() => onPaintFix(paintingFix === 'cage' ? null : 'cage')}>Paint cage offset</Button>

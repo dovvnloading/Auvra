@@ -102,9 +102,10 @@ export const TEXT_NODE: TexNodeDef = {
         draw.rotate((Number(context.params.rotation) || 0) * Math.PI / 180);
         const top = -(layout.lines.length - 1) * layout.lineHeight / 2;
         layout.lines.forEach((line, index) => draw.fillText(line, 0, top + index * layout.lineHeight));
-        // Laid the way the graph's pictures are: the canvas's top row first, as a picture's is.
+        // A graph's pictures keep their bottom row first (the 2D view shows the first row at the bottom):
+        // turned over on the way, the canvas's top row is the picture's top, and the text reads upright.
         const texture = new THREE.CanvasTexture((offscreen ?? element!) as unknown as HTMLCanvasElement);
-        texture.flipY = false;
+        texture.flipY = true;
         texture.colorSpace = THREE.NoColorSpace;
         texture.needsUpdate = true;
         try {

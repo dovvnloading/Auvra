@@ -10,17 +10,23 @@ import { VALUE_SETTING_KINDS, valuePinKey } from './nodeKit';
 import { SCATTER_NODES } from './nodes/scatter';
 import { TRANSFORM_NODES } from './nodes/transform';
 import { TEXT_NODE } from './nodes/text';
+import { NOISE_NODES } from './nodes/noises';
+import { PATTERN_NODES } from './nodes/patterns';
+import { COLOUR_NODES } from './nodes/colour';
+import { FILTER_NODES } from './nodes/filters';
+import { GEOMETRY_NODES } from './nodes/geometry';
+import { WEATHERING_NODES } from './nodes/weathering';
 import { conditionHolds, conditionScope } from './parameters';
 import { OUTPUT_CHANNEL_LABELS, outputNodeKind, type NodeCategory, type OutputChannel, type PortKind, type TexGraphLink, type TexGraphNode, type TexNodeDef, type TexParamDef, type TexPortDef, type TextureGraph } from './types';
 
 /** Every node a texture graph can hold, by type; sub-graph nodes are made from the graph they use. */
 
-export const TEXTURE_NODE_DEFINITIONS: readonly TexNodeDef[] = [...IO_NODES, ...PROCESSOR_NODES, ITERATE_PLACEHOLDER, ...GENERATOR_NODES, TEXT_NODE, ...SCATTER_NODES, ...ADJUST_NODES, ...TRANSFORM_NODES, ...DISTANCE_NODES, ...MATERIAL_NODES];
+export const TEXTURE_NODE_DEFINITIONS: readonly TexNodeDef[] = [...IO_NODES, ...PROCESSOR_NODES, ITERATE_PLACEHOLDER, ...GENERATOR_NODES, ...NOISE_NODES, ...PATTERN_NODES, TEXT_NODE, ...SCATTER_NODES, ...ADJUST_NODES, ...COLOUR_NODES, ...TRANSFORM_NODES, ...FILTER_NODES, ...DISTANCE_NODES, ...GEOMETRY_NODES, ...WEATHERING_NODES, ...MATERIAL_NODES];
 
 const BY_TYPE = new Map(TEXTURE_NODE_DEFINITIONS.map((definition) => [definition.type, definition]));
 
 export const NODE_CATEGORY_ORDER: readonly NodeCategory[] = [
-    'Inputs and outputs', 'Mesh maps', 'Materials', 'Noises', 'Patterns', 'Shapes', 'Adjustments', 'Blending', 'Transforms', 'Warps',
+    'Inputs and outputs', 'Mesh maps', 'Weathering', 'Materials', 'Noises', 'Patterns', 'Shapes', 'Adjustments', 'Blending', 'Transforms', 'Warps',
     'Blurs and sharpening', 'Edges and distance', 'Height and normals', 'Utility',
 ];
 

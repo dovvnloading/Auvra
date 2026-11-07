@@ -177,4 +177,31 @@ describe('My library', () => {
         const pictures = await capturePictures(rustyMetal(), { ...projectPictures, textures: textures.slice(1) });
         expect(pictures.map(picture => picture.id).sort()).toEqual(['tex-height', 'tex-normal']);
     });
+
+    it('carries the graphs a texture graph uses as nodes, and gives them ids of their own in another project', async () => {
+        const graph = normalizeMaterialGraph({ nodes: [{ id: 'out', type: OUTPUT_NODE_TYPE, x: 0, y: 0, params: defaultParams(OUTPUT_NODE_TYPE) }], links: [] });
+        const inner: MaterialAsset = { id: 'fn-inner', name: 'Grunge mask', graph, textureGraph: { library: true, graph: { nodes: [{ id: 'b', type: 'bitmap', params: { texture: 'tex-height' } }] } } };
+        const middle: MaterialAsset = { id: 'fn-middle', name: 'Edge wear', graph, textureGraph: { library: true, graph: { nodes: [{ id: 's', type: 'subgraph', params: { graph: 'fn-inner' } }] } } };
+        const rusty: MaterialAsset = { id: 'rust-tex', name: 'Rusty panel', graph, textureGraph: { graph: { nodes: [{ id: 'w', type: 'subgraph', params: { graph: 'fn-middle' } }, { id: 'x', type: 'subgraph', params: { graph: 'gone' } }] } } };
+        const project = new Map([inner, middle, rusty].map(each => [each.id, each]));
+        const library = newLibrary();
+        const { entry } = await addToLibrary(library, rusty, { ...projectPictures, materialOf: (id) => project.get(id) }, async () => ball);
+        expect(entry.nodeGraphs?.length).toBe(2);
+        expect(entry.pictureIds).toEqual(['tex-height']);
+
+        const { target, saved } = projectB();
+        const asset = await bringIntoProject(library, entry.id, target);
+        // The two graphs, then the material, each with a new id, naming one another by them.
+        expect(saved.map(each => [each.id, each.name])).toEqual([['material-1', 'Edge wear'], ['material-2', 'Grunge mask'], ['material-3', 'Rusty panel']]);
+        const nodesOf = (each: MaterialAsset) => (each.textureGraph as { graph: { nodes: Array<{ params: Record<string, unknown> }> } }).graph.nodes;
+        expect(nodesOf(asset).map(each => each.params.graph)).toEqual(['material-1', 'gone']);
+        expect(nodesOf(saved[0])[0].params.graph).toBe('material-2');
+        expect(nodesOf(saved[1])[0].params.texture).toBe('b-tex-height');
+
+        // Back where it came from, the graphs the project has are used as they are.
+        const home = projectB({ projectId: 'project-a', hasMaterial: (id) => project.has(id) });
+        const back = await bringIntoProject(library, entry.id, home.target);
+        expect(home.saved).toEqual([back]);
+        expect(nodesOf(back)[0].params.graph).toBe('fn-middle');
+    });
 });

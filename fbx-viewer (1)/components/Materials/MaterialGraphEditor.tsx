@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { BookIcon, CommentAddIcon, CrossIcon, ExternalLinkIcon, FlowIcon, GraphIcon, PlusIcon, TrashIcon, WarningIcon } from '../UI/Icons';
+import { BookIcon, ChipIcon, CommentAddIcon, CrossIcon, ExternalLinkIcon, FlowIcon, GraphIcon, PlusIcon, TrashIcon, WarningIcon } from '../UI/Icons';
 import { useAssets } from '../../context/AssetContext';
 import { projectService } from '../../utils/projectService';
 import { frontendDiagnostics } from '../../diagnostics/runtime';
@@ -17,6 +17,7 @@ import {
 import { MATERIALS_DOMAIN, materialAssetDocument, materialAssetUse, materialLibrary, type MaterialAsset } from '../../runtime/materials/materialLibrary';
 import { LIBRARY_DRAG_TYPE, MyLibraryPanel, useAddToLibrary, useBringIn, useUserLibrary } from './MyLibrary';
 import { MaterialXExportButton, MaterialXImport, type MaterialXImportHandle } from './MaterialXFiles';
+import { ProjectBall } from './ProjectBalls';
 import { MaterialFromDescription } from './MaterialFromDescription';
 import { STARTER_MATERIALS } from '../../runtime/materials/starterMaterials';
 import { MaterialGraphCanvas } from './MaterialGraphCanvas';
@@ -348,16 +349,15 @@ export const MaterialGraphEditor: React.FC = () => {
     return (
         <div className="flex h-full min-h-0 w-full bg-gray-950 text-white">
             <aside className="flex w-56 shrink-0 flex-col border-r border-gray-800">
-                <div className="flex items-center gap-1.5 border-b border-gray-800 px-3 py-2">
-                    <span className="text-xs font-bold text-gray-400">Materials</span>
-                    <span className="flex-1" />
+                {/* Icons with tooltips, so the row fits the sidebar however narrow the window. */}
+                <div className="flex h-9 shrink-0 items-center gap-0.5 border-b border-gray-800 pl-3 pr-2">
+                    <span className="min-w-0 flex-1 truncate text-xs font-bold text-gray-400">Materials</span>
                     <IconButton label="My library: your materials for every project" active={libraryOpen} onClick={() => setLibraryOpen(open => !open)}><BookIcon size={14} /></IconButton>
                     <MaterialFromDescription onCreated={createFromDescription} />
-                    <button onClick={() => setMemoryOpen(true)} title="What textures take on the graphics card, per level and per material"
-                        className="rounded bg-gray-800 px-2 py-1 text-2xs text-gray-200 hover:bg-gray-700">Memory</button>
+                    <IconButton label="Texture memory: what textures take on the graphics card, per level and per material" onClick={() => setMemoryOpen(true)}><ChipIcon size={14} /></IconButton>
                     {memoryOpen && <TextureMemoryDialog onClose={() => setMemoryOpen(false)} />}
                     <MaterialXImport ref={materialXImport} onImported={(imported) => { setSelectedId(imported.id); select([]); setLibraryOpen(false); }} />
-                    <button ref={newButton} onClick={() => setNewMenu(true)} aria-label="New material" className="flex items-center gap-1 rounded bg-gray-800 px-2 py-1 text-2xs text-gray-200 hover:bg-gray-700"><PlusIcon size={12} /> New</button>
+                    <IconButton ref={newButton} label="New material" active={newMenu} onClick={() => setNewMenu(true)}><PlusIcon size={14} /></IconButton>
                     <Popover anchor={newButton} open={newMenu} onClose={() => setNewMenu(false)} width={280} label="New material">
                         <div className="p-1">
                             {[
@@ -406,9 +406,15 @@ export const MaterialGraphEditor: React.FC = () => {
                         <button
                             key={candidate.id}
                             onClick={() => { setSelectedId(candidate.id); select([]); setLibraryOpen(false); }}
-                            className={`mb-1 w-full truncate rounded px-2 py-1.5 text-left text-xs ${candidate.id === asset?.id ? 'bg-blue-900/40 text-white' : 'text-gray-300 hover:bg-gray-800'}`}
+                            title={candidate.textureGraph ? 'Texture graph' : 'Shader graph'}
+                            className={`mb-0.5 w-full rounded px-1.5 py-1 text-left text-xs ${candidate.id === asset?.id ? 'bg-blue-900/40 text-white' : 'text-gray-300 hover:bg-gray-800'}`}
                         >
-                            <span className="flex items-center gap-1.5">{candidate.textureGraph ? <GraphIcon size={11} className="shrink-0 text-amber-400/80" /> : <FlowIcon size={11} className="shrink-0 text-sky-400/80" />}<span className="truncate">{candidate.name}</span></span>
+                            {/* Its ball, drawn as My library's are, then its name and what kind of graph it is. */}
+                            <span className="flex items-center gap-2">
+                                <ProjectBall asset={candidate} />
+                                <span className="min-w-0 flex-1 truncate">{candidate.name}</span>
+                                {candidate.textureGraph ? <GraphIcon size={11} className="shrink-0 text-amber-400/60" /> : <FlowIcon size={11} className="shrink-0 text-sky-400/60" />}
+                            </span>
                         </button>
                     ))}
                 </div>

@@ -1,7 +1,10 @@
-import { materialAssetDocument, type MaterialAsset } from '../runtime/materials/materialLibrary';
+import { materialAssetDocument, withRenamedTextures, type MaterialAsset } from '../runtime/materials/materialLibrary';
 import type { TextureSettings } from '../texturing/textureSettings';
 import type { TextureData } from '../types';
-import { materialFromLibrary, portableSettings, type LibraryEntry, type LibraryPicture, type UserMaterialLibrary } from './userMaterialLibrary';
+import {
+    libraryNodeGraphs, materialFromLibrary, portableSettings, uniqueName, usedNodeGraphs, withRenamedNodeGraphs,
+    type LibraryEntry, type LibraryPicture, type UserMaterialLibrary,
+} from './userMaterialLibrary';
 
 /**
  * Moving materials between the open project and My library: a project material taken in with its pictures,
@@ -16,10 +19,11 @@ export interface ProjectPictures {
     read(url: string): Promise<Blob>;
 }
 
-/** The project's pictures a material draws with, as the library keeps them; a texture the project no longer has is left out. */
-export const capturePictures = async (asset: MaterialAsset, project: ProjectPictures): Promise<LibraryPicture[]> => {
+/** The project's pictures materials draw with, as the library keeps them; a texture the project no longer has is left out. */
+export const capturePictures = async (asset: MaterialAsset | readonly MaterialAsset[], project: ProjectPictures): Promise<LibraryPicture[]> => {
     const pictures: LibraryPicture[] = [];
-    for (const textureId of materialAssetDocument(asset).textureIds) {
+    const named = new Set((Array.isArray(asset) ? asset : [asset]).flatMap((each: MaterialAsset) => materialAssetDocument(each).textureIds));
+    for (const textureId of named) {
         const texture = project.textures.find(candidate => candidate.id === textureId);
         if (!texture) continue;
         // A deep picture keeps its own file, with its 8-bit preview beside it.
@@ -44,15 +48,17 @@ export const canAddToLibrary = (asset: MaterialAsset, isPreset: (asset: Material
 export const addToLibrary = async (
     library: UserMaterialLibrary,
     asset: MaterialAsset,
-    project: ProjectPictures & { projectId: string },
+    project: ProjectPictures & { projectId: string; materialOf?: (id: string) => MaterialAsset | undefined },
     renderBall: BallRenderer,
 ): Promise<{ entry: LibraryEntry; updated: boolean }> => {
     await library.load();
-    const pictures = await capturePictures(asset, project);
+    // The graphs it uses as nodes come with it, with their pictures.
+    const nodeGraphs = project.materialOf ? usedNodeGraphs(asset, project.materialOf) : [];
+    const pictures = await capturePictures([asset, ...nodeGraphs], project);
     const thumbnail = await renderBall(asset, pictures).catch(() => null) ?? undefined;
     const before = library.addedFrom(project.projectId, asset.id);
-    if (before) return { entry: await library.replaceMaterial(before.id, { asset, pictures, thumbnail }), updated: true };
-    return { entry: await library.add({ asset, pictures, thumbnail, source: { projectId: project.projectId, materialId: asset.id } }), updated: false };
+    if (before) return { entry: await library.replaceMaterial(before.id, { asset, pictures, nodeGraphs, thumbnail }), updated: true };
+    return { entry: await library.add({ asset, pictures, nodeGraphs, thumbnail, source: { projectId: project.projectId, materialId: asset.id } }), updated: false };
 };
 
 /** Where a library material's pictures go in the project, and how the material is kept there. */
@@ -66,6 +72,8 @@ export interface ProjectTarget {
     /** Keeps the material in the project. */
     saveMaterial(asset: MaterialAsset): Promise<void>;
     newId(): string;
+    /** Whether the project has a material by this id (a node graph brought back where it came from is used as it is). */
+    hasMaterial?(id: string): boolean;
 }
 
 /** Brings a library material into the project as its own copy, its pictures as the project's textures, and remembers the use. */
@@ -76,8 +84,23 @@ export const bringIntoProject = async (library: UserMaterialLibrary, entryId: st
     const folder = `Materials/${entry.name}`;
     const textureIds = new Map<string, string>();
     for (const picture of pictures) textureIds.set(picture.id, await project.addPicture(picture, folder));
-    const asset = materialFromLibrary(entry, textureIds, project.newId(), project.materialNames);
-    if (!asset) throw new Error('This material could not be read.');
+    // The graphs it uses as nodes come first, each the project's own (unless the project has it already), and the
+    // material, and they, name them by their ids here.
+    const names = [...project.materialNames];
+    const graphIds = new Map<string, string>();
+    const broughtGraphs: MaterialAsset[] = [];
+    for (const graph of libraryNodeGraphs(entry)) {
+        if (project.hasMaterial?.(graph.id)) continue;
+        const id = project.newId();
+        graphIds.set(graph.id, id);
+        const name = uniqueName(graph.name, names);
+        names.push(name);
+        broughtGraphs.push({ ...withRenamedTextures(graph, (textureId) => textureIds.get(textureId) ?? ''), id, name });
+    }
+    for (const graph of broughtGraphs) await project.saveMaterial(withRenamedNodeGraphs(graph, graphIds));
+    const made = materialFromLibrary(entry, textureIds, project.newId(), names);
+    if (!made) throw new Error('This material could not be read.');
+    const asset = withRenamedNodeGraphs(made, graphIds);
     await project.saveMaterial(asset);
     await library.recordUse(entryId, { projectId: project.projectId, projectName: project.projectName, materialId: asset.id });
     return asset;

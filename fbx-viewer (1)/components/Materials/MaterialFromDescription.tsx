@@ -32,6 +32,7 @@ export const MaterialFromDescription: React.FC<{ onCreated: (name: string, graph
       hint="A seamless texture with normal, roughness and metal maps, wired into a new material."
       placeholder="For example: mossy cobblestones, wet after rain"
       onPainted={onPainted}
+      compact
     />
   );
 };
