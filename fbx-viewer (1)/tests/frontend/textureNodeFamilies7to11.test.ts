@@ -438,4 +438,19 @@ describe('shaders', () => {
             }
         }
     });
+
+    it('outside the nodes, no pass declares the size every pass already has', () => {
+        // The UDIM atlas pass once declared uSize again and failed to compile. The two files that write a
+        // pass's prelude declare it on purpose.
+        const root = resolve(__dirname, '../../texturing');
+        const preludes = new Set(['gpu/textureGpu.ts', 'bake/uvRaster.ts']);
+        const files = (readdirSync(root, { recursive: true }) as string[])
+            .map((name) => name.split('\\').join('/'))
+            .filter((name) => name.endsWith('.ts') && !name.startsWith('graph/nodes/') && !preludes.has(name));
+        expect(files.length).toBeGreaterThan(20);
+        for (const file of files) {
+            const source = readFileSync(resolve(root, file), 'utf8');
+            expect(source, `${file} declares uSize`).not.toMatch(/uniform\s+\w+\s+uSize\b/);
+        }
+    });
 });
