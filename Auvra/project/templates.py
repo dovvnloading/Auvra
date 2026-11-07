@@ -1437,7 +1437,7 @@ def _crate_values(**values: float) -> dict[str, Any]:
 
 
 def _living_logic(front: list[str]) -> dict[str, Any]:
-    """Steps the front row's Wetness through 0, a half, all and a half again, two seconds apart, round and round."""
+    """Steps the front row's Wetness through 0, a half, all and a half again, three seconds apart, round and round."""
 
     pin = lambda node_id, name, kind, way: {"id": f"{node_id}-{_pin_slug(name)}", "name": name, "dataType": kind, "direction": way}
     nodes: list[dict[str, Any]] = [{"id": "living-begin", "type": "Event", "name": "Event BeginPlay", "position": {"x": 40, "y": 120},
@@ -1461,7 +1461,7 @@ def _living_logic(front: list[str]) -> dict[str, Any]:
         delay_id = f"living-wait-{step}"
         nodes.append({"id": delay_id, "type": "Delay", "name": "Delay", "position": {"x": x, "y": 120},
                       "inputs": [pin(delay_id, "Exec", "Exec", "Input"), pin(delay_id, "Duration", "Float", "Input")],
-                      "outputs": [pin(delay_id, "Out", "Exec", "Output")], "data": {"default_Duration": 2}})
+                      "outputs": [pin(delay_id, "Out", "Exec", "Output")], "data": {"default_Duration": 3}})
         connections.append({"id": f"living-wire-{delay_id}", "fromNodeId": previous[0], "fromPinId": previous[1], "toNodeId": delay_id, "toPinId": f"{delay_id}-exec"})
         previous = (delay_id, f"{delay_id}-out")
         x += 260
