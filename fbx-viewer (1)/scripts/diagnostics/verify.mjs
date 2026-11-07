@@ -238,6 +238,12 @@ const EXEMPT = new Map(Object.entries({
   'utils/materialInstances.ts': 'pure-utility',
   'runtime/materials/triplanarNormal.ts': 'pure-utility',
   'runtime/materials/shaderErrors.ts': 'pure-utility',
+  'texturing/textureDecode.ts': 'pure-utility',
+  'texturing/textureSettings.ts': 'pure-utility',
+  'texturing/texturePipeline.ts': 'pure-utility',
+  'texturing/textureBudget.ts': 'pure-utility',
+  'texturing/materialTextureLoader.ts': 'pure-utility',
+  'utils/textureCompression/materialTextureEncoder.ts': 'pure-utility',
   'runtime/materials/bounceColour.ts': 'hot-loop',
   'runtime/navGeometry.ts': 'pure-utility',
   'runtime/levelObjectMotion.ts': 'pure-utility',
@@ -387,6 +393,8 @@ const EXEMPT = new Map(Object.entries({
   'workers/navBake.worker.ts': 'worker-protocol',
   'workers/basisTranscode.worker.ts': 'worker-protocol',
   'workers/dracoDecode.worker.ts': 'worker-protocol',
+  'workers/texturePipeline.worker.ts': 'worker-protocol',
+  'texturing/utif.d.ts': 'type-declaration',
   'workers/gltfDecoders.d.ts': 'type-declaration',
 }));
 
