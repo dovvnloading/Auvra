@@ -34,6 +34,9 @@ import type { TexGraphComment, TexParamDef } from '../../texturing/graph/types';
 import { DraftNumber, DraftText, ParamControl } from './TextureParamField';
 import { FUNCTION_PREVIEW_SIZE, valueWords, type FunctionPreview, type FunctionPreviews } from './functionPreviews';
 
+/** A count with its word, singular for one: "1 step", "3 steps". */
+const countWords = (count: number, word: string): string => `${count} ${word}${count === 1 ? '' : 's'}`;
+
 /**
  * FUNCTION GRAPH EDITING
  *
@@ -328,7 +331,7 @@ export const FunctionGraphCanvas: React.FC<{
             undoKeys="workspace"
             onSelect={onSelect}
             onEdit={onEdit}
-            status={compiled.error ? `Not working yet: ${compiled.error}` : `${fn.nodes.length} nodes, ${compiled.ir?.steps.length ?? 0} steps`}
+            status={compiled.error ? `Not working yet: ${compiled.error}` : `${countWords(fn.nodes.length, 'node')}, ${countWords(compiled.ir?.steps.length ?? 0, 'step')}`}
         />
     );
 };
