@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { readdirSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { PHOTO_NODES, atlasPlace, pickBand, shadingFit } from '../../texturing/graph/nodes/photo';
+import { growFromExample, grownPicture, grownSource } from '../../texturing/graph/quilting';
 import { closedCut, seamMasks, seamTile, type Picture } from '../../texturing/graph/seamCut';
 import { textureNodeDefinitionByType } from '../../texturing/graph/registry';
 import { nearestOn, placementsAlong, quadPlace, resample, segmentsOf, simplify, smoothPath, traceOutlines, windingAt, wrapOffsets, type Point } from '../../texturing/graph/curves';
@@ -119,6 +120,42 @@ describe('photo and scan processing', () => {
             expect(textureNodeDefinitionByType(definition.type), definition.type).toBe(definition);
         }
         expect(textureNodeDefinitionByType('makeTile')?.params.find((param) => param.key === 'method')?.default).toBe('seams');
+    });
+});
+
+describe('growing a texture from an example', () => {
+    const example = photo(40, 40, 3);
+    const grow = (seed: number, randomness = 0.3) => growFromExample(example, { width: 96, height: 96, patch: 16, overlap: 0.25, randomness, seed, candidates: 400 });
+
+    it('lays moved copies of the example, every pixel from inside it', () => {
+        const map = grow(5);
+        expect(map.patches).toBeGreaterThan(30);
+        const moves = new Set<string>();
+        for (let y = 0; y < map.height; y++) {
+            for (let x = 0; x < map.width; x++) {
+                const [sx, sy] = grownSource(map, x + 0.5, y + 0.5);
+                expect(sx, `${x},${y}`).toBeGreaterThanOrEqual(0);
+                expect(sy).toBeGreaterThanOrEqual(0);
+                expect(sx).toBeLessThanOrEqual(example.width);
+                expect(sy).toBeLessThanOrEqual(example.height);
+                moves.add(`${map.offset[(y * map.width + x) * 2]},${map.offset[(y * map.width + x) * 2 + 1]}`);
+            }
+        }
+        // Patches, not a pixel-by-pixel scramble: few moves for many pixels.
+        expect(moves.size).toBeLessThan(map.patches * 3);
+    });
+
+    it('tiles: its edges meet as smoothly as its inside', () => {
+        const grown = grownPicture(example, grow(9));
+        const { wrap, inside } = steps(grown);
+        expect(wrap).toBeLessThan(inside * 2.5);
+    });
+
+    it('is the same for the same seed and different for another', () => {
+        expect(Array.from(grow(4).offset)).toEqual(Array.from(grow(4).offset));
+        expect(Array.from(grow(4).offset)).not.toEqual(Array.from(grow(5).offset));
+        const node = PHOTO_NODES.find((definition) => definition.type === 'growFromExample')!;
+        expect(node.params.map((param) => param.key)).toEqual(expect.arrayContaining(['patch', 'randomness', 'seed']));
     });
 });
 

@@ -164,6 +164,7 @@ const EXEMPT = new Map(Object.entries({
   'texturing/graph/nodes/pbrChecks.ts': 'pure-utility',
   'texturing/graph/nodes/time.ts': 'pure-utility',
   'texturing/graph/animation.ts': 'pure-utility',
+  'texturing/graph/quilting.ts': 'pure-utility',
   'texturing/graph/nodes/text.ts': 'pure-utility',
   'texturing/graph/iterate.ts': 'pure-utility',
   'texturing/graph/nodes/processors.ts': 'pure-utility',

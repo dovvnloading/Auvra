@@ -1,12 +1,15 @@
 import * as THREE from 'three';
 import type { GpuImage } from '../../gpu/textureGpu';
-import { anyIn, bool, colorIn, float, grayIn, int, out, select, vec2 } from '../nodeKit';
+import { anyIn, bool, colorIn, float, grayIn, int, out, seed, select, vec2 } from '../nodeKit';
+import { growFromExample } from '../quilting';
 import { seamMasks, softenMask, type Picture } from '../seamCut';
 import type { NodeRunContext, TexNodeDef } from '../types';
 import { gaussianBlur } from './transform';
 
 /**
  * PHOTO AND SCAN PROCESSING
+ *
+ * (Also growing a larger tiling picture from a small example: quilting.ts.)
  *
  * Making a photo tile by cutting along its least visible joins (seamCut.ts), and doing it with the
  * band width chosen and the light evened out first; a clone patch that takes on the light where it
@@ -24,9 +27,9 @@ const whole = (params: Params, key: string, fallback: number): number => Math.ro
 const SEARCH_SIZE = 512;
 
 /** A picture's colour read back as numbers (0 to 1, bottom row first), at most SEARCH_SIZE a side. */
-const readSmall = async (context: NodeRunContext, input: GpuImage, limit = SEARCH_SIZE): Promise<Picture | null> => {
-    const width = Math.min(input.width, limit);
-    const height = Math.min(input.height, limit);
+const readSmall = async (context: NodeRunContext, input: GpuImage, limit = SEARCH_SIZE, size?: { width: number; height: number }): Promise<Picture | null> => {
+    const width = size?.width ?? Math.min(input.width, limit);
+    const height = size?.height ?? Math.min(input.height, limit);
     const small = context.gpu.image(width, height, 'color', 8);
     // Each small pixel is the average of a 4 x 4 spread over the pixels it covers.
     await context.gpu.pass(small, {
@@ -165,7 +168,80 @@ export const pickBand = (costs: readonly number[]): number => {
 
 const lightingRemovalNeeds = (context: NodeRunContext) => ({ occlusion: context.input('occlusion'), height: context.input('height') });
 
+/** The largest side Grow from example lays its patches out at (the GPU then draws the result at any size). */
+const GROW_SIZE = 256;
+
+/**
+ * The grown picture at full size: each pixel the example read where its patch moves it, the four nearest
+ * map pixels blended (each with its own move), so cuts are soft over one map pixel and never double up.
+ */
+const GROWN = `uniform sampler2D offsets;
+uniform vec2 uMap;
+uniform vec2 uExample;
+vec4 fromCell(vec2 at, vec2 cell) {
+    vec2 wrapped = mod(cell, uMap);
+    vec2 move = texelFetch(offsets, ivec2(wrapped), 0).xy;
+    return texture(t_in, clamp((at - cell + wrapped + move) / uExample, vec2(0.0), vec2(1.0)));
+}
+void main() {
+    vec2 at = vUv * uMap;
+    vec2 p = at - 0.5;
+    vec2 base = floor(p);
+    vec2 f = p - base;
+    vec4 a = fromCell(at, base);
+    vec4 b = fromCell(at, base + vec2(1.0, 0.0));
+    vec4 c = fromCell(at, base + vec2(0.0, 1.0));
+    vec4 d = fromCell(at, base + vec2(1.0, 1.0));
+    outColor = mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}`;
+
 export const PHOTO_NODES: TexNodeDef[] = [
+    {
+        type: 'growFromExample',
+        label: 'Grow from example',
+        category: 'Photo and scans',
+        description: 'Grows a larger, tiling picture from a small example: patches of it, each from where it matches what is already laid, joined along their least visible cuts, so it reads as more of the same with no grid of repeats.',
+        keywords: ['grow from example', 'texture synthesis', 'example based', 'quilting', 'extend texture', 'more of the same', 'tile from sample'],
+        inputs: [anyIn('in', 'Example')],
+        outputs: [out('any')],
+        params: [
+            float('exampleSize', 'Example size', 0.35, 0.1, 1, { hint: 'How much of the result the example spans: smaller makes its features smaller and the result more varied.' }),
+            float('patch', 'Patch size', 0.35, 0.1, 0.8, { hint: 'A patch\'s side, as a share of the example: larger keeps more of its structure together.' }),
+            float('overlap', 'Overlap', 0.25, 0.1, 0.5, { hint: 'How much of each patch overlaps those before it, for its cut to wander through.' }),
+            float('randomness', 'Randomness', 0.3, 0, 1, { hint: '0 always takes the best match; more picks among good ones, for more variety.' }),
+            seed(),
+        ],
+        sizeFrom: 'graph',
+        kindFrom: 'in',
+        async run(context) {
+            const input = context.input('in');
+            const result = context.image(context.outputKind('out'));
+            if (!input) { context.gpu.clear(result, [0, 0, 0, 0]); return { out: result }; }
+            const mapWidth = Math.min(GROW_SIZE, result.width);
+            const mapHeight = Math.min(GROW_SIZE, result.height);
+            const exampleWidth = Math.max(8, Math.round(mapWidth * num(context.params, 'exampleSize', 0.35)));
+            const exampleHeight = Math.max(8, Math.round(exampleWidth * (input.height / input.width)));
+            const example = await readSmall(context, input, SEARCH_SIZE, { width: exampleWidth, height: exampleHeight });
+            if (!example) { context.gpu.clear(result, [0, 0, 0, 0]); return { out: result }; }
+            const map = growFromExample(example, {
+                width: mapWidth, height: mapHeight, patch: num(context.params, 'patch', 0.35) * Math.min(exampleWidth, exampleHeight),
+                overlap: num(context.params, 'overlap', 0.25), randomness: num(context.params, 'randomness', 0.3), seed: context.seed,
+            });
+            const texture = new THREE.DataTexture(map.offset, mapWidth, mapHeight, THREE.RGFormat, THREE.FloatType);
+            texture.minFilter = texture.magFilter = THREE.NearestFilter;
+            texture.needsUpdate = true;
+            try {
+                await context.pass(result, GROWN, {
+                    inputs: { offsets: texture },
+                    uniforms: { uMap: new THREE.Vector2(mapWidth, mapHeight), uExample: new THREE.Vector2(exampleWidth, exampleHeight) },
+                    cost: 6,
+                });
+            } finally {
+                texture.dispose();
+            }
+            return { out: result };
+        },
+    },
     {
         type: 'makeTile',
         label: 'Make it tile',
