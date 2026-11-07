@@ -192,7 +192,15 @@ export interface PaintDocument {
     before?: Partial<Record<PaintChannel, TilePictures>>;
     /** Paths drawn on the surface, kept to be changed and laid on again. */
     paths?: SurfacePath[];
+    /**
+     * Fixes painted onto the model for the next bake: skew (white leans rays to the surface's own normals)
+     * and cage offset (mid grey leaves the cage as it is, white pushes it out to twice as far, black pulls it in).
+     */
+    bakeFixes?: Partial<Record<BakeFix, TilePictures>>;
 }
+
+/** What can be painted onto the model to fix a bake in place. */
+export type BakeFix = 'skew' | 'cage';
 
 export const BLEND_FOR: Record<PaintChannel, ChannelBlend['mode']> = {
     baseColor: 'normal', roughness: 'normal', metallic: 'normal', height: 'normal', normal: 'normalCombine', emissive: 'normal', opacity: 'normal',
@@ -397,5 +405,6 @@ export const readPaintDocument = (value: unknown): PaintDocument | null => {
         ...(raw.applied ? { applied: raw.applied } : {}),
         ...(raw.before && typeof raw.before === 'object' ? { before: raw.before } : {}),
         ...(Array.isArray(raw.paths) ? { paths: readPaths(raw.paths) } : {}),
+        ...(raw.bakeFixes && typeof raw.bakeFixes === 'object' ? { bakeFixes: raw.bakeFixes } : {}),
     };
 };

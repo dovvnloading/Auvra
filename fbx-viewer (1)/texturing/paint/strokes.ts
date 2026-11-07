@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { GpuImage, TextureGpu } from '../gpu/textureGpu';
+import type { TileBake } from '../bake/meshBaker';
 import { NO_MIRROR, type Mirror } from '../mesh/picker';
 import { CHANNEL_IS_COLOR, PAINT_CHANNELS, type PaintChannel, type PaintDocument } from './paintTypes';
 import { GpuResetError, pictureKey, type PaintStack } from './paintStack';
@@ -543,6 +544,8 @@ export interface HistoryEntry {
     label: string;
     document?: { before: PaintDocument; after: PaintDocument };
     pixels?: PixelPatch[];
+    /** A bake: the maps before and after it, held on the GPU so undo and redo can put either back. */
+    bakeMaps?: { before: Map<number, TileBake> | null; after: Map<number, TileBake> };
 }
 
 /** Bytes of pixels an undo step holds. */
@@ -1087,6 +1090,7 @@ export class Stroke {
                     gpu.release(source?.image);
                 }
                 stack.touch(key, tile);
+                if (key.startsWith('bake:')) stack.noteBakeFix(tile, rects);
             }
         }
         stack.invalidate(this.channels(), areas);
@@ -1200,6 +1204,7 @@ export const applyPixelHistory = (stack: PaintStack, patches: readonly PixelPatc
             if (pixels) writeBlock(gpu, page, pixels, local);
         }
         stack.touch(patch.key, patch.tile);
+        if (patch.key.startsWith('bake:')) stack.noteBakeFix(patch.tile, patch.rects.map((rect) => ({ x0: rect.x, y0: rect.y, x1: rect.x + rect.width, y1: rect.y + rect.height })));
         const channels = channel && (PAINT_CHANNELS as readonly string[]).includes(channel) ? [channel] : stack.channelsOfEffect(patch.key);
         const group = channels.join(',');
         let entry = byChannels.get(group);
