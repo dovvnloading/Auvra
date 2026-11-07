@@ -19,6 +19,9 @@ import type {
 
 export const OUTPUT_NODE_TYPE = 'output';
 export const REROUTE_NODE_TYPE = 'reroute';
+/** Named links: a Send and the Receives of its name stand for wires between them (namedMaterialLinks). */
+export const NAMED_SEND_TYPE = 'namedSend';
+export const NAMED_RECEIVE_TYPE = 'namedReceive';
 export const UDIM_ATLAS_NODE_TYPE = 'udimAtlas';
 
 /** UDIM tile numbers written in a list (anything but digits between them), each once, in the order given. */
@@ -491,7 +494,9 @@ export const MATERIAL_NODE_DEFINITIONS: MaterialNodeDef[] = [
             const normal = context.local('normal');
             return {
                 statements: [
-                    `vec3 ${normal} = texture(${context.param('texture')}, ${inputs.uv}).xyz * 2.0 - 1.0;`,
+                    // Blue is rebuilt from red and green, so a map compressed to two channels (BC5) reads the same.
+                    `vec3 ${normal} = vec3(texture(${context.param('texture')}, ${inputs.uv}).xy * 2.0 - 1.0, 0.0);`,
+                    `${normal}.z = sqrt(max(1.0 - dot(${normal}.xy, ${normal}.xy), 0.0));`,
                     ...(context.static('flipGreen') === true ? [`${normal}.y = -${normal}.y;`] : []),
                     `${normal}.xy *= ${context.param('strength')};`,
                 ],
@@ -1260,6 +1265,30 @@ export const MATERIAL_NODE_DEFINITIONS: MaterialNodeDef[] = [
         params: [{ key: 'on', label: 'On', kind: 'boolean', default: true }],
         reads: (statics) => [statics.on === false ? 'whenOff' : 'whenOn'],
         emit: (inputs, context) => ({ outputs: { out: context.static('on') === false ? inputs.whenOff : inputs.whenOn } }),
+    },
+
+    // ------------------------------------------------------------------ Named links
+    {
+        type: NAMED_SEND_TYPE,
+        label: 'Send',
+        category: 'Utility',
+        description: 'Sends what it takes in under a name: every Receive of the same name gives it out, with no wire across the graph between them.',
+        keywords: ['named link', 'portal', 'wireless', 'teleport', 'broadcast'],
+        inputs: [auto('in', 'In', value(0))],
+        outputs: [{ key: 'out', label: 'Out', type: 'auto' }],
+        params: [{ key: 'name', label: 'Name', kind: 'text', default: '' }],
+        emit: (inputs) => ({ outputs: { out: inputs.in } }),
+    },
+    {
+        type: NAMED_RECEIVE_TYPE,
+        label: 'Receive',
+        category: 'Utility',
+        description: 'Gives out what the first Send of its name takes in, as if wired to it.',
+        keywords: ['named link', 'portal', 'wireless', 'teleport'],
+        inputs: [auto('in', 'In', value(0))],
+        outputs: [{ key: 'out', label: 'Out', type: 'auto' }],
+        params: [{ key: 'name', label: 'Name', kind: 'text', default: '' }],
+        emit: (inputs) => ({ outputs: { out: inputs.in } }),
     },
 
     // ------------------------------------------------------------------ Custom

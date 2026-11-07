@@ -20,6 +20,9 @@ interface AssetContextMenuProps {
     reimport?: AssetMenuAction;
     /** Changing an imported model's size; omitted for other assets. */
     importSize?: AssetMenuAction;
+    /** A texture's settings (compression, size limit, wrap...); omitted for other assets. */
+    textureSettings?: AssetMenuAction;
+    onTextureSettings?: () => void;
     onRename: () => void;
     onMove: (folder: string) => void;
     onReimport: () => void;
@@ -42,6 +45,8 @@ export const AssetContextMenu: React.FC<AssetContextMenuProps> = ({
     onMove,
     onReimport,
     onImportSize,
+    textureSettings,
+    onTextureSettings,
     onClose,
 }) => {
     const [mode, setMode] = useState<'main' | 'move'>('main');
@@ -100,6 +105,7 @@ export const AssetContextMenu: React.FC<AssetContextMenuProps> = ({
                         {item('Move to Folder', <FolderMoveIcon size={12} />, move, () => setMode('move'))}
                         {reimport && item('Reimport...', <RefreshIcon size={12} />, reimport, onReimport)}
                         {importSize && onImportSize && item('Import Settings...', <ScaleIcon size={12} />, importSize, onImportSize)}
+                        {textureSettings && onTextureSettings && item('Texture Settings...', <ScaleIcon size={12} />, textureSettings, onTextureSettings)}
                     </>
                 ) : (
                     <>

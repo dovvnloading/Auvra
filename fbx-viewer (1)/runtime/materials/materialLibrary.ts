@@ -161,6 +161,9 @@ export const materialAssetUse = (asset: Pick<MaterialAsset, 'textureGraph' | 'pa
 /** Where a texture id's image is, for loading it. */
 export type TextureUrlResolver = (textureId: string) => string | undefined;
 
+/** Loads a texture's file for the way a graph reads it. */
+export type TextureLoad = (url: string, request: { textureId: string; slot: TextureSlot; flipY: boolean }) => Promise<THREE.Texture>;
+
 /** How a material is shaded by an asset here. */
 export interface MaterialBinding {
     materialId: string;
@@ -183,10 +186,10 @@ class MaterialLibrary {
     private readonly textures = new Map<string, THREE.Texture | null>();
     private resolveUrl: TextureUrlResolver = () => undefined;
     private readonly addedUrls = new Map<string, string>();
-    private loadTexture: (url: string) => Promise<THREE.Texture> = (url) => new THREE.TextureLoader().loadAsync(url);
+    private loadTexture: TextureLoad = (url) => new THREE.TextureLoader().loadAsync(url);
 
-    /** Where texture images come from (the open project), and how they load (tests). */
-    setTextureSource(resolveUrl: TextureUrlResolver, load?: (url: string) => Promise<THREE.Texture>): void {
+    /** Where texture images come from (the open project), and how they load (texturing/materialTextureLoader.ts; tests). */
+    setTextureSource(resolveUrl: TextureUrlResolver, load?: TextureLoad): void {
         this.resolveUrl = resolveUrl;
         this.addedUrls.clear();
         if (load) this.loadTexture = load;
@@ -244,6 +247,13 @@ class MaterialLibrary {
             texture?.dispose();
             this.textures.delete(key);
         }
+    }
+
+    /** Loads a texture again (its settings changed): every graph sampling it draws the new one once it is ready. */
+    reloadTexture(textureId: string): void {
+        this.releaseTexture(textureId);
+        this.rebindAll();
+        this.emit();
     }
 
     /** Clears a deleted texture from every graph sampling it (the project has already). */
@@ -310,15 +320,18 @@ class MaterialLibrary {
         this.textures.set(key, null);
         const url = this.addedUrls.get(textureId) ?? this.resolveUrl(textureId);
         if (!url) return null;
-        this.loadTexture(url).then((texture) => {
-            // Only colour is decoded from sRGB; normals and data are read as stored.
-            texture.colorSpace = slot === 'map' ? THREE.SRGBColorSpace : THREE.NoColorSpace;
-            texture.wrapS = THREE.RepeatWrapping;
-            texture.wrapT = THREE.RepeatWrapping;
-            // Sharp at grazing angles; three caps it at what the GPU supports.
-            texture.anisotropy = 8;
-            texture.flipY = flipY;
-            texture.needsUpdate = true;
+        this.loadTexture(url, { textureId, slot, flipY }).then((texture) => {
+            // A texture its loader set up from its settings (and laid the right way up) is left as it is.
+            if (texture.userData?.auvraTextureSettings !== true) {
+                // Only colour is decoded from sRGB; normals and data are read as stored.
+                texture.colorSpace = slot === 'map' ? THREE.SRGBColorSpace : THREE.NoColorSpace;
+                texture.wrapS = THREE.RepeatWrapping;
+                texture.wrapT = THREE.RepeatWrapping;
+                // Sharp at grazing angles; three caps it at what the GPU supports.
+                texture.anisotropy = 8;
+                texture.flipY = flipY;
+                texture.needsUpdate = true;
+            }
             this.textures.set(key, texture);
             this.texturesLoaded++;
             // Every graph sampling it picks it up.

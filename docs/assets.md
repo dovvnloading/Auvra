@@ -127,7 +127,7 @@ A material asset describes a surface as a graph of nodes, so one material can be
    - **Color**: Color Ramp, Blend (14 modes), Hue / Saturation / Value, RGB to HSV, HSV to RGB, Desaturate, Contrast, Posterize, Luminance.
    - **Math**, **Vector** and **Logic**: arithmetic, trigonometry, Lerp, Clamp, Smoothstep, Remap, Split, Combine, Swizzle, Dot, Cross, Rotate About Axis, Branch, Switch and more.
    - **Custom**: Custom GLSL, your own function of four inputs.
-   - **Utility**: Reroute.
+   - **Utility**: Reroute, Send and Receive (every Receive gives out what the first Send of its name takes in, with no wire across the graph).
 3. Drag from a pin to a pin of the other kind to wire them (outputs on the right, inputs on the left). Pin colours show the value type: grey a number, green a 2-vector, yellow a 3-vector or colour, purple a 4-vector. Math nodes take the widest type wired into them, so adding two colours gives a colour. A value of another type is converted (a single number fills every component, a longer vector is cut down). Each input takes one wire, so a new wire replaces the old one, and a wire that would make a loop is refused.
 4. Drop a wire on empty space to pick a node for it: the new node is wired to it. Drag a wire off an input to move it to another, or drop it on empty space. **Alt**-click or right-click a wire to cut it; double-click a wire to bend it through a **Reroute**.
 5. Every node shows its value as a small image as you edit (the eye button turns these previews off). Nodes that feed nothing the material reads are dimmed with a dashed border.
@@ -151,7 +151,7 @@ To use a material asset on a model, open the model's **Material Overrides**, exp
 
 Materials made before blend modes keep their look: one whose opacity was set or wired is **Translucent**, any other **Opaque**.
 
-A shader that does not compile marks the nodes whose code failed on the canvas, with what is wrong in plain words; the compiler's own lines stay under the preview.
+A shader that does not compile marks the nodes whose code failed on the canvas, and on a Custom GLSL node's code, with what is wrong in plain words; the panel under the preview says the same, with the compiler's own lines behind **Details**.
 
 ### Height, parallax and triplanar normals
 
@@ -185,7 +185,17 @@ While a game plays, the blueprint's **Set Material Number** and **Set Material C
 
 ## Textures and audio
 
-Images and audio files are imported from the Content Browser in the same way. Textures are used by material overrides, terrain layers and masks. Audio is used by audio emitters, Audio Source components, the **Play Sound** blueprint node and weapon sounds.
+Images and audio files are imported from the Content Browser in the same way. Textures are used by material assets, material overrides, terrain layers, decals and masks. Audio is used by audio emitters, Audio Source components, the **Play Sound** blueprint node and weapon sounds.
+
+Textures can be PNG, JPEG or WebP, and also 16-bit PNG, TIFF (8, 16 or 32-bit floating point), OpenEXR, Radiance HDR, TGA and Photoshop PSD. A PSD is read as its flattened picture, which Photoshop keeps when it is saved with **Maximize compatibility**. These deep pictures keep their depth: they are read whole, not cut to 8 bits, and material assets draw with them as they are. Everywhere else that shows a picture (the Content Browser, terrain, decals) uses an 8-bit preview made on import.
+
+**Texture Settings** on a texture's menu in the Content Browser sets how it is kept and drawn:
+
+- **Read as**: **By use** (colour where a material reads colour, data where it reads data), **Colour**, or **Data** (masks, roughness, metalness, height: values kept as stored). **Normal map** marks it as one wherever it is read.
+- **Compression**: **By what it is** compresses colour to BC7, normal maps to BC5 and one channel of data to BC4, for about a quarter (or an eighth) of the memory; or pick one, or **None**. Pictures with light beyond white stay 16-bit floating point. A graphics card that cannot take a compression gets the texture whole. The game's **Texture compression** setting turns compression off altogether.
+- **Size limit** draws it no larger than that; **Mip levels** keeps smaller copies for far away (made with a sharp filter, normals kept unit length); **Edges** repeat, stretch or mirror; **Filter** is smooth or pixelated.
+
+Its preview shows the picture as imported and as kept, side by side, with the memory each takes. Compressed sides must be a multiple of 4 pixels. **Memory** in the Materials tab shows what a level's textures take against the game's asset memory, its largest textures and what each material asset's textures take, with plain warnings where it is a lot.
 
 ## Folders
 
