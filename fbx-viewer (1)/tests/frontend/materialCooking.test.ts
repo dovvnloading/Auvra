@@ -10,7 +10,7 @@ import { setObjectMaterialValue, releaseSessionMaterials } from '../../utils/mat
 const crate = (): MaterialAsset => ({
     id: 'crate',
     name: 'Crate wood',
-    graph: surfaceGraphForPictures({ baseColor: true }),
+    graph: surfaceGraphForPictures({ baseColor: 'baked-colour' }),
     pictures: { baseColor: 'baked-colour' },
     textureGraph: { graph: { nodes: [{ id: 'n', type: 'noise', params: {} }], links: [], size: { w: 10, h: 10 }, parameters: [{ name: 'Wetness', kind: 'float' }] }, values: { Wetness: 0 }, bakeSize: 10, layout: 'engine' },
 });
