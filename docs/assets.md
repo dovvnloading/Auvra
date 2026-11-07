@@ -179,9 +179,15 @@ Without the editor open (close the project there first), `python -m Auvra.projec
 - `list`: each material, whether a texture graph makes it, its parameters with their values, and its presets (`--json` for JSON).
 - `set-value MATERIAL NAME VALUE`: sets a texture graph's parameter (VALUE is JSON: `0.4`, `[1, 0.5, 0]`), within its limits, and saves.
 - `apply-preset MATERIAL PRESET`: sets every value a preset holds, and saves.
-- `cook`, `ball`, `bake-mesh-maps`: drawn on a graphics card by the editor, so not headless yet; each says where to do it in the editor and exits with 3.
+- `cook MATERIAL`: makes a texture graph's pictures, as **Update material** does.
+- `ball MATERIAL`: draws a material's preview ball as a PNG, as the Materials list shows it. A texture graph whose pictures are missing or older than the graph is drawn with them made from the graph as it is.
+- `bake-mesh-maps MODEL`: bakes a model's mesh maps, one set for each of its surfaces, as the Paint tab's **Bake mesh maps** does with its usual settings. They are kept bottom row first, as the Paint tab keeps them.
 
-MATERIAL is a material's id or name (any case). A command that cannot be done exits with 2 and says why.
+The last three take `--out FOLDER` to write the pictures to a folder, and `--into-project` to keep them in the project as the editor would: the material's pictures (the ones they replace go, unless something else uses them), a texture named after the material in the **Material balls** folder, or the bake of the surface's painted set (made if the surface has none, ready for the Paint tab). Writing only to a folder reads the project, so it can stay open in the editor meanwhile. `--size` is a power of two, given as the power or in pixels (`9` or `512`); a cook takes the material's own size without it, a bake the painted set's (2048 for a new one), and a painted set is 256 to 4096 pixels across. For a ball `--size` is pixels across (160 when not given). `bake-mesh-maps` also takes `--samples`, the rays per texel for occlusion and thickness (128 when not given).
+
+These three run the editor's own code in a headless browser on its software GPU, so they need Node, the editor's packages installed in `fbx-viewer (1)`, and Chrome or Edge (or a browser named by `AUVRA_BROWSER`). The first run after the editor's code changes builds the page they use (a few seconds), kept in the system's temporary folder.
+
+MATERIAL is a material's id or name, and MODEL a model's (any case). A command that cannot be done as asked exits with 2 and says why; 3 means Node, the packages or a browser are missing, and 4 that the headless browser could not do the work.
 
 ### MaterialX
 
