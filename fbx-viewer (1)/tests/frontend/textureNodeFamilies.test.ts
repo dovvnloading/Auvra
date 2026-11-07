@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { defaultNodeParams } from '../../texturing/graph/document';
 import { FILTER_NODES, FILTER_REFERENCES, FILTER_SHADERS, inverseBilinear } from '../../texturing/graph/nodes/filters';
+import { GEOMETRY_NODES, reoriented, solvePoisson, transformedNormal, uncombined } from '../../texturing/graph/nodes/geometry';
 import { textureNodeDefinitionByType } from '../../texturing/graph/registry';
+import { transformMatrix } from '../../texturing/graph/safeTransform';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 
 const SEED = 4321.5;
 const withDefaults = (type: string, extra: Record<string, unknown> = {}) => ({ ...defaultNodeParams(textureNodeDefinitionByType(type)!), ...extra });
@@ -64,5 +68,54 @@ describe('blurs, warps and transforms', () => {
 
     it('every node says what it does', () => {
         for (const definition of FILTER_NODES) expect(definition.description.length, definition.type).toBeGreaterThan(40);
+    });
+});
+
+describe('geometry effects and normals', () => {
+    const unit = (v: number[]) => { const l = Math.hypot(...v); return v.map((x) => x / l); };
+
+    it('takes a base normal back out of a combined one', () => {
+        for (const [base, detail] of [[[0.3, -0.2, 0.93], [0.1, 0.4, 0.91]], [[-0.5, 0.1, 0.86], [0, 0, 1]], [[0, 0, 1], [0.6, 0.2, 0.77]]]) {
+            const combined = unit(reoriented(unit(base), unit(detail)));
+            uncombined(combined, base).forEach((value, k) => expect(value).toBeCloseTo(unit(detail)[k], 5));
+        }
+    });
+
+    it("turns, mirrors and steepens a normal map's directions with its picture", () => {
+        // Read through a quarter turn, a slope across becomes a slope down.
+        const quarter = transformedNormal(unit([0.5, 0, 0.87]), transformMatrix(90, [1, 1]));
+        expect(Math.abs(quarter[0])).toBeLessThan(1e-9);
+        expect(Math.abs(quarter[1])).toBeGreaterThan(0.4);
+        // Mirrored across, the slope across turns round.
+        expect(transformedNormal(unit([0.5, 0.2, 0.84]), transformMatrix(0, [-1, 1]))[0]).toBeLessThan(0);
+        // Half the size, twice as many repeats: the same heights over half the distance are steeper.
+        const n = unit([0.3, 0, 0.95]);
+        expect(transformedNormal(n, transformMatrix(0, [0.5, 0.5]))[0]).toBeGreaterThan(n[0]);
+    });
+
+    it('solves a height from its slopes by multigrid, the error falling with each cycle', () => {
+        const size = 32;
+        const height = (x: number, y: number) => Math.sin(2 * Math.PI * x / size) * 3 + Math.cos(2 * Math.PI * (2 * y + x) / size) * 2;
+        const slopes = (x: number, y: number) => [(height(x + 1, y) - height(x - 1, y)) / 2, (height(x, y + 1) - height(x, y - 1)) / 2];
+        const f = new Float64Array(size * size);
+        for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) f[y * size + x] = (slopes(x + 1, y)[0] - slopes(x - 1, y)[0] + slopes(x, y + 1)[1] - slopes(x, y - 1)[1]) / 2;
+        const error = (cycles: number) => {
+            const h = solvePoisson(f, size, cycles);
+            const mean = h.reduce((a, b) => a + b, 0) / h.length;
+            let worst = 0;
+            for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) worst = Math.max(worst, Math.abs(h[y * size + x] - mean - height(x, y)));
+            return worst;
+        };
+        const one = error(1);
+        const six = error(6);
+        expect(six).toBeLessThan(one);
+        // Against heights spanning 10: within a few hundredths (the slopes' own steps make the rest).
+        expect(six).toBeLessThan(0.15);
+    });
+
+    it('reads round each pixel only through wrapping reads, so tiling pictures stay tiling', () => {
+        const source = readFileSync(resolve(__dirname, '../../texturing/graph/nodes/geometry.ts'), 'utf8');
+        expect(source).not.toMatch(/texture\(t_|texelFetch\(t_/);
+        for (const definition of GEOMETRY_NODES) expect(definition.description.length, definition.type).toBeGreaterThan(40);
     });
 });

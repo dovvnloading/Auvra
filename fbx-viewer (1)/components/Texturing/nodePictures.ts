@@ -71,7 +71,11 @@ const draw = async (gpu: TextureGpu, evaluator: TextureGraphEvaluator, request: 
     if (main) {
         const sample = ID_SAMPLED.has(definition.type) ? 'tiles' : sampleFor(definition);
         nodes.unshift({ ...createNode(sample, -200, 0), id: 'sample' });
-        if (COLOUR_SAMPLED.has(definition.type) || ID_SAMPLED.has(definition.type)) {
+        if (definition.inputs.find((port) => port.key === main)?.fallback === 'normal') {
+            // A node changing normals is shown changing a normal map (of the cells).
+            nodes.unshift({ ...createNode('normalFromHeight', -150, 0), id: 'normals' });
+            links.push({ from: 'sample', fromOutput: 'out', to: 'normals', toInput: 'in' }, { from: 'normals', fromOutput: 'out', to: 'picture', toInput: main });
+        } else if (COLOUR_SAMPLED.has(definition.type) || ID_SAMPLED.has(definition.type)) {
             // A colourful sample: the noise through a colourful gradient, or islands each a random colour.
             const colourful = ID_SAMPLED.has(definition.type) ? { ...createNode('floodFill', -150, 0), id: 'islands' } : { ...createNode('gradientMap', -150, 0, { ramp: COLOURFUL_RAMP }), id: 'colourful' };
             nodes.unshift(colourful);
