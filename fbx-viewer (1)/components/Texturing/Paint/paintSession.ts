@@ -20,7 +20,7 @@ import { applyPixelHistory, trimmedHistory, type HistoryEntry } from '../../../t
 import { castsFromThreeSides, createPaintDocument, newFillLayer, paintId, readPaintDocument, type PaintChannel, type PaintDocument } from '../../../texturing/paint/paintTypes';
 import { download, makeZip } from '../../../texturing/zip';
 import { fileName, holdsNormalGreen, planPicture, type ChannelSource, type ExportPicture, type ExportSource, type ExportTemplate } from '../../../texturing/paint/exportTemplates';
-import { extensionOf, writePicture, type PictureData } from '../../../texturing/paint/pictureFiles';
+import { colourChannels, extensionOf, linearChannels, writePicture, type PictureData } from '../../../texturing/paint/pictureFiles';
 import { atlasMesh, surfaceOfGraph, writePaintedGlb, type GltfPictures, type GltfSurface } from '../../../texturing/paint/gltfExport';
 
 /** A template's picture packed from up to four maps: each channel a component of one (grey maps hold theirs in red), or a value. */
@@ -829,7 +829,7 @@ export class PaintSession {
                         const packed = this.packPicture(picture, images, coverage, size, size, { directX: template.normal === 'directX', padding: template.padding, flipRows });
                         let name = fileName(picture.name, { set, model, tile, size });
                         if (tiles.length > 1 && !picture.name.includes('$tile')) name += `.${tile}`;
-                        files.push({ name: `${sizes.length > 1 ? `${size}/` : ''}${name}.${extensionOf(template.format)}`, data: await writePicture(packed, template.format) });
+                        files.push({ name: `${sizes.length > 1 ? `${size}/` : ''}${name}.${extensionOf(template.format)}`, data: await writePicture(linearChannels(packed, colourChannels(picture, template.format)), template.format) });
                     }
                 }
             }

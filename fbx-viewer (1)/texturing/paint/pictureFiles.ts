@@ -24,6 +24,24 @@ export const PICTURE_FORMATS: ReadonlyArray<{ value: PictureFormat; label: strin
 
 export const extensionOf = (format: PictureFormat): string => PICTURE_FORMATS.find((each) => each.value === format)?.extension ?? 'png';
 
+/** Float files (EXR, 32-bit TIFF) hold light as it is: colours go in them linear, not as they are shown. */
+export const isFloatFormat = (format: PictureFormat): boolean => format === 'exr16' || format === 'exr32' || format === 'tiff32';
+
+/** A shown (sRGB) colour value as linear light. */
+export const srgbToLinear = (value: number): number => (value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4);
+
+/** Makes the given channels of a picture linear (colour channels bound for a float file). */
+export const linearChannels = (picture: PictureData, channels: readonly number[]): PictureData => {
+    if (!channels.length) return picture;
+    const data = picture.data.slice();
+    for (let i = 0; i < data.length; i += picture.channels) for (const c of channels) if (c < picture.channels) data[i + c] = srgbToLinear(data[i + c]);
+    return { ...picture, data };
+};
+
+/** Which channels of a template picture hold colour (base colour or emission) that a float file takes linear. */
+export const colourChannels = (picture: { channels: ReadonlyArray<{ from: string; component: number } | { value: number }> }, format: PictureFormat): number[] =>
+    isFloatFormat(format) ? picture.channels.flatMap((channel, c) => ('from' in channel && (channel.from === 'baseColor' || channel.from === 'emissive') && channel.component < 3 ? [c] : [])) : [];
+
 export interface PictureData {
     width: number;
     height: number;

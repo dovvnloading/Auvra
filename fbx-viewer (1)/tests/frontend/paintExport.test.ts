@@ -1,6 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import { BUILT_IN_TEMPLATES, fileName, holdsNormalGreen, planPicture, readTemplates } from '../../texturing/paint/exportTemplates';
-import { writeExr, writeTga, writeTiff, type PictureData } from '../../texturing/paint/pictureFiles';
+import { colourChannels, linearChannels, srgbToLinear, writeExr, writeTga, writeTiff, type PictureData } from '../../texturing/paint/pictureFiles';
+import { channelPictureFiles } from '../../texturing/paint/channelDownload';
+import type { TextureGpu } from '../../texturing/gpu/textureGpu';
+import type { ChannelImages } from '../../texturing/materialOutput';
+
+const bytesOf = (blob: Blob): Promise<Uint8Array> => new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(new Uint8Array(reader.result as ArrayBuffer));
+    reader.onerror = () => reject(reader.error);
+    reader.readAsArrayBuffer(blob);
+});
 
 const picture = (channels: 1 | 3 | 4): PictureData => ({
     width: 3, height: 2, channels,
@@ -89,5 +99,31 @@ describe('picture files', () => {
         // Grey is one Y channel.
         const grey = new TextDecoder().decode(writeExr(picture(1), 16).subarray(8, 80));
         expect(grey).toContain('Y');
+    });
+
+    it('take colour linear into float files only', () => {
+        const orm = BUILT_IN_TEMPLATES[0].pictures[0];
+        expect(colourChannels(orm, 'exr16')).toEqual([0, 1, 2]);
+        expect(colourChannels(orm, 'png16')).toEqual([]);
+        expect(colourChannels({ channels: [{ from: 'roughness', component: 0 }, { from: 'emissive', component: 2 }, { value: 1 }] }, 'tiff32')).toEqual([1]);
+        const linear = linearChannels({ width: 1, height: 1, channels: 4, data: Float32Array.from([0.5, 0.5, 0.5, 0.5]) }, [0, 2]);
+        expect(Array.from(linear.data)).toEqual([Math.fround(srgbToLinear(0.5)), 0.5, Math.fround(srgbToLinear(0.5)), 0.5]);
+        expect(srgbToLinear(0.5)).toBeCloseTo(0.214, 3);
+    });
+
+    it('write the channels of a material in the file kind asked for, rows from the top', async () => {
+        // The GPU hands rows back bottom first: here the bottom row is coloured, the top black.
+        const pixels = Float32Array.from({ length: 2 * 2 * 4 }, (_, i) => (i < 8 ? [0.5, 0.25, 1, 1][i % 4] : 0));
+        const gpu = { readFloat: () => pixels } as unknown as TextureGpu;
+        const images = { baseColor: { kind: 'color', width: 2, height: 2 }, roughness: { kind: 'gray', width: 2, height: 2 } } as unknown as ChannelImages;
+        const files = await channelPictureFiles(gpu, images, 2, 2, 'Mat', 'tga');
+        expect(files.map((file) => file.name)).toEqual(['Mat_baseColor.tga', 'Mat_roughness.tga']);
+        const colour = await bytesOf(files[0].data);
+        expect([colour[2], colour[16]]).toEqual([2, 24]);
+        expect(Array.from(colour.subarray(18, 21))).toEqual([0, 0, 0]);
+        expect(Array.from(colour.subarray(18 + 6, 18 + 9))).toEqual([255, 64, 128]);
+        const grey = await bytesOf(files[1].data);
+        expect([grey[2], grey[16], grey.length]).toEqual([3, 8, 18 + 4]);
+        expect((await channelPictureFiles(gpu, images, 2, 2, 'Mat', 'exr32')).map((file) => file.name)).toEqual(['Mat_baseColor.exr', 'Mat_roughness.exr']);
     });
 });

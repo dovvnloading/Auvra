@@ -87,6 +87,7 @@ const EXEMPT = new Map(Object.entries({
   'texturing/paint/exportTemplates.ts': 'data-model',
   'texturing/paint/pictureFiles.ts': 'pure-utility',
   'texturing/paint/gltfExport.ts': 'pure-utility',
+  'texturing/paint/channelDownload.ts': 'pure-utility',
   'components/Texturing/Paint/openMaterial.ts': 'pure-utility',
   'texturing/uv/uvTopology.ts': 'pure-utility',
   'texturing/uv/lscm.ts': 'pure-utility',
