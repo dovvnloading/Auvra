@@ -27,7 +27,7 @@ const passesOf = async (definition: TexNodeDef): Promise<Array<{ fragment: strin
         gpu, node: { id: 'n', type: definition.type, x: 0, y: 0, params }, width: 64, height: 64, seed: 1, precision: 8, tiling: [true, true],
         iteration: { index: 0, count: 1 }, world: [1, 1], params, signal: new AbortController().signal, time: { seconds: 0, loop: 4, phase: 0 },
         input: () => null, outputKind: () => 'color', image: (_k: string, w?: number, h?: number) => image(w, h), texture: () => null, external: () => null, material: () => null,
-        subgraph: async () => ({}), note: () => undefined,
+        subgraph: async () => ({}), note: () => undefined, curve: () => null, giveCurve: () => undefined,
         pass: async (_t: unknown, fragment: string, extra: { inputs?: Record<string, unknown>; wgsl?: { functions: string; result: string } } = {}) => {
             const bound = nodeBindings(definition, { input: () => null, params, seed: 1, texture: () => null, tiling: [true, true] }, () => ({}) as never);
             keep(`${bound.declarations}\n${fragment}`, [...Object.keys(bound.inputs), ...Object.keys(extra.inputs ?? {})], extra.wgsl);

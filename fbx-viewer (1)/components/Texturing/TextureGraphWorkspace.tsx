@@ -228,15 +228,15 @@ const contextOf = (outerSession: TextureGraphSession, outer: StoredTextureGraph,
     return { inputs, parameters, seed, size, ...(iteration ? { iteration } : {}), version: JSON.stringify([version, parameters, seed, size, iteration ?? null]) };
 };
 
-/** What the 2D view can show of a node: each image it gives, each channel of a material it gives. */
+/** What the 2D view can show of a node: each image it gives, each channel of a material it gives (a curve is no picture). */
 const shownOptions = (definition: TexNodeDef): Array<{ value: string; label: string }> => definition.outputs.flatMap((port) => (port.kind === 'material'
     ? MATERIAL_CHANNELS.map((channel) => ({ value: materialKey(port.key, channel), label: `${port.label}: ${MATERIAL_CHANNEL_LABELS[channel]}` }))
-    : [{ value: port.key, label: port.label }]));
+    : port.kind === 'curve' ? [] : [{ value: port.key, label: port.label }]));
 
 /** The names a node's code can use: its inputs (c_, g_, w_), its settings (p_), the pixel's place and what it writes. */
 const codeNames = (definition: TexNodeDef): string[] => [
     'uv', 'vUv', 'outColor', 'uSeed', 'uSize',
-    ...definition.inputs.filter((port) => port.kind !== 'material').flatMap((port) => [`c_${port.key}`, `g_${port.key}`, `w_${port.key}`]),
+    ...definition.inputs.filter((port) => port.kind !== 'material' && port.kind !== 'curve').flatMap((port) => [`c_${port.key}`, `g_${port.key}`, `w_${port.key}`]),
     ...definition.params.map((param) => `p_${param.key}`),
 ];
 
