@@ -68,7 +68,8 @@ const draw = async (gpu: TextureGpu, evaluator: TextureGraphEvaluator, request: 
     const node = { ...createNode(request.type, 0, 0, request.params), id: 'picture' };
     const nodes = [node];
     const links: TexGraphLink[] = [];
-    const main = mainInput(definition) ?? (definition.type === 'makeMaterial' ? 'baseColor' : null);
+    // Measured F0 shows its colour on its own; the rest change a sample wired into their main input.
+    const main = definition.type === 'measuredF0' ? null : mainInput(definition) ?? (definition.type === 'makeMaterial' ? 'baseColor' : null);
     if (definition.category === 'Weathering') {
         // Weathering is shown on stand-in model maps made from the cells as a height: its curvature (also
         // as the cavity), occlusion, normals (as the way each place faces) and the height as thickness.
@@ -123,6 +124,8 @@ const draw = async (gpu: TextureGpu, evaluator: TextureGraphEvaluator, request: 
             links.push({ from: 'sampleMaterial', fromOutput: 'out', to: 'picture', toInput: main });
         } else {
             links.push({ from: 'sample', fromOutput: 'out', to: 'picture', toInput: main });
+            // The metal and roughness check is shown finding half-metal in the same noise.
+            if (definition.type === 'pbrRangeCheck') links.push({ from: 'sample', fromOutput: 'out', to: 'picture', toInput: 'metallic' });
         }
     }
     const graph: TextureGraph = { version: 1, size: { w: 6, h: 6 }, seed: 11, nodes, links, parameters: [] };

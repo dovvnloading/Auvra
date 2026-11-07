@@ -4,11 +4,13 @@ import { resolve } from 'node:path';
 import { PHOTO_NODES, atlasPlace, pickBand, shadingFit } from '../../texturing/graph/nodes/photo';
 import { closedCut, seamMasks, seamTile, type Picture } from '../../texturing/graph/seamCut';
 import { textureNodeDefinitionByType } from '../../texturing/graph/registry';
-import { coerceParam } from '../../texturing/graph/document';
 import { nearestOn, placementsAlong, quadPlace, resample, segmentsOf, simplify, smoothPath, traceOutlines, windingAt, wrapOffsets, type Point } from '../../texturing/graph/curves';
 import { SPLINE_NODES, outlinePaths, scatterRows, strokeAt } from '../../texturing/graph/nodes/splines';
 import { addPoint, dragOrbit, dragPoint, removePoint, type PointList } from '../../components/Texturing/view2d';
 import { SDF_NODES, primitiveDistance, sdfCombine, sdfHeightAt, sdfScene, viewUniforms } from '../../texturing/graph/nodes/sdf';
+import { MEASURED_F0, PBR_CHECK_NODES, albedoFinding, f0AsBaseColour, linearToSrgb, pbrFinding, pbrLimits, srgbToLinear } from '../../texturing/graph/nodes/pbrChecks';
+import { WEATHERING_REFERENCES, standInPanels } from '../../texturing/graph/nodes/weathering';
+import { coerceParam, defaultNodeParams } from '../../texturing/graph/document';
 import { VECTOR_NODES, combineDistances, decodeDistance, encodeDistance, insideByRule, shapeDistance, vectorShapeAt } from '../../texturing/graph/nodes/vector';
 import { fitToPicture, parsePathData, parseSvg } from '../../texturing/graph/svgPaths';
 
@@ -349,6 +351,75 @@ describe('SDF shapes', () => {
         expect(uEye.z).toBeGreaterThan(uTarget.z);
         for (const definition of SDF_NODES) expect(definition.description.length).toBeGreaterThan(40);
         expect(dragOrbit([0.75, 0.5])).toEqual({ yaw: 90, pitch: 45 });
+    });
+});
+
+describe('PBR checks', () => {
+    it('finds base colours outside the range real non-metals have', () => {
+        expect(albedoFinding([20 / 255, 20 / 255, 20 / 255], 30, 240)).toBe(-1);
+        expect(albedoFinding([0.5, 0.5, 0.5], 30, 240)).toBe(0);
+        expect(albedoFinding([250 / 255, 250 / 255, 250 / 255], 30, 240)).toBe(1);
+        expect(linearToSrgb(srgbToLinear(0.37))).toBeCloseTo(0.37, 9);
+    });
+
+    it('finds half-metal, metal too dark and mirror-smooth surfaces', () => {
+        const limits = pbrLimits({});
+        expect(pbrFinding([0.8, 0.8, 0.8], 0.5, 0.4, limits)).toBe('half');
+        expect(pbrFinding([0.3, 0.3, 0.3], 1, 0.4, limits)).toBe('darkMetal');
+        expect(pbrFinding([0.5, 0.5, 0.5], 0, 0.01, limits)).toBe('mirror');
+        expect(pbrFinding([0.5, 0.5, 0.5], 0, 0.5, limits)).toBeNull();
+        // Every measured metal passes as a metal; every other material reflects little.
+        for (const entry of MEASURED_F0) {
+            if (entry.metal) expect(pbrFinding(f0AsBaseColour(entry.key), 1, 0.4, limits), entry.key).toBeNull();
+            else expect(Math.max(...entry.f0), entry.key).toBeLessThan(0.2);
+        }
+        const gold = f0AsBaseColour('gold').map((value) => Math.round(value * 255));
+        expect(gold[0]).toBe(255);
+        expect(gold[2]).toBeLessThan(gold[1]);
+        for (const definition of PBR_CHECK_NODES) {
+            expect(definition.category).toBe('Checks');
+            expect(definition.description.length).toBeGreaterThan(40);
+        }
+    });
+});
+
+describe('weathering on stand-ins', () => {
+    const SEED = 77.5;
+    const edgeGap = (picture: (u: number, v: number) => number) => {
+        let gap = 0;
+        for (let i = 0; i <= 50; i++) { const t = (i + 0.29) / 51; gap = Math.max(gap, Math.abs(picture(0, t) - picture(1, t)), Math.abs(picture(t, 0) - picture(t, 1))); }
+        return gap;
+    };
+
+    it('gives edge-based wear stand-in panel edges to wear, still tiling', () => {
+        const params = defaultNodeParams(textureNodeDefinitionByType('edgeWear')!);
+        const wear = (u: number, v: number) => WEATHERING_REFERENCES.edgeWear(u, v, standInPanels(u, v), params, SEED);
+        let sum = 0;
+        for (let y = 0; y < 48; y++) for (let x = 0; x < 48; x++) sum += wear((x + 0.5) / 48, (y + 0.5) / 48);
+        expect(sum / 2304).toBeGreaterThan(0.03);
+        expect(edgeGap(wear)).toBeLessThan(1e-9);
+        // The middle of a panel is flat: nothing to wear there.
+        expect(wear(0.5, 0.5)).toBe(0);
+    });
+
+    it('says so on the node when there is no curvature map, and not when one is wired', async () => {
+        const definition = textureNodeDefinitionByType('edgeWear')!;
+        const run = async (wired: boolean) => {
+            const notes: string[] = [];
+            const context = {
+                params: defaultNodeParams(definition), tiling: [true, true], seed: 1,
+                input: (key: string) => (wired && key === 'curvature' ? { kind: 'gray', width: 4, height: 4 } : null),
+                external: () => null,
+                gpu: { constant: () => ({}) },
+                image: () => ({}),
+                pass: async () => undefined,
+                note: (text: string) => notes.push(text),
+            };
+            await definition.run(context as never);
+            return notes;
+        };
+        expect((await run(false))[0]).toMatch(/^No curvature map: /);
+        expect(await run(true)).toEqual([]);
     });
 });
 
