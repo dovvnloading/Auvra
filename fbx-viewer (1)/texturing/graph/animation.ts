@@ -1,5 +1,6 @@
 import * as THREE from 'three';
-import type { GpuImage, TextureGpu } from '../gpu/textureGpu';
+import type { GpuImage } from '../gpu/textureGpu';
+import type { TexturingGpu } from '../gpu/texturingGpu';
 
 /**
  * ANIMATED TEXTURE GRAPHS
@@ -101,7 +102,7 @@ export const flipbookFrameSize = (size: { w: number; h: number }, frames: number
  * Frames laid out into one picture, a grid of `columns` x `rows` from the top left (as flipbookCell
  * places them), each copied into its cell at the frames' size.
  */
-export const packFlipbook = (gpu: TextureGpu, frames: readonly GpuImage[], columns: number, rows: number): GpuImage => {
+export const packFlipbook = (gpu: TexturingGpu, frames: readonly GpuImage[], columns: number, rows: number): GpuImage => {
     const first = frames[0];
     const atlas = gpu.image(first.width * columns, first.height * rows, first.kind, first.precision);
     gpu.clear(atlas, first.kind === 'gray' ? [0, 0, 0, 1] : [0, 0, 0, 0]);

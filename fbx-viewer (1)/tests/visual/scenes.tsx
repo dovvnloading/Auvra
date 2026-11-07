@@ -9,6 +9,7 @@ import { GraphMaterial, bindMaterialGraph } from '../../runtime/materials/graphM
 import { normalizeMaterialGraph, withMaterialPictures } from '../../runtime/materials/materialGraph';
 import { paintedCopyGraph } from '../../utils/paintedCopies';
 import type { LevelComponent, LevelObject, SkyConfig } from '../../types';
+import { TextureGraphScene, textureGraphScene } from './textureGraphScene';
 
 /**
  * The scenes the rendering pictures are taken of: each small, fixed and built from the engine's own lighting, sky,
@@ -395,4 +396,14 @@ export const SCENES: Record<string, VisualScene> = {
   // Last: on WebGPU, a scene drawn before the ray-traced ones still changes them slightly (a leak across scenes on one
   // device, not yet found in the renderer), so the newest scene goes after them all.
   'physical-materials': { camera: { position: [0, 3.2, 6.4], fov: 45 }, Scene: PhysicalMaterialsScene, frames: 20 },
+  // A texture graph cooked on the renderer's own GPU (WebGL2's texturing context, or the WebGPU path), last of all so
+  // the two renderers' pictures compare the two cooks.
+  'texture-graph': {
+    camera: { position: [0, 0.6, 5.2], fov: 45 },
+    Scene: TextureGraphScene,
+    settle: async ({ frames, until }) => {
+      await until(() => textureGraphScene.ready);
+      await frames(6);
+    },
+  },
 };

@@ -55,9 +55,9 @@ export const CURVE_GLSL = `uniform sampler2D segs;
 uniform int uSegs;
 uniform vec4 uOffsets[9];
 uniform int uOffsetCount;
-struct CurveHit { float dist; float along; float side; float path; float pathLength; };
-CurveHit nearestOnCurve(vec2 p) {
-    CurveHit hit = CurveHit(1e9, 0.0, 1.0, 0.0, 0.0);
+// The nearest point as (distance, length along its path, side, segment); hitPath gives that segment's path and its length.
+vec4 nearestOnCurve(vec2 p) {
+    vec4 hit = vec4(1e9, 0.0, 1.0, 0.0);
     for (int k = 0; k < 9; k++) {
         if (k >= uOffsetCount) break;
         vec2 q = p + uOffsets[k].xy;
@@ -68,14 +68,15 @@ CurveHit nearestOnCurve(vec2 p) {
             float t = clamp(dot(q - s.xy, e) / max(dot(e, e), 1e-12), 0.0, 1.0);
             vec2 d = q - (s.xy + e * t);
             float dist = length(d);
-            if (dist < hit.dist) {
+            if (dist < hit.x) {
                 vec4 info = texelFetch(segs, ivec2(i, 1), 0);
-                hit = CurveHit(dist, info.x + t * info.y, e.x * d.y - e.y * d.x >= 0.0 ? 1.0 : -1.0, info.z, info.w);
+                hit = vec4(dist, info.x + t * info.y, e.x * d.y - e.y * d.x >= 0.0 ? 1.0 : -1.0, float(i));
             }
         }
     }
     return hit;
 }
+vec2 hitPath(vec4 hit) { return texelFetch(segs, ivec2(int(hit.w), 1), 0).zw; }
 float windingOf(vec2 p) {
     float winding = 0.0;
     for (int k = 0; k < 9; k++) {
@@ -256,21 +257,22 @@ float closingWinding(vec2 p) {
     return winding;
 }
 void main() {
-    CurveHit hit = nearestOnCurve(vUv);
+    vec4 hit = nearestOnCurve(vUv);
+    vec2 path = hitPath(hit);
     float aa = pixelSize();
-    float t = hit.pathLength > 0.0 ? hit.along / hit.pathLength : 0.0;
+    float t = path.y > 0.0 ? hit.y / path.y : 0.0;
     float halfWidth = p_width * 0.5 * (1.0 + (sqrt(max(0.0, 4.0 * t * (1.0 - t))) - 1.0) * uTaper);
     float soft = max(halfWidth * p_softness, aa);
-    float stroke = 1.0 - smoothstep(halfWidth - soft, halfWidth + aa * 0.5, hit.dist);
+    float stroke = 1.0 - smoothstep(halfWidth - soft, halfWidth + aa * 0.5, hit.x);
     if (uDash > 0.0) {
         float period = uDash + uGap;
-        float phase = mod(hit.along, period);
+        float phase = mod(hit.y, period);
         stroke *= step(phase, uDash);
     }
     if (uWhat == 0) { outColor = vec4(vec3(stroke), 1.0); return; }
     if (uWhat == 2) { outColor = vec4(vec3(t * step(0.001, stroke)), 1.0); return; }
     float winding = windingOf(vUv) + (uClosedFill == 1 ? closingWinding(vUv) : 0.0);
-    float edge = min(hit.dist, uClosedFill == 1 ? closingDistance(vUv) : 1e9);
+    float edge = min(hit.x, uClosedFill == 1 ? closingDistance(vUv) : 1e9);
     float inside = abs(winding) > 0.5 ? 1.0 : 0.0;
     float fill = clamp(0.5 + (inside > 0.5 ? edge : -edge) / aa, 0.0, 1.0);
     outColor = vec4(vec3(fill), 1.0);
@@ -423,12 +425,13 @@ void main() {
             const glsl = `uniform float uRepeats;
 uniform int uWhat;
 void main() {
-    CurveHit hit = nearestOnCurve(vUv);
+    vec4 hit = nearestOnCurve(vUv);
+    vec2 path = hitPath(hit);
     float aa = pixelSize();
     float halfWidth = p_width * 0.5;
-    float m = 1.0 - smoothstep(halfWidth - max(halfWidth * p_softness, aa), halfWidth + aa * 0.5, hit.dist);
-    float across = (p_flip == 1 ? -hit.side : hit.side) * hit.dist / max(p_width, 1e-5) + 0.5;
-    float along = hit.pathLength > 0.0 ? hit.along / hit.pathLength * uRepeats : 0.0;
+    float m = 1.0 - smoothstep(halfWidth - max(halfWidth * p_softness, aa), halfWidth + aa * 0.5, hit.x);
+    float across = (p_flip == 1 ? -hit.z : hit.z) * hit.x / max(p_width, 1e-5) + 0.5;
+    float along = path.y > 0.0 ? hit.y / path.y * uRepeats : 0.0;
     if (uWhat == 1) { outColor = vec4(vec3(m), 1.0); return; }
     vec4 c = texture(t_pattern, vec2(fract(along), clamp(across, 0.0, 1.0)));
     outColor = vec4(c.rgb, c.a * m);
@@ -527,13 +530,14 @@ uniform float uGap;
 uniform int uWhat;
 uniform float uSeedValue;
 void main() {
-    CurveHit hit = nearestOnCurve(vUv);
+    vec4 hit = nearestOnCurve(vUv);
+    vec2 path = hitPath(hit);
     float aa = pixelSize();
     float halfWidth = p_width * 0.5;
-    float m = 1.0 - smoothstep(halfWidth - max(halfWidth * p_softness, aa), halfWidth + aa * 0.5, hit.dist);
-    if (uDash > 0.0) m *= step(mod(hit.along, uDash + uGap), uDash);
-    if (uWhat == 1) outColor = vec4(vec3((hit.pathLength > 0.0 ? hit.along / hit.pathLength : 0.0) * step(0.001, m)), 1.0);
-    else if (uWhat == 2) outColor = vec4(vec3(hash1(ivec2(int(hit.path), 7), uSeedValue) * step(0.001, m)), 1.0);
+    float m = 1.0 - smoothstep(halfWidth - max(halfWidth * p_softness, aa), halfWidth + aa * 0.5, hit.x);
+    if (uDash > 0.0) m *= step(mod(hit.y, uDash + uGap), uDash);
+    if (uWhat == 1) outColor = vec4(vec3((path.y > 0.0 ? hit.y / path.y : 0.0) * step(0.001, m)), 1.0);
+    else if (uWhat == 2) outColor = vec4(vec3(hash1(ivec2(int(path.x), 7), uSeedValue) * step(0.001, m)), 1.0);
     else outColor = vec4(vec3(m), 1.0);
 }`;
             const common = { uDash: num(context.params, 'dash', 0), uGap: num(context.params, 'gap', 0.01), uSeedValue: context.seed };

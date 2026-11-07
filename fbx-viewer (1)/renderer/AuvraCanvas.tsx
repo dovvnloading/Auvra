@@ -7,6 +7,7 @@ import { isGpuRenderer } from "./gpu/frame";
 import type { GpuRenderer } from "./gpu/GpuRenderer";
 import { frontendDiagnostics } from "../diagnostics/runtime";
 import { MaterialClock } from "../runtime/materials/MaterialClock";
+import { cookingDevice, setCookingDevice } from "../texturing/gpu/cookingDevice";
 // Every scene draws with its baked light, or none (installs the shader hook on import).
 import "../runtime/lighting/bakedLighting";
 
@@ -108,6 +109,15 @@ const RendererLifecycleBridge: React.FC<{
   useEffect(() => {
     if (isGpuRenderer(gl)) gl.settings.set("shadows.virtual", shadowPages);
   }, [gl, shadowPages]);
+  // A game drawing with WebGPU cooks its texture graphs on the same device; the editor keeps cooking on WebGL2.
+  useEffect(() => {
+    if (role !== "runtime" || !isGpuRenderer(gl)) return undefined;
+    const device = gl.core.device;
+    setCookingDevice(device);
+    return () => {
+      if (cookingDevice() === device) setCookingDevice(null);
+    };
+  }, [gl, role]);
   useEffect(() => {
     const renderer = gl as THREE.WebGLRenderer;
     const canvas = renderer.domElement;

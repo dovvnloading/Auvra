@@ -1,5 +1,6 @@
 import * as THREE from 'three';
-import type { GpuImage, TextureGpu } from '../../gpu/textureGpu';
+import type { GpuImage } from '../../gpu/textureGpu';
+import type { TexturingGpu as TextureGpu } from '../../gpu/texturingGpu';
 import { anyIn, bool, colorIn, float, grayIn, int, onePass, out, select, seed } from '../nodeKit';
 import type { NodeRunContext, TexNodeDef } from '../types';
 import { FLOOD_ANY, FLOOD_BOX_VERTEX, FLOOD_CHANGED, FLOOD_HOOK, FLOOD_JUMP, FLOOD_RESULT, FLOOD_SEAMS, FLOOD_START } from '../flood';

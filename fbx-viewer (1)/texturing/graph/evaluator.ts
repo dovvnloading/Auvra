@@ -1,5 +1,6 @@
 import type * as THREE from 'three';
-import type { GpuImage, ImagePrecision, TextureGpu } from '../gpu/textureGpu';
+import type { GpuImage, ImagePrecision } from '../gpu/textureGpu';
+import type { TexturingGpu } from '../gpu/texturingGpu';
 import { readAnimation, timeAt, type GraphTime } from './animation';
 import { coerceParam, formulaScope, graphContentKey, hashText, mixSeeds, parameterValues, resolveNodeParams, subgraphRunSeed, MAX_SIZE_LOG2 } from './document';
 import { MATERIAL_CHANNELS, materialKey, materialOf, materialResults, type MaterialImages } from './material';
@@ -154,7 +155,7 @@ export class TextureGraphEvaluator {
     private readonly stopListening: () => void;
 
     constructor(
-        private readonly gpu: TextureGpu,
+        private readonly gpu: TexturingGpu,
         private readonly resolve: GraphResolver,
         private readonly texture: (textureId: string) => THREE.Texture | null,
         private readonly depth = 0,

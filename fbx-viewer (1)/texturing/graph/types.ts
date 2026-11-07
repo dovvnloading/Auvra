@@ -1,5 +1,6 @@
 import type * as THREE from 'three';
-import type { GpuImage, ImagePrecision, PassOptions, TextureGpu } from '../gpu/textureGpu';
+import type { GpuImage, ImagePrecision, PassOptions } from '../gpu/textureGpu';
+import type { TexturingGpu } from '../gpu/texturingGpu';
 import type { GraphAnimation, GraphTime } from './animation';
 import type { MaterialImages } from './material';
 
@@ -226,7 +227,7 @@ export interface SubgraphRunOptions {
 
 /** Everything a node sees while it draws. */
 export interface NodeRunContext {
-    readonly gpu: TextureGpu;
+    readonly gpu: TexturingGpu;
     readonly node: TexGraphNode;
     readonly width: number;
     readonly height: number;
