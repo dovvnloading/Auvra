@@ -17,6 +17,7 @@ import {
 import { MATERIALS_DOMAIN, materialAssetDocument, materialAssetUse, materialLibrary, type MaterialAsset } from '../../runtime/materials/materialLibrary';
 import { LIBRARY_DRAG_TYPE, MyLibraryPanel, useAddToLibrary, useBringIn, useUserLibrary } from './MyLibrary';
 import { MaterialXExportButton, MaterialXImport, type MaterialXImportHandle } from './MaterialXFiles';
+import { ProjectBall } from './ProjectBalls';
 import { MaterialFromDescription } from './MaterialFromDescription';
 import { STARTER_MATERIALS } from '../../runtime/materials/starterMaterials';
 import { MaterialGraphCanvas } from './MaterialGraphCanvas';
@@ -405,9 +406,15 @@ export const MaterialGraphEditor: React.FC = () => {
                         <button
                             key={candidate.id}
                             onClick={() => { setSelectedId(candidate.id); select([]); setLibraryOpen(false); }}
-                            className={`mb-1 w-full truncate rounded px-2 py-1.5 text-left text-xs ${candidate.id === asset?.id ? 'bg-blue-900/40 text-white' : 'text-gray-300 hover:bg-gray-800'}`}
+                            title={candidate.textureGraph ? 'Texture graph' : 'Shader graph'}
+                            className={`mb-0.5 w-full rounded px-1.5 py-1 text-left text-xs ${candidate.id === asset?.id ? 'bg-blue-900/40 text-white' : 'text-gray-300 hover:bg-gray-800'}`}
                         >
-                            <span className="flex items-center gap-1.5">{candidate.textureGraph ? <GraphIcon size={11} className="shrink-0 text-amber-400/80" /> : <FlowIcon size={11} className="shrink-0 text-sky-400/80" />}<span className="truncate">{candidate.name}</span></span>
+                            {/* Its ball, drawn as My library's are, then its name and what kind of graph it is. */}
+                            <span className="flex items-center gap-2">
+                                <ProjectBall asset={candidate} />
+                                <span className="min-w-0 flex-1 truncate">{candidate.name}</span>
+                                {candidate.textureGraph ? <GraphIcon size={11} className="shrink-0 text-amber-400/60" /> : <FlowIcon size={11} className="shrink-0 text-sky-400/60" />}
+                            </span>
                         </button>
                     ))}
                 </div>
