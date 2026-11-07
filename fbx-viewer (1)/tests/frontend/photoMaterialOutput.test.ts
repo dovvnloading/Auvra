@@ -27,7 +27,7 @@ const sample = (image: Picture, fx: number, fy: number, c: number): number => {
     const x0 = Math.floor(fx), y0 = Math.floor(fy), tx = fx - x0, ty = fy - y0;
     return (at(image, x0, y0, c) * (1 - tx) + at(image, x0 + 1, y0, c) * tx) * (1 - ty) + (at(image, x0, y0 + 1, c) * (1 - tx) + at(image, x0 + 1, y0 + 1, c) * tx) * ty;
 };
-const map = (image: Picture, channels: 1 | 4, f: (x: number, y: number, c: number) => number): Picture => picture(channels, f);
+const map = (_image: Picture, channels: 1 | 4, f: (x: number, y: number, c: number) => number): Picture => picture(channels, f);
 const luma = (r: number, g: number, b: number) => 0.2126 * r + 0.7152 * g + 0.0722 * b;
 const gaussian = (image: Picture, sigma: number): Picture => {
     if (sigma <= 0.01) return image;
