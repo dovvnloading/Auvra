@@ -64,6 +64,12 @@ const CATEGORY_MARKS: Record<string, IconComponent> = {
     'Edges and distance': SelectBoxIcon, 'Height and normals': MountainIcon, Utility: GearIcon, 'Graphs in this project': GraphIcon, Materials: MaterialIcon,
 };
 const OUTPUT_TINT = '#2b4a6b';
+
+/** A note's short phrase (before its colon) for a node's header, or a plain word when it has none short enough. */
+const noteBadge = (note: string): string => {
+    const short = note.split(':')[0].trim();
+    return short.length > 0 && short.length <= 22 ? short : 'See note';
+};
 const MISSING_TINT = '#5a4317';
 const NODE_WIDTH = 140;
 const GRAPHS_CATEGORY = 'Graphs in this project';
@@ -314,7 +320,8 @@ export const TextureGraphCanvas: React.FC<TextureGraphCanvasProps> = (props) => 
                 ...(error ? { error } : {}),
                 ...(missing ? { missing: true } : {}),
                 ...(state && !error && state.milliseconds >= 20 ? { badge: `${Math.round(state.milliseconds)} ms` } : {}),
-                description: node.name ? `${kindTitle}: ${def?.description ?? ''}` : def?.description,
+                ...(state?.notes?.length && !error ? { badge: noteBadge(state.notes[0]) } : {}),
+                description: [state?.notes?.join(' ') ?? '', node.name ? `${kindTitle}: ${def?.description ?? ''}` : def?.description ?? ''].filter(Boolean).join('\n\n'),
                 canBypass: Boolean(!missing && def && mainInput(def)),
                 canDelete: true,
                 ...(isOutput ? { output: true } : {}),

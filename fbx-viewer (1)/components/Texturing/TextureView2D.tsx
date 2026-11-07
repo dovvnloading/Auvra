@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import * as THREE from 'three';
-import { CompareIcon, CrossIcon, FrameIcon, PinIcon, PulseIcon, SunIcon, TilesIcon } from '../UI/Icons';
+import { CompareIcon, CrossIcon, FrameIcon, InfoIcon, PinIcon, PulseIcon, SunDimIcon, SunIcon, TilesIcon } from '../UI/Icons';
 import type { GpuImage } from '../../texturing/gpu/textureGpu';
 import { hash2 } from '../../texturing/graph/scatter';
 import { isParamLink, type TexGraphNode } from '../../texturing/graph/types';
@@ -47,6 +47,7 @@ uniform int uLit;
 uniform vec3 uLight;
 uniform int uRangeOn;
 uniform vec2 uRange;
+uniform int uHdr;
 void main() {
     vec2 local = gl_FragCoord.xy - uOffset;
     vec2 uv = (local - uSize * 0.5 - uPan) / (uZoom * uImage) + 0.5;
@@ -74,6 +75,13 @@ void main() {
     if (uRangeOn == 1) {
         float value = uChannel == 1 ? v.r : uChannel == 2 ? v.g : uChannel == 3 ? v.b : uChannel == 4 ? v.a : luma(v.rgb);
         if (value < uRange.x || value > uRange.y) c = mix(c, vec3(0.03), 0.82);
+    }
+    // Values past 0 to 1 (a deep picture's) striped: red above 1, blue below 0.
+    if (uHdr == 1 && !useOther) {
+        vec3 raw = uGray == 1 ? v.rrr : v.rgb;
+        float stripe = step(0.5, fract((local.x + local.y) / 12.0));
+        if (max(raw.r, max(raw.g, raw.b)) > 1.0) c = mix(c, vec3(1.0, 0.25, 0.2), 0.55 * stripe + 0.15);
+        else if (min(raw.r, min(raw.g, raw.b)) < 0.0) c = mix(c, vec3(0.25, 0.45, 1.0), 0.55 * stripe + 0.15);
     }
     // A faint line where the repeats meet.
     if (uTile == 1) {
@@ -195,6 +203,7 @@ export const TextureView2D: React.FC<{
     const [size, setSize] = useState({ width: 0, height: 0 });
     const [exposure, setExposure] = useState(0);
     const [lit, setLit] = useState(false);
+    const [hdr, setHdr] = useState(false);
     const [light, setLight] = useState<[number, number]>([-0.45, 0.55]);
     const [showHistogram, setShowHistogram] = useState(false);
     const [histogram, setHistogram] = useState<Histogram | null>(null);
@@ -293,11 +302,12 @@ export const TextureView2D: React.FC<{
                     uLight: new THREE.Vector3(light[0], light[1], 0.75),
                     uRangeOn: range ? 1 : 0,
                     uRange: new THREE.Vector2(range ? Math.min(...range) : 0, range ? Math.max(...range) : 1),
+                    uHdr: hdr ? 1 : 0,
                 },
             });
             void width;
         });
-    }, [channel, exposure, image, light, lit, other, range, session, size, tile, version, view, wipe, zoom]);
+    }, [channel, exposure, hdr, image, light, lit, other, range, session, size, tile, version, view, wipe, zoom]);
 
     useEffect(() => {
         const element = host.current;
@@ -547,6 +557,7 @@ export const TextureView2D: React.FC<{
                     onClick={() => setCompare((value) => (value || !nodeId ? null : { nodeId, output, label }))}
                 ><CompareIcon size={13} /></IconButton>
                 <IconButton label={lit ? 'Show the normal map as it is' : 'Light it as a normal map (the light follows the pointer)'} active={lit} disabled={image?.kind === 'gray'} onClick={() => setLit((value) => !value)}><SunIcon size={13} /></IconButton>
+                <IconButton label={hdr ? 'Stop marking values past 0 to 1' : 'Mark values past 0 to 1: red stripes above 1, blue below 0 (for deep pictures)'} active={hdr} onClick={() => setHdr((value) => !value)}><SunDimIcon size={13} /></IconButton>
                 <span className="flex-1" />
                 <label className="flex items-center gap-1 text-2xs text-ink-3" title="Exposure in stops: brighter or darker, for looking only. Double-click to reset.">
                     <span>EV</span>
@@ -564,6 +575,12 @@ export const TextureView2D: React.FC<{
                 onPointerLeave={() => { wanted.current = null; setProbe(null); }}
             >
                 <canvas ref={canvas} className="absolute inset-0 h-full w-full" />
+                {image && state?.notes?.length ? (
+                    <div className="pointer-events-none absolute inset-x-2 bottom-2 flex gap-1.5 rounded bg-panel/95 px-2 py-1 text-2xs leading-snug text-ink-2 shadow">
+                        <InfoIcon size={12} className="mt-px shrink-0 text-accent" />
+                        <span>{state.notes.join(' ')}</span>
+                    </div>
+                ) : null}
                 {!image && <div className="absolute inset-0 flex items-center justify-center text-2xs text-ink-3">{nodeId ? (state?.error ?? 'Drawing…') : 'Double-click a node to look at it here.'}</div>}
                 {placement && (
                     <svg className="pointer-events-none absolute inset-0 h-full w-full overflow-visible">

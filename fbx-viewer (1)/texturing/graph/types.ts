@@ -261,6 +261,11 @@ export interface NodeRunContext {
     external(name: string): GpuImage | THREE.Texture | null;
     /** The channels of the material wired into a material input (null when none is). */
     material(key: string): MaterialImages | null;
+    /**
+     * Says something about how the node drew, shown on it and in its 2D view: a short phrase, then
+     * ": " and the rest ("No curvature map: ..."). Not every caller listens.
+     */
+    note?(text: string): void;
 }
 
 export type NodeCategory =
