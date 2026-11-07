@@ -7,6 +7,7 @@ import { LevelDynamicGi, dynamicGiFor } from '../../runtime/lighting/dynamicGi/L
 import { isGpuRenderer } from '../../renderer/gpu/frame';
 import { GraphMaterial, bindMaterialGraph } from '../../runtime/materials/graphMaterial';
 import { normalizeMaterialGraph, withMaterialPictures } from '../../runtime/materials/materialGraph';
+import { STARTER_MATERIALS } from '../../runtime/materials/starterMaterials';
 import { paintedCopyGraph } from '../../utils/paintedCopies';
 import type { LevelComponent, LevelObject, SkyConfig } from '../../types';
 
@@ -230,6 +231,31 @@ const PhysicalMaterialsScene: React.FC = () => {
   );
 };
 
+/**
+ * Car paint up close: the starter Car paint (silver flakes under a coat tinted red), flakes alone with no coat, a
+ * coloured coat alone over a pale base, and coarse flakes under a green-tinted coat, so each flake's glint shows.
+ */
+const CarPaintScene: React.FC = () => {
+  const paints = useMemo(() => [
+    new GraphMaterial(STARTER_MATERIALS.find((starter) => starter.key === 'carPaint')!.graph()),
+    outputBall({ baseColor: [0.03, 0.06, 0.2], metalness: 0.1, roughness: 0.5, flakeDensity: 0.6, flakeSize: 0.02, flakeColor: [0.85, 0.88, 0.95] }),
+    outputBall({ baseColor: [0.85, 0.85, 0.82], roughness: 0.4, coat: 1, coatRoughness: 0.03, coatColor: [1, 0.75, 0.25] }),
+    outputBall({ baseColor: [0.05, 0.05, 0.05], metalness: 0.2, roughness: 0.5, coat: 1, coatRoughness: 0.02, coatColor: [0.45, 1, 0.55], flakeDensity: 0.5, flakeSize: 0.06, flakeColor: [0.95, 0.95, 0.9] }),
+  ], []);
+  return (
+    <>
+      <LookAt at={[0, 0.5, 0]} />
+      <Sky />
+      <Ground />
+      {paints.map((material, index) => (
+        <mesh key={index} position={[-1.65 + index * 1.1, 0.5, 0]} castShadow receiveShadow material={material}>
+          <sphereGeometry args={[0.5, 64, 48]} />
+        </mesh>
+      ))}
+    </>
+  );
+};
+
 /** Point, spot and fill lights in the dark, with their shadows and falloff. */
 const LightingScene: React.FC = () => (
   <>
@@ -393,6 +419,7 @@ export const SCENES: Record<string, VisualScene> = {
   'post-grade': { camera: { position: [0, 2, 7], fov: 45 }, Scene: PostGradeScene, frames: 30 },
   crowd: { camera: { position: [0, 12, 14], fov: 50, far: 300 }, Scene: CrowdScene, frames: 3 },
   // Last: on WebGPU, a scene drawn before the ray-traced ones still changes them slightly (a leak across scenes on one
-  // device, not yet found in the renderer), so the newest scene goes after them all.
+  // device, not yet found in the renderer), so the newest scenes go after them all.
   'physical-materials': { camera: { position: [0, 3.2, 6.4], fov: 45 }, Scene: PhysicalMaterialsScene, frames: 20 },
+  'car-paint': { camera: { position: [0, 1.3, 3.4], fov: 45 }, Scene: CarPaintScene, frames: 20 },
 };
