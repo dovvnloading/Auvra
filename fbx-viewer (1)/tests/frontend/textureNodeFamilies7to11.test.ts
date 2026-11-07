@@ -7,7 +7,8 @@ import { textureNodeDefinitionByType } from '../../texturing/graph/registry';
 import { coerceParam } from '../../texturing/graph/document';
 import { nearestOn, placementsAlong, quadPlace, resample, segmentsOf, simplify, smoothPath, traceOutlines, windingAt, wrapOffsets, type Point } from '../../texturing/graph/curves';
 import { SPLINE_NODES, outlinePaths, scatterRows, strokeAt } from '../../texturing/graph/nodes/splines';
-import { addPoint, dragPoint, removePoint, type PointList } from '../../components/Texturing/view2d';
+import { addPoint, dragOrbit, dragPoint, removePoint, type PointList } from '../../components/Texturing/view2d';
+import { SDF_NODES, primitiveDistance, sdfCombine, sdfHeightAt, sdfScene, viewUniforms } from '../../texturing/graph/nodes/sdf';
 import { VECTOR_NODES, combineDistances, decodeDistance, encodeDistance, insideByRule, shapeDistance, vectorShapeAt } from '../../texturing/graph/nodes/vector';
 import { fitToPicture, parsePathData, parseSvg } from '../../texturing/graph/svgPaths';
 
@@ -301,6 +302,53 @@ describe('vector shapes', () => {
 
     it('every node says what it does', () => {
         for (const definition of VECTOR_NODES) expect(definition.description.length, definition.type).toBeGreaterThan(40);
+    });
+});
+
+describe('SDF shapes', () => {
+    const base = { aKind: 'sphere', aAt: [0, 0], aRaise: 0, aSize: 0.3, aStretch: [1, 1], aTall: 1, aTurn: 0, aTilt: 0, aThickness: 0.05, bOp: 'none', cOp: 'none', repeat: 1, range: 0.5, twist: 0, bend: 0 };
+
+    it('measures each primitive exactly', () => {
+        expect(primitiveDistance('sphere', [0.3, 0, 0], 0.3, [1, 1], 1, 0)).toBeCloseTo(0, 9);
+        expect(primitiveDistance('box', [0.5, 0, 0], 0.22, [1, 1], 1, 0)).toBeCloseTo(0.28, 9);
+        expect(primitiveDistance('box', [0, 0, 0], 0.22, [2, 1], 1, 0)).toBeCloseTo(-0.22, 9);
+        expect(primitiveDistance('torus', [0.2, 0, 0], 0.2, [1, 1], 1, 0.05)).toBeCloseTo(-0.05, 9);
+        expect(primitiveDistance('torus', [0, 0, 0], 0.2, [1, 1], 1, 0.05)).toBeCloseTo(0.15, 9);
+        expect(primitiveDistance('capsule', [0.3, 0, 0], 0.25, [1, 1], 1, 0.05)).toBeCloseTo(0, 9);
+        expect(primitiveDistance('cylinder', [0, 0, 0.2], 0.2, [1, 1], 1, 0)).toBeCloseTo(0, 9);
+        expect(primitiveDistance('cylinder', [0.3, 0, 0], 0.2, [1, 1], 1, 0)).toBeCloseTo(0.1, 9);
+        expect(sdfCombine(-0.1, 0.2, 'union', 0)).toBe(-0.1);
+        expect(sdfCombine(-0.1, -0.05, 'subtract', 0)).toBeCloseTo(0.05, 12);
+        expect(sdfCombine(-0.1, 0.2, 'intersect', 0)).toBe(0.2);
+    });
+
+    it('draws the height looking down, and cuts lower it', () => {
+        expect(sdfHeightAt(base, 0.5, 0.5)).toBeCloseTo(0.6, 2);
+        expect(sdfHeightAt(base, 0.02, 0.02)).toBe(0);
+        const cut = { ...base, bOp: 'subtract', bKind: 'sphere', bAt: [0, 0], bRaise: 0.3, bSize: 0.15, bStretch: [1, 1], bTall: 1, bTurn: 0, bTilt: 0, bThickness: 0, bSmooth: 0 };
+        expect(sdfHeightAt(cut, 0.5, 0.5)).toBeLessThan(sdfHeightAt(base, 0.5, 0.5) - 0.2);
+        expect(sdfScene(base, [1, 0, 0.1])).toBeCloseTo(sdfScene(base, [0, 0, 0.1]), 9);
+    });
+
+    it('keeps repeats tiling, a shape over the edge coming round', () => {
+        const over = { ...base, aKind: 'box', aAt: [0.42, -0.3], aSize: 0.18, aStretch: [1.4, 0.8], aTurn: 25, aThickness: 0.03, repeat: 2, twist: 40 };
+        let gap = 0;
+        for (let i = 0; i <= 24; i++) {
+            const t = (i + 0.41) / 25;
+            gap = Math.max(gap, Math.abs(sdfHeightAt(over, 0, t) - sdfHeightAt(over, 1, t)), Math.abs(sdfHeightAt(over, t, 0) - sdfHeightAt(over, t, 1)));
+        }
+        expect(gap).toBeLessThan(1e-6);
+        // The box reaches over the right edge, so it shows at the left.
+        expect(sdfHeightAt(over, 0.02, 0.1)).toBeGreaterThan(0);
+    });
+
+    it('stands the 3D view\'s camera round the scene, and says what it does', () => {
+        const { uEye, uTarget } = viewUniforms({ yaw: 90, pitch: 30, zoom: 2, range: 0.5 });
+        expect(uEye.distanceTo(uTarget)).toBeCloseTo(1.2, 9);
+        expect(uEye.x - uTarget.x).toBeCloseTo(0, 9);
+        expect(uEye.z).toBeGreaterThan(uTarget.z);
+        for (const definition of SDF_NODES) expect(definition.description.length).toBeGreaterThan(40);
+        expect(dragOrbit([0.75, 0.5])).toEqual({ yaw: 90, pitch: 45 });
     });
 });
 

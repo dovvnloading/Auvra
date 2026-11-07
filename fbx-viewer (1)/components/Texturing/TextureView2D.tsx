@@ -10,7 +10,7 @@ import type { TextureGraphSession } from './textureGraphSession';
 import { readPoints, smoothPath } from '../../texturing/graph/curves';
 import { textureNodeDefinitionByType } from '../../texturing/graph/registry';
 import {
-    addPoint, cloneFrame, dragClone, dragGradient, dragPoint, dragShape, dragTile, dragTransform, gradientFrame, pointsFrame, rangeShare, removePoint, shapeFrame, tileFrame, transformFrame, uvToView, viewToUv,
+    addPoint, cloneFrame, dragClone, dragOrbit, orbitFrame, dragGradient, dragPoint, dragShape, dragTile, dragTransform, gradientFrame, pointsFrame, rangeShare, removePoint, shapeFrame, tileFrame, transformFrame, uvToView, viewToUv,
     type HandleFrame, type Histogram, type PointList, type UV, type Vec2, type ViewPlacement,
 } from './view2d';
 
@@ -131,6 +131,8 @@ const handlesFor = (node: TexGraphNode | null | undefined, seed: number | undefi
             const settings = { centre: pair(p.centre, [0.5, 0.5]), size: num(p.size, 0.8), stretch: pair(p.stretch, [1, 1]), rotation: num(p.rotation, 0), tiling: num(p.tiling, 1) };
             return { frame: shapeFrame(settings), drag: (key, to) => ({ ...dragShape(settings, key, to) }), locked };
         }
+        case 'sdfShapes':
+            return { frame: orbitFrame(num(p.yaw, 35), num(p.pitch, 35)), drag: (_key, to) => ({ ...dragOrbit(to) }), locked: () => isParamLink(p.yaw) || isParamLink(p.pitch) };
         case 'clone':
         case 'clonePatch': {
             const settings = { from: pair(p.from, [0.3, 0.5]), to: pair(p.to, [0.7, 0.5]), size: num(p.size, 0.15) };
@@ -156,7 +158,7 @@ const handlesFor = (node: TexGraphNode | null | undefined, seed: number | undefi
 const HANDLE_WORDS: Record<string, string> = {
     offset: 'Drag to move', centre: 'Drag to move', rotation: 'Drag to turn', scale: 'Drag to scale (Shift keeps proportions)', size: 'Drag to size',
     start: 'Drag to turn the gradient (black end)', end: 'Drag to turn the gradient (white end)',
-    from: 'Drag to choose where the patch comes from', to: 'Drag to move where the patch goes',
+    from: 'Drag to choose where the patch comes from', to: 'Drag to move where the patch goes', orbit: 'Drag to turn the 3D view round (across) and look from higher or lower (up)',
 };
 const handleWords = (key: string): string => HANDLE_WORDS[key] ?? (key.includes(':') ? 'Drag to move this point; Alt-click to take it away' : 'Drag');
 

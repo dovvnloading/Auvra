@@ -349,3 +349,14 @@ export const removePoint = (lists: readonly PointList[], key: string): Record<st
     if (!found || !list || list.points.length <= list.least) return null;
     return { [list.key]: list.points.filter((_, index) => index !== found.index) };
 };
+
+// The SDF shapes node's 3D view: one handle, across for the turn round and up for the height it looks from.
+export const orbitFrame = (yaw: number, pitch: number): HandleFrame => ({
+    outline: [],
+    points: [{ key: 'orbit', at: [0.5 + yaw / 360, clamp(pitch / 90, 0, 1)], look: 'turn' }],
+});
+
+export const dragOrbit = (to: Vec2): { yaw: number; pitch: number } => ({
+    yaw: wrapAngle((to[0] - 0.5) * 360),
+    pitch: Math.round(clamp(to[1] * 90, 5, 89) * 10) / 10,
+});
