@@ -3,10 +3,10 @@ import * as THREE from 'three';
 import type { GpuImage } from '../../../texturing/gpu/textureGpu';
 import { builtInAlphaTexture } from '../../../texturing/paint/brushLibrary';
 import type { PaintChannel } from '../../../texturing/paint/paintTypes';
-import { Stroke, type BrushSettings, type StrokeTarget } from '../../../texturing/paint/strokes';
+import { pictureAspect, stencilPlace, Stroke, type BrushSettings, type StrokeTarget } from '../../../texturing/paint/strokes';
 import { Select } from '../../UI/Select';
 import type { PaintSession } from './paintSession';
-import type { PaintTool } from './PaintViewport';
+import { StencilOverlay, type PaintTool } from './PaintViewport';
 
 /**
  * PAINTING ON THE UV LAYOUT
@@ -209,6 +209,8 @@ export const PaintView2D: React.FC<{
         if (brush.mode === 'clone' && !cloneFrom.current && tool !== 'island') { onMessage('Ctrl-click where to copy from first, then paint where the copy goes.'); return; }
         onMessage(null);
         const alpha = brush.shape === 'picture' && brush.alphaTexture ? builtInAlphaTexture(brush.alphaTexture) ?? session.host.texture(brush.alphaTexture) : null;
+        // The stencil lies over this view as it does over the 3D one.
+        const stencil = brush.stencil.enabled && brush.stencil.textureId ? session.host.texture(brush.stencil.textureId) : null;
         const stroke = new Stroke(session.stack, target, tool === 'erase' ? 'erase' : 'paint', brush, {
             viewProjection: new THREE.Matrix4(),
             cameraPosition: new THREE.Vector3(),
@@ -217,7 +219,7 @@ export const PaintView2D: React.FC<{
             depth: null,
             perspective: 1,
             uvView: { tile, toUv, pixelsPerUv: scale },
-        }, alpha, null);
+        }, alpha, stencil);
         if (tool === 'island') {
             const triangle = triangleAt(...toUv(x, y));
             if (triangle >= 0) stroke.fillIsland(session.part.triangleIsland[triangle]);
@@ -229,6 +231,8 @@ export const PaintView2D: React.FC<{
         gesture.current = { kind: 'stroke', stroke };
         stroke.moveTo(x, y, pressure, () => null);
     };
+
+    const stencilTexture = brush.stencil.enabled && brush.stencil.textureId && (tool === 'paint' || tool === 'erase') ? session.host.texture(brush.stencil.textureId) : null;
 
     return (
         <div ref={host} className="relative min-h-0 min-w-0 flex-1 overflow-hidden"
@@ -275,6 +279,7 @@ export const PaintView2D: React.FC<{
         >
             <canvas ref={picture} className="absolute inset-0 h-full w-full" />
             <canvas ref={overlay} className="pointer-events-none absolute inset-0 h-full w-full" />
+            {stencilTexture && <StencilOverlay texture={stencilTexture} place={stencilPlace(brush.stencil, pictureAspect(stencilTexture), size.width, size.height)} />}
             <div className="absolute right-3 top-3 flex items-center gap-2" onPointerDown={(event) => event.stopPropagation()}>
                 <label className="flex items-center gap-1.5 rounded bg-zinc-900/90 px-2 py-1 text-2xs text-zinc-300">
                     <input type="checkbox" className="accent-sky-500" checked={wireframe} onChange={(event) => setWireframe(event.target.checked)} />
@@ -287,7 +292,7 @@ export const PaintView2D: React.FC<{
                 )}
             </div>
             <div className="pointer-events-none absolute bottom-3 left-3 rounded bg-zinc-900/90 px-2 py-1 text-2xs text-zinc-400">
-                Painting on the UV layout: strokes stay on the islands (edges in blue). Middle or right drag pans; the wheel zooms.
+                Painting on the UV layout: strokes stay on the islands (edges in blue), and symmetry copies land where they would on the model. Middle or right drag pans; the wheel zooms.
             </div>
         </div>
     );
