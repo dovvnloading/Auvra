@@ -1,8 +1,8 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { CheckCircleIcon, DownloadIcon, FlameIcon, RefreshIcon } from '../../UI/Icons';
 import type * as THREE from 'three';
-import { BAKE_VERSION, DEFAULT_BAKE_SETTINGS, EXTRA_MAPS, EXTRA_MAP_LABELS, type BakeSettings } from '../../../texturing/bake/meshBaker';
-import { SUPERSAMPLE, bakeBytesPerTexel, supersampled, type CageMode, type Supersample } from '../../../texturing/bake/bakeSetup';
+import { BAKE_VERSION, DEFAULT_BAKE_SETTINGS, EXTRA_MAPS, EXTRA_MAP_LABELS, bakeStrips, type BakeSettings } from '../../../texturing/bake/meshBaker';
+import { SUPERSAMPLE, type CageMode, type Supersample } from '../../../texturing/bake/bakeSetup';
 import { MESH_MAP_LABELS, MESH_MAPS, type MeshMapName } from '../../../texturing/graph/nodes/io';
 import { CHANNEL_LABELS, PAINT_CHANNELS, type PaintChannel } from '../../../texturing/paint/paintTypes';
 import type { PictureLayout } from '../../../texturing/materialOutput';
@@ -23,11 +23,16 @@ export const SetPanel: React.FC<{
     models: ReadonlyArray<{ id: string; name: string; object: THREE.Object3D }>;
     /** Opens the set again (after its picture size changed). */
     onReopen: () => void;
-}> = ({ session, models, onReopen }) => {
+    /** Shows (or, with null, stops showing) the bake rays at spots clicked on the model, for these settings. */
+    onShowRays?: (settings: BakeSettings | null) => void;
+    showingRays?: boolean;
+}> = ({ session, models, onReopen, onShowRays, showingRays = false }) => {
     const document = session.document;
     // The bake's own size starts at the set's (and can be larger, for detail averaged down).
     const [settings, setSettings] = useState<BakeSettings>(() => ({ ...DEFAULT_BAKE_SETTINGS, size: document.size, ...(document.bake?.settings ?? {}) }));
     const [cageModel, setCageModel] = useState('');
+    // The rays shown follow the settings as they change.
+    useEffect(() => { if (showingRays) onShowRays?.(settings); }, [settings]); // eslint-disable-line react-hooks/exhaustive-deps
     const [highPoly, setHighPoly] = useState('');
     const [layout, setLayout] = useState<PictureLayout>('separate');
     const [convention, setConvention] = useState<'bottom' | 'top'>('bottom');
@@ -83,8 +88,8 @@ export const SetPanel: React.FC<{
                     <Segmented value={String(settings.supersample ?? 1)} options={SUPERSAMPLE.map((factor) => ({ value: String(factor), label: factor === 1 ? 'Off' : `${factor}×${factor}` }))} onChange={(factor) => setSettings({ ...settings, supersample: Number(factor) as Supersample })} label="Supersampling" />
                 </div>
                 {(() => {
-                    const plan = supersampled(settings.size, settings.supersample ?? 1, session.gpu.maxSize, bakeBytesPerTexel(settings.maps, settings.extras ?? [], Boolean(highPoly)));
-                    return plan.size !== document.size || plan.limited ? <p className="text-2xs leading-snug text-zinc-500">Baked at {2 ** plan.size} × {2 ** plan.size}{plan.limited ? ' (as large as the graphics card safely takes for these maps: fewer maps, or a smaller set, leave room for more)' : ''}{plan.size !== document.size ? `, then averaged to the set's ${2 ** document.size} × ${2 ** document.size}` : ''}.</p> : null;
+                    const plan = bakeStrips(settings, Boolean(highPoly), session.gpu.maxSize, document.size);
+                    return plan.size !== document.size || plan.strips > 1 ? <p className="text-2xs leading-snug text-zinc-500">Baked at {2 ** plan.size} × {2 ** plan.size}{plan.strips > 1 ? ` in ${plan.strips} strips, to stay within the graphics memory` : ''}{plan.size !== document.size ? `, then averaged to the set's ${2 ** document.size} × ${2 ** document.size}` : ''}.</p> : null;
                 })()}
                 <Row label="Rays per texel" value={settings.samples} min={16} max={512} step={16} onChange={(samples) => setSettings({ ...settings, samples })} />
                 <Row label="Occlusion reach" value={settings.occlusionDistance} min={0.01} max={0.5} step={0.005} onChange={(occlusionDistance) => setSettings({ ...settings, occlusionDistance })} />
@@ -141,6 +146,12 @@ export const SetPanel: React.FC<{
                         </label>
                     ))}
                 </div>
+                {onShowRays && (
+                    <label className="flex items-center gap-1.5 text-2xs text-zinc-300">
+                        <input type="checkbox" className="accent-sky-500" checked={showingRays} onChange={(event) => onShowRays(event.target.checked ? settings : null)} />
+                        Show the bake rays where I click the model
+                    </label>
+                )}
                 {busy && session.busy && session.progress > 0 ? (
                     <div className="space-y-1">
                         <div className="h-1.5 overflow-hidden rounded bg-zinc-800"><div className="h-full bg-sky-500 transition-all" style={{ width: `${Math.round(session.progress * 100)}%` }} /></div>

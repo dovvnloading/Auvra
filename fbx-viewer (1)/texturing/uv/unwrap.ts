@@ -1,4 +1,4 @@
-import { flattenChart, type Flattened } from './lscm';
+import { flattenChart, type FlattenMethod, type Flattened } from './lscm';
 import { buildCharts, chartBoundaries, edgeKey, type Chart, type UvTopology } from './uvTopology';
 
 /**
@@ -25,6 +25,8 @@ export interface UnwrapSettings {
     stretchLimit: number;
     /** Charts smaller than this share of the surface join a neighbour when they can. */
     smallChart: number;
+    /** How charts are laid flat (conformal unless given). */
+    method?: FlattenMethod;
 }
 
 export const DEFAULT_UNWRAP: UnwrapSettings = { hardAngle: 66, coneAngle: 70, stretchLimit: 2.2, smallChart: 0.002 };
@@ -326,7 +328,7 @@ export const unwrap = (topology: UvTopology, settings: UnwrapSettings = DEFAULT_
     const flatten = (chart: Chart): Flattened => {
         const key = keyOf(chart);
         let result = done.get(key);
-        if (!result) done.set(key, result = flattenChart(topology, chart));
+        if (!result) done.set(key, result = flattenChart(topology, chart, settings.method ?? 'conformal'));
         return result;
     };
     const ROUNDS = 12;

@@ -169,8 +169,19 @@ export const BrushPanel: React.FC<{
             </section>
             <section className="space-y-2">
                 <div className="text-2xs font-semibold text-zinc-300">Laying it on</div>
-                <Segmented value={brush.projection} options={[{ value: 'screen', label: 'From the screen' }, { value: 'surface', label: 'On the surface' }]} onChange={(projection) => set({ projection })} label="Projection" />
-                <p className="text-2xs leading-snug text-zinc-500">{brush.projection === 'screen' ? 'Cast onto what you see; hidden and away-facing parts are left alone.' : 'A disc lying on the surface under the pointer: it wraps round edges.'}</p>
+                <Select value={brush.projection} options={[{ value: 'screen', label: 'From the screen' }, { value: 'surface', label: 'On the surface' }, { value: 'planar', label: 'Flat along an axis' }, { value: 'triplanar', label: 'From three sides' }]} onChange={(projection) => set({ projection: projection as BrushSettings['projection'] })} className="w-full" />
+                <p className="text-2xs leading-snug text-zinc-500">{{
+                    screen: 'Cast onto what you see; hidden and away-facing parts are left alone.',
+                    surface: 'A disc lying on the surface under the pointer: it wraps round edges.',
+                    planar: 'Cast straight along one axis through whatever lies under the brush, as a decal is, within three brush widths either side.',
+                    triplanar: 'Cast along each of the model\'s three axes and blended by how the surface faces, so it runs on round corners without stretching.',
+                }[brush.projection]}</p>
+                {brush.projection === 'planar' && (
+                    <div className="flex items-center gap-2">
+                        <span className="w-24 text-2xs text-zinc-400">Along</span>
+                        <Segmented value={brush.planarAxis ?? 'view'} options={[{ value: 'view', label: 'The view' }, { value: 'x', label: 'X' }, { value: 'y', label: 'Y' }, { value: 'z', label: 'Z' }]} onChange={(planarAxis) => set({ planarAxis: planarAxis as BrushSettings['planarAxis'] })} label="Flat brush axis" />
+                    </div>
+                )}
                 <Row label="Facing limit" value={brush.facingLimit} min={10} max={179} step={1} suffix="°" onChange={(facingLimit) => set({ facingLimit })} />
                 <div className="flex items-center gap-3">
                     <span className="w-24 text-2xs text-zinc-400">Mirror across</span>

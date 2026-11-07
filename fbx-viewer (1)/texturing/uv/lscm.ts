@@ -71,8 +71,68 @@ const pinPair = (topology: UvTopology, chart: Chart): [number, number] => {
     return [a, b];
 };
 
-/** Lays a chart flat. */
-export const flattenChart = (topology: UvTopology, chart: Chart): Flattened => {
+/** How a chart is laid flat: keeping each triangle's own angles as well as it can, or angles evened out first. */
+export type FlattenMethod = 'conformal' | 'angleBased';
+
+/**
+ * Angle-based flattening's first step: each corner's angle, from the model, nudged until the angles round
+ * every inner vertex of the chart add up to a full turn (as they must on a flat sheet) and each triangle's
+ * add up to a half turn, so the curvature is spread over every angle instead of left to the solver. Three
+ * angles per chart face, in the face's corner order; `inner` says which chart vertices are not on its edge.
+ */
+export const flatAngles = (angles: Float64Array, corners: ArrayLike<number>, inner: ReadonlySet<number>, rounds = 60): Float64Array => {
+    const out = Float64Array.from(angles);
+    const vertexCount = corners.length ? Math.max(...Array.from(corners)) + 1 : 0;
+    const sums = new Float64Array(vertexCount);
+    for (let round = 0; round < rounds; round++) {
+        sums.fill(0);
+        for (let i = 0; i < corners.length; i++) sums[corners[i]] += out[i];
+        for (let i = 0; i < corners.length; i++) if (inner.has(corners[i]) && sums[corners[i]] > 0) out[i] *= (2 * Math.PI) / sums[corners[i]];
+        for (let f = 0; f + 2 < corners.length; f += 3) {
+            const spare = (Math.PI - (out[f] + out[f + 1] + out[f + 2])) / 3;
+            for (let k = 0; k < 3; k++) out[f + k] = Math.min(Math.PI - 1e-4, Math.max(1e-4, out[f + k] + spare));
+        }
+    }
+    return out;
+};
+
+/** A chart's corner angles on the model, three per face in corner order. */
+const modelAngles = (topology: UvTopology, chart: Chart): Float64Array => {
+    const p = topology.positions;
+    const out = new Float64Array(chart.faces.length * 3);
+    chart.faces.forEach((f, t) => {
+        const w = [0, 1, 2].map((k) => topology.faces[f * 3 + k] * 3);
+        for (let k = 0; k < 3; k++) {
+            const a = w[k], b = w[(k + 1) % 3], c = w[(k + 2) % 3];
+            const ux = p[b] - p[a], uy = p[b + 1] - p[a + 1], uz = p[b + 2] - p[a + 2];
+            const vx = p[c] - p[a], vy = p[c + 1] - p[a + 1], vz = p[c + 2] - p[a + 2];
+            const dot = ux * vx + uy * vy + uz * vz;
+            const cross = Math.hypot(uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx);
+            out[t * 3 + k] = Math.atan2(cross, dot);
+        }
+    });
+    return out;
+};
+
+/** The chart vertices not on its edge (an edge used by only one of its faces). */
+const innerVertices = (chart: Chart): Set<number> => {
+    const uses = new Map<string, number>();
+    for (let t = 0; t < chart.faces.length; t++) {
+        for (let k = 0; k < 3; k++) {
+            const a = chart.corners[t * 3 + k], b = chart.corners[t * 3 + ((k + 1) % 3)];
+            const key = a < b ? `${a},${b}` : `${b},${a}`;
+            uses.set(key, (uses.get(key) ?? 0) + 1);
+        }
+    }
+    const edge = new Set<number>();
+    for (const [key, count] of uses) if (count === 1) for (const v of key.split(',')) edge.add(Number(v));
+    const inner = new Set<number>();
+    for (let v = 0; v < chart.vertexWeld.length; v++) if (!edge.has(v)) inner.add(v);
+    return inner;
+};
+
+/** Lays a chart flat: conformally, or with its angles evened out first (angle-based). */
+export const flattenChart = (topology: UvTopology, chart: Chart, method: FlattenMethod = 'conformal'): Flattened => {
     const count = chart.vertexWeld.length;
     const uv = new Float64Array(count * 2);
     const p = topology.positions;
@@ -87,6 +147,8 @@ export const flattenChart = (topology: UvTopology, chart: Chart): Flattened => {
 
     // Rows: two per triangle, over the 2·count unknowns (u0, v0, u1, v1, ...), each with three corners' terms.
     const faceCount = chart.faces.length;
+    // Angle-based: each triangle is laid out with its evened-out angles (and its own area) instead of its shape on the model.
+    const targets = method === 'angleBased' ? flatAngles(modelAngles(topology, chart), chart.corners, innerVertices(chart)) : null;
     const rowCols = new Int32Array(faceCount * 2 * 6);
     const rowVals = new Float64Array(faceCount * 2 * 6);
     for (let t = 0; t < faceCount; t++) {
@@ -100,9 +162,19 @@ export const flattenChart = (topology: UvTopology, chart: Chart): Flattened => {
         const x2 = l1;
         const x3 = l1 > 0 ? (e1[0] * e2[0] + e1[1] * e2[1] + e1[2] * e2[2]) / l1 : 0;
         const y3 = Math.sqrt(Math.max(0, e2[0] * e2[0] + e2[1] * e2[1] + e2[2] * e2[2] - x3 * x3));
-        const xs = [0, x2, x3];
-        const ys = [0, 0, y3];
-        const doubleArea = Math.max(x2 * y3, 1e-20);
+        let xs = [0, x2, x3];
+        let ys = [0, 0, y3];
+        if (targets) {
+            const [a0, a1, a2] = [targets[t * 3], targets[t * 3 + 1], targets[t * 3 + 2]];
+            // Sides by the sine rule (the side from corner 0 to 1 faces corner 2), scaled to the triangle's own area.
+            const s01 = Math.sin(a2), s02 = Math.sin(a1);
+            const area = Math.max(x2 * y3 / 2, 1e-20);
+            const shapeArea = Math.max(0.5 * s01 * s02 * Math.sin(a0), 1e-20);
+            const k = Math.sqrt(area / shapeArea);
+            xs = [0, s01 * k, s02 * k * Math.cos(a0)];
+            ys = [0, 0, s02 * k * Math.sin(a0)];
+        }
+        const doubleArea = Math.max(xs[1] * ys[2], 1e-20);
         const scale = 1 / Math.sqrt(doubleArea);
         for (let k = 0; k < 3; k++) {
             // W_k = (x_{k+2} - x_{k+1}) + i (y_{k+2} - y_{k+1})

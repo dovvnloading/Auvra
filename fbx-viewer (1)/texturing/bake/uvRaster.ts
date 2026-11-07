@@ -35,6 +35,8 @@ flat out vec3 vE2;
 flat out vec4 vD;
 flat out vec3 vIds;
 out vec4 vCage;
+// A window of the tile (u0, v0, u1, v1) drawn over the whole target, for bakes made in strips; all zero for the whole tile.
+uniform vec4 uWindow;
 void main() {
     vPos = position;
     vNormal = normal;
@@ -47,7 +49,8 @@ void main() {
     vD = uvEdges;
     vIds = ids;
     vCage = cage;
-    gl_Position = vec4(uv * 2.0 - 1.0, 0.0, 1.0);
+    vec2 at = uWindow.z > uWindow.x ? (uv - uWindow.xy) / (uWindow.zw - uWindow.xy) : uv;
+    gl_Position = vec4(at * 2.0 - 1.0, 0.0, 1.0);
 }`;
 
 /** Fragment-side declarations every UV-space shader gets. */
@@ -99,6 +102,8 @@ export class UvRaster {
     private readonly camera = new THREE.Camera();
     private readonly materials = new Map<string, THREE.RawShaderMaterial>();
     readonly hasTangents: boolean;
+    /** Draws only this window of each tile (u0, v0, u1, v1) over the whole target: a strip of a large bake. */
+    window: [number, number, number, number] | null = null;
 
     constructor(private readonly gpu: TextureGpu, readonly part: PartMesh) {
         this.hasTangents = Boolean(part.tangents);
@@ -170,7 +175,7 @@ export class UvRaster {
         if (!meshes) return;
         const material = this.material(fragment, options.blend ?? 'none');
         const kept = material.uniforms;
-        const values: Record<string, unknown> = { uSize: new THREE.Vector2(renderTarget.width, renderTarget.height), uHasTangent: this.hasTangents ? 1 : 0, ...(options.uniforms ?? {}) };
+        const values: Record<string, unknown> = { uSize: new THREE.Vector2(renderTarget.width, renderTarget.height), uHasTangent: this.hasTangents ? 1 : 0, uWindow: new THREE.Vector4(...(this.window ?? [0, 0, 0, 0])), ...(options.uniforms ?? {}) };
         for (const [name, value] of Object.entries(values)) {
             const unwrapped = value && typeof value === 'object' && (value as GpuImage).target ? (value as GpuImage).target.texture : value;
             if (kept[name]) kept[name].value = unwrapped;

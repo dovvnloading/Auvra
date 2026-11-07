@@ -4,7 +4,7 @@ import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment
 import type { GpuImage, TextureGpu } from '../../../texturing/gpu/textureGpu';
 import { tileGeometry } from '../../../texturing/mesh/partMesh';
 import type { MeshMapName } from '../../../texturing/graph/nodes/io';
-import type { ExtraBakeMap } from '../../../texturing/bake/meshBaker';
+import type { BakeSettings, ExtraBakeMap } from '../../../texturing/bake/meshBaker';
 import { MAX_BRUSH_SIZE, lazyFollow, pictureAspect, renderDepth, stencilPlace, Stroke, type BrushSettings, type Dab, type HistoryEntry, type StrokeTarget } from '../../../texturing/paint/strokes';
 import { builtInAlphaTexture } from '../../../texturing/paint/brushLibrary';
 import { layoutAlong, pathLength, sampleAt, samplePath, type SurfacePath, type Vec3 } from '../../../texturing/paint/paths';
@@ -208,8 +208,10 @@ export const PaintViewport: React.FC<{
     pathEdit?: PathEdit | null;
     /** A part or ID colour mask is selected: clicks on the model pick for it, whatever the tool. */
     picking?: boolean;
+    /** Bake settings whose rays are shown where the model is clicked (null: clicks do as the tool does). */
+    bakeRays?: BakeSettings | null;
     commands?: React.MutableRefObject<ViewportCommands | null>;
-}> = ({ session, tool, brush, target, view, maskImage, onBrushSize, onPick, onMessage, frameSignal, uv, pickMode, onSurfacePick, pathEdit, commands, picking = false }) => {
+}> = ({ session, tool, brush, target, view, maskImage, onBrushSize, onPick, onMessage, frameSignal, uv, pickMode, onSurfacePick, pathEdit, commands, picking = false, bakeRays = null }) => {
     const uvVersion = useSyncExternalStore(uv?.subscribe ?? NO_SUBSCRIBE, uv?.getVersion ?? ZERO);
     const host = useRef<HTMLDivElement>(null);
     const canvas = useRef<HTMLCanvasElement>(null);
@@ -413,6 +415,28 @@ export const PaintViewport: React.FC<{
 
     const pathRef = useRef(pathEdit);
     pathRef.current = pathEdit;
+    /** Bake rays shown at the last clicked spot: from the cage (start) to the surface and on behind it (end). */
+    const rays = useRef<Array<{ start: THREE.Vector3; surface: THREE.Vector3; end: THREE.Vector3 }>>([]);
+    useEffect(() => { if (!bakeRays) rays.current = []; }, [bakeRays]);
+
+    const drawRays = useCallback((element: HTMLCanvasElement) => {
+        const context = element.getContext('2d');
+        if (!rays.current.length || !context) return;
+        const matrix = new THREE.Matrix4().multiplyMatrices(world.camera.projectionMatrix, world.camera.matrixWorldInverse);
+        const screen = (p: THREE.Vector3) => { const v = p.clone().applyMatrix4(matrix); return { x: (v.x * 0.5 + 0.5) * element.width, y: (0.5 - v.y * 0.5) * element.height }; };
+        context.save();
+        context.lineWidth = 2 * size.ratio;
+        for (const ray of rays.current) {
+            const [a, b, c] = [screen(ray.start), screen(ray.surface), screen(ray.end)];
+            context.strokeStyle = 'rgba(56, 189, 248, 0.95)';
+            context.beginPath(); context.moveTo(a.x, a.y); context.lineTo(b.x, b.y); context.stroke();
+            context.strokeStyle = 'rgba(251, 191, 36, 0.95)';
+            context.beginPath(); context.moveTo(b.x, b.y); context.lineTo(c.x, c.y); context.stroke();
+            context.fillStyle = '#f4f4f5';
+            context.beginPath(); context.arc(b.x, b.y, 3 * size.ratio, 0, Math.PI * 2); context.fill();
+        }
+        context.restore();
+    }, [size.ratio, world.camera]);
 
     /** The path being drawn, over the view: its curve and its points (the selected one larger). */
     const drawPath = useCallback((element: HTMLCanvasElement) => {
@@ -473,7 +497,8 @@ export const PaintViewport: React.FC<{
             gpu.drawToScreen({ fragment: 'void main() { outColor = texture(source, vUv); }', inputs: { source: target.texture } });
         });
         drawPath(element);
-    }, [drawPath, gpu, placeCamera, size, world]);
+        drawRays(element);
+    }, [drawPath, drawRays, gpu, placeCamera, size, world]);
 
     useEffect(() => { draw(); }, [draw, pathEdit?.path, pathEdit?.point]);
 
@@ -597,6 +622,25 @@ export const PaintViewport: React.FC<{
                 cloneSource.current = { triangle: hit.triangle, uv: hit.uv.clone() };
                 onMessage('Copying from there: paint where the copy goes. The copy keeps its distance on the picture.');
             }
+            return;
+        }
+        // Showing bake rays: a click shows the rays at that spot and its triangle's corners.
+        if (bakeRays && tool !== 'seam' && tool !== 'path') {
+            const hit = hitAt(x, y);
+            if (!hit) return;
+            const part = session.part;
+            const box = new THREE.Box3().setFromBufferAttribute(new THREE.BufferAttribute(session.occluder.positions, 3));
+            const diagonal = Math.max(1e-6, box.getSize(new THREE.Vector3()).length());
+            const front = bakeRays.frontDistance * diagonal;
+            const rear = bakeRays.rearDistance * diagonal;
+            const normals = (bakeRays.averagedNormals ?? true) ? session.averagedNormals : part.normals;
+            const corners = [0, 1, 2].map((k) => part.indices[hit.triangle * 3 + k]);
+            const direction = (v: number) => new THREE.Vector3(normals[v * 3], normals[v * 3 + 1], normals[v * 3 + 2]).normalize();
+            const middle = corners.reduce((sum, v) => sum.add(direction(v)), new THREE.Vector3()).normalize();
+            const spots: Array<[THREE.Vector3, THREE.Vector3]> = [[hit.point.clone(), middle], ...corners.map((v): [THREE.Vector3, THREE.Vector3] => [new THREE.Vector3(part.positions[v * 3], part.positions[v * 3 + 1], part.positions[v * 3 + 2]), direction(v)])];
+            rays.current = spots.map(([at, dir]) => ({ start: at.clone().addScaledVector(dir, front), surface: at, end: at.clone().addScaledVector(dir, -rear) }));
+            onMessage(`Bake rays here start ${front.toPrecision(2)} out (blue) and look ${rear.toPrecision(2)} in (amber)${bakeRays.cage === 'auto' ? '; an automatic cage finds its own distances when baking, so these use the set ones' : bakeRays.cage === 'mesh' ? '; a cage model sets its own, so these use the set distances' : ''}.`);
+            draw();
             return;
         }
         // A part or ID colour mask selected takes the click, with any tool but the seam and path tools.
