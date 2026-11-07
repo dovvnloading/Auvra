@@ -86,8 +86,9 @@ export const TEXT_NODE: TexNodeDef = {
         const scale = Math.min(1, MOST_TEXT_SIZE / Math.max(context.width, context.height));
         const width = Math.max(1, Math.round(context.width * scale));
         const height = Math.max(1, Math.round(context.height * scale));
-        const canvas = typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(width, height) : Object.assign(document.createElement('canvas'), { width, height });
-        const draw = canvas.getContext('2d') as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null;
+        const offscreen = typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(width, height) : null;
+        const element = offscreen ? null : Object.assign(document.createElement('canvas'), { width, height });
+        const draw: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null = offscreen ? offscreen.getContext('2d') : element!.getContext('2d');
         if (!draw) throw new Error('Text cannot be laid out here.');
         const layout = textLayout(context.params, height);
         draw.fillStyle = '#000';
@@ -102,7 +103,7 @@ export const TEXT_NODE: TexNodeDef = {
         const top = -(layout.lines.length - 1) * layout.lineHeight / 2;
         layout.lines.forEach((line, index) => draw.fillText(line, 0, top + index * layout.lineHeight));
         // Laid the way the graph's pictures are: the canvas's top row first, as a picture's is.
-        const texture = new THREE.CanvasTexture(canvas as HTMLCanvasElement);
+        const texture = new THREE.CanvasTexture((offscreen ?? element!) as unknown as HTMLCanvasElement);
         texture.flipY = false;
         texture.colorSpace = THREE.NoColorSpace;
         texture.needsUpdate = true;
