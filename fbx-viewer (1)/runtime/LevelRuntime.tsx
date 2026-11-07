@@ -83,6 +83,7 @@ import { NetStatus } from './net/NetStatus';
 import { LocalPlayerReplicator, RemotePlayers } from './net/RemotePlayers';
 import type { ComponentDefinition } from './components/types';
 import { ScriptRuntime } from './scripting/ScriptRuntime';
+import { CookedPictureLod } from './materials/CookedPictureLod';
 import type { GameContent, LevelRuntimeProps, PlayerStart, RuntimeHost, RuntimeLevel, RuntimeSaveState, SaveGameData } from './types';
 
 type Vec3 = [number, number, number];
@@ -773,6 +774,8 @@ const LevelSession: React.FC<LevelSessionProps> = ({ level, navigation, content,
             {/* --- Replaced Hardcoded Lights with SkySystem --- */}
             <SkySystem levelObjects={runtimeLevelObjects} live />
             <WeatherAudio />
+            {/* Cooked texture-graph pictures follow how large each material shows (runtime/materials/materialCooking.ts). */}
+            <CookedPictureLod />
             <LevelLightVolume bakedLighting={level.bakedLighting} />
             <LevelDynamicGi levelObjects={runtimeLevelObjects} />
 
