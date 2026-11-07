@@ -20,7 +20,7 @@ import { encodeChannels } from '../../texturing/materialOutput';
  * the plane is green when the cook ran on the renderer's own GPU, red when it could not.
  */
 
-/** Seen by the scene's settle step: the cooked pictures are on the plane. */
+/** Seen by the scene's settle step: the cooked pictures are on the plane, and why the renderer's own GPU could not cook (if it could not). */
 export const textureGraphScene = { ready: false, problem: null as string | null };
 
 const node = (id: string, type: string, params: Record<string, unknown> = {}) => ({ id, type, x: 0, y: 0, params });
@@ -104,10 +104,9 @@ export const TextureGraphScene: React.FC = () => {
             try {
                 pictures = await cook(gpu);
             } catch (error) {
-                // The renderer's own GPU could not: say why, and show WebGL2's cook with the ball red.
+                // The renderer's own GPU could not: keep why (textureGraphScene.problem), and show WebGL2's cook with the ball red.
                 own = false;
                 textureGraphScene.problem = error instanceof Error ? error.message : String(error);
-                console.warn(`[texture-graph scene] ${textureGraphScene.problem}`);
                 pictures = await cook(textureGpu());
             }
             const [colour, normal] = await Promise.all([load(pictures.colour, true), load(pictures.normal, false)]);
