@@ -17,6 +17,7 @@ import { DEEP_EXPORT, ROLE_LABELS, encodeChannels, rewriteMaterialPictures, tile
 import { GpuResetError, PaintStack, pictureOwners, type StackHost } from '../../../texturing/paint/paintStack';
 import { BUILTIN_GRAPHS } from '../../../texturing/paint/smartLibrary';
 import { applyPixelHistory, trimmedHistory, type HistoryEntry } from '../../../texturing/paint/strokes';
+import { BAKE_HISTORY_BYTES, bakeStepsToForget, historyKind, type HistoryKind } from '../../../texturing/paint/history';
 import { castsFromThreeSides, createPaintDocument, newFillLayer, paintId, readPaintDocument, type PaintChannel, type PaintDocument } from '../../../texturing/paint/paintTypes';
 import { download, makeZip } from '../../../texturing/zip';
 import { fileName, holdsNormalGreen, planPicture, type ChannelSource, type ExportPicture, type ExportSource, type ExportTemplate } from '../../../texturing/paint/exportTemplates';
@@ -74,7 +75,7 @@ export interface PaintSessionHost {
     materialOverrides: (modelId: string) => MaterialOverrides | undefined;
 }
 
-const HISTORY_LIMIT = 80;
+export const HISTORY_LIMIT = 80;
 /**
  * Pixels the undo history may hold, in bytes (strokes keep the blocks they touched). Past it, the oldest
  * steps go first; the newest step is always kept.
@@ -347,6 +348,7 @@ export class PaintSession {
         const last = this.past[this.past.length - 1];
         if (coalesce && coalesce === this.coalesceKey && now - this.coalesceAt < COALESCE_MS && last?.document && !last.pixels) {
             last.document = { before: last.document.before, after: next };
+            last.at = Date.now();
             this.future = [];
             this.emit();
         } else this.record({ label, document: { before, after: next } });
@@ -361,23 +363,28 @@ export class PaintSession {
     record(entry: HistoryEntry): void {
         // Undone bakes go for good: the maps they would put back are let go of.
         for (const undone of this.future) this.letGoOfBake(undone.bakeMaps?.after ?? null);
-        if (entry.bakeMaps) {
-            // One bake can be undone at a time: older bakes keep their place in the list but put nothing back.
-            for (const older of this.past) {
-                if (!older.bakeMaps) continue;
-                this.letGoOfBake(older.bakeMaps.before);
-                delete older.bakeMaps;
-                delete older.document;
-            }
-        }
+        entry.at ??= Date.now();
         this.past.push(entry);
         this.future = [];
+        if (entry.bakeMaps) this.forgetOldBakes();
         const kept = new Set(this.past);
         this.trimHistory();
         for (const dropped of kept) if (!this.past.includes(dropped)) this.letGoOfBake(dropped.bakeMaps?.before ?? null);
         this.dropUnusedPictures();
         if (entry.pixels) this.dirty();
         this.emit();
+    }
+
+    /**
+     * Keeps the bakes held for undo within their GPU budget: past it, the oldest bake steps let go of their
+     * maps and keep their place in the list, putting nothing back.
+     */
+    private forgetOldBakes(): void {
+        for (const older of bakeStepsToForget(this.past, this.future, this.stack.bake, BAKE_HISTORY_BYTES)) {
+            this.letGoOfBake(older.bakeMaps?.before ?? null);
+            delete older.bakeMaps;
+            delete older.document;
+        }
     }
 
     /** Lets go of maps a bake step held for undo (never the ones in use). */
@@ -399,6 +406,38 @@ export class PaintSession {
         const documents: PaintDocument[] = [this.stack.document];
         for (const entry of [...this.past, ...this.future]) if (entry.document) documents.push(entry.document.before, entry.document.after);
         this.stack.dropPicturesExcept(pictureOwners(documents));
+    }
+
+    /**
+     * The history as a list, oldest first: each step's name, kind and time, whether it is done (the set is
+     * at or past it) and whether going back over it puts anything back.
+     */
+    get steps(): Array<{ entry: HistoryEntry; label: string; kind: HistoryKind; at: number | null; done: boolean; putsBack: boolean }> {
+        const item = (entry: HistoryEntry, done: boolean) => ({ entry, label: entry.label, kind: historyKind(entry), at: entry.at ?? null, done, putsBack: Boolean(entry.pixels || entry.document || entry.bakeMaps) });
+        return [...this.past.map((entry) => item(entry, true)), ...[...this.future].reverse().map((entry) => item(entry, false))];
+    }
+
+    /**
+     * Goes back (or forward) to just after `target`, or to before every kept step when it is null, undoing
+     * or redoing the steps between; the later steps stay until a new change.
+     */
+    goTo(target: HistoryEntry | null): void {
+        if (!this.usable || this.lockReason) return;
+        if (target === null || this.past.includes(target)) {
+            while (this.past.length && this.past[this.past.length - 1] !== target) {
+                // A step let go of to keep memory (while undoing) cannot be reached any more.
+                if (target && !this.past.includes(target)) break;
+                const before = this.past.length;
+                this.undo();
+                if (this.past.length >= before) break;
+            }
+        } else if (this.future.includes(target)) {
+            while (this.future.length && this.past[this.past.length - 1] !== target) {
+                const before = this.future.length;
+                this.redo();
+                if (this.future.length >= before) break;
+            }
+        }
     }
 
     get canUndo(): boolean { return this.past.length > 0 && this.usable && !this.lockReason; }

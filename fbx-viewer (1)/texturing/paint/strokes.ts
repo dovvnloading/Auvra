@@ -559,6 +559,8 @@ export interface PixelPatch {
 
 export interface HistoryEntry {
     label: string;
+    /** When the step was made (ms since 1970), for the history list. */
+    at?: number;
     document?: { before: PaintDocument; after: PaintDocument };
     pixels?: PixelPatch[];
     /** A bake: the maps before and after it, held on the GPU so undo and redo can put either back. */
