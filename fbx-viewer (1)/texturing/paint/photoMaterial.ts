@@ -6,12 +6,14 @@ import type { GraphParameter, GraphParameterGroup, TexGraphLink, TexGraphNode, T
  *
  * A photo of a surface made into a texture graph material, every step an ordinary node the user can
  * change: the picture (Bitmap), made to tile (Make it tile), its light and shadow taken out (Lighting
- * removal, from the height and occlusion worked out here), its colours evened out (Colour equalizer);
- * height from the photo's brightness with its fine detail laid over; normal and occlusion from the
- * height; roughness from a curve of height and colour, squeezed to a range; metallic where the colour
- * is near a chosen one (none unless set). A Strength row of the graph's parameters sets how wide the
- * tiling joins may wander, how much lighting is taken out, how deep the height reads and the roughness
- * range; a Metal row picks the metal's colour and how near counts.
+ * removal), its colours evened out (Colour equalizer). Height comes from the photo's brightness (turned
+ * over when its bright parts are the low ones: Invert height): a smoothed, large-scale height gives the
+ * occlusion and shading lighting removal takes out (soft, mostly near white, so dividing by it never
+ * blows the colour out), and that height with its fine detail laid over gives the normal and the height.
+ * Roughness comes from a curve of height and colour, squeezed to a range; metallic where the colour is
+ * near a chosen one (none unless set). A Strength row of the graph's parameters sets how wide the tiling
+ * joins may wander, how much lighting is taken out, how deep the height reads, which way it runs and the
+ * roughness range; a Metal row picks the metal's colour and how near counts.
  */
 
 const strength = 'Strength';
@@ -21,6 +23,7 @@ export const PHOTO_PARAMETERS: readonly GraphParameter[] = [
     { name: 'tileWidth', label: 'Tiling width', kind: 'float', default: 0.2, min: 0.05, max: 0.45, step: 0.01, group: strength, description: 'How far into the photo the joins that make it tile may wander: wider finds better joins and replaces more of it.' },
     { name: 'lighting', label: 'Lighting removed', kind: 'float', default: 0.8, min: 0, max: 1, step: 0.01, group: strength, description: 'How much of the light and shadow photographed on the surface is taken out of its colour.' },
     { name: 'depth', label: 'Height depth', kind: 'float', default: 0.4, min: 0, max: 1, step: 0.01, group: strength, description: 'How deep the height worked out from the photo reads: its normal, its occlusion and the shading taken out.' },
+    { name: 'invertHeight', label: 'Invert height', kind: 'bool', default: false, group: strength, description: 'Bright parts low, dark parts high: for light mortar or grout between darker stones and bricks. Set by a guess from the photo; flip it if the relief reads inside out.' },
     { name: 'roughLow', label: 'Roughness from', kind: 'float', default: 0.35, min: 0, max: 1, step: 0.01, group: strength, description: 'The roughness of the smoothest part.' },
     { name: 'roughHigh', label: 'Roughness to', kind: 'float', default: 0.85, min: 0, max: 1, step: 0.01, group: strength, description: 'The roughness of the roughest part.' },
     { name: 'metalColour', label: 'Metal colour', kind: 'color', default: [0.75, 0.75, 0.78, 1], group: metal, description: 'Parts of the photo near this colour are metal.' },
@@ -32,8 +35,25 @@ export const PHOTO_GROUPS: readonly GraphParameterGroup[] = [
     { name: metal, description: 'Metallic where the photo shows a chosen colour (none unless set).', folded: true },
 ];
 
+/**
+ * A guess at whether a photo's bright parts are its low ones, from its brightness values (0 to 1): when
+ * the brightest values are a small share (thin light lines, as mortar between darker bricks, pull the
+ * mean above the middle value) they are crevices; when the darkest are (dark grout and cracks), dark is
+ * low and brightness reads as height as it is.
+ */
+export const guessInvertHeight = (brightness: ArrayLike<number>): boolean => {
+    if (!brightness.length) return false;
+    const sorted = Float32Array.from(brightness).sort();
+    const median = sorted[Math.floor(sorted.length / 2)];
+    let mean = 0;
+    for (let i = 0; i < sorted.length; i++) mean += sorted[i];
+    mean /= sorted.length;
+    const spread = Math.max(1e-3, sorted[Math.floor(sorted.length * 0.95)] - sorted[Math.floor(sorted.length * 0.05)]);
+    return (mean - median) / spread > 0.04;
+};
+
 /** A texture graph making a material of the photo `textureId` (a project texture). */
-export const photoMaterialGraph = (textureId: string, size = 10): TextureGraph => {
+export const photoMaterialGraph = (textureId: string, size = 10, options: { invertHeight?: boolean } = {}): TextureGraph => {
     const nodes: TexGraphNode[] = [];
     const links: TexGraphLink[] = [];
     const add = (type: string, x: number, y: number, params: Record<string, unknown> = {}, name?: string): TexGraphNode => {
@@ -49,21 +69,27 @@ export const photoMaterialGraph = (textureId: string, size = 10): TextureGraph =
     const photo = add('bitmap', 0, 200, { texture: textureId, fit: 'fill' }, 'Photo');
     const tiled = add('makeTile', 240, 200, { width: bind('tileWidth') }, 'Made to tile');
     wire(photo, tiled);
-    // Height: the photo's brightness, its fine detail laid over.
+    // Height: the photo's brightness, turned over when bright is low.
     const brightness = add('grayscale', 480, 440, { mode: 'luminance' }, 'Brightness');
     wire(tiled, brightness);
-    const detail = add('highpass', 720, 520, { radius: 0.01 }, 'Fine detail');
-    wire(brightness, detail);
-    const height = add('blend', 960, 440, { mode: 'overlay', opacity: 0.6 }, 'Height');
+    const source = add('levels', 720, 440, { outLow: formula('invertHeight'), outHigh: formula('1 - invertHeight') }, 'Height source');
+    wire(brightness, source);
+    // Large-scale height, the grain smoothed out: what the occlusion and shading taken out come from.
+    const smooth = add('blur', 960, 640, { radius: 0.006 }, 'Large-scale height');
+    wire(source, smooth);
+    const occlusion = add('aoFromHeight', 1200, 640, { depth: formula('depth * 0.05'), radius: 0.02, intensity: 0.6 }, 'Occlusion');
+    wire(smooth, occlusion);
+    // The detailed height (fine detail laid over), for the normal and the height.
+    const detail = add('highpass', 960, 440, { radius: 0.01 }, 'Fine detail');
+    wire(source, detail);
+    const height = add('blend', 1200, 440, { mode: 'overlay', opacity: 0.6 }, 'Height');
     wire(detail, height, 'foreground');
-    wire(brightness, height, 'background');
-    const occlusion = add('aoFromHeight', 1200, 600, { depth: formula('depth * 0.25'), radius: 0.03 }, 'Occlusion');
-    wire(height, occlusion);
+    wire(source, height, 'background');
     // Colour: lighting taken out, then evened out.
-    const delit = add('lightingRemoval', 1440, 120, { occlusionAmount: bind('lighting'), shadingAmount: bind('lighting'), depth: formula('depth * 0.1 + 0.005') }, 'Lighting removed');
+    const delit = add('lightingRemoval', 1440, 120, { occlusionAmount: formula('lighting * 0.5'), shadingAmount: bind('lighting'), depth: formula('depth * 0.05 + 0.005') }, 'Lighting removed');
     wire(tiled, delit);
     wire(occlusion, delit, 'occlusion');
-    wire(height, delit, 'height');
+    wire(smooth, delit, 'height');
     const colour = add('colourEqualizer', 1680, 120, {}, 'Colour evened out');
     wire(delit, colour);
     const normal = add('normalFromHeight', 1440, 440, { intensity: formula('depth * 16') }, 'Normal');
@@ -94,7 +120,7 @@ export const photoMaterialGraph = (textureId: string, size = 10): TextureGraph =
         seed: 1,
         nodes,
         links,
-        parameters: PHOTO_PARAMETERS.map((parameter) => structuredClone(parameter) as GraphParameter),
+        parameters: PHOTO_PARAMETERS.map((parameter) => (parameter.name === 'invertHeight' && options.invertHeight !== undefined ? { ...parameter, default: options.invertHeight } : structuredClone(parameter) as GraphParameter)),
         groups: PHOTO_GROUPS.map((group) => ({ ...group })),
         tiling: 'both',
     };
