@@ -36,21 +36,61 @@ export const PHOTO_GROUPS: readonly GraphParameterGroup[] = [
     { name: metal, description: 'Metallic where the photo shows a chosen colour (none unless set).', folded: true },
 ];
 
+/** A light blur (1 2 1 across and down, edges held), so single grains of a photo don't count as shapes. */
+const lightBlur = (values: ArrayLike<number>, width: number, height: number): Float32Array => {
+    const across = new Float32Array(width * height);
+    const blurred = new Float32Array(width * height);
+    for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+        const i = y * width + x;
+        across[i] = (values[y * width + Math.max(x - 1, 0)] + 2 * values[i] + values[y * width + Math.min(x + 1, width - 1)]) / 4;
+    }
+    for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+        const i = y * width + x;
+        blurred[i] = (across[Math.max(y - 1, 0) * width + x] + 2 * across[i] + across[Math.min(y + 1, height - 1) * width + x]) / 4;
+    }
+    return blurred;
+};
+
 /**
- * A guess at whether a photo's bright parts are its low ones, from its brightness values (0 to 1): when
- * the brightest values are a small share (thin light lines, as mortar between darker bricks, pull the
- * mean above the middle value) they are crevices; when the darkest are (dark grout and cracks), dark is
- * low and brightness reads as height as it is.
+ * How wide the shapes a set of pixels makes are, on average: twice its area over the length of its edge.
+ * A line comes out as its width, a block as about half its shorter side. Null when the set is too small
+ * a share of the picture to tell.
  */
-export const guessInvertHeight = (brightness: ArrayLike<number>): boolean => {
-    if (!brightness.length) return false;
-    const sorted = Float32Array.from(brightness).sort();
-    const median = sorted[Math.floor(sorted.length / 2)];
-    let mean = 0;
-    for (let i = 0; i < sorted.length; i++) mean += sorted[i];
-    mean /= sorted.length;
-    const spread = Math.max(1e-3, sorted[Math.floor(sorted.length * 0.95)] - sorted[Math.floor(sorted.length * 0.05)]);
-    return (mean - median) / spread > 0.04;
+const shapeWidth = (values: Float32Array, width: number, height: number, inSet: (value: number) => boolean): number | null => {
+    let area = 0;
+    let edge = 0;
+    for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+        const i = y * width + x;
+        const here = inSet(values[i]);
+        if (here) area++;
+        if (x + 1 < width && here !== inSet(values[i + 1])) edge++;
+        if (y + 1 < height && here !== inSet(values[i + width])) edge++;
+    }
+    return area >= width * height * 0.01 && edge > 0 ? (2 * area) / edge : null;
+};
+
+/**
+ * A guess at whether a photo's bright parts are its low ones, from its brightness values (0 to 1, rows of
+ * `width`). Crevices photograph as thin lines (mortar, grout, cracks) and the faces between them as
+ * blocks, so it compares the shapes of the bright and the dark parts, not how much of each there is (a
+ * few dark bricks can outweigh the mortar): when the bright parts are clearly the thinner, they are the
+ * crevices and the height is turned over; otherwise dark is low and brightness reads as height as it is.
+ * Bright and dark are a quarter of the range either side of its middle, the range running from the 5th
+ * to the 95th percentile of the lightly blurred brightness.
+ */
+export const guessInvertHeight = (brightness: ArrayLike<number>, width = Math.round(Math.sqrt(brightness.length))): boolean => {
+    const height = width > 0 ? Math.floor(brightness.length / width) : 0;
+    if (width < 8 || height < 8) return false;
+    const blurred = lightBlur(brightness, width, height);
+    const sorted = Float32Array.from(blurred).sort();
+    const low = sorted[Math.floor(sorted.length * 0.05)];
+    const high = sorted[Math.floor(sorted.length * 0.95)];
+    const middle = (low + high) / 2;
+    const quarter = (high - low) / 4;
+    if (quarter < 1e-3) return false;
+    const bright = shapeWidth(blurred, width, height, (value) => value > middle + quarter);
+    const dark = shapeWidth(blurred, width, height, (value) => value < middle - quarter);
+    return bright !== null && dark !== null && bright < dark * 0.8;
 };
 
 /** A texture graph making a material of the photo `textureId` (a project texture). */
