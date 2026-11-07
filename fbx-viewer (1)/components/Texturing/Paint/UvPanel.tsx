@@ -51,6 +51,11 @@ export const UvPanel: React.FC<{
                 <p className="text-2xs leading-snug text-zinc-500">Seams are where the surface is cut to lie flat. Orange lines on the model show them; the seam tool adds or removes one with a click (Shift removes).</p>
                 <Row label="Always cut over" value={set.hardAngle} min={20} max={120} suffix="°" onChange={(hardAngle) => { uv.unwrapSettings = { ...set, hardAngle }; touchVersion(uv); }} />
                 <Row label="Piece curvature" value={set.coneAngle} min={20} max={110} suffix="°" onChange={(coneAngle) => { uv.unwrapSettings = { ...set, coneAngle }; touchVersion(uv); }} />
+                <div className="flex items-center gap-2">
+                    <span className="w-28 shrink-0 text-2xs text-zinc-400">Flattening</span>
+                    <Segmented value={set.method ?? 'conformal'} options={[{ value: 'conformal', label: 'Conformal' }, { value: 'angleBased', label: 'Angle-based' }]} onChange={(method) => { uv.unwrapSettings = { ...set, method }; touchVersion(uv); }} label="Flattening" />
+                </div>
+                <p className="text-2xs leading-snug text-zinc-500">{(set.method ?? 'conformal') === 'conformal' ? 'Keeps each triangle\'s own angles as well as it can.' : 'Evens the angles out first so the curvature is spread over the whole island: less stretch on rounded parts.'}</p>
                 <Row label="Stretch allowed" value={set.stretchLimit} min={1.1} max={4} step={0.05} onChange={(stretchLimit) => { uv.unwrapSettings = { ...set, stretchLimit }; touchVersion(uv); }} />
                 <div className="grid grid-cols-2 gap-1.5">
                     <Button size="sm" disabled={busy} icon={<WandIcon size={12} />} onClick={() => uv.unwrapAuto(false)}>Unwrap afresh</Button>
