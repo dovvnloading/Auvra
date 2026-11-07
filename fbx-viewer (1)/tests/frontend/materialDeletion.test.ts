@@ -4,11 +4,11 @@ import { deleteMaterialQuestion, materialUses } from '../../components/Materials
 import { OUTPUT_NODE_TYPE, defaultParams, normalizeMaterialGraph } from '../../runtime/materials/materialGraph';
 import { boundMaterialGraph } from '../../runtime/materials/graphMaterial';
 import { materialLibrary } from '../../runtime/materials/materialLibrary';
-import type { LevelObject } from '../../types';
+import type { LevelObject, LoadedModelData } from '../../types';
 
 const graph = () => normalizeMaterialGraph({ nodes: [{ id: 'out', type: OUTPUT_NODE_TYPE, x: 0, y: 0, params: defaultParams(OUTPUT_NODE_TYPE) }], links: [] });
 
-const models = [
+const models: Array<Pick<LoadedModelData, 'id' | 'name' | 'materialOverrides'>> = [
     { id: 'crate', name: 'Crate', materialOverrides: { Body: { materialId: 'bricks', parameters: [{ name: 'Tint', value: [1, 0, 0] }] } } },
     { id: 'wall', name: 'Wall', materialOverrides: { Face: { materialId: 'bricks' }, Trim: { roughness: 0.3 } } },
     { id: 'barrel', name: 'Barrel', materialOverrides: { Body: { materialId: 'rust' } } },
@@ -37,7 +37,7 @@ describe('deleting a material asset', () => {
     it('keeps the models\' overrides as they were, so an undo puts every one back', () => {
         const uses = materialUses('bricks', models, objects);
         // What deleting does to them (db.deleteMaterialAsset) does not reach what was kept.
-        delete (models[0].materialOverrides.Body as { materialId?: string }).materialId;
+        delete (models[0].materialOverrides!.Body as { materialId?: string }).materialId;
         expect(uses.models[0].overrides).toEqual({ Body: { materialId: 'bricks', parameters: [{ name: 'Tint', value: [1, 0, 0] }] } });
         expect(uses.models[1].overrides).toEqual({ Face: { materialId: 'bricks' }, Trim: { roughness: 0.3 } });
     });
