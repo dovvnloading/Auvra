@@ -3,7 +3,7 @@ import { blendModeIndex } from '../gpu/glslLibrary';
 import type { GpuImage, TextureGpu } from '../gpu/textureGpu';
 import { hashText } from '../graph/document';
 import { TextureGraphEvaluator, type ExternalImage } from '../graph/evaluator';
-import { MESH_MAPS, OUTPUT_NODE_TYPE, meshMapKey, type MeshMapName } from '../graph/nodes/io';
+import { EXTRA_MESH_MAPS, MESH_MAPS, OUTPUT_NODE_TYPE, meshMapKey, type MeshMapName } from '../graph/nodes/io';
 import { jumpFlood } from '../graph/nodes/distance';
 import type { GraphResolver } from '../graph/registry';
 import { BAKE_VERSION, padImage, releaseTileBake, spaceOfBox, type ExtraBakeMap, type PositionSpace, type TileBake } from '../bake/meshBaker';
@@ -1604,6 +1604,9 @@ void main() {
         const maps = this.meshMaps(tile);
         const result: Record<string, ExternalImage | null> = {};
         for (const name of MESH_MAPS) result[meshMapKey(name)] = maps[name] ?? null;
+        // Cavity, bent normals and what was carried over from a high-poly model, for mesh map nodes in fills.
+        const extras = this.bakeExtras(tile);
+        for (const name of EXTRA_MESH_MAPS) result[meshMapKey(name)] = extras[name] ?? null;
         return result;
     }
 
