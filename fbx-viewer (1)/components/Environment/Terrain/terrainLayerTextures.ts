@@ -4,7 +4,9 @@ import { frontendDiagnostics } from '../../../diagnostics/runtime';
 import { getNeutralLayerTexture } from './terrainLayerMaterial';
 import { pictureToRgba8 } from '../../../texturing/textureDecode';
 import { decodePictureOffPage, encodeTextureOffPage } from '../../../texturing/texturePipeline';
-import { compressionSupport } from '../../../texturing/materialTextureLoader';
+import { compressionSupport, projectCompressedCache, type CompressedTextureCache } from '../../../texturing/materialTextureLoader';
+import { packCompressed, unpackCompressed } from '../../../texturing/compressedContainer';
+import { textureSourceAssetOf } from '../../../texturing/textureSettings';
 import { keptFormat, type CompressionSupport } from '../../../texturing/textureSettings';
 import type { EncodedLevel, MaterialTextureFormat, MaterialTextureKind } from '../../../utils/textureCompression/materialTextureEncoder';
 
@@ -19,7 +21,9 @@ import type { EncodedLevel, MaterialTextureFormat, MaterialTextureKind } from '.
  * Kept apart like this, each array compresses by what it holds, as material textures do: BC7 colour, BC5
  * normals, BC5 for height and roughness (two channels that have nothing to do with each other), or ASTC or
  * ETC2 on phones. The uncompressed arrays show as the pictures load; once every layer's are in, compressed
- * arrays are made off the page and take their place, at well under half the memory.
+ * arrays are made off the page and take their place, at well under half the memory. Each layer's compressed slice
+ * is kept in the project with the picture it comes from (as material textures are), so the terrain loads it next
+ * time instead of compressing again.
  */
 
 /** Pixels along each side of a slice. */
@@ -30,6 +34,8 @@ export interface TerrainLayerSources {
   normal?: string;
   roughness?: string;
   height?: string;
+  /** The project textures the pictures are, by part: their compressed slices are kept with them. */
+  ids?: { albedo?: string; normal?: string; roughness?: string; height?: string };
 }
 
 export interface TerrainLayerArrays {
@@ -171,6 +177,34 @@ const COMPRESSED_ARRAY_FORMATS: Record<MaterialTextureFormat, THREE.CompressedPi
 
 type Encode = (rgba: Uint8Array, width: number, height: number, format: MaterialTextureFormat, kind: MaterialTextureKind, mips: boolean) => Promise<EncodedLevel[]>;
 
+/** Where a layer's slice of one array is kept: the texture it is kept with, and its signature. */
+export interface SliceKeep { textureId: string; signature: string }
+
+/**
+ * Where each layer's slice of each array is kept: with the texture its picture comes from (height for the height and
+ * roughness slice), under a signature of every picture it is made of (their files' hashes), its format and size.
+ * Null where a layer has no picture of the project for it.
+ */
+export const terrainSliceKeeps = (
+  sources: readonly TerrainLayerSources[],
+  formats: Record<keyof typeof CHANNELS, MaterialTextureFormat>,
+  size: number,
+  assetOf: (textureId: string) => string | undefined = textureSourceAssetOf,
+): Array<Record<keyof typeof CHANNELS, SliceKeep | null>> => sources.map((source) => {
+  const ids = source.ids ?? {};
+  const keep = (role: keyof typeof CHANNELS, owner: string | undefined, parts: Array<string | undefined>): SliceKeep | null => {
+    if (!owner) return null;
+    const files = parts.map(id => (id ? assetOf(id) ?? null : '-'));
+    if (files.some(file => file === null)) return null;
+    return { textureId: owner, signature: ['terrain1', role, formats[role], size, ...files].join('|') };
+  };
+  return {
+    albedo: keep('albedo', ids.albedo, [ids.albedo]),
+    detail: keep('detail', ids.normal, [ids.normal]),
+    surface: keep('surface', ids.height ?? ids.roughness, [ids.height, ids.roughness]),
+  };
+});
+
 /** Compressed versions of the arrays, made by role, layer by layer (off the page in the editor). */
 export const compressTerrainArrays = async (
   arrays: Pick<UncompressedArrays, 'albedo' | 'detail' | 'surface'>,
@@ -178,6 +212,7 @@ export const compressTerrainArrays = async (
   size: number,
   formats: Record<keyof typeof CHANNELS, MaterialTextureFormat>,
   encode: Encode = encodeTextureOffPage,
+  kept: { cache: CompressedTextureCache | null; keeps: ReadonlyArray<Record<keyof typeof CHANNELS, SliceKeep | null>> } = { cache: null, keeps: [] },
 ): Promise<Record<keyof typeof CHANNELS, THREE.CompressedArrayTexture>> => {
   const roles = [
     { key: 'albedo', kind: 'colour', colorSpace: THREE.SRGBColorSpace },
@@ -189,7 +224,17 @@ export const compressTerrainArrays = async (
     const data = arrays[role.key].image.data as unknown as Uint8Array;
     const perLayer: EncodedLevel[][] = [];
     for (let layer = 0; layer < layers; layer++) {
-      perLayer.push(await encode(sliceRgba(data, CHANNELS[role.key], size, layer, role.kind === 'normal'), size, size, formats[role.key], role.kind, true));
+      // A slice kept before loads as it is; one made now is kept for next time.
+      const place = kept.keeps[layer]?.[role.key] ?? null;
+      const found = place && kept.cache ? await kept.cache.find(place.textureId, place.signature).catch(() => null) : null;
+      const unpacked = found ? unpackCompressed(found) : null;
+      if (unpacked && unpacked.format === formats[role.key] && unpacked.width === size) {
+        perLayer.push(unpacked.levels);
+        continue;
+      }
+      const levels = await encode(sliceRgba(data, CHANNELS[role.key], size, layer, role.kind === 'normal'), size, size, formats[role.key], role.kind, true);
+      perLayer.push(levels);
+      if (place && kept.cache?.keep) void kept.cache.keep(place.textureId, place.signature, packCompressed({ format: formats[role.key], width: size, height: size, levels })).catch(() => undefined);
     }
     const levels = arrayLevels(perLayer);
     const texture = new THREE.CompressedArrayTexture(levels as unknown as ImageData[], size, size, layers, COMPRESSED_ARRAY_FORMATS[formats[role.key]]);
@@ -306,7 +351,8 @@ export const useTerrainLayerArrays = (sources: readonly TerrainLayerSources[]): 
     if (!formats) return;
     let current = true;
     const rayMaps = arrays.rayMaps;
-    compressTerrainArrays(arrays, count, TERRAIN_LAYER_TEXTURE_SIZE, formats).then((made) => {
+    const cache = projectCompressedCache();
+    compressTerrainArrays(arrays, count, TERRAIN_LAYER_TEXTURE_SIZE, formats, encodeTextureOffPage, { cache, keeps: terrainSliceKeeps(sources, formats, TERRAIN_LAYER_TEXTURE_SIZE) }).then((made) => {
       if (!current) {
         made.albedo.dispose(); made.detail.dispose(); made.surface.dispose();
         return;

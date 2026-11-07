@@ -51,6 +51,19 @@ const stackGraph = (assetId: string, folderId: string, document: PaintDocument):
     };
 };
 
+/** A painted set's name as a graph list shows it: without "(painted)", its run-together words parted. */
+export const setName = (assetName: string): string =>
+    assetName.replace(/\s*\(painted\)\s*$/i, '').replace(/([a-z])([A-Z])/g, '$1 $2').replace(/\s+/g, ' ').trim() || assetName;
+
+/** Paint stacks open in Paint now, by their asset: a graph using one draws from it instead of building its own. */
+const openStacks = new Map<string, import('./paintStack').PaintStack>();
+
+/** Says a set's stack is open in Paint (graphs draw from it); gives back what says it has closed. */
+export const registerOpenStack = (assetId: string, stack: import('./paintStack').PaintStack): (() => void) => {
+    openStacks.set(assetId, stack);
+    return () => { if (openStacks.get(assetId) === stack) openStacks.delete(assetId); };
+};
+
 /**
  * The project's painted sets, and the folders in them, as graphs other graphs can use: `assets` are the
  * material assets (those holding a paint document count).
@@ -60,9 +73,10 @@ export const paintStackEntries = (assets: ReadonlyArray<{ id: string; name: stri
     for (const asset of assets) {
         const document = asset.paint ? readPaintDocument(asset.paint) : null;
         if (!document || !document.layers.length) continue;
-        entries.push({ id: `${PAINT_STACK_PREFIX}${asset.id}`, name: `${asset.name} (paint stack)`, graph: stackGraph(asset.id, '', document) });
+        const set = setName(asset.name);
+        entries.push({ id: `${PAINT_STACK_PREFIX}${asset.id}`, name: `${set}: paint stack`, graph: stackGraph(asset.id, '', document) });
         for (const folder of allLayers(document.layers).filter((layer) => layer.kind === 'folder')) {
-            entries.push({ id: `${PAINT_STACK_PREFIX}${asset.id}:${folder.id}`, name: `${asset.name}: ${folder.name} (paint folder)`, graph: stackGraph(asset.id, folder.id, document) });
+            entries.push({ id: `${PAINT_STACK_PREFIX}${asset.id}:${folder.id}`, name: `${set}: ${folder.name} folder`, graph: stackGraph(asset.id, folder.id, document) });
         }
     }
     return entries;
@@ -170,6 +184,25 @@ export const PAINT_STACK_NODE: TexNodeDef = {
             const found = materialLibrary.get(id);
             return found?.textureGraph ? { id, name: found.name, graph: readStoredGraph(found.textureGraph).graph } : undefined;
         };
+        /** A stack's channels (of tile 1001, or its first) put into the node's outputs at the graph's size. */
+        const outputsOf = async (from: import('./paintStack').PaintStack): Promise<Record<string, GpuImage>> => {
+            const images = from.channelImages(from.tiles.includes(1001) ? 1001 : from.tiles[0]) as Partial<Record<string, GpuImage>>;
+            const out: Record<string, GpuImage> = {};
+            for (const port of PAINT_STACK_NODE.outputs) {
+                const target = context.image(port.kind === 'color' ? 'color' : 'gray');
+                const source = images[port.key];
+                if (source) await context.pass(target, 'void main() { outColor = texture(painted, vUv); }', { inputs: { painted: source } });
+                else context.gpu.clear(target, port.key === 'normal' ? [0.5, 0.5, 1, 1] : port.key === 'opacity' ? [1, 1, 1, 1] : [0, 0, 0, 1]);
+                out[port.key] = target;
+            }
+            return out;
+        };
+        // The set open in Paint: its stack is put together already (with the set's own bake).
+        const open = !String(context.params.folder ?? '') ? openStacks.get(assetId) : undefined;
+        if (open && open.usable) {
+            await open.compose();
+            return outputsOf(open);
+        }
         running.add(assetId);
         let stack: import('./paintStack').PaintStack | null = null;
         try {
@@ -184,7 +217,8 @@ export const PAINT_STACK_NODE: TexNodeDef = {
                     return response.blob();
                 },
                 storePicture: () => Promise.reject(new Error('A paint stack in a graph keeps nothing.')),
-            }, await flatSquare(), { ...document, udim: false, layers });
+            // Drawn at the graph's size (never past the set's own): its pictures are read scaled to it.
+            }, await flatSquare(), { ...document, udim: false, layers, size: Math.min(document.size, Math.max(7, Math.round(Math.log2(Math.max(context.width, context.height))))) });
             // The set's own bake lies on the same UV square; the graph's mesh maps, when it has them, take its place.
             const bake = await bakeFrom(context.gpu, stack.size, (name) => context.external(name));
             if (bake) {
@@ -193,16 +227,7 @@ export const PAINT_STACK_NODE: TexNodeDef = {
                 for (const result of own?.values() ?? []) releaseTileBake(context.gpu, result);
             }
             await stack.compose();
-            const images = stack.channelImages(1001) as Partial<Record<string, GpuImage>>;
-            const out: Record<string, GpuImage> = {};
-            for (const port of PAINT_STACK_NODE.outputs) {
-                const target = context.image(port.kind === 'color' ? 'color' : 'gray');
-                const source = images[port.key];
-                if (source) await context.pass(target, 'void main() { outColor = texture(painted, vUv); }', { inputs: { painted: source } });
-                else context.gpu.clear(target, port.key === 'normal' ? [0.5, 0.5, 1, 1] : port.key === 'opacity' ? [1, 1, 1, 1] : [0, 0, 0, 1]);
-                out[port.key] = target;
-            }
-            return out;
+            return await outputsOf(stack);
         } finally {
             stack?.dispose();
             running.delete(assetId);

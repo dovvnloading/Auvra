@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { BookIcon, ChipIcon, CommentAddIcon, CrossIcon, ExternalLinkIcon, FlowIcon, GraphIcon, PlusIcon, TrashIcon, WarningIcon } from '../UI/Icons';
+import { BookIcon, ChipIcon, CommentAddIcon, CrossIcon, ExternalLinkIcon, FlowIcon, GraphIcon, ImageIcon, PlusIcon, TrashIcon, WarningIcon } from '../UI/Icons';
 import { useAssets } from '../../context/AssetContext';
 import { projectService } from '../../utils/projectService';
 import { frontendDiagnostics } from '../../diagnostics/runtime';
@@ -18,6 +18,7 @@ import { MATERIALS_DOMAIN, materialAssetDocument, materialAssetUse, materialLibr
 import { LIBRARY_DRAG_TYPE, MyLibraryPanel, useAddToLibrary, useBringIn, useUserLibrary } from './MyLibrary';
 import { MaterialXExportButton, MaterialXImport, type MaterialXImportHandle } from './MaterialXFiles';
 import { ProjectBall } from './ProjectBalls';
+import { CompressionBadge } from './CompressionBadge';
 import { MaterialFromDescription } from './MaterialFromDescription';
 import { STARTER_MATERIALS } from '../../runtime/materials/starterMaterials';
 import { MaterialGraphCanvas } from './MaterialGraphCanvas';
@@ -35,6 +36,7 @@ import { isSmartMaterialAsset } from '../../texturing/paint/smartMaterials';
 import { isExportTemplatesAsset } from '../../texturing/paint/exportTemplates';
 import { createFunctionGraph, createTextureGraph } from '../../texturing/graph/document';
 import { TextureGraphWorkspace, newTextureGraphStored } from '../Texturing/TextureGraphWorkspace';
+import { PhotoMaterialPicker, type PhotoMaterialPickerHandle } from '../Texturing/Paint/PhotoMaterialPicker';
 
 /**
  * MATERIAL GRAPH EDITOR (the Materials tab)
@@ -224,6 +226,7 @@ export const MaterialGraphEditor: React.FC = () => {
         select([]);
     };
     const newButton = useRef<HTMLButtonElement>(null);
+    const photoPicker = useRef<PhotoMaterialPickerHandle>(null);
     const [newMenu, setNewMenu] = useState(false);
     const [memoryOpen, setMemoryOpen] = useState(false);
 
@@ -364,6 +367,7 @@ export const MaterialGraphEditor: React.FC = () => {
                                 { key: 'texture', icon: <GraphIcon size={14} />, title: 'Texture graph', text: 'Noises, patterns, blurs and filters drawn into the material\'s pictures: base colour, normal, roughness and the rest.', run: () => createTextureGraph_(false) },
                                 { key: 'shader', icon: <FlowIcon size={14} />, title: 'Shader graph', text: 'Maths worked out for every pixel as the model draws: moving, glowing and view-dependent looks.', run: create },
                                 { key: 'function', icon: <GraphIcon size={14} />, title: 'Graph for other graphs', text: 'A texture graph with an input, made to be used as one node inside others (a smart mask, a filter).', run: () => createTextureGraph_(true) },
+                                { key: 'photo', icon: <ImageIcon size={14} />, title: 'From a photo', text: 'A photo of a surface made into a texture graph: tiled, lighting taken out, with height, normal and roughness worked out. Or drop a photo on the list.', run: () => photoPicker.current?.pick() },
                                 { key: 'materialx', icon: <ExternalLinkIcon size={14} />, title: 'From a MaterialX file', text: 'Pick a .mtlx file together with its pictures: its surface becomes a shader graph.', run: () => materialXImport.current?.pick() },
                             ].map((item) => (
                                 <button key={item.key} onClick={() => { setNewMenu(false); item.run(); }} className="flex w-full gap-2 rounded px-2 py-1.5 text-left hover:bg-gray-800">
@@ -390,16 +394,19 @@ export const MaterialGraphEditor: React.FC = () => {
                 )}
                 <div
                     className={`flex-1 overflow-y-auto p-2 ${dropping ? 'bg-accent/10 ring-1 ring-inset ring-accent/60' : ''}`}
-                    onDragOver={(event) => { if (!event.dataTransfer.types.includes(LIBRARY_DRAG_TYPE)) return; event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; setDropping(true); }}
+                    onDragOver={(event) => { if (!event.dataTransfer.types.includes(LIBRARY_DRAG_TYPE) && !event.dataTransfer.types.includes('Files')) return; event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; setDropping(true); }}
                     onDragLeave={() => setDropping(false)}
                     onDrop={(event) => {
                         setDropping(false);
+                        // A photo dropped on the list becomes a material.
+                        if (event.dataTransfer.files.length && photoPicker.current?.take(event.dataTransfer.files)) { event.preventDefault(); return; }
                         const entryId = event.dataTransfer.getData(LIBRARY_DRAG_TYPE);
                         if (!entryId) return;
                         event.preventDefault();
                         void bringInAndSelect(entryId);
                     }}
                 >
+                    <PhotoMaterialPicker ref={photoPicker} className="mb-1 px-1" onMade={(made) => { setSelectedId(made.id); select([]); }} />
                     {dropping && <p className="mb-1 px-1 text-2xs text-accent">Drop to bring it into this project</p>}
                     {assets.length === 0 && <p className="px-1 text-2xs text-gray-500">No materials yet. A material is a node graph; give one to a model's material in Properties › Material Overrides.</p>}
                     {assets.map(candidate => (
@@ -460,6 +467,7 @@ export const MaterialGraphEditor: React.FC = () => {
                             <button onClick={() => void remove()} aria-label="Delete material" className="rounded p-1 text-gray-500 hover:bg-gray-800 hover:text-red-400"><TrashIcon size={14} /></button>
                         </div>
                         <MaterialPreview assetId={asset.id} graph={shadingGraph ?? graph} previewNodeIds={previewNodeIds} />
+                        <CompressionBadge asset={asset} />
                         {shaderError && (
                             <div role="alert" className="space-y-1 rounded border border-red-900 bg-red-950/60 p-2">
                                 <div className="flex items-center gap-1 text-2xs font-bold text-red-300"><WarningIcon size={12} /> The shader does not compile</div>

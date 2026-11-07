@@ -24,6 +24,9 @@ export interface PictureRequest { key: string; type: string; params?: Record<str
 export type NodePicture = ImageData | 'failed';
 
 const pictures = new Map<string, NodePicture>();
+/** How many times each picture has been drawn: one that failed is tried once more, the next time the finder opens. */
+const attempts = new Map<string, number>();
+const MAX_ATTEMPTS = 2;
 const listeners = new Set<() => void>();
 let queue: PictureRequest[] = [];
 let running = false;
@@ -168,15 +171,19 @@ const run = async (): Promise<void> => {
     try {
         while (queue.length) {
             const request = queue.shift()!;
-            if (pictures.has(request.key)) continue;
+            if (pictures.has(request.key) && pictures.get(request.key) !== 'failed') continue;
             let picture: NodePicture = 'failed';
             try {
                 picture = await draw(gpu, evaluator, request);
             } catch (error) {
                 if (!(error instanceof AbortedError)) frontendDiagnostics.failure('texture_node_picture_failed', error);
             }
-            pictures.set(request.key, picture);
-            for (const listener of listeners) listener();
+            attempts.set(request.key, (attempts.get(request.key) ?? 0) + 1);
+            // A picture drawn at the second try replaces the mark; a second failure keeps it for the session.
+            if (picture !== 'failed' || pictures.get(request.key) !== 'failed') {
+                pictures.set(request.key, picture);
+                for (const listener of listeners) listener();
+            }
             // One picture a frame, so the editor stays responsive while they fill in.
             await nextFrame();
         }
@@ -186,10 +193,17 @@ const run = async (): Promise<void> => {
     }
 };
 
-/** Draws the pictures not drawn yet, in the order given (the finder's), one a frame. */
+/**
+ * The requests to draw now: those not drawn yet and not waiting, and those that failed only once (tried
+ * again, once, when the finder next opens).
+ */
+export const picturesToDraw = (requests: readonly PictureRequest[], drawn: ReadonlyMap<string, NodePicture>, tries: ReadonlyMap<string, number>, waiting: ReadonlySet<string>): PictureRequest[] =>
+    requests.filter((request) => !waiting.has(request.key) && (!drawn.has(request.key) || (drawn.get(request.key) === 'failed' && (tries.get(request.key) ?? 0) < MAX_ATTEMPTS)));
+
+/** Draws the pictures not drawn yet (and those that failed once), in the order given (the finder's), one a frame. */
 export const requestNodePictures = (requests: readonly PictureRequest[]): void => {
     const waiting = new Set(queue.map((request) => request.key));
-    const fresh = requests.filter((request) => !pictures.has(request.key) && !waiting.has(request.key));
+    const fresh = picturesToDraw(requests, pictures, attempts, waiting);
     if (!fresh.length) return;
     queue = [...queue, ...fresh];
     void run();

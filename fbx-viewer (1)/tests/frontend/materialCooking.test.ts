@@ -4,7 +4,7 @@ import { GRAPH_SEED, MaterialCookPlanner, PICTURE_SIZE, cookRequestFor, cookSign
 import { boundMaterialGraph } from '../../runtime/materials/graphMaterial';
 import { materialLibrary, type MaterialAsset } from '../../runtime/materials/materialLibrary';
 import { surfaceGraphForPictures } from '../../texturing/materialOutput';
-import { setObjectMaterialValue, releaseSessionMaterials } from '../../utils/materialInstances';
+import { applyObjectMaterialPreset, setObjectMaterialValue, releaseSessionMaterials } from '../../utils/materialInstances';
 
 /** A material whose pictures a texture graph makes, with a Wetness parameter. */
 const crate = (): MaterialAsset => ({
@@ -221,4 +221,44 @@ describe('texture graphs cooked by the game', () => {
         // Three crates, three values: nine cooks for both rounds.
         expect(cooks).toHaveLength(9);
     });
+
+    it('move a shown set to pictures compressed for the GPU once they are loaded, never drawing it bare', async () => {
+        const settings = new Map<string, unknown>();
+        const library = { addTextureUrl: vi.fn(), releaseTexture: vi.fn(), rebindAsset: vi.fn(), preloadTexture: vi.fn(async () => undefined) };
+        const planner = new MaterialCookPlanner(library, { cook: async () => ({ baseColor: new Blob(['c']), normal: new Blob(['n']) }) }, null,
+            { nextFrame: (task) => setTimeout(task, 0), urlOf: () => 'blob:x', compress: true, setSettings: (id, value) => settings.set(id, value) });
+        const asset = crate();
+        const material = new THREE.MeshStandardMaterial();
+        planner.pictures(asset, { parameters: {} }, material);
+        await planner.settled();
+        const whole = planner.pictures(asset, { parameters: {} }, material);
+        expect(whole?.baseColor).not.toContain('#c');
+        await planner.settled();
+        const compressed = planner.pictures(asset, { parameters: {} }, material);
+        expect(compressed?.baseColor).toContain('#c');
+        expect(settings.get(compressed!.baseColor)).toMatchObject({ compression: 'auto', colorSpace: 'colour' });
+        expect(settings.get(compressed!.normal)).toMatchObject({ compression: 'auto', normalMap: true });
+        expect(settings.get(whole!.baseColor)).toMatchObject({ compression: 'none' });
+        // Without compression on, it stays whole.
+        const plain = plannerWith();
+        plain.planner.pictures(asset, { parameters: {} }, material);
+        await plain.planner.settled();
+        plain.planner.pictures(asset, { parameters: {} }, material);
+        await plain.planner.settled();
+        expect(plain.planner.pictures(asset, { parameters: {} }, material)?.baseColor).not.toContain('#c');
+    });
+
+    it('apply a texture graph preset to one object during play, as a script does', () => {
+        const withPreset = { ...crate(), textureGraph: { ...crate().textureGraph!, graph: { ...(crate().textureGraph!.graph as object), presets: [{ id: 'soaked', name: 'Soaked', values: { Wetness: 1 } }] } } };
+        materialLibrary.replaceAll([withPreset]);
+        const material = new THREE.MeshStandardMaterial();
+        const mesh = new THREE.Mesh(new THREE.BoxGeometry(), material);
+        materialLibrary.assign(material, 'crate');
+        const made: THREE.Material[] = [];
+        expect(applyObjectMaterialPreset(new THREE.Group().add(mesh), 'soaked', made)).toBe(1);
+        expect(materialLibrary.bindingOf(mesh.material as THREE.Material)?.parameters?.Wetness).toBe(1);
+        expect(applyObjectMaterialPreset(new THREE.Group().add(mesh), 'Nope', made)).toBe(0);
+        releaseSessionMaterials(made);
+    });
 });
+

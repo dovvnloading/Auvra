@@ -1,4 +1,4 @@
-import { compileFunction, defaultPixelFunction, defaultValueFunction, glslFunction, readFunctionGraph, type FunctionGraph, type FunctionIr, type FunctionUse, type NamedSetting } from '../functionGraph';
+import { compileFunction, defaultPixelFunction, defaultValueFunction, functionReadsTime, glslFunction, readFunctionGraph, type FunctionGraph, type FunctionIr, type FunctionUse, type NamedSetting } from '../functionGraph';
 import { anyIn, out, select } from '../nodeKit';
 import type { TexGraphNode, TexNodeDef, TexParamDef } from '../types';
 import { pixelProcessorCost } from './io';
@@ -130,6 +130,16 @@ export const migrateProcessorParams = (type: string, own: Readonly<Record<string
 
 // ---- the nodes ----
 
+/** Whether a processor reads which Iterate pass it is: its function graph has a Pass number node, or its code says uIteration. */
+const processorReadsPass = (fallback: () => FunctionGraph) => (params: Readonly<Record<string, unknown>>): boolean => (params.mode === 'code'
+    ? /\buIterations?\b/.test(String(params.code ?? ''))
+    : readFunctionGraph(params.function, fallback).nodes.some((node) => node.type === 'fnPass'));
+
+/** Whether a processor reads the graph's time: its function graph has a Time node, or its code says uTime or uPhase. */
+const processorReadsTime = (fallback: () => FunctionGraph) => (params: Readonly<Record<string, unknown>>): boolean => (params.mode === 'code'
+    ? /\buTime\b|\buPhase\b/.test(String(params.code ?? ''))
+    : functionReadsTime(readFunctionGraph(params.function, fallback)));
+
 /** Roughly how many samples a pixel of the function takes, for drawing heavy ones in bands. */
 const functionCost = (ir: FunctionIr): number => {
     const reads = ir.steps.filter((step) => step.op === 'sample' || step.op === 'sampleGray').length;
@@ -158,6 +168,8 @@ export const PIXEL_PROCESSOR: TexNodeDef = {
     keywords: ['custom', 'code', 'shader', 'glsl', 'expression', 'per pixel', 'function', 'math', 'formula'],
     inputs: [anyIn('a', 'A'), anyIn('b', 'B'), anyIn('c', 'C'), anyIn('d', 'D')],
     outputs: [out('any')],
+    readsTime: processorReadsTime(defaultPixelFunction),
+    readsPass: processorReadsPass(defaultPixelFunction),
     params: [
         select('mode', 'Made with', 'graph', [['graph', 'A function graph'], ['code', 'GLSL code']]),
         functionParam(defaultPixelFunction, (params) => params.mode !== 'code'),
@@ -197,6 +209,8 @@ export const VALUE_PROCESSOR: TexNodeDef = {
     sizeFrom: 'input',
     bypass: false,
     settingsInShader: true,
+    readsTime: processorReadsTime(defaultValueFunction),
+    readsPass: processorReadsPass(defaultValueFunction),
     async run(context) {
         const image = context.image('color', 1, 1, 32);
         await context.pass(image, functionPass(context.params, 'value', PROCESSOR_PICTURES[VALUE_PROCESSOR_TYPE], defaultValueFunction).fragment);

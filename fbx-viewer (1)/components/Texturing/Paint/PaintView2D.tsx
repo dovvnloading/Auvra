@@ -101,6 +101,8 @@ export const PaintView2D: React.FC<{
     const [cursor, setCursor] = useState<{ x: number; y: number } | null>(null);
     const gesture = useRef<{ kind: 'pan'; x: number; y: number } | { kind: 'stroke'; stroke: Stroke } | { kind: 'pathPoint'; index: number } | null>(null);
     const cloneFrom = useRef<{ tile: number; u: number; v: number } | null>(null);
+    /** The frame particles next move on in, while a stroke throwing them is held. */
+    const particleFrame = useRef<number | null>(null);
     const [wireframe, setWireframe] = useState(false);
     const edges = useMemo(() => layoutEdges(session.part, false), [session.part]);
     const wires = useMemo(() => (wireframe ? layoutEdges(session.part, true) : null), [session.part, wireframe]);
@@ -296,6 +298,16 @@ export const PaintView2D: React.FC<{
         }
         if (brush.mode === 'clone' && cloneFrom.current) stroke.cloneSourceAt(cloneFrom.current.tile, cloneFrom.current.u, cloneFrom.current.v);
         gesture.current = { kind: 'stroke', stroke };
+        // Particles run on while the stroke is held, between pointer moves too.
+        if (brush.particles?.enabled) {
+            const tick = () => {
+                const current = gesture.current;
+                if (current?.kind !== 'stroke' || current.stroke !== stroke) { particleFrame.current = null; return; }
+                stroke.advanceParticles();
+                particleFrame.current = requestAnimationFrame(tick);
+            };
+            particleFrame.current = requestAnimationFrame(tick);
+        }
         stroke.moveTo(x, y, pressure, () => null);
     };
 
@@ -423,6 +435,7 @@ export const PaintView2D: React.FC<{
             onPointerUp={() => {
                 const current = gesture.current;
                 gesture.current = null;
+                if (particleFrame.current !== null) { cancelAnimationFrame(particleFrame.current); particleFrame.current = null; }
                 if (current?.kind === 'stroke') session.record(current.stroke.finish(strokeLabel(tool === 'erase' ? 'erase' : 'paint', brush)));
             }}
             onPointerLeave={() => setCursor(null)}

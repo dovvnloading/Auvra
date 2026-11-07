@@ -101,6 +101,10 @@
   - the node library's last five families, a make-it-tile without ghosting, fur and an HDR range view;
   - games that cook texture graphs on their own GPU, with per-object seeds and values;
   - paint stacks as graph nodes, graphs as brushes, filters across UV seams, and Retexture results as layers.
+- **Round 9** brought:
+  - photo to material, a branching history with comparison, and graph brushes in colour;
+  - animated materials, growing a texture from an example, and a WGSL writer for function graphs;
+  - a material command line and script calls, compression-aware authoring, and kept terrain arrays.
 
 See §6.
 
@@ -805,6 +809,10 @@ One family per pull request, each with picture tooltips and the wrap-edge tiling
 - **A Living Materials Lab template:** a row per seed, a wetness row, and a row whose wetness a blueprint steps over time.
 - **Still to come:** level of detail in the editor's level views, and cooked pictures compressed for the GPU.
 
+**Landed in round 9:**
+- Cooked pictures move to GPU compression once shown, without a bare frame.
+- An animated graph cooks as a flipbook, or again at a set rate as it plays.
+
 ### Stage 10 — Capture and AI
 - **Photo to material:** lighting removal, tiling, pulling a material out of a photo by label, and multi-angle capture.
 - **Generative nodes** in the graph.
@@ -813,6 +821,14 @@ One family per pull request, each with picture tooltips and the wrap-edge tiling
 - **Photo to editable graph,** with parameters fitted to the photo.
 
 **Checked by:** real photos of brick, bark and concrete turned into graphs, judged side by side.
+
+**Landed in round 9: photo to editable graph, procedural.**
+- New › From a photo, or a photo dropped on the material list or on Paint, builds a texture graph of ordinary nodes:
+  - tiled, with lighting removed (from a soft occlusion and fitted shading) and colour evened out;
+  - height from brightness and fine detail, inverted when the bright parts are thin lines such as mortar;
+  - a normal from a lightly smoothed height, roughness from a curve, and metal by colour.
+- A Strength row of exposed parameters: tiling width, lighting removed, height depth, invert, and roughness range.
+- **Still to come:** pulling one material out of a photo by label, multi-angle capture, generative nodes, the assistant, and the AI matching-maps step on the tiled colour.
 
 ### Stage 11 — Further past the best tools
 - Filters that cross UV seams.
@@ -824,6 +840,22 @@ One family per pull request, each with picture tooltips and the wrap-edge tiling
 - WebGPU compute paths.
 - A scripting API and command-line batch work.
 
+**Landed by round 9:**
+- **Painting:** filters across seams (round 8), layer stacks as graph nodes, and graphs as brushes (round 8, in colour since round 9).
+- **A branching history:** going back and painting keeps the replaced steps as a branch; Compare splits the view with a wipe.
+- **Animated materials:**
+  - a Time node with a loop length, and a play bar in the 2D view;
+  - Update material lays a flipbook out, which a Flipbook Frames node plays.
+- **Grow from example:** a larger tiling picture grown from patches of a small example, joined along their least visible cuts.
+- **A WGSL writer for function graphs,** matching the GLSL one step for step, with a CPU reference for noise.
+- **Compression-aware authoring:** a badge under a material's preview says what its textures take as the game keeps them, and where compression hurts, with a one-click fix.
+- **Command line and scripts:**
+  - `python -m Auvra.project.material_commands` lists materials, sets texture-graph values and applies presets on a closed project;
+  - `object.applyMaterialPreset` sets a preset on one object in play.
+- **Still to come:**
+  - WebGPU compute paths;
+  - headless cooking, balls and bakes from the command line;
+  - editing materials from an editor script.
 ## 7. How each stage is checked
 
 - **In the running editor first.** Each stage is used end to end in a lab built for it, under `C:\Users\Admin\AuvraLabs`, and judged by looking. Screenshots go in the pull request. Full test suites run once, at the end.
@@ -971,36 +1003,55 @@ File references are relative to `fbx-viewer (1)/`.
   - The UDIM atlas pass declared the size every pass already has, so UDIM sets couldn't be laid on one atlas. It had been that way since round 1; a test now guards it.
   - In play, cooked crates looked different from the editor's, flashed black when their values changed, and missed steps.
 
+### Fixed in round 9
+- **Graph:**
+  - Function graphs have a WGSL writer, and noise has a CPU reference.
+  - Iterate carries materials, opens in place, and redraws only what each pass reaches.
+  - A parameter's formula name can be renamed.
+  - A finder picture that failed once is drawn again.
+- **Painting:**
+  - The paint stack node is named plainly and reuses the open set.
+  - Graph brushes lay colour.
+  - Particles move with time as the stroke is drawn.
+- **Materials:**
+  - Compressed terrain slices are kept in the project.
+  - Cooked pictures are compressed once shown.
+  - The level view's toolbar fits a narrow window.
+- **Found while checking round 9:**
+  - The texture store named every picture .png, so a JPEG photo failed to upload.
+  - The photo graph's colour was speckled white, because its occlusion was noise and Lighting removal divided by it. Lighting removal now limits how much it brightens and says when its occlusion is speckled.
+  - Its normal map was noise.
+  - Its height raised the mortar.
+
 ### Still open
 **Texture graph**
-1. Update material draws mesh-reading nodes with stand-ins, because a material can go on any model. Per-model results come with Stage 9's cooking.
+1. Update material draws mesh-reading nodes with stand-ins, because a material can go on any model. Per-model results come with cooking.
 2. A flood fill box is approximate for an island covering more than about three quarters of a tiling axis.
-3. Function graphs have no WGSL writer yet, and their Noise node has no CPU reference to test against.
-4. Iterate takes picture inputs and outputs only, its graph can't be opened in place, and every node inside redraws on every pass.
-5. A parameter's formula name can't be renamed.
-6. Leaks and dripping rust are placed by noise and slope, not run down the model.
-7. Read-around filters are checked for tiling by reading their shaders, not by measuring pixels.
-8. Make it tile finds its cuts at up to 512 pixels; lighting removal fits one light direction.
-9. A finder picture that fails once stays as the category mark until the editor reloads.
+3. Nothing runs the WGSL writer yet: texture graphs still draw on WebGL2.
+4. Leaks and dripping rust are placed by noise and slope, not run down the model.
+5. Read-around filters are checked for tiling by reading their shaders, not by measuring pixels.
+6. Renaming a parameter doesn't reach other graphs using the graph, or objects' material values.
+7. Flipbook frames may bleed slightly at cell edges with texture filtering.
 
 **Painting, baking and UVs**
-10. The paint view's smoothing draws into a render target marked as an XR target. Recheck this when three.js is upgraded (`components/Texturing/Paint/PaintViewport.tsx`).
-11. A triangle that crosses a UDIM tile edge can pick a too-coarse mip at that edge.
-12. Particles are painted at once rather than over time.
-13. The whole-model glTF keeps only the main maps of the model's other painted sets, and a UDIM set's vertex exactly on a tile edge can land in the wrong cell.
-14. A paint stack node takes many seconds to draw the first time, and its name repeats the set's ("… (painted) (paint stack)").
-15. A graph brush stamps brightness only, not the graph's colour.
+8. The paint view's smoothing draws into a render target marked as an XR target. Recheck this when three.js is upgraded (`components/Texturing/Paint/PaintViewport.tsx`).
+9. A triangle that crosses a UDIM tile edge can pick a too-coarse mip at that edge.
+10. The whole-model glTF keeps only the main maps of the model's other painted sets, and a UDIM set's vertex exactly on a tile edge can land in the wrong cell.
+11. A paint stack folder always builds its own stack, and a stack node redraws only when its set saves.
+12. Comparison in the history works only in the Material view.
+13. Photo to material doesn't yet use the AI matching-maps step, and its starting guesses (invert, roughness) come from simple measures.
 
 **Material graph, engine materials and textures**
-16. Unlit and Phong materials can't take a material asset (a message says so). Converting them is a later step.
-17. The surface has no coat tint, and car paint has no metal flakes.
-18. BC7 uses one block mode, and ASTC and ETC2 use simple block modes, so some blocks blur a little more than with full encoders.
-19. A texture never drawn in the editor has nothing kept, so a built game compresses it as it loads. Compressed terrain arrays are made again each time a terrain loads.
-20. My library lives in the editor's own storage on this machine; painted copies and painting presets can't be added.
-21. MaterialX can't be imported from a zip, and image tiling is ignored.
-22. On WebGPU, anisotropy isn't drawn and specular can't go below 4%; both need a wider surface buffer.
-23. On WebGPU, a scene drawn before a ray-traced one can still change it slightly (a leak across scenes on one device), seen in the picture tests.
-24. The level view's toolbar runs off a 1264-wide window, hiding Play level.
+14. Unlit and Phong materials can't take a material asset (a message says so). Converting them is a later step.
+15. The surface has no coat tint, and car paint has no metal flakes.
+16. BC7 uses one block mode, and ASTC and ETC2 use simple block modes, so some blocks blur a little more than with full encoders.
+17. A texture never drawn in the editor has nothing kept, so a built game compresses it as it loads.
+18. My library lives in the editor's own storage on this machine; painted copies and painting presets can't be added.
+19. MaterialX can't be imported from a zip, and image tiling is ignored.
+20. On WebGPU, anisotropy isn't drawn and specular can't go below 4%; both need a wider surface buffer.
+21. On WebGPU, a scene drawn before a ray-traced one can still change it slightly (a leak across scenes on one device), seen in local picture runs.
+22. The compression badge shows only on shader-graph materials, not in a texture graph's Material tab.
+23. Cooking, balls and mesh-map bakes can't run headless from the command line.
 
 ## 9. Sources and references
 

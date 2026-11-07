@@ -30,6 +30,8 @@ export const MATERIAL_PICTURE_NAMES: ReadonlyArray<[string, string]> = [
 export const NAMED_SEND_TYPE = 'namedSend';
 export const NAMED_RECEIVE_TYPE = 'namedReceive';
 export const UDIM_ATLAS_NODE_TYPE = 'udimAtlas';
+/** Plays a texture graph's flipbook: the frame its time shows now. */
+export const FLIPBOOK_FRAMES_NODE_TYPE = 'flipbookFrames';
 
 /** UDIM tile numbers written in a list (anything but digits between them), each once, in the order given. */
 export const readUdimTiles = (value: unknown): number[] => {
@@ -385,6 +387,38 @@ export const MATERIAL_NODE_DEFINITIONS: MaterialNodeDef[] = [
                 statements: [
                     `float ${frame} = ${inputs.frame} < 0.0 ? floor(${context.builtin('time')} * ${context.param('fps')}) : floor(${inputs.frame});`,
                     `${frame} = mod(${frame}, max(${columns} * ${rows}, 1.0));`,
+                    `vec2 ${cell} = vec2(mod(${frame}, ${columns}), ${rows} - 1.0 - floor(${frame} / ${columns}));`,
+                ],
+                outputs: { out: `((fract(${inputs.uv}) + ${cell}) / vec2(${columns}, ${rows}))` },
+            };
+        },
+    },
+    {
+        type: FLIPBOOK_FRAMES_NODE_TYPE,
+        label: 'Flipbook Frames',
+        category: 'UV',
+        description: "The UV of the frame a texture graph's flipbook shows now: its Frames laid along the rows of a Columns × Rows grid from the top left, played once round every Loop seconds as the graph's time goes round, so the animation loops with no jump. Start later shifts one use's animation from another's. Wire it into every picture the flipbook made.",
+        keywords: ['flipbook', 'animated texture', 'texture graph', 'frames', 'loop', 'animation'],
+        inputs: [
+            { key: 'uv', label: 'UV', type: 'vec2', fallback: builtin('uv') },
+            { key: 'offset', label: 'Start later (seconds)', type: 'float', fallback: '0.0' },
+        ],
+        outputs: [{ key: 'out', label: 'UV', type: 'vec2' }],
+        params: [
+            float('frames', 'Frames', 16, { min: 1, max: 256, step: 1 }),
+            float('columns', 'Columns', 4, { min: 1, max: 64, step: 1 }),
+            float('rows', 'Rows', 4, { min: 1, max: 64, step: 1 }),
+            float('loop', 'Loop (seconds)', 4, { min: 0.1, max: 600, step: 0.1 }),
+        ],
+        emit: (inputs, context) => {
+            const frames = context.param('frames');
+            const columns = context.param('columns');
+            const rows = context.param('rows');
+            const frame = context.local('frame');
+            const cell = context.local('cell');
+            return {
+                statements: [
+                    `float ${frame} = min(floor(fract((${context.builtin('time')} + ${inputs.offset}) / max(${context.param('loop')}, 0.001)) * ${frames}), ${frames} - 1.0);`,
                     `vec2 ${cell} = vec2(mod(${frame}, ${columns}), ${rows} - 1.0 - floor(${frame} / ${columns}));`,
                 ],
                 outputs: { out: `((fract(${inputs.uv}) + ${cell}) / vec2(${columns}, ${rows}))` },

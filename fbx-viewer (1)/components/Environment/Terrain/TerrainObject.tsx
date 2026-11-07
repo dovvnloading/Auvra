@@ -123,6 +123,8 @@ export const TerrainObject = forwardRef<THREE.Group, TerrainObjectProps>(({
         // A deep picture is read from its file, at its own depth, not its 8-bit preview.
         const urlOf = (id: string | undefined) => { const texture = id ? textures.find(candidate => candidate.id === id) : undefined; return texture ? texture.sourceUrl ?? texture.url : undefined; };
         return layers.map(layer => ({
+            // The textures' ids too: the arrays keep their compressed slices with them (terrainLayerTextures.ts).
+            ids: { albedo: layer.textureId, normal: layer.normalTextureId, roughness: layer.roughnessTextureId, height: layer.heightTextureId },
             albedo: urlOf(layer.textureId),
             normal: urlOf(layer.normalTextureId),
             roughness: urlOf(layer.roughnessTextureId),

@@ -233,6 +233,31 @@ export const setObjectMaterialValue = (root: THREE.Object3D, name: string, value
     return changed;
 };
 
+/**
+ * Sets every value one of its materials' texture-graph presets holds (found by name or id, any case) on this object alone
+ * for the play session, as setObjectMaterialValue does. Returns how many values took.
+ */
+export const applyObjectMaterialPreset = (root: THREE.Object3D, presetName: string, made: THREE.Material[]): number => {
+    const wanted = presetName.trim().toLowerCase();
+    const values = new Map<string, number | number[]>();
+    root.traverse((child) => {
+        const mesh = child as THREE.Mesh;
+        if (!mesh.isMesh) return;
+        for (const material of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) {
+            const binding = material ? materialLibrary.bindingOf(material) : undefined;
+            const asset = binding ? materialLibrary.get(binding.materialId) : undefined;
+            const presets = (asset?.textureGraph as { graph?: { presets?: Array<{ id?: string; name?: string; values?: Record<string, unknown> }> } } | undefined)?.graph?.presets ?? [];
+            const preset = presets.find(candidate => String(candidate.name ?? '').toLowerCase() === wanted || String(candidate.id ?? '').toLowerCase() === wanted);
+            for (const [name, value] of Object.entries(preset?.values ?? {})) {
+                if (typeof value === 'number' || (Array.isArray(value) && value.every(item => typeof item === 'number'))) values.set(name, value as number | number[]);
+            }
+        }
+    });
+    let taken = 0;
+    for (const [name, value] of values) taken += setObjectMaterialValue(root, name, value, made) > 0 ? 1 : 0;
+    return taken;
+};
+
 /** Frees the copies a play session made (setObjectMaterialValue). */
 export const releaseSessionMaterials = (made: THREE.Material[]): void => {
     for (const material of made.splice(0)) {

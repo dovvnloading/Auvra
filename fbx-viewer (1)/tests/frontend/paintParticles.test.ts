@@ -4,7 +4,7 @@ import { buildPartMesh } from '../../texturing/mesh/partMesh';
 import { SurfacePicker, closestOnTriangle } from '../../texturing/mesh/picker';
 import { BUILT_IN_BRUSHES, applyPreset, presetFrom, readPresets } from '../../texturing/paint/brushLibrary';
 import { DEFAULT_BRUSH } from '../../texturing/paint/strokes';
-import { PARTICLE_PRESETS, readParticles, throwParticles, type ParticleSettings } from '../../texturing/paint/particles';
+import { ParticleRun, PARTICLE_PRESETS, readParticles, throwParticles, type ParticleSettings } from '../../texturing/paint/particles';
 
 /** A wall (facing +Z, 2 × 2) above a floor (facing up, 4 × 4, at y = -1). */
 const scene = () => {
@@ -78,5 +78,24 @@ describe('particle brushes', () => {
         expect(dabs.every((dab) => Math.abs(dab.point.y + 1) < 1e-3)).toBe(true);
         expect(readParticles({ gravityDirection: [0, 0, 2] }).gravityDirection).toEqual([0, 0, 2]);
         expect(readParticles({ gravityDirection: [0, 0, 0] }).gravityDirection).toBeUndefined();
+    });
+
+    it('run over time as the stroke is drawn, painting along their paths a moment at a time', () => {
+        const run = new ParticleRun(preset('drips'), scene(), 2, 9);
+        run.spawn(from(new THREE.Vector3(0, 0.5, 0), new THREE.Vector3(0, 0, 1)));
+        expect(run.alive).toBe(preset('drips').count);
+        // A tenth of a second in: the drips have only just set off.
+        const early = run.advance(0.1);
+        expect(early.length).toBeGreaterThan(0);
+        const lowest = (dabs: readonly { point: THREE.Vector3 }[]) => Math.min(...dabs.map((dab) => dab.point.y));
+        // Another second: further down the wall.
+        const later = run.advance(1);
+        expect(lowest(later)).toBeLessThan(lowest(early));
+        // Thrown again mid-way, new particles join those on their way; finishing runs them all out.
+        run.spawn(from(new THREE.Vector3(0.4, 0.5, 0), new THREE.Vector3(0, 0, 1)));
+        const rest = run.finish();
+        expect(rest.length).toBeGreaterThan(0);
+        expect(run.alive).toBe(0);
+        expect(run.advance(1)).toEqual([]);
     });
 });

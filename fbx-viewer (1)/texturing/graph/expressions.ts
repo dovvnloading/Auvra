@@ -229,3 +229,29 @@ export const evaluateExpression = (source: string, scope: Readonly<Record<string
     if (typeof value === 'number' ? !Number.isFinite(value) : value.some((x) => !Number.isFinite(x))) return typeof value === 'number' ? 0 : value.map((x) => (Number.isFinite(x) ? x : 0));
     return value;
 };
+
+/**
+ * A formula with one name changed for another wherever it is a name (not inside another name, not a
+ * function called by that name), its spacing and everything else kept as written.
+ */
+export const renameInFormula = (source: string, from: string, to: string): string => {
+    let out = '';
+    let at = 0;
+    while (at < source.length) {
+        const rest = source.slice(at);
+        const space = /^\s+/.exec(rest);
+        if (space) { out += space[0]; at += space[0].length; continue; }
+        const number = /^(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?/i.exec(rest);
+        if (number) { out += number[0]; at += number[0].length; continue; }
+        const name = /^\$?[A-Za-z_][A-Za-z0-9_]*/.exec(rest);
+        if (name) {
+            const called = /^\s*\(/.test(source.slice(at + name[0].length));
+            out += name[0] === from && !called ? to : name[0];
+            at += name[0].length;
+            continue;
+        }
+        out += source[at];
+        at += 1;
+    }
+    return out;
+};

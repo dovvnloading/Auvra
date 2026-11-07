@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { graphContentKey } from '../../texturing/graph/document';
 import { textureNodeDefinition } from '../../texturing/graph/registry';
 import { createPaintDocument, newFillLayer, newFolder, newPaintLayer, type PaintDocument } from '../../texturing/paint/paintTypes';
-import { PAINT_STACK_NODE, PAINT_STACK_NODE_TYPE, paintStackEntries, paintStackEntry, stackLayers } from '../../texturing/paint/stackNode';
+import { PAINT_STACK_NODE, PAINT_STACK_NODE_TYPE, paintStackEntries, paintStackEntry, setName, stackLayers } from '../../texturing/paint/stackNode';
 
 const painted = (): PaintDocument => {
     const document = createPaintDocument('model', ['Body'], 10);
@@ -18,7 +18,8 @@ describe('paint stacks as graph nodes', () => {
         const entries = paintStackEntries([asset, { id: 'plain', name: 'Plain' }]);
         const folder = document.layers[1];
         expect(entries.map((entry) => entry.id)).toEqual(['paint:helmet', `paint:helmet:${folder.id}`]);
-        expect(entries[1].name).toBe('Helmet body: Grime (paint folder)');
+        expect(entries.map((entry) => entry.name)).toEqual(['Helmet body: paint stack', 'Helmet body: Grime folder']);
+        expect(setName('SciFiHelmet Body (painted)')).toBe('Sci Fi Helmet Body');
         const graph = entries[0].graph;
         const node = graph.nodes.find((each) => each.type === PAINT_STACK_NODE_TYPE)!;
         expect(node.params).toMatchObject({ asset: 'helmet', folder: '' });

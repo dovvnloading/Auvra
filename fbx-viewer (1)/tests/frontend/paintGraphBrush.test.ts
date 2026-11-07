@@ -23,6 +23,9 @@ describe('graphs as brushes', () => {
         expect(back.settings.graphStamp).toEqual(brush.graphStamp);
         expect(applyPreset(DEFAULT_BRUSH, back).graphStamp).toEqual(brush.graphStamp);
         expect(readGraphStamp({ graphId: '', output: 'x' })).toBeNull();
+        // Laying its colour is kept with it, and only a true value turns it on.
+        expect(readGraphStamp({ graphId: 'g', colour: true })?.colour).toBe(true);
+        expect(readGraphStamp({ graphId: 'g', colour: 'yes' })?.colour).toBeUndefined();
         expect(readGraphStamp({ graphId: 'g', values: [1, 2] })).toEqual({ graphId: 'g', output: '', values: {} });
     });
 });

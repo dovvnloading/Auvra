@@ -198,7 +198,7 @@ const PICTURE_REQUESTS: readonly PictureRequest[] = NODE_ENTRIES.flatMap((entry)
         const variant = textureNodeDefinitionByType(type)?.variants?.find((candidate) => candidate.key === key);
         return variant ? [{ key: entry.id, type, params: variant.params }] : [];
     }
-    if (entry.id.includes(':') || [INPUT_NODE_TYPE, REROUTE_NODE_TYPE, NAMED_SEND_TYPE, NAMED_RECEIVE_TYPE, MATERIAL_INPUT_NODE_TYPE, MATERIAL_OUTPUT_NODE_TYPE, ITERATE_NODE_TYPE, VALUE_PROCESSOR_TYPE, 'bitmap'].includes(entry.id)) return [];
+    if (entry.id.includes(':') || [INPUT_NODE_TYPE, REROUTE_NODE_TYPE, NAMED_SEND_TYPE, NAMED_RECEIVE_TYPE, MATERIAL_INPUT_NODE_TYPE, MATERIAL_OUTPUT_NODE_TYPE, ITERATE_NODE_TYPE, VALUE_PROCESSOR_TYPE, 'bitmap', 'time'].includes(entry.id)) return [];
     return [{ key: entry.id, type: entry.id }];
 });
 
@@ -327,6 +327,7 @@ export const TextureGraphCanvas: React.FC<TextureGraphCanvasProps> = (props) => 
                 canDelete: true,
                 ...(isOutput ? { output: true } : {}),
                 ...(opens && node.type === SUBGRAPH_NODE_TYPE && typeof node.params.graph === 'string' && resolve(node.params.graph) ? { canOpen: true } : {}),
+                ...(opens && node.type === ITERATE_NODE_TYPE && typeof node.params.graph === 'string' && resolve(node.params.graph) ? { canOpen: true, openLabel: 'Open the graph it runs (at its first pass)' } : {}),
                 ...(opens && PROCESSOR_TYPES.has(node.type) && node.params.mode !== 'code' ? { canOpen: true, openLabel: 'Edit its function graph' } : {}),
                 searchText: `${kindTitle} ${def?.category ?? ''}`,
             };

@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { BrushIcon, BucketIcon, CompareIcon, EraserIcon, EyedropperIcon, FrameIcon, ImageIcon, RedoIcon, ScissorsIcon, SelectBoxIcon, SplineIcon, UndoIcon, WarningIcon } from '../../UI/Icons';
 import { DecalPanel } from './DecalPanel';
+import { createPhotoMaterial, isPhotoFile } from './photoImport';
+import { graphMaterialLayer } from '../../../texturing/paint/smartLibrary';
 import { brushAlpha } from './brushAlpha';
 import { graphStamps } from '../../../texturing/paint/graphStamps';
 import { PaintView2D, type View2DCommands } from './PaintView2D';
@@ -349,7 +351,23 @@ export const PaintWorkspace: React.FC = () => {
     ], [document, layer]);
 
     return (
-        <div className="flex h-full min-h-0 w-full bg-zinc-950 text-white">
+        <div className="flex h-full min-h-0 w-full bg-zinc-950 text-white"
+            onDragOver={(event) => { if (session && event.dataTransfer.types.includes('Files')) { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; } }}
+            onDrop={(event) => {
+                // A photo dropped on Paint becomes a material, laid on the set as a fill layer of it.
+                const photo = Array.from(event.dataTransfer.files).find(isPhotoFile);
+                if (!photo || !session) return;
+                event.preventDefault();
+                setMessage(`Making a material from ${photo.name}…`);
+                void createPhotoMaterial(photo, textureStore.store).then((asset) => {
+                    const graph = asset.textureGraph ? readStoredGraph(asset.textureGraph).graph : null;
+                    if (!graph) return;
+                    const layer = graphMaterialLayer(session.document, asset.id, asset.name, graph);
+                    session.change({ ...session.document, layers: [...session.document.layers, layer] }, `Add ${asset.name}`);
+                    setSelection({ layerId: layer.id, effectId: null });
+                    setMessage(`${asset.name}: made from the photo and laid on as a fill. Change its steps in the Materials tab.`);
+                }, (error: unknown) => setMessage(error instanceof Error ? error.message : 'The photo could not be made into a material.'));
+            }}>
             <aside className="flex shrink-0 flex-col border-r border-zinc-800" style={{ width: sets.width }}>
                 <div className="space-y-1.5 border-b border-zinc-800 p-2">
                     <div className="text-xs font-semibold text-zinc-300">Model</div>

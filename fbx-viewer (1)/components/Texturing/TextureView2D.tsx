@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import * as THREE from 'three';
-import { CompareIcon, CrossIcon, FrameIcon, InfoIcon, PinIcon, PulseIcon, SunDimIcon, SunIcon, TilesIcon } from '../UI/Icons';
+import { CompareIcon, CrossIcon, FrameIcon, InfoIcon, PauseIcon, PinIcon, PlayIcon, PulseIcon, SunDimIcon, SunIcon, TilesIcon } from '../UI/Icons';
 import type { GpuImage } from '../../texturing/gpu/textureGpu';
 import { hash2 } from '../../texturing/graph/scatter';
 import { isParamLink, type TexGraphNode } from '../../texturing/graph/types';
@@ -19,7 +19,8 @@ import {
  * to check it tiles, as all channels or one at a time, brighter or darker by its exposure, or lit as
  * a normal map. The pixel under the pointer shows with its values; colour pins keep showing theirs.
  * The histogram picks out a range of values in the image; holding a node as A compares it with the
- * one shown, either side of a wipe. Transform, Tile sampler, Linear gradient, Shape and Clone nodes get
+ * one shown, either side of a wipe. An animated graph plays round its loop, or is dragged through it.
+ * Transform, Tile sampler, Linear gradient, Shape and Clone nodes get
  * handles to drag on the image; nodes with points (the spline nodes) get one on each, a click on the
  * image adds a point and an Alt-click on one takes it away. A setting's eyedropper picks a colour here with a click, or a
  * gradient along a dragged line.
@@ -224,6 +225,9 @@ export const TextureView2D: React.FC<{
     const nextPin = useRef(1);
 
     const image: GpuImage | null = nodeId ? session.imageOf(nodeId, output) : null;
+    // An animated graph gets a play button and its loop's time to drag through.
+    const animated = session.animates();
+    const loop = session.loop();
     const state = nodeId ? session.state(nodeId) : undefined;
     const other: GpuImage | null = compare && compare.nodeId !== nodeId ? session.imageOf(compare.nodeId, compare.output) : null;
     const ratio = typeof window === 'undefined' ? 1 : window.devicePixelRatio || 1;
@@ -566,6 +570,16 @@ export const TextureView2D: React.FC<{
                     <span className="w-7 text-right font-mono text-ink-2">{exposure > 0 ? '+' : ''}{exposure.toFixed(1)}</span>
                 </label>
             </div>
+            {animated && (
+                <div className="flex items-center gap-1.5 border-b border-line px-1.5 py-0.5">
+                    <IconButton label={session.playing ? 'Stop the animation' : 'Play the animation round its loop'} active={session.playing} onClick={() => session.play(!session.playing)}>
+                        {session.playing ? <PauseIcon size={13} /> : <PlayIcon size={13} />}
+                    </IconButton>
+                    <input type="range" min={0} max={loop} step={loop / 480} value={session.time} aria-label="Time in the loop"
+                        title="The graph's time: drag to see any moment of its loop" onChange={(event) => session.setTime(Number(event.target.value))} className="min-w-0 flex-1 accent-accent" />
+                    <span className="shrink-0 font-mono text-2xs text-ink-2">{session.time.toFixed(2)} of {Number(loop.toFixed(2))} s</span>
+                </div>
+            )}
             <div
                 ref={host}
                 className={`relative min-h-0 flex-1 ${cursor}`}

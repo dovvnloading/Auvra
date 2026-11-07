@@ -1,6 +1,7 @@
 import type * as THREE from 'three';
 import type { MaterialAsset, MaterialBinding } from './materialLibrary';
 import type { TextureSettings } from '../../texturing/textureSettings';
+import { cookTimeStep, readAnimation, untilNextStep } from '../../texturing/graph/animation';
 
 /**
  * COOKED PICTURES: TEXTURE GRAPHS RUN BY THE GAME
@@ -16,6 +17,10 @@ import type { TextureSettings } from '../../texturing/textureSettings';
  * behind what the game draws. A use whose values change keeps showing what it showed until the new set's textures are
  * loaded, so it is never drawn bare; with nothing cooked yet (or if cooking fails) it draws with the baked pictures.
  * Sets no use wears are kept a while, so values set again (a blueprint going round) show at once. Whether a game cooks at all is its setting: always, when the device can, or never.
+ *
+ * An animated graph set to be cooked as it plays is cooked again at its rate: each use asks for the time step it is
+ * at, and is drawn again at the next one, so the sets for every step of its loop are cooked once and then come round
+ * from the cache. One played as a flipbook is cooked once, its frames laid out as its baked pictures are.
  */
 
 /** The parameter a use sets to give its texture graph a seed of its own. */
@@ -33,6 +38,8 @@ export interface CookRequest {
     values: Readonly<Record<string, unknown>>;
     seed?: number;
     sizeLog2?: number;
+    /** Seconds into an animated graph's loop (a graph cooked as it plays). */
+    time?: number;
 }
 
 export interface Cooker {
@@ -63,24 +70,34 @@ export const cookable = (asset: MaterialAsset): boolean => {
 export const graphParameterNames = (asset: MaterialAsset): string[] =>
     (storedOf(asset)?.graph?.parameters ?? []).map(parameter => parameter.name).filter((name): name is string => typeof name === 'string' && name.length > 0);
 
+/** An animated graph's loop and cooks a second, when the game cooks it again as it plays; null otherwise. */
+export const cookAnimation = (asset: MaterialAsset): { loop: number; rate: number } | null => {
+    const raw = storedOf(asset)?.graph?.animation;
+    if (!raw || typeof raw !== 'object') return null;
+    const animation = readAnimation(raw);
+    return animation.play === 'cook' ? { loop: animation.loop, rate: animation.rate } : null;
+};
+
 /** The baked pictures' size (log2), which cooking takes unless the level of detail asks for another. */
 export const bakedSizeLog2 = (asset: MaterialAsset): number => {
     const size = storedOf(asset)?.bakeSize;
     return typeof size === 'number' && Number.isInteger(size) && size >= 4 && size <= 13 ? size : 10;
 };
 
-/** What a use asks to have cooked, from its parameter values (a binding's): its graph values, seed and size. */
-export const cookRequestFor = (asset: MaterialAsset, parameters: Readonly<Record<string, unknown>> | undefined): CookRequest => {
+/** What a use asks to have cooked, from its parameter values (a binding's): its graph values, seed and size, and (cooked as it plays) its time step at `now`. */
+export const cookRequestFor = (asset: MaterialAsset, parameters: Readonly<Record<string, unknown>> | undefined, now?: number): CookRequest => {
     const names = new Set(graphParameterNames(asset));
     const values: Record<string, unknown> = { ...(storedOf(asset)?.values ?? {}) };
     for (const [name, value] of Object.entries(parameters ?? {})) if (names.has(name)) values[name] = value;
     const seed = parameters?.[GRAPH_SEED];
     const size = parameters?.[PICTURE_SIZE];
+    const animation = cookAnimation(asset);
     return {
         asset,
         values,
         ...(typeof seed === 'number' && Number.isFinite(seed) ? { seed: Math.round(seed) } : {}),
         ...(typeof size === 'number' && Number.isInteger(size) ? { sizeLog2: Math.max(4, Math.min(bakedSizeLog2(asset), size)) } : {}),
+        ...(animation && now !== undefined ? { time: cookTimeStep(now, animation.loop, animation.rate) } : {}),
     };
 };
 
@@ -105,7 +122,8 @@ const sorted = (value: unknown): unknown => {
  * the seed and the size. Anything that changes the pictures changes it.
  */
 export const cookSignature = (request: CookRequest, content: (asset: MaterialAsset) => string = (asset) => JSON.stringify(sorted(storedOf(asset)?.graph ?? null))): string => {
-    const text = JSON.stringify([content(request.asset), sorted(request.values), request.seed ?? null, request.sizeLog2 ?? bakedSizeLog2(request.asset)]);
+    // A time step joins the signature only when there is one, so a graph that does not animate keeps its old signature.
+    const text = JSON.stringify([content(request.asset), sorted(request.values), request.seed ?? null, request.sizeLog2 ?? bakedSizeLog2(request.asset), ...(request.time !== undefined ? [request.time] : [])]);
     return `cook1-${fnv(text, 0x811c9dc5)}${fnv(text, 0x01000193)}`;
 };
 
@@ -135,15 +153,18 @@ const ROLE_SLOTS: Record<CookedRole, 'map' | 'normal' | 'data'> = {
     baseColor: 'map', emissive: 'map', normal: 'normal', orm: 'data', opacity: 'data', height: 'data', roughness: 'data', metallic: 'data', ambientOcclusion: 'data',
 };
 
-/** The settings a cooked picture is read with: its role, kept whole (it is made at the size it shows at), no larger than `sizeLog2`. */
-export const cookedPictureSettings = (role: CookedRole, sizeLog2: number | undefined): TextureSettings => ({
+/**
+ * The settings a cooked picture is read with: its role, no larger than `sizeLog2`, and kept whole (quick to show) or
+ * compressed by role for the GPU (what it moves to once shown).
+ */
+export const cookedPictureSettings = (role: CookedRole, sizeLog2: number | undefined, compressed = false): TextureSettings => ({
     ...(ROLE_SLOTS[role] === 'normal' ? { normalMap: true } : { colorSpace: ROLE_SLOTS[role] === 'map' ? 'colour' as const : 'data' as const }),
-    compression: 'none',
+    compression: compressed ? 'auto' : 'none',
     ...(sizeLog2 !== undefined ? { maxSize: 2 ** Math.max(8, sizeLog2) } : {}),
 });
 
-/** The texture id a cooked picture is read by, at a size (the whole cook's when undefined). */
-export const cookedTextureId = (key: string, role: CookedRole, sizeLog2?: number): string => `cooked:${key}@${sizeLog2 ?? 'full'}:${role}`;
+/** The texture id a cooked picture is read by, at a size (the whole cook's when undefined), whole or compressed. */
+export const cookedTextureId = (key: string, role: CookedRole, sizeLog2?: number, compressed = false): string => `cooked:${key}@${sizeLog2 ?? 'full'}${compressed ? '#c' : ''}:${role}`;
 
 /** A cooked set's pictures (its files), one for each look of its values and seed. */
 interface CookedSet {
@@ -157,6 +178,7 @@ interface CookedSet {
 interface Variant {
     key: string;
     sizeLog2: number | undefined;
+    compressed: boolean;
     ids: Partial<Record<CookedRole, string>>;
     ready: boolean;
     users: Set<THREE.Material>;
@@ -178,6 +200,8 @@ export class MaterialCookPlanner {
     private spare: string[] = [];
     /** Variants whose textures are loading. */
     private readonly preparing = new Set<string>();
+    /** Assets cooked as they play with their next step's redraw already asked for. */
+    private readonly stepping = new Set<string>();
     private running = false;
     private scheduled = false;
     /** Cooked sets made (counted for tests and the editor's notes). */
@@ -196,6 +220,12 @@ export class MaterialCookPlanner {
             onFailure?: (error: unknown) => void;
             /** Records how a texture id is read (texturing/textureSettings.ts in the game). */
             setSettings?: (textureId: string, settings: TextureSettings) => void;
+            /** Once a set shows, moves it to pictures compressed for the GPU (the game's Texture compression). */
+            compress?: boolean;
+            /** Seconds of the game's time, which animated graphs cooked as they play follow. */
+            clock?: () => number;
+            /** Runs a task after `ms` milliseconds (the next cook step). */
+            later?: (ms: number, task: () => void) => void;
         } = {},
     ) {}
 
@@ -209,15 +239,24 @@ export class MaterialCookPlanner {
             this.release(material);
             return undefined;
         }
-        const request = cookRequestFor(asset, binding.parameters as Record<string, unknown> | undefined);
+        const request = cookRequestFor(asset, binding.parameters as Record<string, unknown> | undefined, (this.options.clock ?? (() => performance.now() / 1000))());
+        if (request.time !== undefined) this.nextStep(asset);
         // The cook itself never depends on the size it is shown at: every size reads the same pictures, as the editor's.
         const key = cookSignature({ ...request, sizeLog2: undefined }, this.options.content);
         const variantKey = `${key}@${request.sizeLog2 ?? 'full'}`;
         this.wanted.set(material, variantKey);
         this.flips.set(material, binding.flipY !== false);
+        // Compressed for the GPU once made (loaded behind the whole one, so the move never draws it bare).
+        const compressedKey = `${variantKey}#c`;
+        const compressed = this.variants.get(compressedKey);
+        if (compressed?.ready) {
+            this.show(material, compressedKey);
+            return this.withCooked(asset, compressed);
+        }
         const variant = this.variants.get(variantKey);
         if (variant?.ready) {
             this.show(material, variantKey);
+            if (this.options.compress) this.prepare(compressedKey, key, request.sizeLog2, true);
             return this.withCooked(asset, variant);
         }
         if (this.sets.has(key)) this.prepare(variantKey, key, request.sizeLog2);
@@ -229,6 +268,19 @@ export class MaterialCookPlanner {
         const before = this.shown.get(material);
         const showing = before ? this.variants.get(before) : undefined;
         return showing?.ready && this.sets.get(showing.key)?.assetId === asset.id ? this.withCooked(asset, showing) : undefined;
+    }
+
+    /** An animated graph cooked as it plays: its uses are drawn again at its next time step, which asks for that step's set. */
+    private nextStep(asset: MaterialAsset): void {
+        const animation = cookAnimation(asset);
+        if (!animation || this.stepping.has(asset.id)) return;
+        this.stepping.add(asset.id);
+        const now = (this.options.clock ?? (() => performance.now() / 1000))();
+        const wait = Math.max(1, Math.ceil(untilNextStep(now, animation.loop, animation.rate) * 1000) + 1);
+        (this.options.later ?? ((ms: number, task: () => void) => { setTimeout(task, ms); }))(wait, () => {
+            this.stepping.delete(asset.id);
+            this.host.rebindAsset(asset.id);
+        });
     }
 
     /** A use no longer draws with the asset: what it showed is kept a while, then let go of. */
@@ -295,19 +347,20 @@ export class MaterialCookPlanner {
     }
 
     /** A cooked set read at a size: its texture ids, loaded before anything draws with them. */
-    private prepare(variantKey: string, key: string, sizeLog2: number | undefined): void {
+    private prepare(variantKey: string, key: string, sizeLog2: number | undefined, compressed = false): void {
         if (this.variants.has(variantKey) || this.preparing.has(variantKey)) return;
         const set = this.sets.get(key);
         if (!set) return;
-        const variant: Variant = { key, sizeLog2, ids: {}, ready: false, users: new Set() };
+        const variant: Variant = { key, sizeLog2, compressed, ids: {}, ready: false, users: new Set() };
         this.variants.set(variantKey, variant);
         set.variants.add(variantKey);
         this.preparing.add(variantKey);
         const loads: Array<Promise<void>> = [];
-        const flips = new Set([...this.wanted].filter(([, wanted]) => wanted === variantKey).map(([material]) => this.flips.get(material) ?? true));
+        const base = compressed ? variantKey.slice(0, -2) : variantKey;
+        const flips = new Set([...this.wanted].filter(([, wanted]) => wanted === base).map(([material]) => this.flips.get(material) ?? true));
         for (const [role, url] of Object.entries(set.urls) as Array<[CookedRole, string]>) {
-            const id = cookedTextureId(key, role, sizeLog2);
-            this.options.setSettings?.(id, cookedPictureSettings(role, sizeLog2));
+            const id = cookedTextureId(key, role, sizeLog2, compressed);
+            this.options.setSettings?.(id, cookedPictureSettings(role, sizeLog2, compressed));
             this.host.addTextureUrl(id, url);
             variant.ids[role] = id;
             for (const flipY of flips.size ? flips : [true]) if (this.host.preloadTexture) loads.push(this.host.preloadTexture(id, ROLE_SLOTS[role], flipY));
@@ -317,7 +370,7 @@ export class MaterialCookPlanner {
             if (this.variants.get(variantKey) !== variant) return;
             variant.ready = true;
             // Nobody asks for it any more: kept spare.
-            if (![...this.wanted.values()].includes(variantKey) && !variant.users.size) this.keepSpare(variantKey);
+            if (![...this.wanted.values()].includes(base) && !variant.users.size) this.keepSpare(variantKey);
             this.host.rebindAsset(set.assetId);
         });
     }

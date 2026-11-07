@@ -32,7 +32,7 @@ import { applyLayout, decodeLayout } from '../texturing/uv/uvLayout';
 import { setLightVolumeSource } from '../runtime/lighting/lightVolumeLoader';
 import { setUpMaterialCooking } from '../runtime/materials/materialCookingSetup';
 import { PHONE_SUPPORTS, normalizeTextureSettings, setTextureSettings, setTextureSourceAsset, textureSettingsOf } from '../texturing/textureSettings';
-import { createMaterialTextureLoader, setProjectTextureLoader, type CompressedTextureCache } from '../texturing/materialTextureLoader';
+import { createMaterialTextureLoader, setProjectCompressedCache, setProjectTextureLoader, type CompressedTextureCache } from '../texturing/materialTextureLoader';
 
 /** The HUD document in the project 'hud' domain. */
 export const HUD_DOCUMENT_ID = 'hud-main';
@@ -327,11 +327,13 @@ export function createGameContentLoader(
       };
       // Where compressed textures can be kept (the editor), their phone versions are kept too, for built games.
       projectTextureLoader = createMaterialTextureLoader({ compress: compressTextures, cache, ...(options.keepCompressedTexture ? { alsoKeepFor: PHONE_SUPPORTS } : {}) });
+      // Terrain arrays keep their compressed slices there too (terrainLayerTextures.ts).
+      setProjectCompressedCache(compressTextures ? cache : null);
       setProjectTextureLoader(projectTextureLoader);
       materialLibrary.setTextureSource((textureId) => textureAssetUrls.get(textureId), projectTextureLoader);
       materialLibrary.replaceAll(documents(MATERIALS_DOMAIN).map(readMaterialAsset).filter((asset): asset is MaterialAsset => asset !== null));
       // Texture-graph materials may draw with pictures cooked from their graphs, each use with its own values (its setting).
-      setUpMaterialCooking(normalizeGameSettings(documents('metadata').find((doc) => doc?.id === GAME_SETTINGS_DOCUMENT_ID)?.settings).quality.textureGraphCooking);
+      setUpMaterialCooking(normalizeGameSettings(documents('metadata').find((doc) => doc?.id === GAME_SETTINGS_DOCUMENT_ID)?.settings).quality.textureGraphCooking, compressTextures);
       // Levels' baked light volumes are read when a level is shown.
       setLightVolumeSource((assetId) => resolveAssetUrl(assetId), releaseAssetUrl);
     }
