@@ -9,7 +9,8 @@ import type { GraphParameter, GraphParameterGroup, TexGraphLink, TexGraphNode, T
  * removal), its colours evened out (Colour equalizer). Height comes from the photo's brightness (turned
  * over when its bright parts are the low ones: Invert height): a smoothed, large-scale height gives the
  * occlusion and shading lighting removal takes out (soft, mostly near white, so dividing by it never
- * blows the colour out), and that height with its fine detail laid over gives the normal and the height.
+ * blows the colour out), and that height with its fine detail laid over gives the height and, lightly
+ * smoothed so the photo's grain from pixel to pixel doesn't make it glitter, the normal.
  * Roughness comes from a curve of height and colour, squeezed to a range; metallic where the colour is
  * near a chosen one (none unless set). A Strength row of the graph's parameters sets how wide the tiling
  * joins may wander, how much lighting is taken out, how deep the height reads, which way it runs and the
@@ -92,8 +93,13 @@ export const photoMaterialGraph = (textureId: string, size = 10, options: { inve
     wire(smooth, delit, 'height');
     const colour = add('colourEqualizer', 1680, 120, {}, 'Colour evened out');
     wire(delit, colour);
-    const normal = add('normalFromHeight', 1440, 440, { intensity: formula('depth * 16') }, 'Normal');
-    wire(height, normal);
+    // The normal reads the detailed height lightly smoothed: brick-sized shapes and some grain, not the
+    // photo's noise from pixel to pixel, which would make it glitter. Slopes are per metre of the graph's
+    // size in the world, so a strength of a few gives gentle bumps.
+    const smoothed = add('blur', 1440, 440, { radius: 0.006 }, 'Smoothed height');
+    wire(height, smoothed);
+    const normal = add('normalFromHeight', 1680, 440, { intensity: formula('depth * 6') }, 'Normal');
+    wire(smoothed, normal);
     // Roughness: a curve of the height and the colour's brightness, squeezed to its range.
     const tone = add('grayscale', 1920, 300, { mode: 'luminance' }, 'Colour brightness');
     wire(colour, tone);

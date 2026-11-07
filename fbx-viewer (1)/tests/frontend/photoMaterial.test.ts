@@ -17,12 +17,14 @@ describe('photo to material', () => {
         }
         // An output for every channel a material draws with.
         expect(graph.nodes.filter((node) => node.type === 'output').map((node) => node.params.channel).sort()).toEqual(['ambientOcclusion', 'baseColor', 'height', 'metallic', 'normal', 'roughness']);
-        // Occlusion and the shading taken out come from the smoothed height; the normal and the height output from the detailed one.
+        // Occlusion and the shading taken out come from the large-scale height; the height output from the detailed one, and
+        // the normal from the detailed one lightly smoothed.
         const named = (name: string) => graph.nodes.find((node) => node.name === name)!;
         const into = (node: { id: string }, input = 'in') => graph.nodes.find((each) => each.id === graph.links.find((link) => link.to === node.id && link.toInput === input)?.from)?.name;
         expect(into(named('Occlusion'))).toBe('Large-scale height');
         expect(into(named('Lighting removed'), 'height')).toBe('Large-scale height');
-        expect(into(named('Normal'))).toBe('Height');
+        expect(into(named('Normal'))).toBe('Smoothed height');
+        expect(into(named('Smoothed height'))).toBe('Height');
         expect(into(graph.nodes.find((node) => node.type === 'output' && node.params.channel === 'height')!)).toBe('Height');
         // Read back as the graph editor reads it, nothing is lost.
         const back = readTextureGraph(JSON.parse(JSON.stringify(graph)));
@@ -47,7 +49,8 @@ describe('photo to material', () => {
         expect(settings('makeTile').width).toBe(0.3);
         // Half as much occlusion as shading is taken out: the occlusion is a soft one.
         expect(settings('lightingRemoval')).toMatchObject({ occlusionAmount: 0.25, shadingAmount: 0.5, depth: expect.closeTo(0.03, 6) });
-        expect(settings('normalFromHeight').intensity).toBeCloseTo(8);
+        // A strength of a few: slopes are per metre of the graph's size in the world.
+        expect(settings('normalFromHeight').intensity).toBeCloseTo(3);
         expect(graph.nodes.filter((node) => node.type === 'levels').map((node) => resolveNodeParams(textureNodeDefinition(node, () => undefined)!, node, values, scope)).map((resolved) => [resolved.outLow, resolved.outHigh])).toEqual([[1, 0], [0.2, 0.9]]);
         expect(settings('colorToMask')).toMatchObject({ color: [1, 0.8, 0.2, 1], range: 0.25 });
     });
