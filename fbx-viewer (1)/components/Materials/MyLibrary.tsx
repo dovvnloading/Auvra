@@ -7,6 +7,7 @@ import { useNotification } from '../../context/NotificationContext';
 import { frontendDiagnostics } from '../../diagnostics/runtime';
 import { materialLibrary, type MaterialAsset } from '../../runtime/materials/materialLibrary';
 import { textureSettingsOf } from '../../texturing/textureSettings';
+import { readProjectPictures } from '../../utils/projectPictures';
 import { projectService } from '../../utils/projectService';
 import {
     filterLibrary, libraryFolders, libraryMaterial, libraryNodeGraphs, libraryTags, userMaterialLibrary,
@@ -105,6 +106,7 @@ export const useAddToLibrary = () => {
                 textures,
                 settingsOf: textureSettingsOf,
                 read: async (url) => (await fetch(url)).blob(),
+                unlisted: readProjectPictures,
                 materialOf: (id) => materialLibrary.get(id),
             }, renderMaterialBall);
             addNotification({ message: updated ? `"${asset.name}" is updated in your library.` : `"${asset.name}" is in your library, for every project.`, type: 'success' });

@@ -10,6 +10,7 @@ import { download } from '../../texturing/zip';
 import {
     MaterialPackageError, PACKAGE_EXTENSION, packageFileStem, packageFromLibrary, packageFromProject, packageIntoLibrary, readMaterialPackage, writeMaterialPackage,
 } from '../../utils/materialPackage';
+import { readProjectPictures } from '../../utils/projectPictures';
 import { projectService } from '../../utils/projectService';
 import { userMaterialLibrary, type LibraryEntry } from '../../utils/userMaterialLibrary';
 import { bringMaterialIn } from '../../utils/userMaterialLibraryActions';
@@ -37,6 +38,7 @@ export const MaterialPackageExportButton: React.FC<{ asset: MaterialAsset }> = (
                 textures,
                 settingsOf: textureSettingsOf,
                 read: async (url) => (await fetch(url)).blob(),
+                unlisted: readProjectPictures,
                 materialOf: (id) => materialLibrary.get(id),
             }, renderMaterialBall);
             download(await writeMaterialPackage(pkg), `${packageFileStem(current.name)}${PACKAGE_EXTENSION}`);

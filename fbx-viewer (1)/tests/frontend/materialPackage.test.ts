@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { OUTPUT_NODE_TYPE, defaultParams, normalizeMaterialGraph } from '../../runtime/materials/materialGraph';
 import { cookable, graphParameterNames } from '../../runtime/materials/materialCooking';
-import { materialAssetDocument, type MaterialAsset } from '../../runtime/materials/materialLibrary';
+import { withMaterialPictures } from '../../runtime/materials/materialGraph';
+import { graphTextures, materialAssetDocument, type MaterialAsset } from '../../runtime/materials/materialLibrary';
+import { rewriteMaterialPictures } from '../../texturing/materialOutput';
 import { normalizeTextureGraph } from '../../texturing/graph/document';
 import { readStoredGraph, withParameterPictures, type StoredTextureGraph } from '../../texturing/graph/stored';
 import { makeZip, readZip } from '../../texturing/zip';
@@ -89,7 +91,78 @@ const projectB = () => {
 
 const nodesOf = (asset: MaterialAsset) => readStoredGraph(asset.textureGraph).graph.nodes;
 
+/**
+ * "Texture 2", as Update material leaves it: its four pictures made (named by role, and as what its graph last made)
+ * and a surface graph reading them, none of them loaded by the editor (no open level needed them). Its graph uses a
+ * graph for other graphs as a node, giving it a picture for that graph's picture parameter, and has a picture
+ * parameter of its own saved before the editor kept a record of them.
+ */
+const madePictures = { baseColor: 'baked-colour', normal: 'baked-normal', orm: 'baked-orm', height: 'baked-height' };
+const stainGraph = (): MaterialAsset => ({
+    id: 'fn-stain',
+    name: 'Stain',
+    graph: shaderGraph(),
+    textureGraph: { library: true, graph: normalizeTextureGraph({ version: 1, size: { w: 8, h: 8 }, seed: 0, links: [], nodes: [], parameters: [{ name: 'stain', label: 'Stain', kind: 'texture', default: '' }] }) },
+});
+const texture2 = (): MaterialAsset => {
+    const surface = rewriteMaterialPictures({ graph: shaderGraph() }, madePictures);
+    return {
+        id: 'texture-2',
+        name: 'Texture 2',
+        graph: surface.graph,
+        pictures: surface.pictures,
+        textureGraph: {
+            graph: normalizeTextureGraph({
+                version: 1, size: { w: 9, h: 9 }, seed: 0, links: [],
+                parameters: [{ name: 'decal', label: 'Decal', kind: 'texture', default: 'tex-decal' }],
+                nodes: [{ id: 'stained', type: 'subgraph', x: 0, y: 0, params: { graph: 'fn-stain', stain: 'tex-stain' } }],
+            }),
+            values: {},
+            bakeSize: 10,
+            layout: 'engine',
+            baked: { textures: madePictures, signature: 'sig', size: 10, at: 5 },
+        },
+    };
+};
+
 describe('Material packages (.auvramat)', () => {
+    it('carry every picture a material names, loaded or not, and the material comes in drawing with them', async () => {
+        const project = new Map([texture2(), stainGraph()].map((asset) => [asset.id, asset]));
+        const asked: string[][] = [];
+        const pkg = await packageFromProject(texture2(), {
+            // Only the stain picture is loaded; the rest are read from the project.
+            textures: [{ id: 'tex-stain', name: 'stain.png', url: 'blob:stain', dimensions: { width: 128, height: 128 } }],
+            settingsOf: () => undefined,
+            read: async (url) => new Blob([`bytes of ${url}`], { type: 'image/png' }),
+            unlisted: async (ids) => {
+                asked.push([...ids]);
+                return ids.filter((id) => id !== 'nowhere').map((id) => ({ id, name: `${id}.png`, file: new Blob([`stored ${id}`], { type: 'image/png' }), dimensions: { width: 1024, height: 1024 } }));
+            },
+            materialOf: (id) => project.get(id),
+        });
+        expect(asked.map((ids) => [...ids].sort())).toEqual([['baked-colour', 'baked-height', 'baked-normal', 'baked-orm', 'tex-decal']]);
+        const read = await readMaterialPackage(await writeMaterialPackage(pkg));
+        expect(read.pictures.map((picture) => picture.id).sort()).toEqual(['baked-colour', 'baked-height', 'baked-normal', 'baked-orm', 'tex-decal', 'tex-stain']);
+        expect(await read.pictures.find((picture) => picture.id === 'baked-normal')!.file.text()).toBe('stored baked-normal');
+
+        const { target, saved, added } = projectB();
+        const asset = await bringMaterialIn(read, target);
+        const newIds = new Set(added.map((each) => `b-${each.picture.id}`));
+        expect(newIds.size).toBe(6);
+        // It draws with the pictures it brought: its surface graph reads its pictures by name, each now the project's own.
+        expect(asset.pictures).toEqual({ baseColor: 'b-baked-colour', normal: 'b-baked-normal', orm: 'b-baked-orm', height: 'b-baked-height' });
+        const drawn = graphTextures(withMaterialPictures(asset.graph, asset.pictures)).map((texture) => texture.textureId);
+        expect([...new Set(drawn)].sort()).toEqual(['b-baked-colour', 'b-baked-height', 'b-baked-normal', 'b-baked-orm']);
+        expect(drawn.every((id) => newIds.has(id))).toBe(true);
+        // What its graph last made, its own picture parameter, and the picture it gives the graph it uses as a node.
+        const stored = readStoredGraph(asset.textureGraph);
+        expect(stored.baked?.textures).toEqual({ baseColor: 'b-baked-colour', normal: 'b-baked-normal', orm: 'b-baked-orm', height: 'b-baked-height' });
+        expect(stored.graph.parameters[0].default).toBe('b-tex-decal');
+        expect(stored.graph.nodes[0].params).toMatchObject({ graph: saved[0].id, stain: 'b-tex-stain' });
+        // Nothing still names a picture of the project it came from.
+        expect(JSON.stringify([asset, ...saved])).not.toMatch(/"(?:baked|tex)-/);
+    });
+
     it('writes a texture graph with its parameters, presets, pictures and node graphs, and reads the same back', async () => {
         const pkg = await packageFromProject(paintedPlanks(), projectPictures, async () => ball);
         expect(pkg.nodeGraphs.map(graph => graph.id)).toEqual(['fn-mask']);
