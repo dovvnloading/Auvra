@@ -10,7 +10,7 @@ import { textureGpu, type TextureGpu } from '../../../texturing/gpu/textureGpu';
 import type { GraphEntry, GraphResolver } from '../../../texturing/graph/registry';
 import { readStoredGraph } from '../../../texturing/graph/stored';
 import { buildHighPoly, buildPartMesh, buildWholeMesh, type PartMesh } from '../../../texturing/mesh/partMesh';
-import { meshCage } from '../../../texturing/bake/bakeSetup';
+import { averagedNormals, meshCage } from '../../../texturing/bake/bakeSetup';
 import type { SurfacePicker } from '../../../texturing/mesh/picker';
 import { SurfaceSelector } from '../../../texturing/paint/selection';
 import { DEEP_EXPORT, ROLE_LABELS, encodeChannels, materialGraphForTextures, tileAtlas, type ChannelTextureIds, type PictureLayout } from '../../../texturing/materialOutput';
@@ -124,6 +124,14 @@ export class PaintSession {
     private picks: SurfaceSelector | null = null;
 
     /** Finds the triangles a polygon pick takes in (its quads and loops worked out the first time). */
+    private averaged: Float32Array | null = null;
+
+    /** Normals averaged across hard edges, per vertex (the way bake rays leave), worked out the first time. */
+    get averagedNormals(): Float32Array {
+        if (!this.averaged) this.averaged = averagedNormals(this.part.positions, this.part.indices);
+        return this.averaged;
+    }
+
     get selector(): SurfaceSelector {
         if (!this.picks) this.picks = new SurfaceSelector(this.part);
         return this.picks;

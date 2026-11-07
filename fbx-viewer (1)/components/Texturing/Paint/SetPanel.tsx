@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { CheckCircleIcon, DownloadIcon, FlameIcon, RefreshIcon } from '../../UI/Icons';
 import type * as THREE from 'three';
 import { BAKE_VERSION, DEFAULT_BAKE_SETTINGS, EXTRA_MAPS, EXTRA_MAP_LABELS, bakeStrips, type BakeSettings } from '../../../texturing/bake/meshBaker';
@@ -23,11 +23,16 @@ export const SetPanel: React.FC<{
     models: ReadonlyArray<{ id: string; name: string; object: THREE.Object3D }>;
     /** Opens the set again (after its picture size changed). */
     onReopen: () => void;
-}> = ({ session, models, onReopen }) => {
+    /** Shows (or, with null, stops showing) the bake rays at spots clicked on the model, for these settings. */
+    onShowRays?: (settings: BakeSettings | null) => void;
+    showingRays?: boolean;
+}> = ({ session, models, onReopen, onShowRays, showingRays = false }) => {
     const document = session.document;
     // The bake's own size starts at the set's (and can be larger, for detail averaged down).
     const [settings, setSettings] = useState<BakeSettings>(() => ({ ...DEFAULT_BAKE_SETTINGS, size: document.size, ...(document.bake?.settings ?? {}) }));
     const [cageModel, setCageModel] = useState('');
+    // The rays shown follow the settings as they change.
+    useEffect(() => { if (showingRays) onShowRays?.(settings); }, [settings]); // eslint-disable-line react-hooks/exhaustive-deps
     const [highPoly, setHighPoly] = useState('');
     const [layout, setLayout] = useState<PictureLayout>('separate');
     const [convention, setConvention] = useState<'bottom' | 'top'>('bottom');
@@ -141,6 +146,12 @@ export const SetPanel: React.FC<{
                         </label>
                     ))}
                 </div>
+                {onShowRays && (
+                    <label className="flex items-center gap-1.5 text-2xs text-zinc-300">
+                        <input type="checkbox" className="accent-sky-500" checked={showingRays} onChange={(event) => onShowRays(event.target.checked ? settings : null)} />
+                        Show the bake rays where I click the model
+                    </label>
+                )}
                 {busy && session.busy && session.progress > 0 ? (
                     <div className="space-y-1">
                         <div className="h-1.5 overflow-hidden rounded bg-zinc-800"><div className="h-full bg-sky-500 transition-all" style={{ width: `${Math.round(session.progress * 100)}%` }} /></div>

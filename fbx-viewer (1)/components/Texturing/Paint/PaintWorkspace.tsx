@@ -6,7 +6,7 @@ import { frontendDiagnostics } from '../../../diagnostics/runtime';
 import { materialLibrary } from '../../../runtime/materials/materialLibrary';
 import { overrideTextureFlipY } from '../../../utils/materialOverrides';
 import { MESH_MAP_LABELS, MESH_MAPS } from '../../../texturing/graph/nodes/io';
-import { EXTRA_MAPS, EXTRA_MAP_LABELS } from '../../../texturing/bake/meshBaker';
+import { EXTRA_MAPS, EXTRA_MAP_LABELS, type BakeSettings } from '../../../texturing/bake/meshBaker';
 import { readStoredGraph } from '../../../texturing/graph/stored';
 import { CHANNEL_LABELS, allLayers, mapLayer, paintId, readPaintDocument, type MaskEffect } from '../../../texturing/paint/paintTypes';
 import type { SurfacePath } from '../../../texturing/paint/paths';
@@ -149,6 +149,7 @@ export const PaintWorkspace: React.FC = () => {
 
     const [tool, setTool] = useState<PaintTool>('paint');
     const [pickMode, setPickMode] = useState<PickMode>('quad');
+    const [raySettings, setRaySettings] = useState<BakeSettings | null>(null);
     const [brush, setBrushState] = useState<BrushSettings>(rememberedBrush);
     const setBrush = useCallback((next: BrushSettings) => { rememberedBrush = next; setBrushState(next); }, []);
     const [selection, setSelection] = useState<LayerSelection>({ layerId: null, effectId: null });
@@ -358,7 +359,7 @@ export const PaintWorkspace: React.FC = () => {
                         <PaintViewport session={session} tool={tool} brush={brush} target={target} view={view === 'uv2d' ? 'material' : view} maskImage={maskImage}
                             onBrushSize={(size) => setBrush({ ...brush, size })}
                             onPick={(color) => { setBrush({ ...brush, values: { ...brush.values, baseColor: color } }); setTool('paint'); }}
-                            onMessage={setMessage} frameSignal={frameSignal} uv={uv} pickMode={pickMode} onSurfacePick={onSurfacePick} picking={pickingParts}
+                            onMessage={setMessage} frameSignal={frameSignal} uv={uv} pickMode={pickMode} onSurfacePick={onSurfacePick} picking={pickingParts} bakeRays={raySettings}
                             pathEdit={tool === 'path' ? pathEdit : null} commands={viewportCommands} />
                     ) : (
                         <div className="flex flex-1 items-center justify-center text-xs text-zinc-500">
@@ -399,7 +400,7 @@ export const PaintWorkspace: React.FC = () => {
                         )}<BrushPanel brush={brush} onChange={setBrush} channels={session.document.channels} paintingMask={target?.kind === 'mask'} textures={textures} onPick={() => setTool('pick')}
                             paintWith={previewHost ? { sections: brushSections, host: previewHost, onPick: paintWith, onMessage: setMessage } : undefined} onMessage={setMessage} /></div>
                             : panel === 'uvs' && uv ? <div className="min-h-0 flex-1 overflow-y-auto"><UvPanel uv={uv} onSeamTool={() => setTool('seam')} onApplied={() => { if (!uv.proposal) { putOnAfterOpen.current = uv.putOnWhenOpen; setReopen((value) => value + 1); } }} /></div>
-                                : <div className="min-h-0 flex-1 overflow-y-auto"><SetPanel session={session} models={paintable} onReopen={() => setReopen((value) => value + 1)} /></div>
+                                : <div className="min-h-0 flex-1 overflow-y-auto"><SetPanel session={session} models={paintable} onReopen={() => setReopen((value) => value + 1)} onShowRays={setRaySettings} showingRays={Boolean(raySettings)} /></div>
                 ) : (
                     <p className="p-3 text-2xs text-zinc-500">Pick a texture set to see its layers.</p>
                 )}
