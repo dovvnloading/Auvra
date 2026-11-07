@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { CompressionBadge } from '../Materials/CompressionBadge';
 import { ArrowLeftIcon, CheckCircleIcon, ChevronRightIcon, DiceIcon, ExternalLinkIcon, FlowIcon, InfoIcon, LayersIcon, RefreshIcon, WarningIcon } from '../UI/Icons';
 import { useAssets } from '../../context/AssetContext';
 import { useScene } from '../../context/SceneContext';
@@ -1081,6 +1082,8 @@ const Workspace: React.FC<{
                 {baking ?? 'Update material'}
             </Button>
             {!hasOutputs && <p className="text-2xs text-ink-3">Add an Output node for a channel (base colour, normal...) to make a material.</p>}
+            {/* What its pictures cost as the game keeps them, and where compression hurts (components/Materials/CompressionBadge.tsx). */}
+            {stored.baked && <CompressionBadge asset={materialLibrary.get(asset.id) ?? asset} />}
             <div className="grid grid-cols-[1fr_auto] items-center gap-x-2 gap-y-1.5">
                 <span className="text-2xs text-ink-2">{graph.size.w === graph.size.h ? 'Picture size' : 'Picture size (longest side)'}</span>
                 <Select value={stored.bakeSize} options={PICTURE_SIZES} onChange={(value) => change({ bakeSize: Number(value) })} className="w-32" />
