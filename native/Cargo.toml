@@ -6,10 +6,10 @@ publish = false
 
 [dependencies]
 pollster = "=1.0.1"
-serde = { version = "=1.0.228", features = ["derive"] }
-serde_json = "=1.0.145"
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.154"
 wgpu = { version = "=30.0.1", default-features = true }
-winit = { version = "=0.30.12", features = ["rwh_06"] }
+winit = { version = "=0.30.13", features = ["rwh_06"] }
 
 [lints.clippy]
 # Shape, not mistakes: a math routine indexes by axis, and a GPU call takes what it takes.
