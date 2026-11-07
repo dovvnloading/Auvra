@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
-import { arrayLevels, compressTerrainArrays, sliceRgba, terrainArrayFormats } from '../../components/Environment/Terrain/terrainLayerTextures';
+import { arrayLevels, compressTerrainArrays, sliceRgba, terrainArrayFormats, terrainSliceKeeps } from '../../components/Environment/Terrain/terrainLayerTextures';
+import type { CompressedTextureCache } from '../../texturing/materialTextureLoader';
 import { PHONE_SUPPORTS } from '../../texturing/textureSettings';
 import { decodeLevel, encodeMaterialTexture } from '../../utils/textureCompression/materialTextureEncoder';
 
@@ -73,5 +74,39 @@ describe('terrain arrays compressed by role', () => {
         const phone = await compressTerrainArrays(arrays, LAYERS, SIZE, { albedo: 'astc', detail: 'astc', surface: 'astc' }, encode);
         expect(phone.albedo.format).toBe(THREE.RGBA_ASTC_4x4_Format);
         expect((phone.detail.mipmaps as unknown as Array<{ data: Uint8Array }>)[0].data.length).toBe(LAYERS * (SIZE / 4) * (SIZE / 4) * 16);
+    });
+
+    it('are kept in the project with their pictures, so a terrain loads them next time instead of compressing again', async () => {
+        const formats = { albedo: 'bc7', detail: 'bc5', surface: 'bc5' } as const;
+        const assets: Record<string, string> = { grass: 'a'.repeat(64), 'grass-n': 'b'.repeat(64), 'grass-h': 'c'.repeat(64), rock: 'd'.repeat(64) };
+        const keeps = terrainSliceKeeps([
+            { ids: { albedo: 'grass', normal: 'grass-n', height: 'grass-h' } },
+            { ids: { albedo: 'rock', normal: 'not-in-project' } },
+        ], formats, SIZE, (id) => assets[id]);
+        expect(keeps[0].albedo).toEqual({ textureId: 'grass', signature: `terrain1|albedo|bc7|${SIZE}|${'a'.repeat(64)}` });
+        expect(keeps[0].surface?.textureId).toBe('grass-h');
+        expect(keeps[0].surface?.signature).toContain('|-');
+        // A picture whose file the project does not know, or none at all, is not kept.
+        expect(keeps[1].detail).toBeNull();
+        expect(keeps[1].surface).toBeNull();
+
+        const kept = new Map<string, Uint8Array>();
+        const cache: CompressedTextureCache = { find: async (id, signature) => kept.get(`${id}#${signature}`) ?? null, keep: async (id, signature, packed) => { kept.set(`${id}#${signature}`, packed); } };
+        const arrays = {
+            albedo: array(4, THREE.SRGBColorSpace, (layer, x, y, c) => (c === 3 ? 255 : (x * 9 + y * 5 + layer * 30 + c * 40) & 255)),
+            detail: array(2, THREE.NoColorSpace, (_layer, x, y, c) => (c ? 120 + y : 120 + x)),
+            surface: array(2, THREE.NoColorSpace, (layer, x, y, c) => (c ? 200 - y : x * 10 + layer)),
+        };
+        let encoded = 0;
+        const counting = async (...args: Parameters<typeof encode>) => { encoded++; return encode(...args); };
+        await compressTerrainArrays(arrays, LAYERS, SIZE, formats, counting, { cache, keeps });
+        await Promise.resolve();
+        expect(encoded).toBe(6);
+        expect(kept.size).toBe(4);
+        // Again: what was kept loads, only the slices with nowhere to keep them compress.
+        encoded = 0;
+        const again = await compressTerrainArrays(arrays, LAYERS, SIZE, formats, counting, { cache, keeps });
+        expect(encoded).toBe(2);
+        expect(again.albedo.format).toBe(THREE.RGBA_BPTC_Format);
     });
 });

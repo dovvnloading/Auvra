@@ -129,6 +129,11 @@ export const textureFromCompressed = (picture: CompressedPicture, role: TextureR
 };
 
 let projectLoader: ((url: string, request?: MaterialTextureRequest) => Promise<THREE.Texture>) | null = null;
+let projectCache: CompressedTextureCache | null = null;
+
+/** The open project's store of compressed blocks (set as it loads), for what compresses outside material textures: terrain arrays. */
+export const setProjectCompressedCache = (cache: CompressedTextureCache | null): void => { projectCache = cache; };
+export const projectCompressedCache = (): CompressedTextureCache | null => projectCache;
 
 /** The open project's texture loader (set as it loads), for textures outside material assets: decals. */
 export const setProjectTextureLoader = (loader: typeof projectLoader): void => { projectLoader = loader; };
