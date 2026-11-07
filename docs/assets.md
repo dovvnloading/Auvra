@@ -204,10 +204,13 @@ The arrow button beside a material's name exports it as MaterialX: a .zip holdin
 Beyond base colour, metalness and roughness, the Material Output builds a surface up in layers, as glTF's physical materials do:
 
 - **Specular**: **Specular strength** and **Specular colour** weaken and tint the reflection of a surface that is not metal. **Index of refraction** sets how strongly it reflects (1.33 for water, 1.5 for glass and most plastics, 2.4 for diamond). **Anisotropy** stretches highlights along one direction, as on brushed metal, turned by **Anisotropy direction**.
-- **Coat**: a clear layer over the surface (car paint, lacquer, varnish) with its own **Coat roughness** and **Coat normal**.
+- **Coat**: a clear layer over the surface (car paint, lacquer, varnish) with its own **Coat roughness** and **Coat normal**. **Coat colour** tints what is seen through it, as a candy or tinted lacquer does; the coat's own reflection stays white. White is a clear coat.
+- **Flakes**: metal flakes in the paint under the coat, each a tiny mirror leaning its own way, so they glint one by one as the light or the view moves. **Flake density** is how much of the surface is flakes (0 is none), **Flake size** how large they are across, in the model's own units, and **Flake colour** their colour. Flakes stay put on the model as it moves. Smaller than a pixel, they blend into an even metallic sheen rather than shimmer. The starter **Car paint** has silver flakes under a coat tinted red.
 - **Sheen**: the soft light at the edges of cloth such as velvet, in its own colour and roughness. Black is no sheen.
 - **Thin film**: rainbow colours like a soap bubble or oil on water; **Thin film thickness**, in nanometres, picks the colours.
 - **Transmission**: light passes through the surface (glass, water, thin plastic). **Thickness** is how deep the volume behind it is; light crossing it takes on the **Absorption colour** over the **Absorption distance**, and **Dispersion** splits it into colours.
+
+On the WebGPU renderer, which keeps one layer of surface per pixel, the coat is drawn as a glossier surface and its colour tints the reflection under it as well as the colour; flakes are drawn in full.
 
 A material draws with the plainer, cheaper shader until one of these is wired or set away from its default. Only then does it draw as a physical surface, and only the layers it uses cost anything. Changing a value updates the material at once; turning a layer on or off rebuilds its shader. Rain and snow still lie on coated and see-through materials: rain makes a coat glossier, and snow covers glass rather than frosting it.
 
