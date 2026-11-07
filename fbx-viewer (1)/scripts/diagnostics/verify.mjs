@@ -209,6 +209,7 @@ const EXEMPT = new Map(Object.entries({
   'texturing/paint/photoMaterial.ts': 'pure-utility',
   'texturing/paint/photometricStereo.ts': 'pure-utility',
   'texturing/paint/captureMaterial.ts': 'pure-utility',
+  'texturing/paint/photoRegion.ts': 'pure-utility',
   'texturing/mesh/cornerTable.ts': 'pure-utility',
   'components/Texturing/Paint/openMaterial.ts': 'pure-utility',
   'components/Texturing/Paint/graphPictures.ts': 'pure-utility',
