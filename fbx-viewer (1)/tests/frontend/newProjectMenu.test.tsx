@@ -18,13 +18,14 @@ describe('NewProjectMenu', () => {
     expect(trigger()).toHaveAttribute('aria-controls', menu.id);
 
     const items = screen.getAllByRole('menuitem');
-    expect(items).toHaveLength(5);
+    expect(items).toHaveLength(6);
     expect(screen.getByRole('menuitem', { name: 'Blank project' })).toHaveFocus();
     expect(screen.getByRole('menuitem', { name: 'Starter' })).toHaveAccessibleDescription(/walkable level/i);
     expect(screen.getByRole('menuitem', { name: 'Arena Sample' })).toHaveAccessibleDescription(/coins, physics, HUD and menus/i);
     expect(screen.getByRole('menuitem', { name: 'Courtyard Sample' })).toHaveAccessibleDescription(/NPC dialogue/i);
     expect(screen.getByRole('menuitem', { name: 'Outpost Sample' })).toHaveAccessibleDescription(/raiders, supply caches/i);
-    expect(PROJECT_TEMPLATE_OPTIONS.map((option) => option.template)).toEqual(['blank', 'starter', 'arena', 'courtyard', 'outpost']);
+    expect(PROJECT_TEMPLATE_OPTIONS.map((option) => option.template)).toEqual(['blank', 'starter', 'arena', 'courtyard', 'outpost', 'living-materials']);
+    expect(screen.getByRole('menuitem', { name: 'Living Materials Lab' })).toHaveAccessibleDescription(/crates cooking their own wood/i);
   });
 
   it('creates a project from the chosen template and closes', () => {
@@ -54,11 +55,11 @@ describe('NewProjectMenu', () => {
     expect(screen.getByRole('menuitem', { name: 'Starter' })).toHaveAttribute('tabindex', '0');
     expect(screen.getByRole('menuitem', { name: 'Blank project' })).toHaveAttribute('tabindex', '-1');
     fireEvent.keyDown(menu, { key: 'End' });
-    expect(screen.getByRole('menuitem', { name: 'Outpost Sample' })).toHaveFocus();
+    expect(screen.getByRole('menuitem', { name: 'Living Materials Lab' })).toHaveFocus();
     fireEvent.keyDown(menu, { key: 'ArrowDown' });
     expect(screen.getByRole('menuitem', { name: 'Blank project' })).toHaveFocus();
     fireEvent.keyDown(menu, { key: 'ArrowUp' });
-    expect(screen.getByRole('menuitem', { name: 'Outpost Sample' })).toHaveFocus();
+    expect(screen.getByRole('menuitem', { name: 'Living Materials Lab' })).toHaveFocus();
     fireEvent.keyDown(menu, { key: 'Home' });
     fireEvent.keyDown(menu, { key: 'ArrowDown' });
 
@@ -72,7 +73,7 @@ describe('NewProjectMenu', () => {
     render(<NewProjectMenu onCreate={vi.fn()} />);
 
     fireEvent.keyDown(trigger(), { key: 'ArrowUp' });
-    expect(screen.getByRole('menuitem', { name: 'Outpost Sample' })).toHaveFocus();
+    expect(screen.getByRole('menuitem', { name: 'Living Materials Lab' })).toHaveFocus();
 
     const escape = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
     const windowListener = vi.fn();

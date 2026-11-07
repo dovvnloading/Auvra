@@ -239,6 +239,15 @@ export interface MaterialBinding {
     parameters?: MaterialParameterValues;
 }
 
+/**
+ * Where a use of a texture-graph material takes its pictures from, instead of the asset's baked ones: cooked for its
+ * values by the running game (materialCooking.ts). Undefined keeps the baked pictures.
+ */
+export interface PictureSource {
+    pictures(asset: MaterialAsset, binding: MaterialBinding, material: THREE.Material): Record<string, string> | undefined;
+    release(material: THREE.Material): void;
+}
+
 class MaterialLibrary {
     /** Counts changes to the assets, for subscribers that compare snapshots. */
     version = 0;
@@ -253,12 +262,42 @@ class MaterialLibrary {
     private resolveUrl: TextureUrlResolver = () => undefined;
     private readonly addedUrls = new Map<string, string>();
     private loadTexture: TextureLoad = (url) => new THREE.TextureLoader().loadAsync(url);
+    private pictureSource: PictureSource | null = null;
+    /** Textures being loaded, by key, settling when they have (or have failed). */
+    private readonly loading = new Map<string, Promise<void>>();
+
+    /** Where texture-graph materials' uses take their pictures from (null: always the baked ones). Every use draws again. */
+    setPictureSource(source: PictureSource | null): void {
+        if (this.pictureSource) for (const material of this.bound.keys()) this.pictureSource.release(material);
+        this.pictureSource = source;
+        this.rebindAll();
+        this.emit();
+    }
+
+    /** Settles once a texture is loaded in this slot and this way up (or could not be); starts loading it if need be. */
+    preloadTexture(textureId: string, slot: TextureSlot, flipY: boolean): Promise<void> {
+        const key = `${slot}:${flipY ? 1 : 0}:${textureId}`;
+        if (this.textures.get(key)) return Promise.resolve();
+        if (!this.textures.has(key)) this.texture(textureId, slot, flipY);
+        return this.loading.get(key) ?? Promise.resolve();
+    }
+
+    /** Draws every use of an asset again (its cooked pictures arrived). */
+    rebindAsset(id: string): void {
+        for (const [material, binding] of this.bound) if (binding.materialId === id) this.bindNow(material, binding);
+        this.emit();
+    }
 
     /** Where texture images come from (the open project), and how they load (texturing/materialTextureLoader.ts; tests). */
     setTextureSource(resolveUrl: TextureUrlResolver, load?: TextureLoad): void {
         this.resolveUrl = resolveUrl;
         this.addedUrls.clear();
         if (load) this.loadTexture = load;
+    }
+
+    /** Where a texture's picture is read from (one added since the project opened, else the project's). */
+    textureUrl(textureId: string): string | undefined {
+        return this.addedUrls.get(textureId) ?? this.resolveUrl(textureId);
     }
 
     /** Where a texture added since the project opened comes from. */
@@ -302,6 +341,7 @@ class MaterialLibrary {
         for (const [material, binding] of [...this.bound]) {
             if (binding.materialId !== id) continue;
             this.bound.delete(material);
+            this.pictureSource?.release(material);
             unbindMaterialGraph(material);
         }
         this.emit();
@@ -349,6 +389,7 @@ class MaterialLibrary {
         if (!canBindMaterialGraph(material)) return false;
         if (!materialId) {
             if (this.bound.delete(material)) unbindMaterialGraph(material);
+            this.pictureSource?.release(material);
             return false;
         }
         const binding = { materialId, flipY, parameters };
@@ -372,7 +413,9 @@ class MaterialLibrary {
             unbindMaterialGraph(material);
             return false;
         }
-        bindMaterialGraph(material, withMaterialParameters(withMaterialPictures(asset.graph, asset.pictures), binding.parameters), (textureId, slot) => this.texture(textureId, slot ?? 'map', binding.flipY));
+        // A texture-graph material may draw with pictures cooked for this use (materialCooking.ts).
+        const pictures = this.pictureSource?.pictures(asset, binding, material) ?? asset.pictures;
+        bindMaterialGraph(material, withMaterialParameters(withMaterialPictures(asset.graph, pictures), binding.parameters), (textureId, slot) => this.texture(textureId, slot ?? 'map', binding.flipY));
         return true;
     }
 
@@ -387,7 +430,7 @@ class MaterialLibrary {
         this.textures.set(key, null);
         const url = this.addedUrls.get(textureId) ?? this.resolveUrl(textureId);
         if (!url) return null;
-        this.loadTexture(url, { textureId, slot, flipY }).then((texture) => {
+        const loading = this.loadTexture(url, { textureId, slot, flipY }).then((texture) => {
             // A texture its loader set up from its settings (and laid the right way up) is left as it is.
             if (texture.userData?.auvraTextureSettings !== true) {
                 // Only colour is decoded from sRGB; normals and data are read as stored.
@@ -406,7 +449,8 @@ class MaterialLibrary {
             this.emit();
         }, () => {
             this.textures.delete(key);
-        });
+        }).finally(() => { this.loading.delete(key); });
+        this.loading.set(key, loading);
         return null;
     }
 

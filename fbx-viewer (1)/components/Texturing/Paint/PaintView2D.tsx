@@ -1,13 +1,13 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import * as THREE from 'three';
 import type { GpuImage } from '../../../texturing/gpu/textureGpu';
-import { builtInAlphaTexture } from '../../../texturing/paint/brushLibrary';
 import type { PaintChannel } from '../../../texturing/paint/paintTypes';
 import { pictureAspect, stencilPlace, Stroke, type BrushSettings, type HistoryEntry, type StrokeTarget } from '../../../texturing/paint/strokes';
 import { pathLength, samplePath, type SurfacePath } from '../../../texturing/paint/paths';
 import { PICK_LABELS, type PickMode } from '../../../texturing/paint/selection';
 import { UvSurfaceLookup, layoutPlaceOf } from '../../../texturing/paint/uvSurface';
 import { layPathAlong } from './pathLaying';
+import { brushAlpha } from './brushAlpha';
 import { strokeLabel } from '../../../texturing/paint/history';
 import { Select } from '../../UI/Select';
 import type { PaintSession } from './paintSession';
@@ -265,7 +265,8 @@ export const PaintView2D: React.FC<{
         if (!target) { onMessage('Pick a paint layer, or a painted mask effect, to paint on.'); return; }
         if (brush.mode === 'clone' && !cloneFrom.current && tool !== 'island') { onMessage('Ctrl-click where to copy from first, then paint where the copy goes.'); return; }
         onMessage(null);
-        const alpha = brush.shape === 'picture' && brush.alphaTexture ? builtInAlphaTexture(brush.alphaTexture) ?? session.host.texture(brush.alphaTexture) : null;
+        const { alpha, waiting } = brushAlpha(brush, session);
+        if (waiting) { onMessage(waiting); return; }
         // The stencil lies over this view as it does over the 3D one.
         const stencil = brush.stencil.enabled && brush.stencil.textureId ? session.host.texture(brush.stencil.textureId) : null;
         const stroke = new Stroke(session.stack, target, tool === 'erase' ? 'erase' : 'paint', brush, {

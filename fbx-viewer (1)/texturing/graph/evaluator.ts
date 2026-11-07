@@ -58,6 +58,8 @@ export interface NodeState {
     error?: string;
     /** Settings that could not follow their parameter or formula. */
     warnings?: string[];
+    /** What the node said about how it drew (a stand-in it fell back on, a check's findings), in words. */
+    notes?: string[];
     milliseconds: number;
     /** When it was last asked for, for letting go of old results first. */
     used: number;
@@ -412,6 +414,7 @@ export class TextureGraphEvaluator {
             if (details.warnings.length) state.warnings = details.warnings;
             // Every picture the node takes, so whatever it still holds when it fails (or is not kept) goes back.
             const made: GpuImage[] = [];
+            const notes: string[] = [];
             const leftovers = () => {
                 const kept = new Set(Object.values(state.outputs));
                 for (const image of made) if (!kept.has(image)) this.gpu.release(image);
@@ -423,7 +426,8 @@ export class TextureGraphEvaluator {
                 const runDetails = !main && !definition.settingsInShader ? await this.withValuesRead(definition, details, plan.incoming.get(node.id)) : details;
                 state.outputs = main
                     ? this.passThrough(definition, main, details, plan.incoming.get(node.id), made)
-                    : await definition.run(this.context(node, definition, runDetails, plan, request, external, made));
+                    : await definition.run(this.context(node, definition, runDetails, plan, request, external, made, notes));
+                if (notes.length) state.notes = notes;
             } catch (error) {
                 state.outputs = {};
                 leftovers();
@@ -512,6 +516,7 @@ export class TextureGraphEvaluator {
         request: EvaluateRequest,
         external: Readonly<Record<string, ExternalImage | null | undefined>>,
         made: GpuImage[],
+        notes: string[] = [],
     ): NodeRunContext {
         const gpu = this.gpu;
         const links = plan.incoming.get(node.id);
@@ -551,6 +556,7 @@ export class TextureGraphEvaluator {
             },
             texture: this.texture,
             external: (name) => external[name] ?? null,
+            note: (text) => { if (!notes.includes(text)) notes.push(text); },
             material: (key) => {
                 const link = links?.get(key);
                 const outputs = link ? this.cache.get(link.from)?.outputs : undefined;

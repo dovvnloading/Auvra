@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { BrushSettings } from './strokes';
 import { PARTICLE_PRESETS, readParticles, type ParticleSettings } from './particles';
+import { readGraphStamp } from './graphStamps';
 
 /**
  * THE BRUSH AND ALPHA LIBRARY
@@ -15,7 +16,7 @@ import { PARTICLE_PRESETS, readParticles, type ParticleSettings } from './partic
 /** The settings a preset carries. */
 export const PRESET_KEYS = [
     'size', 'hardness', 'flow', 'opacity', 'spacing', 'angle', 'followStroke', 'angleJitter', 'sizeJitter', 'scatter', 'flowJitter',
-    'pressureSize', 'pressureFlow', 'pressureCurve', 'tiltAngle', 'lazy', 'shape', 'alphaTexture', 'mode', 'buildUp', 'particles',
+    'pressureSize', 'pressureFlow', 'pressureCurve', 'tiltAngle', 'lazy', 'shape', 'alphaTexture', 'mode', 'buildUp', 'particles', 'graphStamp',
 ] as const satisfies ReadonlyArray<keyof BrushSettings>;
 
 export type PresetKey = typeof PRESET_KEYS[number];
@@ -94,7 +95,7 @@ export const applyPreset = (brush: BrushSettings, preset: BrushPreset): BrushSet
 /** What kind each preset setting holds, for reading stored presets. */
 const DEFAULT_KINDS: Record<PresetKey, unknown> = {
     size: 0, hardness: 0, flow: 0, opacity: 0, spacing: 0, angle: 0, followStroke: false, angleJitter: 0, sizeJitter: 0, scatter: 0, flowJitter: 0,
-    pressureSize: false, pressureFlow: false, pressureCurve: [], tiltAngle: false, lazy: 0, shape: '', alphaTexture: '', mode: '', buildUp: false, particles: {},
+    pressureSize: false, pressureFlow: false, pressureCurve: [], tiltAngle: false, lazy: 0, shape: '', alphaTexture: '', mode: '', buildUp: false, particles: {}, graphStamp: {},
 };
 
 const finite = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
@@ -114,6 +115,9 @@ export const readPresets = (raw: unknown): BrushPreset[] => {
                 if (Array.isArray(value) && value.length === 4 && value.every(finite)) settings[key] = value.map((v) => Math.min(1, Math.max(0, v)));
             } else if (key === 'particles') {
                 if (value && typeof value === 'object' && !Array.isArray(value)) settings[key] = readParticles(value);
+            } else if (key === 'graphStamp') {
+                const stamp = readGraphStamp(value);
+                if (stamp) settings[key] = stamp;
             } else if (kind === 'number' ? finite(value) : typeof value === kind) settings[key] = value;
         }
         return [{ id: preset.id.slice(0, 64), name: preset.name.slice(0, 48) || 'Brush', settings: settings as PresetSettings }];

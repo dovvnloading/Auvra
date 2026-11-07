@@ -163,8 +163,8 @@ export const udimAtlasPoint = (layout: TileLayout, u: number, v: number): [numbe
  * One tile drawn into its cell of an atlas, and its edge pixels copied out across the gutter round it;
  * a shrunk tile averages every pixel of its own that each of its new pixels covers.
  */
+// uSize is the pass's own (the atlas's size), declared by its prelude.
 const ATLAS_CELL = `uniform vec2 uOrigin;
-uniform vec2 uSize;
 uniform float uCell;
 uniform float uSource;
 uniform int uTaps;

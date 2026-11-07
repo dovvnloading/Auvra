@@ -48,6 +48,7 @@ const COLOURFUL_RAMP = { stops: [
 
 /** The sample a node changing images is shown with. */
 const sampleFor = (definition: TexNodeDef): string => {
+    if (definition.type === 'curveScatter' || definition.type === 'pointList') return 'shape';
     if (definition.category === 'Edges and distance' || definition.type.startsWith('flood')) return 'tiles';
     if (definition.category === 'Height and normals') return 'cells';
     return 'perlinNoise';
@@ -67,7 +68,8 @@ const draw = async (gpu: TextureGpu, evaluator: TextureGraphEvaluator, request: 
     const node = { ...createNode(request.type, 0, 0, request.params), id: 'picture' };
     const nodes = [node];
     const links: TexGraphLink[] = [];
-    const main = mainInput(definition) ?? (definition.type === 'makeMaterial' ? 'baseColor' : null);
+    // Measured F0 shows its colour on its own; the rest change a sample wired into their main input.
+    const main = definition.type === 'measuredF0' ? null : mainInput(definition) ?? (definition.type === 'makeMaterial' ? 'baseColor' : null);
     if (definition.category === 'Weathering') {
         // Weathering is shown on stand-in model maps made from the cells as a height: its curvature (also
         // as the cavity), occlusion, normals (as the way each place faces) and the height as thickness.
@@ -84,6 +86,19 @@ const draw = async (gpu: TextureGpu, evaluator: TextureGraphEvaluator, request: 
         );
         const standIns: Record<string, string> = { curvature: 'curvature', cavity: 'curvature', occlusion: 'occlusion', worldNormal: 'normals', thickness: 'sample' };
         for (const port of definition.inputs) if (standIns[port.key]) links.push({ from: standIns[port.key], fromOutput: 'out', to: 'picture', toInput: port.key });
+    } else if (definition.type === 'shapeBoolean') {
+        // Two overlapping shapes' distances, joined smoothly.
+        nodes.unshift(
+            { ...createNode('vectorShape', -200, 0, { shape: 'polygon', sides: 6, centre: [0.4, 0.5], size: 0.6 }), id: 'first' },
+            { ...createNode('vectorShape', -200, 80, { shape: 'ellipse', centre: [0.64, 0.5], size: 0.5 }), id: 'second' },
+        );
+        node.params = { ...node.params, smooth: 0.06 };
+        links.push({ from: 'first', fromOutput: 'distance', to: 'picture', toInput: 'a' }, { from: 'second', fromOutput: 'distance', to: 'picture', toInput: 'b' });
+    } else if (definition.category === 'Photo and scans' && main) {
+        // A stand-in photo: noise that does not tile, through a colourful gradient (its height as the height).
+        nodes.unshift({ ...createNode('perlinNoise', -260, 0), id: 'sample', tiling: 'none' }, { ...createNode('gradientMap', -150, 0, { ramp: COLOURFUL_RAMP }), id: 'colourful' });
+        links.push({ from: 'sample', fromOutput: 'out', to: 'colourful', toInput: 'in' }, { from: 'colourful', fromOutput: 'out', to: 'picture', toInput: main });
+        if (definition.inputs.some((port) => port.key === 'height')) links.push({ from: 'sample', fromOutput: 'out', to: 'picture', toInput: 'height' });
     } else if (main) {
         const sample = ID_SAMPLED.has(definition.type) ? 'tiles' : sampleFor(definition);
         nodes.unshift({ ...createNode(sample, -200, 0), id: 'sample' });
@@ -109,6 +124,8 @@ const draw = async (gpu: TextureGpu, evaluator: TextureGraphEvaluator, request: 
             links.push({ from: 'sampleMaterial', fromOutput: 'out', to: 'picture', toInput: main });
         } else {
             links.push({ from: 'sample', fromOutput: 'out', to: 'picture', toInput: main });
+            // The metal and roughness check is shown finding half-metal in the same noise.
+            if (definition.type === 'pbrRangeCheck') links.push({ from: 'sample', fromOutput: 'out', to: 'picture', toInput: 'metallic' });
         }
     }
     const graph: TextureGraph = { version: 1, size: { w: 6, h: 6 }, seed: 11, nodes, links, parameters: [] };

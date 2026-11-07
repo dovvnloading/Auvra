@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { BrushIcon, BucketIcon, CompareIcon, EraserIcon, EyedropperIcon, FrameIcon, ImageIcon, RedoIcon, ScissorsIcon, SelectBoxIcon, SplineIcon, UndoIcon, WarningIcon } from '../../UI/Icons';
 import { DecalPanel } from './DecalPanel';
+import { brushAlpha } from './brushAlpha';
+import { graphStamps } from '../../../texturing/paint/graphStamps';
 import { PaintView2D, type View2DCommands } from './PaintView2D';
 import { useAssets } from '../../../context/AssetContext';
 import { useScene } from '../../../context/SceneContext';
@@ -176,6 +178,14 @@ export const PaintWorkspace: React.FC = () => {
     const [brush, setBrushState] = useState<BrushSettings>(rememberedBrush);
     const setBrush = useCallback((next: BrushSettings) => { rememberedBrush = next; setBrushState(next); }, []);
     const [selection, setSelection] = useState<LayerSelection>({ layerId: null, effectId: null });
+    // A graph brush's stamp starts drawing as soon as it is set, so the first dab need not wait.
+    const stampVersion = useSyncExternalStore(graphStamps.subscribe, graphStamps.getVersion);
+    const stampStatus = useMemo(() => {
+        void stampVersion;
+        if (!session || brush.shape !== 'graph' || !brush.graphStamp) return null;
+        const { alpha, waiting } = brushAlpha(brush, session);
+        return alpha ? null : waiting;
+    }, [brush, session, stampVersion]);
     const [panel, setPanel] = useState<'layers' | 'brush' | 'set' | 'uvs' | 'history'>('layers');
     const [view, setView] = useState<ViewMode | 'uv2d' | 'paint2d'>('material');
     // Painting on the UV layout beside the 3D view.
@@ -445,7 +455,8 @@ export const PaintWorkspace: React.FC = () => {
                                 onSelectPoint={setPathPoint}
                                 onPaint={(how) => { if (activePath) void (viewportCommands.current ?? view2dCommands.current)?.paintPath(activePath, how); }} />
                         )}<BrushPanel brush={brush} onChange={setBrush} channels={session.document.channels} paintingMask={target?.kind === 'mask'} textures={textures} onPick={() => setTool('pick')}
-                            paintWith={previewHost ? { sections: brushSections, host: previewHost, onPick: paintWith, onMessage: setMessage } : undefined} onMessage={setMessage} /></div>
+                            paintWith={previewHost ? { sections: brushSections, host: previewHost, onPick: paintWith, onMessage: setMessage } : undefined} onMessage={setMessage}
+                            stamp={{ graphs, resolve, status: stampStatus }} /></div>
                             : panel === 'history' ? <HistoryPanel session={session} stepLimit={HISTORY_LIMIT} memoryMb={HISTORY_BYTES / 1024 / 1024} />
                             : panel === 'uvs' && uv ? <div className="min-h-0 flex-1 overflow-y-auto"><UvPanel uv={uv} otherSets={otherSets} densityOf={densityOf} onSeamTool={() => setTool('seam')} onApplied={() => { if (!uv.proposal) { putOnAfterOpen.current = uv.putOnWhenOpen; setReopen((value) => value + 1); } }} /></div>
                                 : <div className="min-h-0 flex-1 overflow-y-auto"><SetPanel session={session} models={paintable} onReopen={() => setReopen((value) => value + 1)} onShowRays={setRaySettings} showingRays={Boolean(raySettings)}

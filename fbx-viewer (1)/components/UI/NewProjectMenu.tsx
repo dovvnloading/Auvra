@@ -16,6 +16,7 @@ export const PROJECT_TEMPLATE_OPTIONS: readonly ProjectTemplateOption[] = [
   { template: 'arena', label: 'Arena Sample', description: 'A complete small game: coins, physics, HUD and menus' },
   { template: 'courtyard', label: 'Courtyard Sample', description: 'A quest: an NPC dialogue, scripted relics and a gate a timeline opens' },
   { template: 'outpost', label: 'Outpost Sample', description: 'An action level on the full kit, with its own animated characters: raiders, supply caches, a beacon to light' },
+  { template: 'living-materials', label: 'Living Materials Lab', description: 'Rows of crates cooking their own wood from one texture graph: a seed each, a wetness each, and a row the level blueprint wets and dries' },
 ];
 
 interface NewProjectMenuProps {

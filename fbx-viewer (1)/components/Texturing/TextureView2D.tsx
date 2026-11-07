@@ -1,15 +1,17 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import * as THREE from 'three';
-import { CompareIcon, CrossIcon, FrameIcon, PinIcon, PulseIcon, SunIcon, TilesIcon } from '../UI/Icons';
+import { CompareIcon, CrossIcon, FrameIcon, InfoIcon, PinIcon, PulseIcon, SunDimIcon, SunIcon, TilesIcon } from '../UI/Icons';
 import type { GpuImage } from '../../texturing/gpu/textureGpu';
 import { hash2 } from '../../texturing/graph/scatter';
 import { isParamLink, type TexGraphNode } from '../../texturing/graph/types';
 import { IconButton, Segmented } from '../UI/kit';
 import { finishPicking, stopsFrom, usePicking, type Rgba } from './eyedropper';
 import type { TextureGraphSession } from './textureGraphSession';
+import { readPoints, smoothPath } from '../../texturing/graph/curves';
+import { textureNodeDefinitionByType } from '../../texturing/graph/registry';
 import {
-    dragGradient, dragShape, dragTile, dragTransform, gradientFrame, rangeShare, shapeFrame, tileFrame, transformFrame, uvToView, viewToUv,
-    type HandleFrame, type Histogram, type UV, type Vec2, type ViewPlacement,
+    addPoint, cloneFrame, dragClone, dragOrbit, orbitFrame, dragGradient, dragPoint, dragShape, dragTile, dragTransform, gradientFrame, pointsFrame, rangeShare, removePoint, shapeFrame, tileFrame, transformFrame, uvToView, viewToUv,
+    type HandleFrame, type Histogram, type PointList, type UV, type Vec2, type ViewPlacement,
 } from './view2d';
 
 /**
@@ -17,8 +19,9 @@ import {
  * to check it tiles, as all channels or one at a time, brighter or darker by its exposure, or lit as
  * a normal map. The pixel under the pointer shows with its values; colour pins keep showing theirs.
  * The histogram picks out a range of values in the image; holding a node as A compares it with the
- * one shown, either side of a wipe. Transform, Tile sampler, Linear gradient and Shape nodes get
- * handles to drag on the image. A setting's eyedropper picks a colour here with a click, or a
+ * one shown, either side of a wipe. Transform, Tile sampler, Linear gradient, Shape and Clone nodes get
+ * handles to drag on the image; nodes with points (the spline nodes) get one on each, a click on the
+ * image adds a point and an Alt-click on one takes it away. A setting's eyedropper picks a colour here with a click, or a
  * gradient along a dragged line.
  */
 
@@ -44,6 +47,7 @@ uniform int uLit;
 uniform vec3 uLight;
 uniform int uRangeOn;
 uniform vec2 uRange;
+uniform int uHdr;
 void main() {
     vec2 local = gl_FragCoord.xy - uOffset;
     vec2 uv = (local - uSize * 0.5 - uPan) / (uZoom * uImage) + 0.5;
@@ -72,6 +76,13 @@ void main() {
         float value = uChannel == 1 ? v.r : uChannel == 2 ? v.g : uChannel == 3 ? v.b : uChannel == 4 ? v.a : luma(v.rgb);
         if (value < uRange.x || value > uRange.y) c = mix(c, vec3(0.03), 0.82);
     }
+    // Values past 0 to 1 (a deep picture's) striped: red above 1, blue below 0.
+    if (uHdr == 1 && !useOther) {
+        vec3 raw = uGray == 1 ? v.rrr : v.rgb;
+        float stripe = step(0.5, fract((local.x + local.y) / 12.0));
+        if (max(raw.r, max(raw.g, raw.b)) > 1.0) c = mix(c, vec3(1.0, 0.25, 0.2), 0.55 * stripe + 0.15);
+        else if (min(raw.r, min(raw.g, raw.b)) < 0.0) c = mix(c, vec3(0.25, 0.45, 1.0), 0.55 * stripe + 0.15);
+    }
     // A faint line where the repeats meet.
     if (uTile == 1) {
         vec2 edge = abs(fract(uv + 0.5) - 0.5) * uZoom * uImage;
@@ -90,6 +101,10 @@ interface Handles {
     drag: (key: string, to: Vec2, uniform: boolean) => Record<string, unknown>;
     /** True for a handle whose setting follows a graph parameter (it cannot be dragged). */
     locked: (key: string) => boolean;
+    /** The settings a click at `at` gives, adding a point (`near`: how close to a span counts as on it). */
+    add?: (at: Vec2, near: number) => Record<string, unknown> | null;
+    /** The settings with a handle's point taken away. */
+    remove?: (key: string) => Record<string, unknown> | null;
 }
 
 /** The handles a node gets on the image, from its settings (and the seed it drew with, for a Tile sampler's random shifts). */
@@ -97,15 +112,39 @@ const handlesFor = (node: TexGraphNode | null | undefined, seed: number | undefi
     if (!node || node.bypass) return null;
     const p = node.params;
     const locked = (key: string) => isParamLink(p[key]);
+    // Nodes with lists of points (the spline nodes): a handle on every point, a click adds one.
+    const lists = (textureNodeDefinitionByType(node.type)?.params ?? []).filter((param) => param.kind === 'points' && !isParamLink(p[param.key])).map((param): PointList => {
+        const points = readPoints(p[param.key], param.default as Vec2[]);
+        const curve = node.type !== 'pointList';
+        const closed = Boolean(p.closed);
+        return { key: param.key, points, closed, least: curve ? 2 : 1, ...(curve ? { path: smoothPath(points, closed, num(p.smoothness, 1)) } : {}) };
+    });
+    if (lists.length) {
+        return {
+            frame: pointsFrame(lists),
+            drag: (key, to) => dragPoint(lists, key, to) ?? {},
+            locked: () => false,
+            add: (at, near) => addPoint(lists, at, near),
+            remove: (key) => removePoint(lists, key),
+        };
+    }
     switch (node.type) {
         case 'transform':
         case 'safeTransform': {
             const settings = { offset: pair(p.offset, [0, 0]), rotation: num(p.rotation, 0), scale: pair(p.scale, [1, 1]) };
             return { frame: transformFrame(settings), drag: (key, to, uniform) => ({ ...dragTransform(settings, key, to, uniform) }), locked };
         }
-        case 'shape': {
+        case 'shape':
+        case 'vectorShape': {
             const settings = { centre: pair(p.centre, [0.5, 0.5]), size: num(p.size, 0.8), stretch: pair(p.stretch, [1, 1]), rotation: num(p.rotation, 0), tiling: num(p.tiling, 1) };
             return { frame: shapeFrame(settings), drag: (key, to) => ({ ...dragShape(settings, key, to) }), locked };
+        }
+        case 'sdfShapes':
+            return { frame: orbitFrame(num(p.yaw, 35), num(p.pitch, 35)), drag: (_key, to) => ({ ...dragOrbit(to) }), locked: () => isParamLink(p.yaw) || isParamLink(p.pitch) };
+        case 'clone':
+        case 'clonePatch': {
+            const settings = { from: pair(p.from, [0.3, 0.5]), to: pair(p.to, [0.7, 0.5]), size: num(p.size, 0.15) };
+            return { frame: cloneFrame(settings), drag: (key, to) => ({ ...dragClone(settings, key, to) }), locked };
         }
         case 'gradient':
             return { frame: gradientFrame(num(p.angle, 0)), drag: (key, to) => ({ ...dragGradient(key, to) }), locked: () => isParamLink(p.angle) };
@@ -127,7 +166,9 @@ const handlesFor = (node: TexGraphNode | null | undefined, seed: number | undefi
 const HANDLE_WORDS: Record<string, string> = {
     offset: 'Drag to move', centre: 'Drag to move', rotation: 'Drag to turn', scale: 'Drag to scale (Shift keeps proportions)', size: 'Drag to size',
     start: 'Drag to turn the gradient (black end)', end: 'Drag to turn the gradient (white end)',
+    from: 'Drag to choose where the patch comes from', to: 'Drag to move where the patch goes', orbit: 'Drag to turn the 3D view round (across) and look from higher or lower (up)',
 };
+const handleWords = (key: string): string => HANDLE_WORDS[key] ?? (key.includes(':') ? 'Drag to move this point; Alt-click to take it away' : 'Drag');
 
 interface ColourPin { id: number; u: number; v: number }
 
@@ -162,6 +203,7 @@ export const TextureView2D: React.FC<{
     const [size, setSize] = useState({ width: 0, height: 0 });
     const [exposure, setExposure] = useState(0);
     const [lit, setLit] = useState(false);
+    const [hdr, setHdr] = useState(false);
     const [light, setLight] = useState<[number, number]>([-0.45, 0.55]);
     const [showHistogram, setShowHistogram] = useState(false);
     const [histogram, setHistogram] = useState<Histogram | null>(null);
@@ -260,11 +302,12 @@ export const TextureView2D: React.FC<{
                     uLight: new THREE.Vector3(light[0], light[1], 0.75),
                     uRangeOn: range ? 1 : 0,
                     uRange: new THREE.Vector2(range ? Math.min(...range) : 0, range ? Math.max(...range) : 1),
+                    uHdr: hdr ? 1 : 0,
                 },
             });
             void width;
         });
-    }, [channel, exposure, image, light, lit, other, range, session, size, tile, version, view, wipe, zoom]);
+    }, [channel, exposure, hdr, image, light, lit, other, range, session, size, tile, version, view, wipe, zoom]);
 
     useEffect(() => {
         const element = host.current;
@@ -452,6 +495,14 @@ export const TextureView2D: React.FC<{
         }
         if (pinning && uv.u >= 0 && uv.v >= 0 && uv.u <= 1 && uv.v <= 1) {
             setPins((list) => [...list, { id: nextPin.current++, u: uv.u, v: uv.v }].slice(-MAX_PINS));
+            return;
+        }
+        // A click adds a point to a node with a list of them (within 12 pixels of a span, into it).
+        const current2d = onParams ? handlesFor(node, undefined) : null;
+        if (current2d?.add && node && onParams && placement) {
+            const near = (12 * placement.ratio) / (placement.zoom * Math.max(placement.imageWidth, 1));
+            const patch = current2d.add([uv.u, uv.v], near);
+            if (patch) onParams(node.id, patch, `add-point:${Date.now()}`);
         }
     };
 
@@ -468,6 +519,11 @@ export const TextureView2D: React.FC<{
     const toView = (point: Vec2) => (placement ? uvToView({ u: point[0], v: point[1] }, placement) : { x: 0, y: 0 });
     const onHandleDown = (event: React.PointerEvent, key: string) => {
         event.stopPropagation();
+        if (event.altKey && handles?.remove && node && onParams) {
+            const patch = handles.remove(key);
+            if (patch) onParams(node.id, patch, `remove-point:${Date.now()}`);
+            return;
+        }
         (event.currentTarget as Element).setPointerCapture(event.pointerId);
         handleDrag.current = key;
     };
@@ -501,6 +557,7 @@ export const TextureView2D: React.FC<{
                     onClick={() => setCompare((value) => (value || !nodeId ? null : { nodeId, output, label }))}
                 ><CompareIcon size={13} /></IconButton>
                 <IconButton label={lit ? 'Show the normal map as it is' : 'Light it as a normal map (the light follows the pointer)'} active={lit} disabled={image?.kind === 'gray'} onClick={() => setLit((value) => !value)}><SunIcon size={13} /></IconButton>
+                <IconButton label={hdr ? 'Stop marking values past 0 to 1' : 'Mark values past 0 to 1: red stripes above 1, blue below 0 (for deep pictures)'} active={hdr} onClick={() => setHdr((value) => !value)}><SunDimIcon size={13} /></IconButton>
                 <span className="flex-1" />
                 <label className="flex items-center gap-1 text-2xs text-ink-3" title="Exposure in stops: brighter or darker, for looking only. Double-click to reset.">
                     <span>EV</span>
@@ -518,12 +575,21 @@ export const TextureView2D: React.FC<{
                 onPointerLeave={() => { wanted.current = null; setProbe(null); }}
             >
                 <canvas ref={canvas} className="absolute inset-0 h-full w-full" />
+                {image && state?.notes?.length ? (
+                    <div className="pointer-events-none absolute inset-x-2 bottom-2 flex gap-1.5 rounded bg-panel/95 px-2 py-1 text-2xs leading-snug text-ink-2 shadow">
+                        <InfoIcon size={12} className="mt-px shrink-0 text-accent" />
+                        <span>{state.notes.join(' ')}</span>
+                    </div>
+                ) : null}
                 {!image && <div className="absolute inset-0 flex items-center justify-center text-2xs text-ink-3">{nodeId ? (state?.error ?? 'Drawing…') : 'Double-click a node to look at it here.'}</div>}
                 {placement && (
                     <svg className="pointer-events-none absolute inset-0 h-full w-full overflow-visible">
                         {handles && handles.frame.outline.length > 0 && (
                             <polygon points={handles.frame.outline.map((point) => { const at = toView(point); return `${at.x},${at.y}`; }).join(' ')} fill="none" stroke="rgb(240 138 60 / 0.8)" strokeWidth={1} strokeDasharray="4 3" />
                         )}
+                        {handles?.frame.paths?.map((path, index) => (
+                            <polyline key={`path-${index}`} points={path.map((point) => { const at = toView(point); return `${at.x},${at.y}`; }).join(' ')} fill="none" stroke="rgb(240 138 60 / 0.85)" strokeWidth={1.25} strokeDasharray="5 3" />
+                        ))}
                         {handles?.frame.line && (() => { const a = toView(handles.frame.line[0]); const b = toView(handles.frame.line[1]); return <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke="rgb(240 138 60 / 0.8)" strokeWidth={1} strokeDasharray="4 3" />; })()}
                         {handles?.frame.points.map((point) => {
                             const at = toView(point.at);
@@ -534,7 +600,7 @@ export const TextureView2D: React.FC<{
                                     onPointerDown={off ? undefined : (event) => onHandleDown(event, point.key)}
                                     onPointerMove={off ? undefined : onHandleMove}
                                     onPointerUp={() => { handleDrag.current = null; }}>
-                                    <title>{off ? 'This setting follows a graph parameter' : HANDLE_WORDS[point.key] ?? 'Drag'}</title>
+                                    <title>{off ? 'This setting follows a graph parameter' : handleWords(point.key)}</title>
                                     {point.look === 'size'
                                         ? <rect x={at.x - 5} y={at.y - 5} width={10} height={10} fill={fill} stroke="#111214" strokeWidth={1.5} />
                                         : <circle cx={at.x} cy={at.y} r={point.look === 'move' ? 6 : 5} fill={fill} stroke={point.look === 'turn' ? 'rgb(240 138 60)' : '#111214'} strokeWidth={point.look === 'turn' ? 2 : 1.5} />}
