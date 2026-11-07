@@ -11,7 +11,7 @@ import { feedbackPairs, passCount } from '../../texturing/graph/iterate';
 import { describeMatrix, tileSafeDirection, tileSafeMatrix, transformMatrix } from '../../texturing/graph/safeTransform';
 import { PROCESSOR_PICTURES, PROCESSOR_TYPES, defaultFunctionFor, processorUse, readNamedSettings, settingDefault } from '../../texturing/graph/nodes/processors';
 import { compileFunction, readFunctionGraph, type FunctionGraph, type NamedSetting } from '../../texturing/graph/functionGraph';
-import { PARAMETER_KINDS, PARAMETER_KIND_LABELS, applyPreset, presetFrom, putPreset, removePreset, renamePreset } from '../../texturing/graph/parameters';
+import { PARAMETER_KINDS, PARAMETER_KIND_LABELS, applyPreset, presetFrom, putPreset, removePreset, renameParameter, renamePreset } from '../../texturing/graph/parameters';
 import { VALUE_SETTING_KINDS, valuePinKey } from '../../texturing/graph/nodeKit';
 import { graphAnimates, textureNodeDefinition, type GraphEntry, type GraphResolver } from '../../texturing/graph/registry';
 import { DEFAULT_ANIMATION, FLIPBOOK_FRAMES, flipbookFrameSize, flipbookGrid, frameTime, packFlipbook, readAnimation, type GraphAnimation } from '../../texturing/graph/animation';
@@ -1045,6 +1045,11 @@ const Workspace: React.FC<{
                             const parameters = renamed ? graph.parameters.map((parameter) => (parameter.group === renamed.from ? { ...parameter, group: renamed.to } : parameter)) : graph.parameters;
                             const { groups: _old, ...rest } = graph;
                             update(groups.length ? { ...rest, parameters, groups } : { ...rest, parameters }, true);
+                        }}
+                        onRename={(from, to) => {
+                            // The graph and its stored values change together, as one undo step.
+                            const renamed = renameParameter(graph, stored.values, from, to);
+                            change({ graph: renamed.graph, values: renamed.values });
                         }}
                         onRemove={(index) => {
                             const parameter = graph.parameters[index];

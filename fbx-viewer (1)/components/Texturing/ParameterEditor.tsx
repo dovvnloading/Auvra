@@ -9,6 +9,7 @@ import {
     coerceParameter,
     conditionError,
     formatCondition,
+    formulaNameProblem,
     groupByLabelPrefix,
     hasLabelPrefixes,
     parameterSetting,
@@ -134,7 +135,10 @@ const ParameterCard: React.FC<{
     onChange: (patch: Partial<GraphParameter>, coalesce?: string) => void;
     onMove: (by: number) => void;
     onRemove: () => void;
-}> = ({ parameter, parameters, index, textures, bound, onChange, onMove, onRemove }) => {
+    /** Changes its formula name, and every formula and condition using it. */
+    onRename?: (to: string) => void;
+}> = ({ parameter, parameters, index, textures, bound, onChange, onMove, onRemove, onRename }) => {
+    const [renameProblem, setRenameProblem] = useState<string | null>(null);
     const [open, setOpen] = useState(false);
     const [naming, setNaming] = useState(false);
     const groups = [...new Set(parameters.map((other) => other.group).filter((group): group is string => Boolean(group)))];
@@ -157,8 +161,19 @@ const ParameterCard: React.FC<{
                     <div className="grid grid-cols-[76px_minmax(0,1fr)] items-center gap-x-1.5 gap-y-1.5">
                         <span className="text-2xs text-ink-2">Label</span>
                         <DraftText label="Parameter label" value={parameter.label} maxLength={64} className="w-full" onCommit={(label) => onChange({ label: label.trim() || parameter.name })} />
-                        <span className="text-2xs text-ink-2">In formulas</span>
-                        <span className="truncate font-mono text-2xs text-ink-3">{parameter.name}</span>
+                        <span className="text-2xs text-ink-2" title="The name formulas and conditions read it by. Changing it changes them too.">In formulas</span>
+                        {onRename ? (
+                            <div className="min-w-0 space-y-0.5">
+                                <DraftText label="Formula name" value={parameter.name} maxLength={48} className="w-full font-mono"
+                                    onCommit={(name) => {
+                                        const next = name.trim();
+                                        const problem = formulaNameProblem(next, parameters, parameter.name);
+                                        setRenameProblem(problem);
+                                        if (!problem && next !== parameter.name) onRename(next);
+                                    }} />
+                                {renameProblem && <p className="text-2xs text-warn">{renameProblem}</p>}
+                            </div>
+                        ) : <span className="truncate font-mono text-2xs text-ink-3">{parameter.name}</span>}
                         <span className="text-2xs text-ink-2">Group</span>
                         {naming
                             ? <DraftText label="New group name" value="" allowEmpty placeholder="Group name" maxLength={64} className="w-full" onCommit={(group) => { setNaming(false); onChange(group.trim() ? { group: group.trim() } : without('group')); }} />
@@ -252,7 +267,9 @@ export const ParameterEditor: React.FC<{
     onParameters: (parameters: GraphParameter[], coalesce?: string) => void;
     onGroups: (groups: GraphParameterGroup[], renamed?: { from: string; to: string }) => void;
     onRemove: (index: number) => void;
-}> = ({ parameters, groups, textures, boundChoices, onParameters, onGroups, onRemove }) => {
+    /** Changes a parameter's formula name (and what uses it). */
+    onRename?: (from: string, to: string) => void;
+}> = ({ parameters, groups, textures, boundChoices, onParameters, onGroups, onRemove, onRename }) => {
     const change = (index: number, patch: Partial<GraphParameter>, coalesce?: string) => onParameters(parameters.map((parameter, at) => {
         if (at !== index) return parameter;
         const next = { ...parameter, ...patch } as GraphParameter;
@@ -276,7 +293,8 @@ export const ParameterEditor: React.FC<{
             )}
             {parameters.map((parameter, index) => (
                 <ParameterCard key={parameter.name} parameter={parameter} parameters={parameters} index={index} textures={textures} bound={boundChoices.has(parameter.name)}
-                    onChange={(patch, coalesce) => change(index, patch, coalesce)} onMove={(by) => move(index, by)} onRemove={() => onRemove(index)} />
+                    onChange={(patch, coalesce) => change(index, patch, coalesce)} onMove={(by) => move(index, by)} onRemove={() => onRemove(index)}
+                    {...(onRename ? { onRename: (to: string) => onRename(parameter.name, to) } : {})} />
             ))}
             <GroupsEditor names={names} groups={groups} onChange={onGroups} />
         </div>

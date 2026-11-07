@@ -1,4 +1,4 @@
-import { evaluateExpression, type ExprValue } from './expressions';
+import { evaluateExpression, renameInFormula, type ExprValue } from './expressions';
 import { defaultCurves, readCurves, readRamp } from './nodeKit';
 import {
     isParamLink,
@@ -9,6 +9,7 @@ import {
     type GraphPreset,
     type RampStop,
     type TexParamDef,
+    type TextureGraph,
 } from './types';
 
 /**
@@ -321,4 +322,43 @@ export const variationSeeds = (seed: number, count: number): number[] => {
         if (!seeds.includes(candidate)) seeds.push(candidate);
     }
     return seeds;
+};
+
+/** A parameter's formula name: letters, digits and underscores, not starting with a digit (at most 48). */
+export const FORMULA_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,47}$/;
+
+/** What is wrong with a new formula name for a parameter, in words, or null when it will do. */
+export const formulaNameProblem = (name: string, parameters: readonly GraphParameter[], current: string): string | null => {
+    if (!name) return 'A formula name cannot be empty.';
+    if (!FORMULA_NAME.test(name)) return 'Use letters, digits and underscores only, not starting with a digit.';
+    if (name !== current && parameters.some((parameter) => parameter.name === name)) return `Another parameter is called ${name} already.`;
+    return null;
+};
+
+/**
+ * A graph with a parameter's formula name changed, and everything in it that uses the name with it:
+ * settings following it, formulas and conditions (of nodes and of other parameters), presets, and the
+ * stored values given. The label stays as it is.
+ */
+export const renameParameter = (graph: TextureGraph, values: Readonly<Record<string, unknown>>, from: string, to: string): { graph: TextureGraph; values: Record<string, unknown> } => {
+    const renameValue = (value: unknown): unknown => {
+        if (value && typeof value === 'object' && !Array.isArray(value)) {
+            const link = value as { $bind?: unknown; $expr?: unknown };
+            if (link.$bind === from) return { $bind: to };
+            if (typeof link.$expr === 'string') return { $expr: renameInFormula(link.$expr, from, to) };
+        }
+        return value;
+    };
+    const renameKey = <T,>(record: Readonly<Record<string, T>>): Record<string, T> => Object.fromEntries(Object.entries(record).map(([key, value]) => [key === from ? to : key, value]));
+    const nodes = graph.nodes.map((node) => ({
+        ...node,
+        params: Object.fromEntries(Object.entries(node.params).map(([key, value]) => [key, key === 'visibleIf' && typeof value === 'string' ? renameInFormula(value, from, to) : renameValue(value)])),
+    }));
+    const parameters = graph.parameters.map((parameter) => {
+        const next = { ...parameter, ...(parameter.name === from ? { name: to } : {}) };
+        if (parameter.visibleIf) next.visibleIf = renameInFormula(parameter.visibleIf, from, to);
+        return next;
+    });
+    const presets = graph.presets?.map((preset) => ({ ...preset, values: renameKey(preset.values) }));
+    return { graph: { ...graph, nodes, parameters, ...(presets ? { presets } : {}) }, values: renameKey(values) };
 };
