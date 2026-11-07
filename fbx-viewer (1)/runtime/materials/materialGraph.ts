@@ -902,6 +902,11 @@ export interface MaterialGraphSettings {
     unlit: boolean;
     /** How the Normal input is read: like a normal map (tangent space), or as a world-space normal (Triplanar Normal Map). */
     normalSpace: 'tangent' | 'world';
+    /**
+     * Unwired, the base colour, roughness, metalness, normal and emission come from the model's own material
+     * (its maps and values) rather than the Material Output's values: a painted copy changes only what was painted.
+     */
+    keepOwnMaps: boolean;
 }
 
 /** How the graph's Material Output says the material blends, clips, faces and lights. */
@@ -917,5 +922,6 @@ export const materialGraphSettings = (graph: MaterialGraph): MaterialGraphSettin
         twoSided: params('twoSided') === true,
         unlit: params('shading') === 'unlit',
         normalSpace: params('normalSpace') === 'world' ? 'world' : 'tangent',
+        keepOwnMaps: params('ownMaps') === true,
     };
 };

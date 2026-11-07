@@ -353,7 +353,7 @@ describe('material graph v2', () => {
     expect(materialGraphSettings(stored({ opacity: 0.5 })).blendMode).toBe('translucent');
     expect(materialGraphSettings(stored({}, [link('k', 'out', 'out', 'opacity')])).blendMode).toBe('translucent');
     expect(materialGraphSettings(stored({ blendMode: 'masked', alphaClip: 0.3, twoSided: true, shading: 'unlit' }))).toEqual({
-      blendMode: 'masked', alphaClip: 0.3, twoSided: true, unlit: true, normalSpace: 'tangent',
+      blendMode: 'masked', alphaClip: 0.3, twoSided: true, unlit: true, normalSpace: 'tangent', keepOwnMaps: false,
     });
   });
 
