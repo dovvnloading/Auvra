@@ -30,6 +30,7 @@ import { MATERIALS_DOMAIN, materialLibrary, readMaterialAsset, type MaterialAsse
 import { loadSkinPaint } from './skinPaint/modelSkin';
 import { applyLayout, decodeLayout } from '../texturing/uv/uvLayout';
 import { setLightVolumeSource } from '../runtime/lighting/lightVolumeLoader';
+import { setUpMaterialCooking } from '../runtime/materials/materialCookingSetup';
 import { PHONE_SUPPORTS, normalizeTextureSettings, setTextureSettings, setTextureSourceAsset, textureSettingsOf } from '../texturing/textureSettings';
 import { createMaterialTextureLoader, setProjectTextureLoader, type CompressedTextureCache } from '../texturing/materialTextureLoader';
 
@@ -329,6 +330,8 @@ export function createGameContentLoader(
       setProjectTextureLoader(projectTextureLoader);
       materialLibrary.setTextureSource((textureId) => textureAssetUrls.get(textureId), projectTextureLoader);
       materialLibrary.replaceAll(documents(MATERIALS_DOMAIN).map(readMaterialAsset).filter((asset): asset is MaterialAsset => asset !== null));
+      // Texture-graph materials may draw with pictures cooked from their graphs, each use with its own values (its setting).
+      setUpMaterialCooking(normalizeGameSettings(documents('metadata').find((doc) => doc?.id === GAME_SETTINGS_DOCUMENT_ID)?.settings).quality.textureGraphCooking);
       // Levels' baked light volumes are read when a level is shown.
       setLightVolumeSource((assetId) => resolveAssetUrl(assetId), releaseAssetUrl);
     }

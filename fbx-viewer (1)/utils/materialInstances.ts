@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { materialLibrary, type MaterialBinding } from '../runtime/materials/materialLibrary';
+import { GRAPH_SEED, cookable, graphParameterNames } from '../runtime/materials/materialCooking';
 import {
     materialGraphParameters,
     materialShaderVersions,
@@ -21,7 +22,10 @@ import { materialParameterValues, normalizeMaterialOverrides, type MaterialOverr
  * textures change only what its shader is given; each choice of a switch is a shader version of its own.
  *
  * A play session can also set values on one object (the blueprint's Set Material Number and Set
- * Material Colour): that object then gets copies of its own for the session.
+ * Material Colour, a script's setMaterialValue): that object then gets copies of its own for the session.
+ * Besides the material graph's parameters, a material made by a texture graph takes its graph's parameters
+ * and a seed (GRAPH_SEED): its pictures are then cooked for those values (runtime/materials/materialCooking.ts),
+ * shared by every object asking for the same ones.
  */
 
 /** A placed object's own parameter values for its model's materials, by material name. */
@@ -208,8 +212,10 @@ export const setObjectMaterialValue = (root: THREE.Object3D, name: string, value
             const binding = material ? materialLibrary.bindingOf(material) : undefined;
             const asset = binding ? materialLibrary.get(binding.materialId) : undefined;
             const parameter = asset ? materialGraphParameters(asset.graph).find(candidate => candidate.name === name) : undefined;
-            const taken = parameter ? valueForParameter(parameter.param.kind, value) : undefined;
-            if (!binding || !parameter || taken === undefined) return material;
+            // A texture graph's parameter or seed is cooked into the pictures (materialCooking.ts).
+            const cooked = !parameter && asset && cookable(asset) && (name === GRAPH_SEED || graphParameterNames(asset).includes(name));
+            const taken = parameter ? valueForParameter(parameter.param.kind, value) : cooked ? value : undefined;
+            if (!binding || (!parameter && !cooked) || taken === undefined) return material;
             let own = material;
             if (sessionCopies.get(material) !== mesh) {
                 own = makeInstance(material, binding, binding.parameters);
@@ -218,7 +224,7 @@ export const setObjectMaterialValue = (root: THREE.Object3D, name: string, value
                 swapped = true;
             }
             const current = materialLibrary.bindingOf(own) ?? binding;
-            materialLibrary.assign(own, current.materialId, current.flipY, { ...(current.parameters ?? {}), [name]: readParam(parameter.param, taken) as MaterialParameterValue });
+            materialLibrary.assign(own, current.materialId, current.flipY, { ...(current.parameters ?? {}), [name]: parameter ? readParam(parameter.param, taken) as MaterialParameterValue : taken });
             changed += 1;
             return own;
         });
