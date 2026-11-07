@@ -36,6 +36,7 @@ export interface TerrainLayerUniforms {
   terrainSplatSize: THREE.IUniform<THREE.Vector2>;
   terrainAlbedoArray: THREE.IUniform<THREE.Texture>;
   terrainDetailArray: THREE.IUniform<THREE.Texture>;
+  terrainSurfaceArray: THREE.IUniform<THREE.Texture>;
   terrainLayerCount: THREE.IUniform<number>;
   /** 1 / tile size, cos and sin of its turn, height contrast. */
   terrainLayerUv: THREE.IUniform<THREE.Vector4[]>;
@@ -50,8 +51,12 @@ export interface TerrainLayerUniforms {
 export type TerrainLayerMaterial = THREE.MeshStandardMaterial & { userData: { terrainUniforms: TerrainLayerUniforms } };
 
 export interface TerrainLayerBinding {
+  /** Colour. */
   albedo: THREE.Texture;
+  /** Normal, red and green. */
   detail: THREE.Texture;
+  /** Height in red, roughness in green; flat and fully rough when left out. */
+  surface?: THREE.Texture;
   layers: readonly TerrainLayerLook[];
   /** Plane size in its local units: width and depth. */
   width: number;
@@ -104,6 +109,7 @@ uniform sampler2D terrainSplat;
 uniform sampler2D terrainSplat2;
 uniform sampler2DArray terrainAlbedoArray;
 uniform sampler2DArray terrainDetailArray;
+uniform sampler2DArray terrainSurfaceArray;
 uniform int terrainLayerCount;
 uniform vec4 terrainLayerUv[ ${MAX_TERRAIN_LAYERS} ];
 uniform vec4 terrainLayerLook[ ${MAX_TERRAIN_LAYERS} ];
@@ -136,12 +142,14 @@ void terrainSampleLayer( int layer, vec2 at, vec2 dx, vec2 dy, out vec4 albedo, 
     vec2 uv = turn * at * uvSettings.x;
     vec2 gradX = turn * dx * uvSettings.x;
     vec2 gradY = turn * dy * uvSettings.x;
-    albedo = textureGrad( terrainAlbedoArray, vec3( uv, float( layer ) ), gradX, gradY );
+    // Colour, normal, and height with roughness are kept apart, so each compresses by what it is.
+    vec4 surface = textureGrad( terrainSurfaceArray, vec3( uv, float( layer ) ), gradX, gradY );
+    albedo = vec4( textureGrad( terrainAlbedoArray, vec3( uv, float( layer ) ), gradX, gradY ).rgb, surface.r );
     vec4 detail = textureGrad( terrainDetailArray, vec3( uv, float( layer ) ), gradX, gradY );
     vec2 slope = ( detail.rg * 2.0 - 1.0 ) * terrainLayerLook[ layer ].a;
     slope = slope * turn;
     tangentNormal = vec3( slope, sqrt( max( 0.0, 1.0 - min( 1.0, dot( slope, slope ) ) ) ) );
-    roughness = detail.b;
+    roughness = surface.g;
 }`;
 
 // Layers that do not exist carry no weight; a sample with no weight left shows layer 0. A layer with
@@ -276,19 +284,26 @@ const singlePixelArray = (bytes: readonly number[], colorSpace: THREE.ColorSpace
 
 let neutralAlbedoArray: THREE.DataArrayTexture | null = null;
 let neutralDetailArray: THREE.DataArrayTexture | null = null;
+let neutralSurfaceArray: THREE.DataArrayTexture | null = null;
 let emptySplat: THREE.DataTexture | null = null;
 let neutralLayerTexture: THREE.DataTexture | null = null;
 
-/** A one-layer array of flat grey at middling height, bound while a terrain's real ones build. Shared; never disposed. */
+/** A one-layer array of flat grey, bound while a terrain's real ones build. Shared; never disposed. */
 export const getNeutralAlbedoArray = (): THREE.DataArrayTexture => {
-  neutralAlbedoArray ??= singlePixelArray([0x55, 0x55, 0x55, 128], THREE.SRGBColorSpace);
+  neutralAlbedoArray ??= singlePixelArray([0x55, 0x55, 0x55, 255], THREE.SRGBColorSpace);
   return neutralAlbedoArray;
 };
 
-/** A one-layer array of a flat normal and full roughness. Shared; never disposed. */
+/** A one-layer array of a flat normal. Shared; never disposed. */
 export const getNeutralDetailArray = (): THREE.DataArrayTexture => {
   neutralDetailArray ??= singlePixelArray([128, 128, 255, 255], THREE.NoColorSpace);
   return neutralDetailArray;
+};
+
+/** A one-layer array of middling height and full roughness. Shared; never disposed. */
+export const getNeutralSurfaceArray = (): THREE.DataArrayTexture => {
+  neutralSurfaceArray ??= singlePixelArray([128, 255, 0, 255], THREE.NoColorSpace);
+  return neutralSurfaceArray;
 };
 
 /** No weight at all, for a terrain with four layers or fewer. Shared; never disposed. */
@@ -335,6 +350,7 @@ export function createTerrainLayerMaterial(splat: THREE.DataTexture): TerrainLay
     terrainSplatSize: { value: new THREE.Vector2(image.width, image.height) },
     terrainAlbedoArray: { value: getNeutralAlbedoArray() },
     terrainDetailArray: { value: getNeutralDetailArray() },
+    terrainSurfaceArray: { value: getNeutralSurfaceArray() },
     terrainLayerCount: { value: 1 },
     terrainLayerUv: { value: vectors() },
     terrainLayerLook: { value: vectors() },
@@ -432,6 +448,7 @@ export function bindTerrainLayers(material: TerrainLayerMaterial, binding: Terra
   const count = Math.max(1, Math.min(MAX_TERRAIN_LAYERS, binding.layers.length));
   uniforms.terrainAlbedoArray.value = binding.albedo;
   uniforms.terrainDetailArray.value = binding.detail;
+  uniforms.terrainSurfaceArray.value = binding.surface ?? getNeutralSurfaceArray();
   uniforms.terrainLayerCount.value = count;
   let heightBlend = 0;
   for (let index = 0; index < MAX_TERRAIN_LAYERS; index++) {

@@ -23,6 +23,7 @@ import {
     createTerrainSplatTexture,
     getNeutralAlbedoArray,
     getNeutralDetailArray,
+    getNeutralSurfaceArray,
     setTerrainSplatTextures,
     createTerrainGroundMaterial,
     type TerrainLayerLook,
@@ -190,6 +191,7 @@ export const TerrainObject = forwardRef<THREE.Group, TerrainObjectProps>(({
         bindTerrainLayers(layerMaterial, {
             albedo: layerArrays?.albedo ?? getNeutralAlbedoArray(),
             detail: layerArrays?.detail ?? getNeutralDetailArray(),
+            surface: layerArrays?.surface ?? getNeutralSurfaceArray(),
             layers: looks,
             width,
             depth,
