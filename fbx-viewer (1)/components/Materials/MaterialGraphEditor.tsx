@@ -114,19 +114,22 @@ export const MaterialGraphEditor: React.FC = () => {
 
     const history = useCallback((id: string) => historyOf(id), []);
 
-    const save = useCallback((next: MaterialAsset, immediately = false) => {
+    /** Saves the material, at once or shortly; saved at once, it settles when the project has it (true) or refused it (false). */
+    const save = useCallback((next: MaterialAsset, immediately = false): Promise<boolean> => {
         const timers = pending.current;
         clearTimeout(timers.get(next.id));
         const write = () => {
             timers.delete(next.id);
-            projectService.applyChanges([{ domain: MATERIALS_DOMAIN, operation: 'upsert', id: next.id, value: materialAssetDocument(next) }])
-                .then(() => setError(null), (failure: unknown) => {
+            return projectService.applyChanges([{ domain: MATERIALS_DOMAIN, operation: 'upsert', id: next.id, value: materialAssetDocument(next) }])
+                .then(() => { setError(null); return true; }, (failure: unknown) => {
                     frontendDiagnostics.failure('material_save_failed', failure);
                     setError('The material could not be saved: is a project open?');
+                    return false;
                 });
         };
-        if (immediately) write();
-        else timers.set(next.id, setTimeout(write, SAVE_DELAY_MS));
+        if (immediately) return write();
+        timers.set(next.id, setTimeout(() => { void write(); }, SAVE_DELAY_MS));
+        return Promise.resolve(true);
     }, []);
     useEffect(() => () => {
         // Leaving the tab saves what is waiting.

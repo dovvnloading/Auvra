@@ -97,7 +97,7 @@ interface Level {
 export const TextureGraphWorkspace: React.FC<{
     asset: MaterialAsset;
     assets: readonly MaterialAsset[];
-    onSave: (next: MaterialAsset, immediately?: boolean) => void;
+    onSave: (next: MaterialAsset, immediately?: boolean) => void | Promise<boolean>;
     onOpenAsset: (id: string) => void;
 }> = ({ asset, assets, onSave, onOpenAsset }) => {
     // Other graph materials, usable as nodes.
@@ -235,7 +235,7 @@ const Workspace: React.FC<{
     /** Shown only while it is the graph being edited (one opened inside it is not). */
     hidden: boolean;
     asset: MaterialAsset;
-    onSave: (next: MaterialAsset, immediately?: boolean) => void;
+    onSave: (next: MaterialAsset, immediately?: boolean) => void | Promise<boolean>;
     onOpenAsset: (id: string) => void;
     session: TextureGraphSession;
     entries: Map<string, GraphEntry>;
@@ -470,8 +470,10 @@ const Workspace: React.FC<{
                 textureGraph: { ...latestStored, baked: { textures: ids, signature: bakeSignature(latestStored, resolve), size: latestStored.bakeSize, at: Date.now() } } as unknown as Record<string, unknown>,
             };
             materialLibrary.upsert(next);
-            onSave(next, true);
-            void textureStore.discard(previous);
+            // The old pictures go once the project has the material without them, or their removal
+            // reads the material as it was and clashes with its save. Not saved, it still draws with them.
+            const saved = await onSave(next, true);
+            if (saved !== false) void textureStore.discard(previous);
             const drawn = pictures.filter((picture) => materialReadsPicture(picture.role)).length;
             setMessage({ text: `The material now draws with ${drawn} new picture${drawn === 1 ? '' : 's'} at ${width} × ${height}.`, tone: 'info' });
         } catch (error) {
