@@ -617,7 +617,7 @@ class ProviderHostTests(unittest.TestCase):
                 previews.close()
                 service.shutdown()
 
-    def test_media_commit_onto_a_material_makes_it_the_painted_base_map_of_its_override(self) -> None:
+    def test_media_commit_onto_a_material_makes_a_painted_copy_the_model_owns(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
             service = ProjectService(index=ProjectIndex(root / "projects.sqlite3"))
@@ -649,8 +649,31 @@ class ProviderHostTests(unittest.TestCase):
                     "textureId": "painted", "name": "Painted", "materialName": "Body", "targetModelId": "robot",
                 })
                 model = service.active.get_domain("models")["documents"][0]
-                self.assertEqual(model["materialOverrides"], {"Body": {"roughness": 0.4, "mapTextureId": "painted", "paintedMap": True}})
+                materials = service.active.get_domain("materials")["documents"]
+                self.assertEqual(len(materials), 1)
+                painted_copy = materials[0]
+                self.assertEqual(model["materialOverrides"], {"Body": {"roughness": 0.4, "materialId": painted_copy["id"]}})
+                self.assertEqual(painted_copy["owner"], {"modelId": "robot", "material": "Body"})
+                self.assertEqual(painted_copy["pictures"], {"baseColor": "painted"})
+                self.assertEqual(painted_copy["textureIds"], ["painted"])
+                self.assertEqual(painted_copy["name"], "Painted Body")
+                output = next(node for node in painted_copy["graph"]["nodes"] if node["type"] == "output")
+                self.assertTrue(output["params"]["ownMaps"])
                 self.assertEqual(model["textureOverrides"], {"Visor": "older"})
+                # Painted again, the same copy shows the new picture.
+                second_job = "job-media-f039-00005"
+                second = previews.ingest(second_job, io.BytesIO(picture(3, 3)), project_id=project_id)
+                host.jobs.create(project_id=project_id, provider="fal", model="gpt-test", capability=Capability.MEDIA_EDIT.value, prompt_hash="b" * 64, job_id=second_job)
+                for state in (JobState.SUBMITTING, JobState.RUNNING, JobState.SUCCEEDED):
+                    host.jobs.transition(second_job, state, project_id=project_id)
+                host._meta[second_job] = {"route": "cloud", "createdAt": 0, "assetIds": []}
+                host._commit_media({
+                    "projectId": project_id, "expectedRevision": service.active.revision, "jobId": second_job, "previewAssetId": second.asset_id,
+                    "textureId": "painted-again", "name": "Painted again", "materialName": "Body", "targetModelId": "robot",
+                })
+                materials = service.active.get_domain("materials")["documents"]
+                self.assertEqual([(item["id"], item["pictures"]) for item in materials], [(painted_copy["id"], {"baseColor": "painted-again"})])
+                self.assertEqual(service.active.get_domain("models")["documents"][0]["materialOverrides"], {"Body": {"roughness": 0.4, "materialId": painted_copy["id"]}})
             finally:
                 host.shutdown()
                 previews.close()

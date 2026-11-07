@@ -61,14 +61,40 @@ const authoringTextureIds = (value: unknown, into: Set<string>, key = ''): void 
     for (const [childKey, child] of Object.entries(value as Record<string, unknown>)) authoringTextureIds(child, into, key === 'textures' ? '#textures' : childKey);
 };
 
-/** The same authoring document with every mention of `textureId` cleared. */
-const withoutAuthoringTexture = <T>(value: T, textureId: string, key = ''): T => {
-    if (typeof value === 'string') return ((key === 'texture' || key === 'textureId' || key === '#textures') && value === textureId ? '' : value) as T;
-    if (Array.isArray(value)) return value.map((item) => withoutAuthoringTexture(item, textureId, key === '#textures' ? '' : key)) as T;
+/** The same authoring document with every texture it names renamed (or cleared, renamed to ''). */
+const renamedAuthoringTextures = <T>(value: T, rename: (textureId: string) => string, key = ''): T => {
+    if (typeof value === 'string') return ((key === 'texture' || key === 'textureId' || key === '#textures') && value ? rename(value) : value) as T;
+    if (Array.isArray(value)) return value.map((item) => renamedAuthoringTextures(item, rename, key === '#textures' ? '' : key)) as T;
     if (!value || typeof value !== 'object') return value;
     const result: Record<string, unknown> = {};
-    for (const [childKey, child] of Object.entries(value as Record<string, unknown>)) result[childKey] = withoutAuthoringTexture(child, textureId, key === 'textures' ? '#textures' : childKey);
+    for (const [childKey, child] of Object.entries(value as Record<string, unknown>)) result[childKey] = renamedAuthoringTextures(child, rename, key === 'textures' ? '#textures' : childKey);
     return result as T;
+};
+
+/** The same authoring document with every mention of `textureId` cleared. */
+const withoutAuthoringTexture = <T>(value: T, textureId: string): T => renamedAuthoringTextures(value, (id) => (id === textureId ? '' : id));
+
+/**
+ * The asset with every texture it names (in its graph, its authoring documents and its pictures) renamed:
+ * how a material from another project takes the ids its pictures were given here. A texture renamed to
+ * '' is cleared, and a picture renamed to '' is dropped.
+ */
+export const withRenamedTextures = (asset: MaterialAsset, rename: (textureId: string) => string): MaterialAsset => {
+    const pictures = asset.pictures
+        ? Object.fromEntries(Object.entries(asset.pictures).map(([name, textureId]) => [name, rename(textureId)]).filter(([, textureId]) => textureId))
+        : undefined;
+    return {
+        ...asset,
+        graph: {
+            ...asset.graph,
+            nodes: asset.graph.nodes.map((node) => (typeof node.params.texture === 'string' && node.params.texture
+                ? { ...node, params: { ...node.params, texture: rename(node.params.texture) } }
+                : node)),
+        },
+        ...(asset.textureGraph ? { textureGraph: renamedAuthoringTextures(asset.textureGraph, rename) } : {}),
+        ...(asset.paint ? { paint: renamedAuthoringTextures(asset.paint, rename) } : {}),
+        ...(pictures ? { pictures } : {}),
+    };
 };
 
 /** The asset with `textureId` gone from its graph and its authoring documents; the same asset when none names it. */

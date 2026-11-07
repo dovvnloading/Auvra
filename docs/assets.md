@@ -158,6 +158,14 @@ Materials made before blend modes keep their look: one whose opacity was set or 
 
 A shader that does not compile marks the nodes whose code failed on the canvas, and on a Custom GLSL node's code, with what is wrong in plain words; the panel under the preview says the same, with the compiler's own lines behind **Details**.
 
+### My library
+
+**My library** (the book button at the top of the Materials list) keeps your own materials for every project, on this computer, each shown as a ball drawn the way the engine draws it. **Add to my library** (the book button beside a material's name) keeps a copy of the material with its pictures; adding it again updates that copy. In the library, search by name, tag or folder, or pick a folder or tag above the balls. The chosen material's page renames it, moves it into a folder (type a path such as Metals/Painted), tags it, says which projects it went into, and has **Use in this project** (or drag its ball onto the project's materials, or double-click it), **Duplicate** and **Delete**, which can be undone. A material brought in is the project's own copy, its pictures added to the project's textures under Materials/its name.
+
+### MaterialX
+
+The arrow button beside a material's name exports it as MaterialX: a .zip holding a .mtlx file and its pictures, as **Standard Surface** (read by most tools) or **OpenPBR**. Inputs left unwired are written as their values, inputs read straight from a picture as images (one channel taken out of a packed picture, normal maps through a normal map node); an input the graph works out some other way is written as its value, and the editor says which. **New** › **From a MaterialX file** reads a .mtlx file, picked together with its pictures, into a new shader graph of Texture Sample and Normal Map nodes on a Material Output.
+
 ### Height, parallax and triplanar normals
 
 **Parallax** makes a flat surface look deep: it follows the view into a height map (white high, black low), so bricks, stones and tiles look raised as you move round them. Wire its **UV** into the textures it should move and its **Shadow** into the Material Output's **Self-shadow**, where the raised parts shade the low ones from the sun. **Depth** is in texture units; **Quality** takes 8, 16 or 32 steps; **Self-shadow** off skips the shadow. Materials made from pictures with a height (a texture graph's **Update material**, or a painting put on a model) are wired this way for you, with a depth of 0.03 that each model and placed object can change through the material's **Height depth** value.
@@ -197,12 +205,12 @@ Textures can be PNG, JPEG or WebP, and also 16-bit PNG, TIFF (8, 16 or 32-bit fl
 **Texture Settings** on a texture's menu in the Content Browser sets how it is kept and drawn:
 
 - **Read as**: **By use** (colour where a material reads colour, data where it reads data), **Colour**, or **Data** (masks, roughness, metalness, height: values kept as stored). **Normal map** marks it as one wherever it is read.
-- **Compression**: **By what it is** compresses colour to BC7, normal maps to BC5 and one channel of data to BC4, for about a quarter (or an eighth) of the memory; or pick one, or **None**. Pictures with light beyond white stay 16-bit floating point. A graphics card that cannot take a compression gets the texture whole. The game's **Texture compression** setting turns compression off altogether.
+- **Compression**: **By what it is** compresses colour to BC7, normal maps to BC5 and one channel of data to BC4, for about a quarter (or an eighth) of the memory; or pick one, or **None**. Pictures with light beyond white stay 16-bit floating point. A graphics card without BC (phones and tablets) takes ASTC 4×4 in its place, else ETC2; Texture Settings says what phones take. One that takes none of them gets the texture whole. The game's **Texture compression** setting turns compression off altogether.
 - **Size limit** draws it no larger than that; **Mip levels** keeps smaller copies for far away (made with a sharp filter, normals kept unit length); **Edges** repeat, stretch or mirror; **Filter** is smooth or pixelated.
 
 A texture whose name ends _n, _nrm, _normal, _nor or _nor_gl (a size such as _4k after it is fine) is imported as a normal map, and one ending _nor_dx as a DirectX normal map, whose green is turned over as it loads (**Green points** in its settings). Roughness, metallic, occlusion, height and packed maps are read as data. Texture Settings can change any of it.
 
-A texture is compressed once: the result is kept in the project and in built games, so reopening the project or playing the game loads it as it is. Textures named by material overrides and decals take the same path as material textures.
+A texture is compressed once: the result is kept in the project and in built games, so reopening the project or playing the game loads it as it is. The editor keeps its phone versions (ASTC and ETC2) as well, so a built game carries the format each device needs. Terrain layers compress the same way, by what they hold: colour, normals, and height with roughness. Textures named by material overrides and decals take the same path as material textures.
 
 Its preview shows the picture as imported and as kept, side by side, with the memory each takes. Compressed sides must be a multiple of 4 pixels. **Memory** in the Materials tab shows what a level's textures take against the game's asset memory, its largest textures and what each material asset's textures take, with plain warnings where it is a lot.
 

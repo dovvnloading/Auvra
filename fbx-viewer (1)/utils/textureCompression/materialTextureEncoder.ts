@@ -1,4 +1,6 @@
 import { decodeBlocks, encodeBlocks } from './bcEncoder';
+import { ASTC_BLOCK_BYTES, decodeAstcBlock, encodeAstcBlock } from './astcEncoder';
+import { ETC2A_BLOCK_BYTES, ETC2_BLOCK_BYTES, decodeEtc2AlphaBlock, decodeEtc2Block, encodeEtc2AlphaBlock, encodeEtc2Block } from './etc2Encoder';
 
 /**
  * MATERIAL TEXTURE COMPRESSION
@@ -11,22 +13,27 @@ import { decodeBlocks, encodeBlocks } from './bcEncoder';
  *   three r164 cannot upload unsigned BC4 (its format table checks the wrong constant), so it is written
  *   as signed BC4 using only the non-negative half: values read back 0..1 as they should, with end points
  *   at 7 bits rather than 8.
+ * Graphics cards without BC (phones, tablets) take ASTC 4×4 (astcEncoder.ts), else ETC2 (etc2Encoder.ts),
+ * with EAC alpha where the texture has alpha: a byte a pixel, or half a byte for opaque ETC2.
  * Mip levels are made with a Kaiser-windowed filter rather than a box (sharper, with no ringing to speak
  * of): colour in linear light, normals as directions, made unit length again at each level.
  */
 
-export type MaterialTextureFormat = 'bc7' | 'bc5' | 'bc4';
+/** The BC formats, for desktop graphics cards (and what a texture's settings can pick). */
+export type BcFormat = 'bc7' | 'bc5' | 'bc4';
+/** Every compressed format a material texture is kept in: BC, and ASTC or ETC2 (opaque, or with alpha) for phones. */
+export type MaterialTextureFormat = BcFormat | 'astc' | 'etc2' | 'etc2a';
 export type MaterialTextureKind = 'colour' | 'data' | 'normal';
 
 export interface EncodedLevel { data: Uint8Array; width: number; height: number }
 
 /** Bytes a pixel each way of keeping a texture. */
-export const BYTES_PER_PIXEL: Record<MaterialTextureFormat | 'rgba8' | 'half', number> = { bc7: 1, bc5: 1, bc4: 0.5, rgba8: 4, half: 8 };
+export const BYTES_PER_PIXEL: Record<MaterialTextureFormat | 'rgba8' | 'half', number> = { bc7: 1, bc5: 1, bc4: 0.5, astc: 1, etc2: 0.5, etc2a: 1, rgba8: 4, half: 8 };
 
 /** Bytes a texture takes on the GPU, with its mip levels when it has them. */
 export const textureMemoryBytes = (width: number, height: number, format: MaterialTextureFormat | 'rgba8' | 'half', mips = true): number => {
     // Blocks of 4×4 for the compressed formats.
-    const blocky = format === 'bc7' || format === 'bc5' || format === 'bc4';
+    const blocky = format !== 'rgba8' && format !== 'half';
     let total = 0;
     let w = width;
     let h = height;
@@ -310,7 +317,23 @@ const decodeBc4Block = (bytes: Uint8Array, out: Uint8Array): void => {
 
 // --- Whole textures ------------------------------------------------------------------------------
 
-const BLOCK_SIZE: Record<MaterialTextureFormat, number> = { bc7: 16, bc5: 16, bc4: 8 };
+const BLOCK_SIZE: Record<MaterialTextureFormat, number> = { bc7: 16, bc5: 16, bc4: 8, astc: ASTC_BLOCK_BYTES, etc2: ETC2_BLOCK_BYTES, etc2a: ETC2A_BLOCK_BYTES };
+
+const ENCODE_BLOCK: Record<Exclude<MaterialTextureFormat, 'bc5'>, (block: Uint8Array) => Uint8Array> = {
+    bc7: (block) => encodeBc7Block(block),
+    bc4: (block) => encodeBc4Block(block),
+    astc: encodeAstcBlock,
+    etc2: encodeEtc2Block,
+    etc2a: encodeEtc2AlphaBlock,
+};
+
+const DECODE_BLOCK: Record<Exclude<MaterialTextureFormat, 'bc5'>, (bytes: Uint8Array, out: Uint8Array) => void> = {
+    bc7: (bytes, out) => decodeBc7Block(bytes, out),
+    bc4: (bytes, out) => decodeBc4Block(bytes, out),
+    astc: decodeAstcBlock,
+    etc2: decodeEtc2Block,
+    etc2a: decodeEtc2AlphaBlock,
+};
 
 /** One level's blocks in the format. */
 export const encodeLevel = (rgba: Uint8Array, width: number, height: number, format: MaterialTextureFormat): Uint8Array => {
@@ -323,7 +346,7 @@ export const encodeLevel = (rgba: Uint8Array, width: number, height: number, for
     for (let by = 0; by < rows; by++) {
         for (let bx = 0; bx < columns; bx++) {
             readBlock(rgba, width, height, bx, by, block);
-            out.set(format === 'bc7' ? encodeBc7Block(block) : encodeBc4Block(block), (by * columns + bx) * size);
+            out.set(ENCODE_BLOCK[format](block), (by * columns + bx) * size);
         }
     }
     return out;
@@ -349,8 +372,7 @@ export const decodeLevel = (data: Uint8Array, width: number, height: number, for
     for (let by = 0; by < Math.ceil(height / 4); by++) {
         for (let bx = 0; bx < columns; bx++) {
             const bytes = data.subarray((by * columns + bx) * size, (by * columns + bx + 1) * size);
-            if (format === 'bc7') decodeBc7Block(bytes, block);
-            else decodeBc4Block(bytes, block);
+            DECODE_BLOCK[format](bytes, block);
             for (let y = 0; y < 4; y++) for (let x = 0; x < 4; x++) {
                 const px = bx * 4 + x, py = by * 4 + y;
                 if (px < width && py < height) out.set(block.subarray((y * 4 + x) * 4, (y * 4 + x) * 4 + 4), (py * width + px) * 4);

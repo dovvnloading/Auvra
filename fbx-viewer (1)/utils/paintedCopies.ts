@@ -31,6 +31,12 @@ export const paintedCopyGraph = (): MaterialGraph => normalizeMaterialGraph({
     ],
 });
 
+/** What marks a painted copy kept only while Material Overrides previews an unsaved picture. */
+const PREVIEW_PREFIX = 'preview-painted:';
+
+/** Whether an asset is a preview-only painted copy (never saved). */
+export const isPreviewCopy = (id: string): boolean => id.startsWith(PREVIEW_PREFIX);
+
 /** Whether an asset is a painted copy some model owns (not a material to list or give to others). */
 export const isPaintedCopy = (asset: Pick<MaterialAsset, 'owner'> | undefined): boolean => Boolean(asset?.owner);
 
@@ -44,7 +50,8 @@ export const contractPaintedCopies = (
     assets: readonly MaterialAsset[],
     newId: () => string = () => crypto.randomUUID(),
 ): { overrides: MaterialOverrides; upserts: MaterialAsset[]; removals: string[] } => {
-    const owned = assets.filter(asset => asset.owner?.modelId === modelId);
+    // A copy kept only for a preview is never the model's own.
+    const owned = assets.filter(asset => asset.owner?.modelId === modelId && !isPreviewCopy(asset.id));
     const used = new Set<string>();
     const upserts: MaterialAsset[] = [];
     const next: MaterialOverrides = {};
@@ -68,6 +75,29 @@ export const contractPaintedCopies = (
         }
     }
     return { overrides: next, upserts, removals: owned.filter(asset => !used.has(asset.id)).map(asset => asset.id) };
+};
+
+/**
+ * The overrides as they draw while being edited: painted base maps as the model's painted copies, as saving
+ * keeps them. A picture not yet saved is drawn by a copy kept only for the preview (its id marked so), which
+ * `previews` lists for the caller to put in the material library, and to take out again once not shown.
+ */
+export const drawnPaintedCopies = (
+    modelId: string,
+    overrides: MaterialOverrides,
+    assets: readonly MaterialAsset[],
+): { overrides: MaterialOverrides; previews: MaterialAsset[] } => {
+    const saved = assets.filter(asset => !isPreviewCopy(asset.id));
+    const { overrides: drawn, upserts } = contractPaintedCopies(modelId, overrides, saved);
+    const previews: MaterialAsset[] = [];
+    const next: MaterialOverrides = { ...drawn };
+    for (const copy of upserts) {
+        const material = copy.owner!.material;
+        const preview = { ...copy, id: `${PREVIEW_PREFIX}${modelId}:${material}` };
+        previews.push(preview);
+        next[material] = { ...next[material], materialId: preview.id };
+    }
+    return { overrides: next, previews };
 };
 
 /** The overrides with each painted copy shown as the painted base map it carries (what Material Overrides and Retexture edit). */

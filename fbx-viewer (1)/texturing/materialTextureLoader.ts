@@ -12,7 +12,8 @@ import { textureSourceAssetOf, type TextureRole, type TextureSettings } from './
  *
  * How the material library makes a texture for a graph: the file decoded at its own depth (off the page),
  * scaled down to its size limit, then compressed for its role where the GPU can take it (BC7 colour, BC5
- * normals, BC4 single channels, with Kaiser mip levels), or kept whole as 8-bit or half floats. Its wrap,
+ * normals, BC4 single channels, with Kaiser mip levels; ASTC or ETC2 on phones), or kept whole as 8-bit or
+ * half floats. The editor also keeps each texture's phone versions, so built games carry them. Its wrap,
  * filter, mips and colour space come from its settings (textureSettings.ts).
  */
 
@@ -30,6 +31,9 @@ const COMPRESSED_FORMATS: Record<MaterialTextureFormat, THREE.CompressedPixelFor
     bc5: THREE.RED_GREEN_RGTC2_Format,
     // Signed: three r164 cannot upload unsigned BC4 (materialTextureEncoder.ts).
     bc4: THREE.SIGNED_RED_RGTC1_Format,
+    astc: THREE.RGBA_ASTC_4x4_Format,
+    etc2: THREE.RGB_ETC2_Format,
+    etc2a: THREE.RGBA_ETC2_EAC_Format,
 };
 
 const WRAPS = { repeat: THREE.RepeatWrapping, clamp: THREE.ClampToEdgeWrapping, mirror: THREE.MirroredRepeatWrapping } as const;
@@ -40,7 +44,12 @@ let support: CompressionSupport | null = null;
 export const compressionSupport = (): CompressionSupport => {
     if (!support) {
         const extensions = gpuExtensions();
-        support = { bptc: extensions.has('EXT_texture_compression_bptc'), rgtc: extensions.has('EXT_texture_compression_rgtc') };
+        support = {
+            bptc: extensions.has('EXT_texture_compression_bptc'),
+            rgtc: extensions.has('EXT_texture_compression_rgtc'),
+            astc: extensions.has('WEBGL_compressed_texture_astc'),
+            etc2: extensions.has('WEBGL_compressed_texture_etc'),
+        };
     }
     return support;
 };
@@ -51,6 +60,15 @@ const flipped = <T extends Uint8Array | Uint16Array>(data: T, width: number, hei
     const out = new (data.constructor as new (length: number) => T)(data.length);
     for (let y = 0; y < height; y++) out.set(data.subarray((height - 1 - y) * row, (height - y) * row), y * row);
     return out;
+};
+
+/** A sized picture's 8-bit pixels as they are compressed or uploaded: sRGB-encoded floating-point colour, DirectX green turned over, laid the right way up. */
+const preparedBytes = (sized: DecodedPicture, request: MaterialTextureRequest, role: TextureRole, flipGreen: boolean): Uint8Array => {
+    // Floating-point colour is encoded to sRGB, as the colour formats read it.
+    const bytes = pictureToRgba8(sized, sized.depth === 32 && role === 'colour');
+    // A DirectX normal map's green points down: turned over so it reads as the others do.
+    if (flipGreen) for (let i = 1; i < bytes.length; i += 4) bytes[i] = 255 - bytes[i];
+    return request.flipY ? flipped(bytes, sized.width, sized.height) : bytes;
 };
 
 /** A texture made from a decoded picture as its settings and role say (exported for the tests). */
@@ -64,28 +82,21 @@ export const textureFromPicture = async (
     const format = compress ? keptFormat(role, settings, support, sized) : wholeFormat(sized);
     const mips = settings?.mips !== false;
     let texture: THREE.Texture;
-    if (format === 'half') {
+    if (format !== 'half' && format !== 'rgba8') {
+        const levels = await encodeTextureOffPage(preparedBytes(sized, request, role, settings?.flipGreen === true), width, height, format, role === 'colour' ? 'colour' : role, mips);
+        texture = new THREE.CompressedTexture(levels as unknown as ImageData[], width, height, COMPRESSED_FORMATS[format]);
+        texture.generateMipmaps = false;
+        texture.minFilter = levels.length > 1 ? THREE.LinearMipmapLinearFilter : THREE.LinearFilter;
+    } else if (format === 'half') {
         const half = pictureToHalf(sized);
         texture = new THREE.DataTexture(request.flipY ? flipped(half, width, height) : half, width, height, THREE.RGBAFormat, THREE.HalfFloatType);
         // Half floats are not filtered into mip levels here.
         texture.generateMipmaps = false;
         texture.minFilter = THREE.LinearFilter;
     } else {
-        // Floating-point colour is encoded to sRGB, as the colour formats read it.
-        const bytes = pictureToRgba8(sized, sized.depth === 32 && role === 'colour');
-        // A DirectX normal map's green points down: turned over so it reads as the others do.
-        if (settings?.flipGreen) for (let i = 1; i < bytes.length; i += 4) bytes[i] = 255 - bytes[i];
-        const rgba = request.flipY ? flipped(bytes, width, height) : bytes;
-        if (format === 'rgba8') {
-            texture = new THREE.DataTexture(rgba, width, height, THREE.RGBAFormat, THREE.UnsignedByteType);
-            texture.generateMipmaps = mips;
-            texture.minFilter = mips ? THREE.LinearMipmapLinearFilter : THREE.LinearFilter;
-        } else {
-            const levels = await encodeTextureOffPage(rgba, width, height, format, role === 'colour' ? 'colour' : role, mips);
-            texture = new THREE.CompressedTexture(levels as unknown as ImageData[], width, height, COMPRESSED_FORMATS[format]);
-            texture.generateMipmaps = false;
-            texture.minFilter = levels.length > 1 ? THREE.LinearMipmapLinearFilter : THREE.LinearFilter;
-        }
+        texture = new THREE.DataTexture(preparedBytes(sized, request, role, settings?.flipGreen === true), width, height, THREE.RGBAFormat, THREE.UnsignedByteType);
+        texture.generateMipmaps = mips;
+        texture.minFilter = mips ? THREE.LinearMipmapLinearFilter : THREE.LinearFilter;
     }
     setUp(texture, role, format, settings);
     return { texture, format };
@@ -139,7 +150,37 @@ export interface CompressedTextureCache {
  * The material library's loader: `compress` off (the game's quality settings) keeps every texture whole.
  * With a cache, a texture compressed before loads its kept blocks instead of being compressed again.
  */
-export const createMaterialTextureLoader = (options: { compress: boolean; cache?: CompressedTextureCache; support?: CompressionSupport }) => async (url: string, request?: MaterialTextureRequest): Promise<THREE.Texture> => {
+/** Phone versions waiting to be made, one at a time, behind what is being drawn. */
+let phoneQueue: Promise<void> = Promise.resolve();
+
+type KeepingCache = CompressedTextureCache & { keep: NonNullable<CompressedTextureCache['keep']> };
+
+/**
+ * Keeps a texture's versions for other graphics cards (phones: ASTC, ETC2) under their own signatures, where
+ * none is kept yet, so built games carry the format each device needs. Made one at a time, in the background.
+ */
+const keepOtherVersions = (picture: DecodedPicture, request: MaterialTextureRequest, source: string, supports: readonly CompressionSupport[], cache: KeepingCache): Promise<void> => {
+    const settings = textureSettingsOf(request.textureId);
+    const role = textureRole(request.slot, settings);
+    const sized = limitPictureSize(picture, settings?.maxSize);
+    const mips = settings?.mips !== false;
+    for (const support of supports) {
+        phoneQueue = phoneQueue.then(async () => {
+            const format = keptFormat(role, settings, support, sized);
+            if (format === 'rgba8' || format === 'half') return;
+            const signature = compressionSignature(source, role, settings, request.flipY, support);
+            if (await cache.find(request.textureId, signature).catch(() => null)) return;
+            const levels = await encodeTextureOffPage(preparedBytes(sized, request, role, settings?.flipGreen === true), sized.width, sized.height, format, role === 'colour' ? 'colour' : role, mips);
+            await cache.keep(request.textureId, signature, packCompressed({ format, width: sized.width, height: sized.height, levels }));
+        }).catch(() => undefined);
+    }
+    return phoneQueue;
+};
+
+/** Settles once every phone version asked for so far is kept (tests). */
+export const phoneVersionsKept = (): Promise<void> => phoneQueue;
+
+export const createMaterialTextureLoader = (options: { compress: boolean; cache?: CompressedTextureCache; support?: CompressionSupport; alsoKeepFor?: readonly CompressionSupport[] }) => async (url: string, request?: MaterialTextureRequest): Promise<THREE.Texture> => {
     const support = options.support ?? compressionSupport();
     const asked = request ?? { textureId: '', slot: 'map' as const, flipY: true };
     const settings = textureSettingsOf(asked.textureId);
@@ -159,6 +200,10 @@ export const createMaterialTextureLoader = (options: { compress: boolean; cache?
         const packed = packCompressed({ format, width: levels[0].width, height: levels[0].height, levels });
         // Kept for next time; a failure (a read-only project) only means compressing again then.
         void options.cache.keep(asked.textureId, signature, packed).catch(() => undefined);
+    }
+    // Its versions for phones are kept as well (in the editor), behind what is being drawn.
+    if (options.compress && options.alsoKeepFor?.length && options.cache?.keep && source) {
+        void keepOtherVersions(picture, asked, source, options.alsoKeepFor, options.cache as KeepingCache);
     }
     return texture;
 };

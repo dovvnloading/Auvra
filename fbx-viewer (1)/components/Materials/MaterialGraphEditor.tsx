@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { CommentAddIcon, CrossIcon, FlowIcon, GraphIcon, PlusIcon, TrashIcon, WarningIcon } from '../UI/Icons';
+import { BookIcon, CommentAddIcon, CrossIcon, ExternalLinkIcon, FlowIcon, GraphIcon, PlusIcon, TrashIcon, WarningIcon } from '../UI/Icons';
 import { useAssets } from '../../context/AssetContext';
 import { projectService } from '../../utils/projectService';
 import { frontendDiagnostics } from '../../diagnostics/runtime';
@@ -14,7 +14,9 @@ import {
     type MaterialGraph,
     type MaterialGraphNode,
 } from '../../runtime/materials/materialGraph';
-import { MATERIALS_DOMAIN, materialAssetDocument, materialLibrary, type MaterialAsset } from '../../runtime/materials/materialLibrary';
+import { MATERIALS_DOMAIN, materialAssetDocument, materialAssetUse, materialLibrary, type MaterialAsset } from '../../runtime/materials/materialLibrary';
+import { LIBRARY_DRAG_TYPE, MyLibraryPanel, useAddToLibrary, useBringIn, useUserLibrary } from './MyLibrary';
+import { MaterialXExportButton, MaterialXImport, type MaterialXImportHandle } from './MaterialXFiles';
 import { MaterialFromDescription } from './MaterialFromDescription';
 import { STARTER_MATERIALS } from '../../runtime/materials/starterMaterials';
 import { MaterialGraphCanvas } from './MaterialGraphCanvas';
@@ -25,7 +27,7 @@ import { deleteMaterialQuestion, materialUses, type MaterialUses } from './mater
 import { appConfirm } from '../../utils/appDialogs';
 import { useScene } from '../../context/SceneContext';
 import { GraphHistory, createComment, nodeRect, removeNodes, showsPreview, withComments } from './materialGraphEditing';
-import { Popover } from '../UI/kit';
+import { IconButton, Popover } from '../UI/kit';
 import { FRAME_COLOURS, FRAME_COLOUR_NAMES } from '../NodeGraph/frames';
 import { OPEN_MATERIAL_EVENT, takeOpenMaterialRequest } from '../Texturing/Paint/openMaterial';
 import { isSmartMaterialAsset } from '../../texturing/paint/smartMaterials';
@@ -85,7 +87,7 @@ export const MaterialGraphEditor: React.FC = () => {
     // Painted copies belong to their models (Material Overrides), not to the material list.
     const assets = useMemo(() => allAssets.filter((candidate) => !isSmartMaterialAsset(candidate) && !isExportTemplatesAsset(candidate) && !candidate.owner), [allAssets]);
     const { textures, removeMaterialAsset, updateModelMaterialOverrides } = useAssets();
-    const { models, levelObjects } = useScene();
+    const { models, levelObjects, projectStatus } = useScene();
     // The last material deleted, and what used it, until it is undone or another goes.
     const [deleted, setDeleted] = useState<{ asset: MaterialAsset; uses: MaterialUses } | null>(null);
     const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -100,6 +102,33 @@ export const MaterialGraphEditor: React.FC = () => {
     // The canvas takes node errors as a plain record (node id -> message).
     const canvasMarks = useMemo(() => ({ nodeErrors: Object.fromEntries(nodeErrors) as Record<string, string> }), [nodeErrors]);
     const asset = assets.find(candidate => candidate.id === selectedId) ?? assets[0] ?? null;
+    // My library: open in place of the editor, beside the project's list, which takes balls dropped on it.
+    const [libraryOpen, setLibraryOpen] = useState(false);
+    const [dropping, setDropping] = useState(false);
+    // Followed so the button below says whether this material is in the library already.
+    const { library: myLibrary } = useUserLibrary();
+    const bringIn = useBringIn();
+    const addToMyLibrary = useAddToLibrary();
+    const [adding, setAdding] = useState(false);
+    const inMyLibrary = asset && projectStatus.projectId ? myLibrary.addedFrom(projectStatus.projectId, asset.id) : undefined;
+    const bringInAndSelect = useCallback(async (entryId: string) => {
+        const brought = await bringIn(entryId);
+        if (brought) setSelectedId(brought.id);
+        return brought;
+    }, [bringIn]);
+    const addAsset = async () => {
+        if (!asset) return;
+        setAdding(true);
+        await addToMyLibrary(materialLibrary.get(asset.id) ?? asset);
+        setAdding(false);
+    };
+    const materialXImport = useRef<MaterialXImportHandle>(null);
+    const libraryButton = asset && materialAssetUse(asset) !== 'forOtherGraphs' ? (<>
+        <MaterialXExportButton asset={asset} />
+        <IconButton label={adding ? 'Adding it to your library…' : inMyLibrary ? 'Update in my library: the copy kept for every project' : 'Add to my library: keep a copy for every project'} disabled={adding} onClick={() => void addAsset()}>
+            <BookIcon size={14} />
+        </IconButton>
+    </>) : null;
     // A material another tab asked to open (Paint's "edit a copy"): taken when this tab opens, and while it is open.
     useEffect(() => {
         const takeRequest = () => {
@@ -322,10 +351,12 @@ export const MaterialGraphEditor: React.FC = () => {
                 <div className="flex items-center gap-1.5 border-b border-gray-800 px-3 py-2">
                     <span className="text-xs font-bold text-gray-400">Materials</span>
                     <span className="flex-1" />
+                    <IconButton label="My library: your materials for every project" active={libraryOpen} onClick={() => setLibraryOpen(open => !open)}><BookIcon size={14} /></IconButton>
                     <MaterialFromDescription onCreated={createFromDescription} />
                     <button onClick={() => setMemoryOpen(true)} title="What textures take on the graphics card, per level and per material"
                         className="rounded bg-gray-800 px-2 py-1 text-2xs text-gray-200 hover:bg-gray-700">Memory</button>
                     {memoryOpen && <TextureMemoryDialog onClose={() => setMemoryOpen(false)} />}
+                    <MaterialXImport ref={materialXImport} onImported={(imported) => { setSelectedId(imported.id); select([]); setLibraryOpen(false); }} />
                     <button ref={newButton} onClick={() => setNewMenu(true)} aria-label="New material" className="flex items-center gap-1 rounded bg-gray-800 px-2 py-1 text-2xs text-gray-200 hover:bg-gray-700"><PlusIcon size={12} /> New</button>
                     <Popover anchor={newButton} open={newMenu} onClose={() => setNewMenu(false)} width={280} label="New material">
                         <div className="p-1">
@@ -333,6 +364,7 @@ export const MaterialGraphEditor: React.FC = () => {
                                 { key: 'texture', icon: <GraphIcon size={14} />, title: 'Texture graph', text: 'Noises, patterns, blurs and filters drawn into the material\'s pictures: base colour, normal, roughness and the rest.', run: () => createTextureGraph_(false) },
                                 { key: 'shader', icon: <FlowIcon size={14} />, title: 'Shader graph', text: 'Maths worked out for every pixel as the model draws: moving, glowing and view-dependent looks.', run: create },
                                 { key: 'function', icon: <GraphIcon size={14} />, title: 'Graph for other graphs', text: 'A texture graph with an input, made to be used as one node inside others (a smart mask, a filter).', run: () => createTextureGraph_(true) },
+                                { key: 'materialx', icon: <ExternalLinkIcon size={14} />, title: 'From a MaterialX file', text: 'Pick a .mtlx file together with its pictures: its surface becomes a shader graph.', run: () => materialXImport.current?.pick() },
                             ].map((item) => (
                                 <button key={item.key} onClick={() => { setNewMenu(false); item.run(); }} className="flex w-full gap-2 rounded px-2 py-1.5 text-left hover:bg-gray-800">
                                     <span className="mt-0.5 text-gray-400">{item.icon}</span>
@@ -356,12 +388,24 @@ export const MaterialGraphEditor: React.FC = () => {
                         <button onClick={() => setDeleted(null)} aria-label="Dismiss" className="text-gray-500 hover:text-gray-300"><CrossIcon size={11} /></button>
                     </div>
                 )}
-                <div className="flex-1 overflow-y-auto p-2">
+                <div
+                    className={`flex-1 overflow-y-auto p-2 ${dropping ? 'bg-accent/10 ring-1 ring-inset ring-accent/60' : ''}`}
+                    onDragOver={(event) => { if (!event.dataTransfer.types.includes(LIBRARY_DRAG_TYPE)) return; event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; setDropping(true); }}
+                    onDragLeave={() => setDropping(false)}
+                    onDrop={(event) => {
+                        setDropping(false);
+                        const entryId = event.dataTransfer.getData(LIBRARY_DRAG_TYPE);
+                        if (!entryId) return;
+                        event.preventDefault();
+                        void bringInAndSelect(entryId);
+                    }}
+                >
+                    {dropping && <p className="mb-1 px-1 text-2xs text-accent">Drop to bring it into this project</p>}
                     {assets.length === 0 && <p className="px-1 text-2xs text-gray-500">No materials yet. A material is a node graph; give one to a model's material in Properties › Material Overrides.</p>}
                     {assets.map(candidate => (
                         <button
                             key={candidate.id}
-                            onClick={() => { setSelectedId(candidate.id); select([]); }}
+                            onClick={() => { setSelectedId(candidate.id); select([]); setLibraryOpen(false); }}
                             className={`mb-1 w-full truncate rounded px-2 py-1.5 text-left text-xs ${candidate.id === asset?.id ? 'bg-blue-900/40 text-white' : 'text-gray-300 hover:bg-gray-800'}`}
                         >
                             <span className="flex items-center gap-1.5">{candidate.textureGraph ? <GraphIcon size={11} className="shrink-0 text-amber-400/80" /> : <FlowIcon size={11} className="shrink-0 text-sky-400/80" />}<span className="truncate">{candidate.name}</span></span>
@@ -370,7 +414,9 @@ export const MaterialGraphEditor: React.FC = () => {
                 </div>
             </aside>
 
-            {asset && asset.textureGraph ? (
+            {libraryOpen ? (
+                <MyLibraryPanel onBringIn={bringInAndSelect} />
+            ) : asset && asset.textureGraph ? (
                 <div className="flex min-w-0 flex-1 flex-col">
                     <div className="flex items-center gap-2 border-b border-gray-800 px-3 py-1.5">
                         <GraphIcon size={13} className="text-amber-400/80" />
@@ -378,6 +424,7 @@ export const MaterialGraphEditor: React.FC = () => {
                         <span className="text-2xs text-gray-500">Texture graph</span>
                         <span className="flex-1" />
                         {error && <span className="text-2xs text-amber-400">{error}</span>}
+                        {libraryButton}
                         <button onClick={() => void remove()} aria-label="Delete material" className="rounded p-1 text-gray-500 hover:bg-gray-800 hover:text-red-400"><TrashIcon size={14} /></button>
                     </div>
                     <TextureGraphWorkspace key={asset.id} asset={asset} assets={assets} onSave={save} onOpenAsset={(id) => { setSelectedId(id); select([]); }} />
@@ -403,6 +450,7 @@ export const MaterialGraphEditor: React.FC = () => {
                     <aside className="flex w-80 shrink-0 flex-col gap-3 overflow-y-auto border-l border-gray-800 p-3">
                         <div className="flex items-center gap-2">
                             <input aria-label="Material name" value={asset.name} onChange={(event) => rename(event.target.value)} className="min-w-0 flex-1 rounded border border-gray-700 bg-gray-950 px-2 py-1 text-xs text-white" />
+                            {libraryButton}
                             <button onClick={() => void remove()} aria-label="Delete material" className="rounded p-1 text-gray-500 hover:bg-gray-800 hover:text-red-400"><TrashIcon size={14} /></button>
                         </div>
                         <MaterialPreview assetId={asset.id} graph={shadingGraph ?? graph} previewNodeIds={previewNodeIds} />

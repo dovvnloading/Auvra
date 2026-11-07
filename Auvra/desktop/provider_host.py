@@ -90,6 +90,35 @@ def _assert_state_path_safe(path: Path) -> None:
             raise OSError("provider state path cannot contain links")
 
 
+
+def _painted_copy_graph() -> dict[str, Any]:
+    """A painted copy's surface, as the editor makes it: the painted picture over the model's own maps, cut out
+    where it is see-through, drawn from both sides (the editor fills in every other setting)."""
+    return {
+        "nodes": [
+            {"id": "output", "type": "output", "x": 480, "y": 120, "params": {"ownMaps": True, "blendMode": "masked", "alphaClip": 0.5, "twoSided": True}},
+            {"id": "painted", "type": "materialPicture", "x": 160, "y": 120, "params": {"output": "baseColor"}},
+        ],
+        "links": [
+            {"fromNode": "painted", "fromOutput": "rgb", "toNode": "output", "toInput": "baseColor"},
+            {"fromNode": "painted", "fromOutput": "a", "toNode": "output", "toInput": "opacity"},
+        ],
+    }
+
+
+def _with_painted_copy(documents: list[dict[str, Any]], model_id: str, material_name: str, texture_id: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """The model's painted copy of a material, showing `texture_id`, and the material documents with it kept."""
+    owner = {"modelId": model_id, "material": material_name}
+    index = next((at for at, item in enumerate(documents) if isinstance(item, dict) and item.get("owner") == owner), None)
+    before = documents[index] if index is not None else {"id": str(uuid.uuid4()), "graph": _painted_copy_graph()}
+    painted = {**before, "name": f"Painted {material_name}"[:128], "owner": owner, "pictures": {"baseColor": texture_id}, "textureIds": [texture_id]}
+    kept = list(documents)
+    if index is None:
+        kept.append(painted)
+    else:
+        kept[index] = painted
+    return painted, kept
+
 @trace_public_class("provider_host", concise=("handle", "shutdown"))
 class NativeProviderHost:
     """Implement provider protocol methods without exposing provider authority."""
@@ -801,12 +830,18 @@ class NativeProviderHost:
                                 if isinstance(item, dict) and item.get("id") == target_model_id), None)
             if model_index is None:
                 raise HostOperationError("invalid_project", "Target model is unavailable")
-            # The picture becomes the material's painted base map, in its material override beside whatever else
-            # that holds; an older per-material texture override of the same material is let go of.
+            # The picture becomes a painted copy the model owns (as the editor keeps them: utils/paintedCopies.ts),
+            # the picture over the material's own maps, which the material's override points at beside whatever
+            # else it holds; a copy made before for the same model and material is reused. An older per-material
+            # texture override of the same material is let go of.
             material_name = payload["materialName"]
+            material_documents = copy.deepcopy(list(self.project_host.service.active.get_domain("materials").get("documents", [])))
+            painted_copy, material_documents = _with_painted_copy(material_documents, target_model_id, material_name, payload["textureId"])
+            changes["materials"] = material_documents
             model = dict(model_documents[model_index])
             material_overrides = dict(model.get("materialOverrides") or {})
-            material_overrides[material_name] = {**dict(material_overrides.get(material_name) or {}), "mapTextureId": payload["textureId"], "paintedMap": True}
+            kept = {key: value for key, value in dict(material_overrides.get(material_name) or {}).items() if key not in ("mapTextureId", "paintedMap")}
+            material_overrides[material_name] = {**kept, "materialId": painted_copy["id"]}
             model["materialOverrides"] = material_overrides
             texture_overrides = dict(model.get("textureOverrides") or {})
             if material_name in texture_overrides:
