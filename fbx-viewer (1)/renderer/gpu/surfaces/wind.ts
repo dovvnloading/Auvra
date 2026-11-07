@@ -1,3 +1,6 @@
+import type * as THREE from "three";
+import { isWeatherPatched, type WindSway } from "../../../runtime/weatherSurfaces";
+
 /**
  * FOLIAGE IN THE WIND
  *
@@ -27,3 +30,20 @@ fn windOffset(local: vec3f, instance: Instance, sway: f32, flutter: f32, bottom:
   return offset;
 }
 `;
+
+/** The sway the weather patch gave a material; as on the WebGL path, none without that patch. */
+export const windSwayOf = (material: THREE.Material): WindSway | null => {
+  if (!isWeatherPatched(material)) return null;
+  const wind = material.userData.windSway as WindSway | null | undefined;
+  return wind && wind.sway > 0 ? wind : null;
+};
+
+/** Writes how a material sways and where its plant stands, as `windOffset` takes them, at `floats[at]` on. */
+export const packWind = (material: THREE.Material, floats: Float32Array, at: number): void => {
+  const wind = windSwayOf(material);
+  const shape = material.userData.windShape as { bottom: number; height: number } | undefined;
+  floats[at] = wind?.sway ?? 0;
+  floats[at + 1] = wind?.flutter ?? 0;
+  floats[at + 2] = shape?.bottom ?? 0;
+  floats[at + 3] = Math.max(1e-3, shape?.height ?? 1);
+};

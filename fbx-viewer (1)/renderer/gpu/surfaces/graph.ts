@@ -1,24 +1,28 @@
 /// <reference types="@webgpu/types" />
 import * as THREE from "three";
 import { MATERIAL_TIME, boundMaterialGraph } from "../../../runtime/materials/graphMaterial";
-import type { MaterialGraph } from "../../../runtime/materials/materialGraph";
+import { materialGraphShape, type MaterialGraph } from "../../../runtime/materials/materialGraph";
+import { isWeatherPatched } from "../../../runtime/weatherSurfaces";
 import { registerSurfaceKind } from "../materialPool";
 import { surfaceBufferShader } from "../shaders";
 import { textureLayoutEntries, type SurfaceKind } from "../surfaces";
 import { hookUniforms } from "./materialHooks";
-import { GRAPH_FLAG, compileGraphWgsl, type CompiledGraphWgsl } from "./materialWgsl";
+import { GRAPH_FLAG, GRAPH_WIND_AT, compileGraphWgsl, graphLayers, type CompiledGraphWgsl } from "./materialWgsl";
+import { packWind, windSwayOf } from "./wind";
 import { deviceOf, worldBindEntries, worldLayoutEntries } from "./world";
 import { reportGpu } from "../report";
 
 /**
  * MATERIALS SHADED BY A GRAPH
  *
- * A surface kind per graph, keyed by the hash of what its shader depends on: materials wired alike share one, and only
- * their numbers and textures differ. A graph can hold more numbers than a material's slice of the common buffer, so each
- * material has a small uniform buffer of its own. The numbers and textures are the very uniform objects the WebGL path
- * reads, so editing a constant in the material editor just writes them again, and the time is the one MaterialClock
- * keeps. A kind is drawn only once its shader has been seen to compile: until then, and for good if it does not, the
- * material draws as a plain lit surface rather than taking the frame down with it.
+ * A surface kind per graph shape, as the WebGL path compiles one (runtime/materials/graphMaterial.ts): its wiring and
+ * settings, the parts of a physical surface it uses, and whether the material sways in the wind. Materials of one shape
+ * share a kind, and only their numbers and textures differ, so a graph edited value by value is compiled once. A graph
+ * can hold more numbers than a material's slice of the common buffer, so each material has a small uniform buffer of
+ * its own. The numbers and textures are the very uniform objects the WebGL path reads, so editing a constant in the
+ * material editor just writes them again, and the time is the one MaterialClock keeps. A kind is drawn only once its
+ * shader has been seen to compile: until then, and for good if it does not, the material draws as a plain lit surface
+ * rather than taking the frame down with it.
  */
 
 type GraphBuffer = {
@@ -82,13 +86,22 @@ const writeField = (data: Float32Array, at: number, kind: string, value: unknown
 
 const graphUniforms = (material: THREE.Material): Record<string, THREE.IUniform> => hookUniforms(material, boundMaterialGraph(material));
 
+/** The flags a graph's shader reads of the material it draws (materialWgsl.ts GRAPH_FLAG). */
+export const graphFlags = (material: THREE.Material): number => {
+  const m = material as THREE.MeshStandardMaterial;
+  return (m.vertexColors ? GRAPH_FLAG.vertexColors : 0)
+    | (m.flatShading ? GRAPH_FLAG.flatShading : 0)
+    | (isWeatherPatched(material) ? GRAPH_FLAG.takesWeather : 0)
+    | (m.transparent ? GRAPH_FLAG.blended : 0);
+};
+
 const makeKind = (compiled: CompiledGraphWgsl): SurfaceKind => {
   const textureCount = compiled.textures.length;
   return {
     id: compiled.id,
     wgsl: compiled.wgsl,
     displaces: compiled.displaces,
-    readsVertex: compiled.displaces,
+    readsVertex: compiled.readsVertex,
     layoutEntries: () => [...textureLayoutEntries(textureCount), ...worldLayoutEntries(compiled.worldBinding)],
     textures: (material) => {
       const uniforms = graphUniforms(material);
@@ -112,9 +125,10 @@ const makeKind = (compiled: CompiledGraphWgsl): SurfaceKind => {
       const uniforms = graphUniforms(material);
       data[0] = compiled.animated ? MATERIAL_TIME.value : 0;
       data[1] = m.alphaTest;
-      words[2] = (m.vertexColors ? GRAPH_FLAG.vertexColors : 0) | (m.flatShading ? GRAPH_FLAG.flatShading : 0);
+      words[2] = graphFlags(material);
       data[4] = m.normalScale.x;
       data[5] = m.normalScale.y;
+      if (compiled.sways) packWind(material, data, GRAPH_WIND_AT);
       for (const field of compiled.fields) writeField(data, field.offset / 4, field.kind, uniforms[field.name]?.value);
       let same = true;
       for (let index = 0; index < data.length; index++) {
@@ -136,9 +150,14 @@ interface GraphEntry {
   state: "pending" | "ready" | "failed";
 }
 
-/** The entries by what the shader depends on, and each graph's entry: a new graph object means something was edited. */
+/**
+ * The entries by the graph's shape as drawn (null for one that cannot be put in WGSL), and by the code they compile to,
+ * so that shapes compiling alike share one. Graphs are never changed in place, so each graph's entries, still and
+ * swaying, are looked up once.
+ */
+const entriesByShape = new Map<string, GraphEntry | null>();
 const entriesByKey = new Map<string, GraphEntry>();
-const entriesByGraph = new WeakMap<MaterialGraph, GraphEntry | null>();
+const entriesByGraph = new WeakMap<MaterialGraph, { still?: GraphEntry | null; wind?: GraphEntry | null }>();
 
 let device: GPUDevice | null = null;
 
@@ -164,24 +183,35 @@ const checkEntry = (entry: GraphEntry): void => {
   });
 };
 
-const entryFor = (graph: MaterialGraph): GraphEntry | null => {
-  let entry = entriesByGraph.get(graph);
-  if (entry !== undefined) return entry;
+const compileEntry = (graph: MaterialGraph, sways: boolean): GraphEntry | null => {
   try {
-    const compiled = compileGraphWgsl(graph);
-    entry = entriesByKey.get(compiled.key) ?? null;
-    if (!entry) {
-      const made: GraphEntry = { kind: makeKind(compiled), state: "pending" };
-      entry = made;
-      entriesByKey.set(compiled.key, made);
-      registerSurfaceKind((material) => graphSurfaceFor(material) === made.kind, made.kind);
-      checkEntry(made);
-    }
+    const compiled = compileGraphWgsl(graph, { sways });
+    const known = entriesByKey.get(compiled.key);
+    if (known) return known;
+    const made: GraphEntry = { kind: makeKind(compiled), state: "pending" };
+    entriesByKey.set(compiled.key, made);
+    registerSurfaceKind((material) => graphSurfaceFor(material) === made.kind, made.kind);
+    checkEntry(made);
+    return made;
   } catch (error) {
     reportGpu("[gpu] A material graph cannot be put in WGSL, so it draws plain:", error);
-    entry = null;
+    return null;
   }
-  entriesByGraph.set(graph, entry);
+};
+
+const entryFor = (graph: MaterialGraph, sways: boolean): GraphEntry | null => {
+  let entries = entriesByGraph.get(graph);
+  if (!entries) entriesByGraph.set(graph, entries = {});
+  const known = sways ? entries.wind : entries.still;
+  if (known !== undefined) return known;
+  const shape = `${materialGraphShape(graph)}#${graphLayers(graph).join(",")}#${sways ? "wind" : "still"}`;
+  let entry = entriesByShape.get(shape);
+  if (entry === undefined) {
+    entry = compileEntry(graph, sways);
+    entriesByShape.set(shape, entry);
+  }
+  if (sways) entries.wind = entry;
+  else entries.still = entry;
   return entry;
 };
 
@@ -189,6 +219,6 @@ const entryFor = (graph: MaterialGraph): GraphEntry | null => {
 export const graphSurfaceFor = (material: THREE.Material): SurfaceKind | null => {
   const graph = (material as THREE.MeshStandardMaterial).isMeshStandardMaterial ? boundMaterialGraph(material) : null;
   if (!graph) return null;
-  const entry = entryFor(graph);
+  const entry = entryFor(graph, windSwayOf(material) !== null);
   return entry?.state === "ready" ? entry.kind : null;
 };

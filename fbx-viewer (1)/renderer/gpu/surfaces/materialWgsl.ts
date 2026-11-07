@@ -1,17 +1,23 @@
 import {
   MAX_RAMP_STOPS,
+  STAGE_OUTPUTS,
   compileMaterialGraph,
+  materialGraphFeatures,
   materialGraphSettings,
   textureSlot,
   type CompiledMaterialGraph,
   type MaterialGraph,
   type MaterialUniformSpec,
+  type PhysicalFeature,
   type TextureSlot,
 } from "../../../runtime/materials/materialGraph";
 import { forwardHead } from "../shaders";
 import { MAPPED_NORMAL_WGSL, type SurfaceKind } from "../surfaces";
 import { BAKED_VOLUME_WGSL } from "./bakedVolume";
 import { GLSL_SUPPORT_WGSL, GlslError, GlslTranslator, wgslType, type GlslContext, type GlslFunction } from "./glslToWgsl";
+import { PHYSICAL_LAYERS_WGSL } from "./physicalLayers";
+import { WEATHER_WGSL } from "./weather";
+import { WIND_WGSL } from "./wind";
 import { INSTANCE_INVERSE_WGSL, STIPPLE_WGSL, worldWgsl } from "./world";
 import { reportGpu } from "../report";
 
@@ -23,6 +29,14 @@ import { reportGpu } from "../report";
  * uniforms, and the GLSL statements that come out are translated (glslToWgsl.ts), so each node has one definition, every
  * node comes along by that, and so does a Custom GLSL node's code. What is written here is what the translation is
  * placed in: the function a surface kind is, what its builtins read, and the numbers it holds.
+ *
+ * Around the graph, a graph-shaded material is drawn as the WebGL path's shader stages draw it
+ * (runtime/materials/shaderStages.ts):
+ * - the coat, sheen and transmission a graph works out, as physicalLayers.ts carries them; the other parts of a physical
+ *   surface change the lobe itself, which the surface buffer does not hold;
+ * - rain and snow on whatever colour and roughness the graph worked out, when the weather patch reached the material;
+ * - for a material swaying in the wind, its vertices moved from where the graph's vertex offset left them, which makes
+ *   a kind of its own, as for any lit material (lit.ts).
  */
 
 interface WgslHelper {
@@ -320,7 +334,8 @@ const helperFunctions = (): Record<string, GlslFunction> =>
 // What a graph's numbers look like in its uniform buffer
 // ---------------------------------------------------------------------------
 
-export const GRAPH_FLAG = { vertexColors: 1, flatShading: 2 } as const;
+/** Flags in a graph's uniform buffer: `blended` is a material drawn blended, `takesWeather` one the weather patch reached. */
+export const GRAPH_FLAG = { vertexColors: 1, flatShading: 2, takesWeather: 4, blended: 8 } as const;
 
 const FIELD_LAYOUT: Readonly<Record<string, { align: number; size: number; type: string }>> = {
   float: { align: 4, size: 4, type: "f32" },
@@ -330,8 +345,27 @@ const FIELD_LAYOUT: Readonly<Record<string, { align: number; size: number; type:
   ramp: { align: 16, size: MAX_RAMP_STOPS * 16, type: `array<vec4f, ${MAX_RAMP_STOPS}>` },
 };
 
-/** The fixed start of a graph's uniform buffer: time, alpha test, flags, then the normal scale, in bytes. */
-const FIELDS_START = 24;
+/**
+ * The fixed start of a graph's uniform buffer, in bytes: time, alpha test, flags, the normal scale, then how the
+ * material sways (wind.ts packWind) at GRAPH_WIND_AT, in floats.
+ */
+const FIELDS_START = 48;
+export const GRAPH_WIND_AT = 8;
+
+/** The parts of a physical surface a graph's kind carries, and the Material Output inputs each reads. */
+const LAYER_OUTPUTS: Partial<Record<PhysicalFeature, readonly string[]>> = {
+  coat: ["coat", "coatRoughness"],
+  sheen: ["sheenColor", "sheenRoughness"],
+  transmission: ["transmission"],
+};
+
+/** The parts of a physical surface a (normalised) graph uses that its kind carries. */
+export const graphLayers = (graph: MaterialGraph): PhysicalFeature[] => materialGraphFeatures(graph).filter((feature) => LAYER_OUTPUTS[feature] !== undefined);
+
+export interface CompileGraphWgslOptions {
+  /** Whether the material sways in the wind (wind.ts windSwayOf): its kind moves the vertices. */
+  sways?: boolean;
+}
 
 export interface GraphField {
   name: string;
@@ -351,6 +385,12 @@ export interface CompiledGraphWgsl {
   id: string;
   wgsl: string;
   displaces: boolean;
+  /** Whether its `displace()` reads the vertex it moves (SurfaceKind.readsVertex): a graph's vertex offset does. */
+  readsVertex: boolean;
+  /** Whether it moves the vertices in the wind. */
+  sways: boolean;
+  /** The parts of a physical surface it carries. */
+  layers: PhysicalFeature[];
   fields: GraphField[];
   textures: GraphTexture[];
   /** How large a uniform buffer it needs, in bytes. */
@@ -452,11 +492,15 @@ const translateGlobal = (source: string, functions: Record<string, GlslFunction>
  * A graph as a surface kind's code. Throws if the nodes' code cannot be translated, which is a fault in a node definition,
  * not in anything a person wrote: that only reaches a Custom GLSL node's function, which is replaced above.
  */
-export const compileGraphWgsl = (graph: MaterialGraph): CompiledGraphWgsl => {
+export const compileGraphWgsl = (graph: MaterialGraph, options: CompileGraphWgslOptions = {}): CompiledGraphWgsl => {
   const settings = materialGraphSettings(graph);
-  const fragment = compileMaterialGraph(graph, { stage: "fragment" });
+  const sways = options.sways === true;
+  // An unlit graph shows its colour as it is: the WebGL path sets a physical surface up only for its lighting.
+  const layers = settings.unlit ? [] : graphLayers(graph);
+  const outputs = [...STAGE_OUTPUTS.fragment, ...layers.flatMap((feature) => LAYER_OUTPUTS[feature] ?? [])];
+  const fragment = compileMaterialGraph(graph, { stage: "fragment", outputs });
   const vertex: CompiledMaterialGraph | null = fragment.connected.has("worldPositionOffset") ? compileMaterialGraph(graph, { stage: "vertex" }) : null;
-  const key = [fragment.key, vertex?.key ?? "-", settings.blendMode === "opaque", settings.unlit].join("#");
+  const key = [fragment.key, vertex?.key ?? "-", settings.blendMode === "opaque", settings.unlit, layers.join(","), sways ? "wind" : "still"].join("#");
 
   const specs = new Map<string, MaterialUniformSpec>();
   for (const stage of [fragment, vertex]) for (const spec of stage?.uniforms ?? []) specs.set(spec.name, spec);
@@ -500,16 +544,31 @@ export const compileGraphWgsl = (graph: MaterialGraph): CompiledGraphWgsl => {
   const metalness = output("metalness", "float");
   const roughness = output("roughness", "float");
   const emissive = output("emissive", "vec3");
+  const emissiveStrength = output("emissiveStrength", "float");
   const occlusion = output("occlusion", "float");
   const normal = fragment.connected.has("normal") ? output("normal", "vec3") : null;
+  // A graph reading the vertex colours uses them as it likes: they are not multiplied in again.
+  const albedo = fragment.builtins.has("vertexColor") ? `(${baseColor})` : `(${baseColor}) * mgVertexColor()`;
 
+  // The coat, sheen and transmission it works out, as physicalLayers.ts takes them; a part it does not use is none.
+  const layer = (feature: PhysicalFeature, value: () => string, none: string) => (layers.includes(feature) ? value() : none);
+  const physical = layers.length ? /* wgsl */ `
+  out = applyPhysicalLayers(in, out, PhysicalLayers(
+    ${layer("coat", () => `clamp(${output("coat", "float")}, 0.0, 1.0)`, "0.0")},
+    ${layer("coat", () => `clamp(${output("coatRoughness", "float")}, 0.0, 1.0)`, "0.0")},
+    ${layer("sheen", () => `max(${output("sheenColor", "vec3")}, vec3f(0.0))`, "vec3f(0.0)")},
+    ${layer("sheen", () => `clamp(${output("sheenRoughness", "float")}, 0.07, 1.0)`, "1.0")},
+    ${layer("transmission", () => `clamp(${output("transmission", "float")}, 0.0, 1.0)`, "0.0")},
+  ), (material.flags & ${GRAPH_FLAG.blended}u) != 0u);` : "";
+
+  // The wind moves a vertex from where the graph's vertex offset left it, as on the WebGL path.
+  const windMove = (at: string) => `instanceLocalDirection(instance, windOffset(${at}, instance, material.wind.x, material.wind.y, material.wind.z, material.wind.w))`;
   let displace = "";
   if (vertex) {
     const vertexTranslator = new GlslTranslator(vertexContext(all, functions, called));
     const vertexStatements = vertexTranslator.statements(vertex.statements.join("\n"));
     const worldOffset = vertexTranslator.expression(vertex.outputs.worldPositionOffset, "vec3");
     displace = /* wgsl */ `
-${INSTANCE_INVERSE_WGSL}
 var<private> displaceVertex: Vertex;
 var<private> mgVertexLocal: vec3f;
 var<private> mgVertexWorld: vec3f;
@@ -529,7 +588,14 @@ fn displace(local: vec3f, normal: vec3f, instance: Instance, time: f32) -> vec3f
   mgVertexOrigin = vec3f(instance.world0.w, instance.world1.w, instance.world2.w);
   mgVertexWorldNormal = worldNormalOf(instance, normal);
   ${vertexStatements}
-  return local + instanceLocalDirection(instance, ${worldOffset});
+  let mgOffsetLocal = local + instanceLocalDirection(instance, ${worldOffset});
+  return ${sways ? `mgOffsetLocal + ${windMove("mgOffsetLocal")}` : "mgOffsetLocal"};
+}
+`;
+  } else if (sways) {
+    displace = /* wgsl */ `
+fn displace(local: vec3f, normal: vec3f, instance: Instance, time: f32) -> vec3f {
+  return local + ${windMove("local")};
 }
 `;
   }
@@ -537,7 +603,6 @@ fn displace(local: vec3f, normal: vec3f, instance: Instance, time: f32) -> vec3f
   // What the pixels read of where they are on the object comes from the instance, when surfaces can tell which one it is.
   const knowsInstance = surfaceKnowsInstance();
   const objectBuiltins = knowsInstance ? /* wgsl */ `
-${vertex ? "" : INSTANCE_INVERSE_WGSL}
 fn mgLocalPosition() -> vec3f { return instanceLocalPoint(instances[mgIn.instanceId], mgIn.worldPosition); }
 fn mgObjectPosition() -> vec3f {
   let instance = instances[mgIn.instanceId];
@@ -564,19 +629,29 @@ struct GraphMaterial {
   flags: u32,
   pad: f32,
   normalScale: vec2f,
+  pad2: vec2f,
+  // How it sways, and where its plant stands (wind.ts).
+  wind: vec4f,
 ${fieldDeclarations}
 }
 @group(2) @binding(0) var<uniform> material: GraphMaterial;
 ${textureDeclarations}
 ${worldWgsl(worldBinding)}
 ${STIPPLE_WGSL}
+${WEATHER_WGSL}
 ${BAKED_VOLUME_WGSL}
 ${MAPPED_NORMAL_WGSL}
+${layers.length ? PHYSICAL_LAYERS_WGSL : ""}
+${vertex || sways || knowsInstance ? INSTANCE_INVERSE_WGSL : ""}
+${sways ? WIND_WGSL : ""}
 
 var<private> mgIn: SurfaceIn;
 
 fn mgWorldNormal() -> vec3f { return select(mgIn.normal, mgIn.geometricNormal, (material.flags & ${GRAPH_FLAG.flatShading}u) != 0u); }
-fn mgVertexColor() -> vec3f { return select(vec3f(1.0), mgIn.vertexColor.rgb, (material.flags & ${GRAPH_FLAG.vertexColors}u) != 0u); }
+// The colours three's own shader would multiply in: the vertices', when the material uses them, and the instance's.
+fn mgVertexColor() -> vec3f {
+  return select(vec3f(1.0), mgIn.vertexColor.rgb, (material.flags & ${GRAPH_FLAG.vertexColors}u) != 0u) * mgIn.instanceColor.rgb;
+}
 ${objectBuiltins}
 ${helperSource(needed)}
 ${[...globals.values()].join("\n")}
@@ -587,16 +662,18 @@ fn surface(in: SurfaceIn) -> SurfaceOut {
   mgIn = in;
   var out = surfaceDefaults(in);
   ${statements}
-  out.albedo = (${baseColor}) * mgVertexColor() * in.instanceColor.rgb;
+  out.albedo = ${albedo};
   out.opacity = ${opacity};
   out.alphaTest = material.alphaTest;
   out.metalness = clamp(${metalness}, 0.0, 1.0);
   out.roughness = clamp(${roughness}, 0.0, 1.0);
-  out.emissive = ${emissive};
+  out.emissive = (${emissive}) * (${emissiveStrength});
   out.occlusion = ${occlusion};
   out.normal = mgWorldNormal();
   ${normal ? `let mgMapped = ${normal};\n  out.normal = mappedNormal(in, out.normal, vec3f(mgMapped.xy * material.normalScale, mgMapped.z), in.uv0);` : ""}
   out.unlit = ${settings.unlit};
+  ${physical}
+  if ((material.flags & ${GRAPH_FLAG.takesWeather}u) != 0u) { out = applyWeather(in, out); }
   return applyBakedVolume(in, out);
 }
 `;
@@ -605,7 +682,10 @@ fn surface(in: SurfaceIn) -> SurfaceOut {
     key,
     id: `graph-${hashOf(key)}`,
     wgsl,
-    displaces: vertex !== null,
+    displaces: vertex !== null || sways,
+    readsVertex: vertex !== null,
+    sways,
+    layers,
     fields,
     textures,
     bytes,

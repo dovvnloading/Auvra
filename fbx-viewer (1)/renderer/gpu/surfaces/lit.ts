@@ -1,10 +1,12 @@
 /// <reference types="@webgpu/types" />
 import type * as THREE from "three";
-import { isWeatherPatched, type WindSway } from "../../../runtime/weatherSurfaces";
+import { boundMaterialGraph } from "../../../runtime/materials/graphMaterial";
+import { isWeatherPatched } from "../../../runtime/weatherSurfaces";
 import { MATERIAL_FLAG, STANDARD_BODY_WGSL, packStandard, standardFallbacks, standardMaps, textureBindEntries, textureLayoutEntries, type SurfaceKind } from "../surfaces";
 import { BAKED_VOLUME_WGSL } from "./bakedVolume";
+import { PHYSICAL_LAYERS_WGSL } from "./physicalLayers";
 import { WEATHER_WGSL } from "./weather";
-import { WIND_WGSL } from "./wind";
+import { WIND_WGSL, packWind, windSwayOf } from "./wind";
 import { INSTANCE_INVERSE_WGSL, STIPPLE_WGSL, worldBindEntries, worldLayoutEntries, worldWgsl } from "./world";
 
 /**
@@ -18,13 +20,8 @@ import { INSTANCE_INVERSE_WGSL, STIPPLE_WGSL, worldBindEntries, worldLayoutEntri
  * Hair, lashes and leaf cards need nothing further here: utils/processing/ModelMaterials.ts splits them into an
  * alpha-tested body and a blended fringe, two plain materials these kinds draw as they are.
  *
- * What a physical material adds, as far as one layer of surface can carry it:
- * - clearcoat: a shinier surface, more so at grazing angles, with the light the coat keeps taken from what is under it;
- * - sheen: a soft brightening toward the edges, with the base dimmed by what the sheen takes;
- * - transmission: a blended material gets more see-through; a solid one, which has nothing behind it in the surface
- *   buffer to show, is stippled away by what lets light through, and the temporal resolve smooths that into glass.
- * Index of refraction, specular tint, iridescence and anisotropy change the lobe itself, which the surface buffer does
- * not hold.
+ * What a physical material's clearcoat, sheen and transmission add is physicalLayers.ts's to say: the same as a material
+ * graph's coat, sheen and transmission add.
  *
  * Drawn in the forward pass, a physical material has all its maps and all the frame's lighting in one shader, three
  * pictures more than the sixteen every card promises. On a card with no more than that it goes by its numbers alone.
@@ -58,35 +55,17 @@ fn physicalTexels(in: SurfaceIn) -> mat3x3f { return mat3x3f(vec3f(1.0), vec3f(1
 `;
 
 const PHYSICAL_WGSL = /* wgsl */ `
+${PHYSICAL_LAYERS_WGSL}
 fn applyPhysical(in: SurfaceIn, plain: SurfaceOut) -> SurfaceOut {
-  var out = plain;
   let texels = physicalTexels(in);
-  let coatTexel = texels[0].x;
-  let sheenTexel = texels[1];
-  let transmissionTexel = texels[2].x;
-  let facing = clamp(dot(out.normal, in.viewDirection), 0.0, 1.0);
-  let edge = pow(1.0 - facing, 5.0);
-  let reflected = 0.04 + 0.96 * edge;
-
-  let coat = material.extra[0].x * coatTexel;
-  out.roughness = mix(out.roughness, material.extra[0].y, coat * mix(0.5, 1.0, edge));
-  out.albedo *= 1.0 - coat * reflected;
-
-  let sheen = material.extra[1].rgb * sheenTexel;
-  let rim = pow(1.0 - facing, mix(5.0, 2.0, material.extra[0].z));
-  out.albedo = out.albedo * (1.0 - 0.157 * max(max(sheen.r, sheen.g), sheen.b)) + sheen * rim * (1.0 - out.metalness);
-
-  let transmission = material.extra[0].w * transmissionTexel;
-  if (transmission > 0.0) {
-    let seen = mix(1.0, max(reflected, 0.12), transmission);
-    out.albedo *= 1.0 - transmission * 0.85;
-    out.opacity *= seen;
-    if ((material.flags & ${MATERIAL_FLAG.transparent}u) == 0u && view.kind == 0u) {
-      out.alphaTest = max(out.alphaTest, surfaceStipple(in));
-    }
-    out.keepsReflections = (material.flags & ${MATERIAL_FLAG.transparent}u) != 0u;
-  }
-  return out;
+  let layers = PhysicalLayers(
+    material.extra[0].x * texels[0].x,
+    material.extra[0].y,
+    material.extra[1].rgb * texels[1],
+    material.extra[0].z,
+    material.extra[0].w * texels[2].x,
+  );
+  return applyPhysicalLayers(in, plain, layers, (material.flags & ${MATERIAL_FLAG.transparent}u) != 0u);
 }
 `;
 
@@ -115,13 +94,6 @@ fn surface(in: SurfaceIn) -> SurfaceOut {
 
 type LitMaterial = THREE.MeshPhysicalMaterial;
 
-/** The sway the weather patch gave a material; as on the WebGL path, none without that patch. */
-const swayOf = (material: THREE.Material): WindSway | null => {
-  if (!isWeatherPatched(material)) return null;
-  const wind = material.userData.windSway as WindSway | null | undefined;
-  return wind && wind.sway > 0 ? wind : null;
-};
-
 const physicalMaps = (material: THREE.Material) => {
   const m = material as LitMaterial;
   return [...standardMaps(material), m.clearcoatMap, m.sheenColorMap, m.transmissionMap];
@@ -141,14 +113,7 @@ const packLit = (physical: boolean, sways: boolean): SurfaceKind["pack"] => (mat
     floats[89] = m.sheenColor ? m.sheenColor.g * sheen : 0;
     floats[90] = m.sheenColor ? m.sheenColor.b * sheen : 0;
   }
-  if (sways) {
-    const wind = swayOf(material);
-    const shape = material.userData.windShape as { bottom: number; height: number } | undefined;
-    floats[92] = wind?.sway ?? 0;
-    floats[93] = wind?.flutter ?? 0;
-    floats[94] = shape?.bottom ?? 0;
-    floats[95] = Math.max(1e-3, shape?.height ?? 1);
-  }
+  if (sways) packWind(material, floats, 92);
 };
 
 const litKind = (physical: boolean, sways: boolean, maps = physical): SurfaceKind => {
@@ -195,8 +160,10 @@ export const isLitMaterial = (material: THREE.Material): boolean => {
 
 export const litSurfaceFor = (material: THREE.Material): SurfaceKind => {
   const m = material as LitMaterial;
-  const physical = m.isMeshPhysicalMaterial === true && (m.clearcoat > 0 || m.sheen > 0 || m.transmission > 0);
-  const sways = swayOf(material) !== null;
+  // A graph switches the physical parts it uses on with values of 1 and gives their amounts itself
+  // (runtime/materials/physicalSurface.ts): drawn plain, while its own kind is not fit to draw, it shows none of them.
+  const physical = m.isMeshPhysicalMaterial === true && !boundMaterialGraph(material) && (m.clearcoat > 0 || m.sheen > 0 || m.transmission > 0);
+  const sways = windSwayOf(material) !== null;
   if (physical && !forwardHoldsPhysicalMaps && (material.transparent || !material.toneMapped || m.wireframe)) return sways ? LIT_PHYSICAL_NO_MAPS_WIND_SURFACE : LIT_PHYSICAL_NO_MAPS_SURFACE;
   if (physical) return sways ? LIT_PHYSICAL_WIND_SURFACE : LIT_PHYSICAL_SURFACE;
   return sways ? LIT_WIND_SURFACE : LIT_SURFACE;
