@@ -15,7 +15,7 @@ import { forwardHead } from "../shaders";
 import { MAPPED_NORMAL_WGSL, type SurfaceKind } from "../surfaces";
 import { BAKED_VOLUME_WGSL } from "./bakedVolume";
 import { GLSL_SUPPORT_WGSL, GlslError, GlslTranslator, wgslType, type GlslContext, type GlslFunction } from "./glslToWgsl";
-import { PHYSICAL_LAYERS_WGSL } from "./physicalLayers";
+import { PHYSICAL_LAYERS_WGSL, PHYSICAL_LOBE_WGSL } from "./physicalLayers";
 import { WEATHER_WGSL } from "./weather";
 import { WIND_WGSL } from "./wind";
 import { INSTANCE_INVERSE_WGSL, STIPPLE_WGSL, worldWgsl } from "./world";
@@ -32,8 +32,10 @@ import { reportGpu } from "../report";
  *
  * Around the graph, a graph-shaded material is drawn as the WebGL path's shader stages draw it
  * (runtime/materials/shaderStages.ts):
- * - the coat, sheen and transmission a graph works out, as physicalLayers.ts carries them; the other parts of a physical
- *   surface change the lobe itself, which the surface buffer does not hold;
+ * - the coat, sheen and transmission a graph works out, and its specular, index of refraction and thin film, as
+ *   physicalLayers.ts carries them (anisotropy is not drawn);
+ * - with "Keep the model's own maps", what the graph leaves unwired read from the material's own maps and values (its
+ *   colour, roughness, metalness, normal and emission), as three's own code reads them on the WebGL path;
  * - rain and snow on whatever colour and roughness the graph worked out, when the weather patch reached the material;
  * - for a material swaying in the wind, its vertices moved from where the graph's vertex offset left them, which makes
  *   a kind of its own, as for any lit material (lit.ts).
@@ -398,10 +400,56 @@ fn mgParallaxShadow(heightMap: texture_2d<f32>, heightSampler: sampler, uv: vec2
     params: ["sampler2D", "vec3", "vec3", "float", "float", "float"],
     source: triplanarNormalWgsl("mgTriplanarNormalVertex", (uv) => `textureSampleLevel(map, mapSampler, ${uv}, 0.0)`),
   },
+
+  // --- What vertices call for helpers that read how things change across the screen, which vertices cannot ---
+  // No neighbours to slope toward: the surface as it is.
+  mgNormalFromHeightVertex: {
+    returns: "vec3",
+    params: ["float", "vec2", "float"],
+    source: `
+fn mgNormalFromHeightVertex(height: f32, uv: vec2f, strength: f32) -> vec3f {
+  return vec3f(0.0, 0.0, 1.0);
+}`,
+  },
+  // A frame round the normal alone (its tangent along whichever axis lies flattest across it).
+  mgTangentFrameVertex: {
+    returns: "mat3",
+    params: ["vec3", "vec3", "vec2"],
+    source: `
+fn mgTangentFrameVertex(position: vec3f, normal: vec3f, uv: vec2f) -> mat3x3f {
+  let n = normalize(normal);
+  let across = select(vec3f(1.0, 0.0, 0.0), vec3f(0.0, 1.0, 0.0), abs(n.x) > 0.9);
+  let t = normalize(cross(across, n));
+  return mat3x3f(t, cross(n, t), n);
+}`,
+  },
+  // Parallax marches across pixels: a vertex reads its own place, unshadowed.
+  mgParallaxUvVertex: {
+    returns: "vec2",
+    params: ["sampler2D", "vec2", "vec3", "float", "float"],
+    source: `
+fn mgParallaxUvVertex(heightMap: texture_2d<f32>, heightSampler: sampler, uv: vec2f, toEye: vec3f, depth: f32, layers: f32) -> vec2f {
+  return uv;
+}`,
+  },
+  mgParallaxShadowVertex: {
+    returns: "float",
+    params: ["sampler2D", "vec2", "vec3", "float", "float"],
+    source: `
+fn mgParallaxShadowVertex(heightMap: texture_2d<f32>, heightSampler: sampler, uv: vec2f, light: vec3f, depth: f32, layers: f32) -> f32 {
+  return 1.0;
+}`,
+  },
 };
 
 /** Helpers that read textures with a mip level chosen by the pixels around, and the one vertices call in their place. */
-const VERTEX_HELPERS: Readonly<Record<string, string>> = { mgTriplanarNormal: "mgTriplanarNormalVertex" };
+const VERTEX_HELPERS: Readonly<Record<string, string>> = {
+  mgTriplanarNormal: "mgTriplanarNormalVertex",
+  mgNormalFromHeight: "mgNormalFromHeightVertex",
+  mgTangentFrame: "mgTangentFrameVertex",
+  mgParallaxUv: "mgParallaxUvVertex",
+  mgParallaxShadow: "mgParallaxShadowVertex",
+};
 
 /** The helpers' WGSL, dependencies first, for the names asked for; names that are not helpers are left out. */
 const helperSource = (names: Iterable<string>): string => {
@@ -449,10 +497,46 @@ export const GRAPH_WIND_AT = 8;
 
 /** The parts of a physical surface a graph's kind carries, and the Material Output inputs each reads. */
 const LAYER_OUTPUTS: Partial<Record<PhysicalFeature, readonly string[]>> = {
+  specular: ["specularWeight", "specularColor", "ior"],
   coat: ["coat", "coatRoughness"],
   sheen: ["sheenColor", "sheenRoughness"],
+  thinFilm: ["thinFilm", "thinFilmThickness"],
   transmission: ["transmission"],
 };
+
+/** The parts carried as layers over the surface (the rest change its reflection: PHYSICAL_LOBE_WGSL). */
+const OVER_LAYERS: readonly PhysicalFeature[] = ["coat", "sheen", "transmission"];
+
+/**
+ * What a graph keeping the model's own maps reads of the material for an input it leaves unwired, as three's own code
+ * reads it: the maps (a missing one reads as white, or flat for a normal map) and the material's own values.
+ */
+interface OwnRead {
+  /** Unwired, all of these, the input is the material's own. */
+  unless: readonly string[];
+  textures: readonly GraphTexture[];
+  fields: ReadonlyArray<{ name: string; kind: "float" | "color"; own: string }>;
+}
+
+const OWN_READS: Readonly<Record<"baseColor" | "roughness" | "metalness" | "normal" | "emissive", OwnRead>> = {
+  baseColor: { unless: ["baseColor"], textures: [{ name: "mgOwnMap", slot: "map", own: "map" }], fields: [{ name: "mgOwnColor", kind: "color", own: "color" }] },
+  roughness: { unless: ["roughness"], textures: [{ name: "mgOwnRoughnessMap", slot: "data", own: "roughnessMap" }], fields: [{ name: "mgOwnRoughness", kind: "float", own: "roughness" }] },
+  metalness: { unless: ["metalness"], textures: [{ name: "mgOwnMetalnessMap", slot: "data", own: "metalnessMap" }], fields: [{ name: "mgOwnMetalness", kind: "float", own: "metalness" }] },
+  normal: { unless: ["normal"], textures: [{ name: "mgOwnNormalMap", slot: "normal", own: "normalMap" }], fields: [] },
+  emissive: {
+    unless: ["emissive", "emissiveStrength"],
+    textures: [{ name: "mgOwnEmissiveMap", slot: "map", own: "emissiveMap" }],
+    fields: [{ name: "mgOwnEmissive", kind: "color", own: "emissive" }, { name: "mgOwnEmissiveIntensity", kind: "float", own: "emissiveIntensity" }],
+  },
+};
+
+const OWN_NORMAL_WGSL = /* wgsl */ `
+@diagnostic(off, derivative_uniformity)
+fn mgOwnNormal() -> vec3f {
+  let texel = textureSample(mgOwnNormalMap, mgOwnNormalMap_sampler, mgIn.uv0).xy * 2.0 - 1.0;
+  // Blue comes from red and green: a compressed normal map keeps only those, and a full one agrees.
+  return vec3f(texel, sqrt(saturate(1.0 - dot(texel, texel))));
+}`;
 
 /** The parts of a physical surface a (normalised) graph uses that its kind carries. */
 export const graphLayers = (graph: MaterialGraph): PhysicalFeature[] => materialGraphFeatures(graph).filter((feature) => LAYER_OUTPUTS[feature] !== undefined);
@@ -467,11 +551,15 @@ export interface GraphField {
   kind: MaterialUniformSpec["kind"];
   /** In bytes. */
   offset: number;
+  /** The material's own value this holds (the property's name), rather than a graph uniform. */
+  own?: string;
 }
 
 export interface GraphTexture {
   name: string;
   slot: TextureSlot;
+  /** The material's own map this reads (the property's name), rather than a graph uniform's texture. */
+  own?: string;
 }
 
 export interface CompiledGraphWgsl {
@@ -642,7 +730,11 @@ export const compileGraphWgsl = (graph: MaterialGraph, options: CompileGraphWgsl
   const outputs = [...STAGE_OUTPUTS.fragment, ...layers.flatMap((feature) => LAYER_OUTPUTS[feature] ?? [])];
   const fragment = compileMaterialGraph(graph, { stage: "fragment", outputs });
   const vertex: CompiledMaterialGraph | null = fragment.connected.has("worldPositionOffset") ? compileMaterialGraph(graph, { stage: "vertex" }) : null;
-  const key = [fragment.key, vertex?.key ?? "-", settings.blendMode === "opaque", settings.unlit, settings.normalSpace, layers.join(","), sways ? "wind" : "still"].join("#");
+  // Keeping the model's own maps, each unwired input it covers is read from the material.
+  const own = (settings.keepOwnMaps && !settings.unlit
+    ? (Object.keys(OWN_READS) as Array<keyof typeof OWN_READS>).filter((input) => OWN_READS[input].unless.every((wired) => !fragment.connected.has(wired)))
+    : []);
+  const key = [fragment.key, vertex?.key ?? "-", settings.blendMode === "opaque", settings.unlit, settings.normalSpace, layers.join(","), sways ? "wind" : "still", `own:${own.join(",")}`].join("#");
 
   const specs = new Map<string, MaterialUniformSpec>();
   for (const stage of [fragment, vertex]) for (const spec of stage?.uniforms ?? []) specs.set(spec.name, spec);
@@ -650,15 +742,19 @@ export const compileGraphWgsl = (graph: MaterialGraph, options: CompileGraphWgsl
 
   const nodes = new Map(graph.nodes.map((node) => [node.id, node]));
   const textures: GraphTexture[] = all.filter((spec) => spec.kind === "texture").map((spec) => ({ name: spec.name, slot: textureSlot(nodes.get(spec.nodeId)!) }));
+  for (const input of own) textures.push(...OWN_READS[input].textures);
 
-  // The numbers' places, in the order WGSL lays out a struct.
+  // The numbers' places, in the order WGSL lays out a struct: the graph's, then the material's own it reads.
   const fields: GraphField[] = [];
   let offset = FIELDS_START;
-  for (const spec of all) {
-    if (spec.kind === "texture") continue;
-    const layout = FIELD_LAYOUT[spec.kind];
+  const numbers: Array<{ name: string; kind: MaterialUniformSpec["kind"]; own?: string }> = [
+    ...all.filter((spec) => spec.kind !== "texture").map((spec) => ({ name: spec.name, kind: spec.kind })),
+    ...own.flatMap((input) => OWN_READS[input].fields),
+  ];
+  for (const number of numbers) {
+    const layout = FIELD_LAYOUT[number.kind];
     offset = Math.ceil(offset / layout.align) * layout.align;
-    fields.push({ name: spec.name, kind: spec.kind, offset });
+    fields.push({ name: number.name, kind: number.kind, offset, ...(number.own ? { own: number.own } : {}) });
     offset += layout.size;
   }
   const bytes = Math.ceil(offset / 16) * 16;
@@ -681,16 +777,18 @@ export const compileGraphWgsl = (graph: MaterialGraph, options: CompileGraphWgsl
   const surfaceTranslator = new GlslTranslator(fragmentContext(all, functions, called));
   const statements = surfaceTranslator.statements(withThreesLightsTranslated(fragment.statements).join("\n"));
   const output = (name: string, type: string) => surfaceTranslator.expression(fragment.outputs[name], type);
-  const baseColor = output("baseColor", "vec3");
+  const ownTexel = (name: string, channels: string) => `textureSample(${name}, ${name}_sampler, mgIn.uv0).${channels}`;
+  const baseColor = own.includes("baseColor") ? `material.mgOwnColor * ${ownTexel("mgOwnMap", "rgb")}` : output("baseColor", "vec3");
   const opacity = settings.blendMode === "opaque" ? "1.0" : output("opacity", "float");
-  const metalness = output("metalness", "float");
-  const roughness = output("roughness", "float");
-  const emissive = output("emissive", "vec3");
-  const emissiveStrength = output("emissiveStrength", "float");
+  const metalness = own.includes("metalness") ? `material.mgOwnMetalness * ${ownTexel("mgOwnMetalnessMap", "b")}` : output("metalness", "float");
+  const roughness = own.includes("roughness") ? `material.mgOwnRoughness * ${ownTexel("mgOwnRoughnessMap", "g")}` : output("roughness", "float");
+  const emissive = own.includes("emissive") ? `material.mgOwnEmissive * ${ownTexel("mgOwnEmissiveMap", "rgb")}` : output("emissive", "vec3");
+  const emissiveStrength = own.includes("emissive") ? "material.mgOwnEmissiveIntensity" : output("emissiveStrength", "float");
   const occlusion = output("occlusion", "float");
-  const normal = fragment.connected.has("normal") ? output("normal", "vec3") : null;
+  const ownNormal = own.includes("normal");
+  const normal = fragment.connected.has("normal") ? output("normal", "vec3") : ownNormal ? "mgOwnNormal()" : null;
   // A world-space normal (Triplanar Normal Map) is the surface's normal as it is; a tangent-space one is a normal map's.
-  const mapped = !normal ? "" : settings.normalSpace === "world"
+  const mapped = !normal ? "" : settings.normalSpace === "world" && !ownNormal
     ? `out.normal = normalize(${normal});`
     : `let mgMapped = ${normal};\n  out.normal = mappedNormal(in, out.normal, vec3f(mgMapped.xy * material.normalScale, mgMapped.z), in.uv0);`;
   // How much of the direct light its own relief lets through (Parallax's shadow).
@@ -700,14 +798,24 @@ export const compileGraphWgsl = (graph: MaterialGraph, options: CompileGraphWgsl
 
   // The coat, sheen and transmission it works out, as physicalLayers.ts takes them; a part it does not use is none.
   const layer = (feature: PhysicalFeature, value: () => string, none: string) => (layers.includes(feature) ? value() : none);
-  const physical = layers.length ? /* wgsl */ `
+  const over = layers.some((feature) => OVER_LAYERS.includes(feature));
+  // Its specular and thin film first: they change what the surface reflects, under any coat.
+  const lobe = layers.includes("specular") || layers.includes("thinFilm");
+  const ior = layer("specular", () => output("ior", "float"), "1.5");
+  const lobeCall = lobe ? /* wgsl */ `
+  out = applyPhysicalLobe(in, out, PhysicalLobe(
+    ${layer("specular", () => `min(vec3f(((${ior}) - 1.0) / ((${ior}) + 1.0) * (((${ior}) - 1.0) / ((${ior}) + 1.0))) * max(${output("specularColor", "vec3")}, vec3f(0.0)), vec3f(1.0)) * clamp(${output("specularWeight", "float")}, 0.0, 1.0)`, "vec3f(0.04)")},
+    ${layer("thinFilm", () => `clamp(${output("thinFilm", "float")}, 0.0, 1.0)`, "0.0")},
+    ${layer("thinFilm", () => `max(${output("thinFilmThickness", "float")}, 0.0)`, "0.0")},
+  ));` : "";
+  const physical = lobeCall + (over ? /* wgsl */ `
   out = applyPhysicalLayers(in, out, PhysicalLayers(
     ${layer("coat", () => `clamp(${output("coat", "float")}, 0.0, 1.0)`, "0.0")},
     ${layer("coat", () => `clamp(${output("coatRoughness", "float")}, 0.0, 1.0)`, "0.0")},
     ${layer("sheen", () => `max(${output("sheenColor", "vec3")}, vec3f(0.0))`, "vec3f(0.0)")},
     ${layer("sheen", () => `clamp(${output("sheenRoughness", "float")}, 0.07, 1.0)`, "1.0")},
     ${layer("transmission", () => `clamp(${output("transmission", "float")}, 0.0, 1.0)`, "0.0")},
-  ), (material.flags & ${GRAPH_FLAG.blended}u) != 0u);` : "";
+  ), (material.flags & ${GRAPH_FLAG.blended}u) != 0u);` : "");
 
   // The wind moves a vertex from where the graph's vertex offset left it, as on the WebGL path.
   const windMove = (at: string) => `instanceLocalDirection(instance, windOffset(${at}, instance, material.wind.x, material.wind.y, material.wind.z, material.wind.w))`;
@@ -764,7 +872,7 @@ fn mgLocalNormal() -> vec3f { return mgIn.normal; }
 `;
 
   const worldBinding = 1 + textures.length * 2;
-  const fieldDeclarations = all.filter((spec) => spec.kind !== "texture").map((spec) => `  ${spec.name}: ${FIELD_LAYOUT[spec.kind].type},`).join("\n");
+  const fieldDeclarations = fields.map((field) => `  ${field.name}: ${FIELD_LAYOUT[field.kind].type},`).join("\n");
   const textureDeclarations = textures.map((texture, index) => [
     `@group(2) @binding(${1 + index * 2}) var ${texture.name}: texture_2d<f32>;`,
     `@group(2) @binding(${2 + index * 2}) var ${texture.name}_sampler: sampler;`,
@@ -789,7 +897,8 @@ ${STIPPLE_WGSL}
 ${WEATHER_WGSL}
 ${BAKED_VOLUME_WGSL}
 ${MAPPED_NORMAL_WGSL}
-${layers.length ? PHYSICAL_LAYERS_WGSL : ""}
+${over ? PHYSICAL_LAYERS_WGSL : ""}
+${lobe ? PHYSICAL_LOBE_WGSL : ""}
 ${vertex || sways || knowsInstance ? INSTANCE_INVERSE_WGSL : ""}
 ${sways ? WIND_WGSL : ""}
 
@@ -804,6 +913,7 @@ fn mgVertexColor() -> vec3f {
 }
 ${objectBuiltins}
 ${helperSource(needed)}
+${ownNormal ? OWN_NORMAL_WGSL : ""}
 ${[...globals.values()].join("\n")}
 ${displace}
 

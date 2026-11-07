@@ -1,7 +1,7 @@
 /// <reference types="@webgpu/types" />
 import * as THREE from "three";
 import { MATERIAL_TIME, boundMaterialGraph } from "../../../runtime/materials/graphMaterial";
-import { materialGraphShape, type MaterialGraph } from "../../../runtime/materials/materialGraph";
+import { materialGraphSettings, materialGraphShape, type MaterialGraph } from "../../../runtime/materials/materialGraph";
 import { isWeatherPatched } from "../../../runtime/weatherSurfaces";
 import { registerSurfaceKind } from "../materialPool";
 import { surfaceBufferShader } from "../shaders";
@@ -105,7 +105,8 @@ const makeKind = (compiled: CompiledGraphWgsl): SurfaceKind => {
     layoutEntries: () => [...textureLayoutEntries(textureCount), ...worldLayoutEntries(compiled.worldBinding)],
     textures: (material) => {
       const uniforms = graphUniforms(material);
-      return compiled.textures.map((texture) => (uniforms[texture.name]?.value as THREE.Texture | null | undefined) ?? null);
+      // A map of the material's own (a graph keeping the model's own maps) is read off the material.
+      return compiled.textures.map((texture) => ((texture.own ? (material as unknown as Record<string, unknown>)[texture.own] : uniforms[texture.name]?.value) as THREE.Texture | null | undefined) ?? null);
     },
     bindGroupEntries: (input) => {
       const { buffer } = bufferFor(input.material, deviceOf(input.pool), compiled.bytes);
@@ -129,7 +130,7 @@ const makeKind = (compiled: CompiledGraphWgsl): SurfaceKind => {
       data[4] = m.normalScale.x;
       data[5] = m.normalScale.y;
       if (compiled.sways) packWind(material, data, GRAPH_WIND_AT);
-      for (const field of compiled.fields) writeField(data, field.offset / 4, field.kind, uniforms[field.name]?.value);
+      for (const field of compiled.fields) writeField(data, field.offset / 4, field.kind, field.own ? (material as unknown as Record<string, unknown>)[field.own] : uniforms[field.name]?.value);
       let same = true;
       for (let index = 0; index < data.length; index++) {
         if (data[index] !== sent[index] && !(Number.isNaN(data[index]) && Number.isNaN(sent[index]))) {
@@ -204,7 +205,7 @@ const entryFor = (graph: MaterialGraph, sways: boolean): GraphEntry | null => {
   if (!entries) entriesByGraph.set(graph, entries = {});
   const known = sways ? entries.wind : entries.still;
   if (known !== undefined) return known;
-  const shape = `${materialGraphShape(graph)}#${graphLayers(graph).join(",")}#${sways ? "wind" : "still"}`;
+  const shape = `${materialGraphShape(graph)}#${graphLayers(graph).join(",")}#${materialGraphSettings(graph).keepOwnMaps ? "own" : "-"}#${sways ? "wind" : "still"}`;
   let entry = entriesByShape.get(shape);
   if (entry === undefined) {
     entry = compileEntry(graph, sways);

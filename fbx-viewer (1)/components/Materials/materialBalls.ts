@@ -3,7 +3,7 @@ import { captureRenderer } from '../../renderer/capture';
 import { bindMaterialGraph, unbindMaterialGraph } from '../../runtime/materials/graphMaterial';
 import { withMaterialPictures } from '../../runtime/materials/materialGraph';
 import { graphTextures, type MaterialAsset } from '../../runtime/materials/materialLibrary';
-import { textureRole } from '../../texturing/textureSettings';
+import { textureRole, type TextureSettings } from '../../texturing/textureSettings';
 import type { LibraryPicture } from '../../utils/userMaterialLibrary';
 import { captureLighting, previewBackdrop } from './previewLighting';
 
@@ -13,8 +13,17 @@ import { captureLighting, previewBackdrop } from './previewLighting';
  * A material's picture for My library: a ball drawn on the engine's own material path (the graph bound to
  * a standard material, as on a model) under the material preview's studio lighting, in front of its soft
  * backdrop, with the engine's tone mapping. Drawn by the shared capture renderer, from the pictures the
- * library keeps (an 8-bit preview where a deep picture has one).
+ * library keeps or the open project's textures (an 8-bit preview where a deep picture has one).
  */
+
+/** Where a picture a ball draws with is read: its URL (and whether it is ours to let go of after), and its settings. */
+export type BallPictureSource = (textureId: string) => { url: string; settings?: TextureSettings; owned?: boolean } | null;
+
+/** Pictures kept by My library, as a ball reads them. */
+export const libraryPictureSource = (pictures: readonly LibraryPicture[]): BallPictureSource => (textureId) => {
+    const picture = pictures.find(candidate => candidate.id === textureId);
+    return picture ? { url: URL.createObjectURL(picture.preview ?? picture.file), settings: picture.settings, owned: true } : null;
+};
 
 /** Pixels across a ball. */
 export const BALL_SIZE = 160;
@@ -23,13 +32,13 @@ const environments = new WeakMap<THREE.WebGLRenderer, THREE.WebGLRenderTarget>()
 const sphere = new THREE.SphereGeometry(1, 64, 32);
 
 /** The pictures a graph samples, loaded as textures by slot and id; what cannot be read is left out. */
-const loadPictures = async (pictures: readonly LibraryPicture[], needed: ReadonlyArray<{ textureId: string; slot: 'map' | 'normal' | 'data' }>): Promise<Map<string, THREE.Texture>> => {
+const loadPictures = async (source: BallPictureSource, needed: ReadonlyArray<{ textureId: string; slot: 'map' | 'normal' | 'data' }>): Promise<Map<string, THREE.Texture>> => {
     const loaded = new Map<string, THREE.Texture>();
     const loader = new THREE.TextureLoader();
     await Promise.all(needed.map(async ({ textureId, slot }) => {
-        const picture = pictures.find(candidate => candidate.id === textureId);
+        const picture = source(textureId);
         if (!picture) return;
-        const url = URL.createObjectURL(picture.preview ?? picture.file);
+        const { url } = picture;
         try {
             const texture = await loader.loadAsync(url);
             texture.colorSpace = textureRole(slot, picture.settings) === 'colour' ? THREE.SRGBColorSpace : THREE.NoColorSpace;
@@ -40,7 +49,7 @@ const loadPictures = async (pictures: readonly LibraryPicture[], needed: Readonl
         } catch {
             // Drawn without it.
         } finally {
-            URL.revokeObjectURL(url);
+            if (picture.owned) URL.revokeObjectURL(url);
         }
     }));
     return loaded;
@@ -54,9 +63,9 @@ const pngBlob = (dataUrl: string): Blob => {
 };
 
 /** The material's ball as a PNG, or null where nothing can be drawn (no graphics). */
-export const renderMaterialBall = async (asset: MaterialAsset, pictures: readonly LibraryPicture[], size = BALL_SIZE): Promise<Blob | null> => {
+export const renderMaterialBall = async (asset: MaterialAsset, pictures: readonly LibraryPicture[] | BallPictureSource, size = BALL_SIZE): Promise<Blob | null> => {
     const graph = withMaterialPictures(asset.graph, asset.pictures);
-    const textures = await loadPictures(pictures, graphTextures(graph));
+    const textures = await loadPictures(typeof pictures === 'function' ? pictures : libraryPictureSource(pictures), graphTextures(graph));
     try {
         const dataUrl = captureRenderer.drawWith(size, size, (renderer) => {
             let environment = environments.get(renderer);

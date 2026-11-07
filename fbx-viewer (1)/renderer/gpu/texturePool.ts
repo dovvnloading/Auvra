@@ -56,7 +56,7 @@ interface ImagePlan {
   fill(texture: GPUTexture): void;
 }
 
-interface CompressedFormat {
+export interface CompressedFormat {
   format: GPUTextureFormat;
   srgb?: GPUTextureFormat;
   feature: keyof Pick<GpuFeatures, "bc" | "etc2" | "astc">;
@@ -64,13 +64,17 @@ interface CompressedFormat {
   blockSize: number;
 }
 
-const COMPRESSED: Partial<Record<number, CompressedFormat>> = {
+/** The WebGPU format a three compressed format is uploaded as, and the device feature it needs. */
+export const COMPRESSED: Readonly<Partial<Record<number, CompressedFormat>>> = {
   [THREE.RGB_S3TC_DXT1_Format]: { format: "bc1-rgba-unorm", srgb: "bc1-rgba-unorm-srgb", feature: "bc", blockBytes: 8, blockSize: 4 },
   [THREE.RGBA_S3TC_DXT1_Format]: { format: "bc1-rgba-unorm", srgb: "bc1-rgba-unorm-srgb", feature: "bc", blockBytes: 8, blockSize: 4 },
   [THREE.RGBA_S3TC_DXT3_Format]: { format: "bc2-rgba-unorm", srgb: "bc2-rgba-unorm-srgb", feature: "bc", blockBytes: 16, blockSize: 4 },
   [THREE.RGBA_S3TC_DXT5_Format]: { format: "bc3-rgba-unorm", srgb: "bc3-rgba-unorm-srgb", feature: "bc", blockBytes: 16, blockSize: 4 },
   [THREE.RGBA_BPTC_Format]: { format: "bc7-rgba-unorm", srgb: "bc7-rgba-unorm-srgb", feature: "bc", blockBytes: 16, blockSize: 4 },
   [THREE.RED_RGTC1_Format]: { format: "bc4-r-unorm", feature: "bc", blockBytes: 8, blockSize: 4 },
+  // Material textures keep one channel of data as signed BC4 in its non-negative half (three r164 uploads no unsigned
+  // BC4: utils/textureCompression/materialTextureEncoder.ts), which reads back 0 to 1 here as well.
+  [THREE.SIGNED_RED_RGTC1_Format]: { format: "bc4-r-snorm", feature: "bc", blockBytes: 8, blockSize: 4 },
   [THREE.RED_GREEN_RGTC2_Format]: { format: "bc5-rg-unorm", feature: "bc", blockBytes: 16, blockSize: 4 },
   [THREE.RGB_ETC2_Format]: { format: "etc2-rgb8unorm", srgb: "etc2-rgb8unorm-srgb", feature: "etc2", blockBytes: 8, blockSize: 4 },
   [THREE.RGBA_ETC2_EAC_Format]: { format: "etc2-rgba8unorm", srgb: "etc2-rgba8unorm-srgb", feature: "etc2", blockBytes: 16, blockSize: 4 },
