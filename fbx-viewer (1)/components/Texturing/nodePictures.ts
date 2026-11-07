@@ -84,6 +84,11 @@ const draw = async (gpu: TextureGpu, evaluator: TextureGraphEvaluator, request: 
         );
         const standIns: Record<string, string> = { curvature: 'curvature', cavity: 'curvature', occlusion: 'occlusion', worldNormal: 'normals', thickness: 'sample' };
         for (const port of definition.inputs) if (standIns[port.key]) links.push({ from: standIns[port.key], fromOutput: 'out', to: 'picture', toInput: port.key });
+    } else if (definition.category === 'Photo and scans' && main) {
+        // A stand-in photo: noise that does not tile, through a colourful gradient (its height as the height).
+        nodes.unshift({ ...createNode('perlinNoise', -260, 0), id: 'sample', tiling: 'none' }, { ...createNode('gradientMap', -150, 0, { ramp: COLOURFUL_RAMP }), id: 'colourful' });
+        links.push({ from: 'sample', fromOutput: 'out', to: 'colourful', toInput: 'in' }, { from: 'colourful', fromOutput: 'out', to: 'picture', toInput: main });
+        if (definition.inputs.some((port) => port.key === 'height')) links.push({ from: 'sample', fromOutput: 'out', to: 'picture', toInput: 'height' });
     } else if (main) {
         const sample = ID_SAMPLED.has(definition.type) ? 'tiles' : sampleFor(definition);
         nodes.unshift({ ...createNode(sample, -200, 0), id: 'sample' });

@@ -275,6 +275,10 @@ export type NodeCategory =
     | 'Height and normals'
     | 'Mesh maps'
     | 'Weathering'
+    | 'Photo and scans'
+    | 'Splines and paths'
+    | 'SDF shapes'
+    | 'Checks'
     | 'Materials'
     | 'Utility';
 
