@@ -70,6 +70,8 @@ describe('texel density', () => {
         // Scaled, both islands have the same density.
         expect(texelDensity(areas[0], 1024) * scales[0]).toBeCloseTo(texelDensity(areas[1], 1024) * scales[1], 6);
         expect(densityScales(areas, 1024, 102.4)).toEqual([2, 0.5]);
+        // A layout not measured yet reads as no density, never NaN.
+        expect(texelDensity({ uv: Number.NaN, model: 4 }, 1024)).toBe(0);
     });
 });
 
