@@ -56,7 +56,7 @@ class MaterialOverrideSchemaTests(unittest.TestCase):
                 validate_domain("objects", domain_document("objects", [placed(bad)]))
 
     def test_a_texture_keeps_its_import_settings(self):
-        settings = {"colorSpace": "data", "normalMap": False, "compression": "bc4", "maxSize": 2048, "wrap": "clamp", "filter": "linear", "mips": True,
+        settings = {"colorSpace": "data", "normalMap": False, "compression": "bc4", "maxSize": 2048, "wrap": "clamp", "filter": "linear", "mips": True, "flipGreen": True,
                     "source": {"format": "exr", "depth": 32, "channels": 4, "hdr": True}, "preview": {"assetId": "b" * 64}}
         document = validate_domain("textures", domain_document("textures", [{"id": "tex-height", "name": "Height.exr", "assetId": "a" * 64, "settings": settings}]))
         self.assertEqual(document["documents"][0]["settings"], settings)

@@ -69,6 +69,8 @@ export const textureFromPicture = async (picture: DecodedPicture, request: Mater
     } else {
         // Floating-point colour is encoded to sRGB, as the colour formats read it.
         const bytes = pictureToRgba8(sized, sized.depth === 32 && role === 'colour');
+        // A DirectX normal map's green points down: turned over so it reads as the others do.
+        if (settings?.flipGreen) for (let i = 1; i < bytes.length; i += 4) bytes[i] = 255 - bytes[i];
         const rgba = request.flipY ? flipped(bytes, width, height) : bytes;
         if (format === 'rgba8') {
             texture = new THREE.DataTexture(rgba, width, height, THREE.RGBAFormat, THREE.UnsignedByteType);
