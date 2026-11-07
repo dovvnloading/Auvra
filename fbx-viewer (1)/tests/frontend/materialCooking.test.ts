@@ -67,19 +67,28 @@ describe('texture graphs cooked by the game', () => {
         expect(planner.heldSets).toBe(2);
     });
 
-    it('let a set go once no use wears it', async () => {
-        const { planner, library, letGo } = plannerWith();
+    it('keep sets no use wears a while, so a value set again shows at once, and let the oldest go', async () => {
+        const { planner, cooks, library } = plannerWith();
         const asset = crate();
-        const [a, b] = [new THREE.MeshStandardMaterial(), new THREE.MeshStandardMaterial()];
-        planner.pictures(asset, { parameters: { Wetness: 1 } }, a);
-        planner.pictures(asset, { parameters: { Wetness: 1 } }, b);
+        const material = new THREE.MeshStandardMaterial();
+        planner.pictures(asset, { parameters: { Wetness: 1 } }, material);
         await planner.settled();
-        planner.release(a);
+        planner.pictures(asset, { parameters: { Wetness: 1 } }, material);
+        planner.pictures(asset, { parameters: { Wetness: 0.5 } }, material);
+        await planner.settled();
+        planner.pictures(asset, { parameters: { Wetness: 0.5 } }, material);
+        // Back to 1: kept, so nothing is cooked again.
+        expect(planner.pictures(asset, { parameters: { Wetness: 1 } }, material)).toBeDefined();
+        expect(cooks).toHaveLength(2);
         expect(library.releaseTexture).not.toHaveBeenCalled();
-        // b moves to another value: the first set goes.
-        planner.pictures(asset, { parameters: { Wetness: 0.5 } }, b);
-        expect(library.releaseTexture).toHaveBeenCalledTimes(2);
-        expect(letGo).toHaveBeenCalledTimes(2);
+        // Many more values: the oldest kept ones go.
+        for (let step = 0; step < 30; step++) {
+            planner.pictures(asset, { parameters: { Wetness: step / 100 } }, material);
+            await planner.settled();
+            planner.pictures(asset, { parameters: { Wetness: step / 100 } }, material);
+        }
+        expect(library.releaseTexture).toHaveBeenCalled();
+        expect(planner.heldSets).toBeLessThanOrEqual(25);
     });
 
     it('load a set kept from an earlier run instead of cooking it again', async () => {
@@ -119,6 +128,7 @@ describe('texture graphs cooked by the game', () => {
 
     it('draw a use with its cooked pictures through the material library, and a seed set during play cooks its own', async () => {
         const { planner } = plannerWith(null, false, materialLibrary);
+        materialLibrary.setTextureSource(() => undefined, async () => new THREE.Texture());
         materialLibrary.replaceAll([crate()]);
         materialLibrary.setPictureSource(planner);
         const material = new THREE.MeshStandardMaterial();
@@ -138,5 +148,77 @@ describe('texture graphs cooked by the game', () => {
         expect(setObjectMaterialValue(root, 'Wetness', 0.8, made)).toBe(1);
         expect(setObjectMaterialValue(root, 'Not a parameter', 1, made)).toBe(0);
         releaseSessionMaterials(made);
+    });
+
+    it('cook the same pictures in play as in the editor for the same values and seed, whatever size they show at', async () => {
+        const { planner, cooks } = plannerWith(null, false, materialLibrary);
+        materialLibrary.setTextureSource(() => undefined, async () => new THREE.Texture());
+        materialLibrary.replaceAll([crate()]);
+        materialLibrary.setPictureSource(planner);
+        // The editor: a placed crate's own seed and wetness (Material values).
+        const inEditor = new THREE.MeshStandardMaterial();
+        materialLibrary.assign(inEditor, 'crate', true, { [GRAPH_SEED]: 20, Wetness: 0 });
+        // Play: a crate with that seed, its wetness set by the blueprint, its picture size by the level of detail.
+        const material = new THREE.MeshStandardMaterial();
+        const mesh = new THREE.Mesh(new THREE.BoxGeometry(), material);
+        const root = new THREE.Group().add(mesh);
+        materialLibrary.assign(material, 'crate', true, { [GRAPH_SEED]: 20 });
+        const made: THREE.Material[] = [];
+        setObjectMaterialValue(root, 'Wetness', 0, made);
+        const inPlay = mesh.material as THREE.Material;
+        const binding = materialLibrary.bindingOf(inPlay)!;
+        materialLibrary.assign(inPlay, 'crate', true, { ...binding.parameters, [PICTURE_SIZE]: 7 });
+        await planner.settled();
+        // One cook, at the size the material bakes at, for both.
+        const forValues = cooks.filter(cook => cook.values.Wetness === 0 && cook.seed === 20);
+        expect(forValues).toHaveLength(1);
+        expect(forValues[0].sizeLog2).toBeUndefined();
+        const key = cookSignature(cookRequestFor(crate(), { [GRAPH_SEED]: 20, Wetness: 0 }));
+        const pictureOf = (each: THREE.Material) => boundMaterialGraph(each)!.nodes.find(node => node.params.output === 'baseColor')?.params.texture;
+        expect(pictureOf(inEditor)).toBe(cookedTextureId(key, 'baseColor'));
+        // Play reads the same pictures, smaller.
+        expect(pictureOf(inPlay)).toBe(cookedTextureId(key, 'baseColor', 7));
+        releaseSessionMaterials(made);
+    });
+
+    it('keep drawing what a use showed until its new values are cooked and loaded, never bare', async () => {
+        let finish: (() => void) | null = null;
+        const library = { addTextureUrl: vi.fn(), releaseTexture: vi.fn(), rebindAsset: vi.fn(), preloadTexture: vi.fn(() => new Promise<void>((resolve) => { finish = resolve; })) };
+        const planner = new MaterialCookPlanner(library, { cook: async () => ({ baseColor: new Blob(['c']) }) }, null, { nextFrame: (task) => setTimeout(task, 0), urlOf: (blob) => `blob:${blob.size}:${Math.random()}` });
+        const asset = crate();
+        const material = new THREE.MeshStandardMaterial();
+        planner.pictures(asset, { parameters: { Wetness: 0 } }, material);
+        await new Promise(resolve => setTimeout(resolve, 5));
+        finish!();
+        await planner.settled();
+        const dry = planner.pictures(asset, { parameters: { Wetness: 0 } }, material);
+        expect(dry?.baseColor).toMatch(/^cooked:/);
+        // Wetter: still the dry pictures while the wet ones cook and load.
+        expect(planner.pictures(asset, { parameters: { Wetness: 1 } }, material)).toEqual(dry);
+        await new Promise(resolve => setTimeout(resolve, 5));
+        expect(planner.pictures(asset, { parameters: { Wetness: 1 } }, material)).toEqual(dry);
+        finish!();
+        await planner.settled();
+        const wet = planner.pictures(asset, { parameters: { Wetness: 1 } }, material);
+        expect(wet?.baseColor).not.toBe(dry?.baseColor);
+        expect(library.rebindAsset).toHaveBeenCalledTimes(2);
+    });
+
+    it('show every step of a blueprint going round, a value set again sharing its cook', async () => {
+        const { planner, cooks } = plannerWith();
+        const asset = crate();
+        const crates = [new THREE.MeshStandardMaterial(), new THREE.MeshStandardMaterial(), new THREE.MeshStandardMaterial()];
+        const shown: string[] = [];
+        for (const round of [0, 1]) {
+            for (const wetness of [0, 0.5, 1, 0.5]) {
+                crates.forEach((material, index) => planner.pictures(asset, { parameters: { [GRAPH_SEED]: 20 + index, Wetness: wetness } }, material));
+                await planner.settled();
+                const pictures = planner.pictures(asset, { parameters: { [GRAPH_SEED]: 20, Wetness: wetness } }, crates[0]);
+                shown.push(`${round}:${wetness}:${pictures?.baseColor === cookedTextureId(cookSignature(cookRequestFor(asset, { [GRAPH_SEED]: 20, Wetness: wetness })), 'baseColor')}`);
+            }
+        }
+        expect(shown).toEqual(['0:0:true', '0:0.5:true', '0:1:true', '0:0.5:true', '1:0:true', '1:0.5:true', '1:1:true', '1:0.5:true']);
+        // Three crates, three values: nine cooks for both rounds.
+        expect(cooks).toHaveLength(9);
     });
 });

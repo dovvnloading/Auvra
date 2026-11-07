@@ -263,6 +263,8 @@ class MaterialLibrary {
     private readonly addedUrls = new Map<string, string>();
     private loadTexture: TextureLoad = (url) => new THREE.TextureLoader().loadAsync(url);
     private pictureSource: PictureSource | null = null;
+    /** Textures being loaded, by key, settling when they have (or have failed). */
+    private readonly loading = new Map<string, Promise<void>>();
 
     /** Where texture-graph materials' uses take their pictures from (null: always the baked ones). Every use draws again. */
     setPictureSource(source: PictureSource | null): void {
@@ -270,6 +272,14 @@ class MaterialLibrary {
         this.pictureSource = source;
         this.rebindAll();
         this.emit();
+    }
+
+    /** Settles once a texture is loaded in this slot and this way up (or could not be); starts loading it if need be. */
+    preloadTexture(textureId: string, slot: TextureSlot, flipY: boolean): Promise<void> {
+        const key = `${slot}:${flipY ? 1 : 0}:${textureId}`;
+        if (this.textures.get(key)) return Promise.resolve();
+        if (!this.textures.has(key)) this.texture(textureId, slot, flipY);
+        return this.loading.get(key) ?? Promise.resolve();
     }
 
     /** Draws every use of an asset again (its cooked pictures arrived). */
@@ -420,7 +430,7 @@ class MaterialLibrary {
         this.textures.set(key, null);
         const url = this.addedUrls.get(textureId) ?? this.resolveUrl(textureId);
         if (!url) return null;
-        this.loadTexture(url, { textureId, slot, flipY }).then((texture) => {
+        const loading = this.loadTexture(url, { textureId, slot, flipY }).then((texture) => {
             // A texture its loader set up from its settings (and laid the right way up) is left as it is.
             if (texture.userData?.auvraTextureSettings !== true) {
                 // Only colour is decoded from sRGB; normals and data are read as stored.
@@ -439,7 +449,8 @@ class MaterialLibrary {
             this.emit();
         }, () => {
             this.textures.delete(key);
-        });
+        }).finally(() => { this.loading.delete(key); });
+        this.loading.set(key, loading);
         return null;
     }
 

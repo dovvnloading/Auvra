@@ -62,7 +62,8 @@ export const createGraphCooker = (source: GraphCookerSource): Cooker => ({
         const evaluator = new TextureGraphEvaluator(gpu, resolve, (textureId) => loaded.get(textureId) ?? null);
         try {
             const graph = stored.graph;
-            const largest = request.sizeLog2 ?? bakedSizeLog2(request.asset);
+            // At the size the material bakes at, always, as the editor draws it: a smaller one is read from this.
+            const largest = bakedSizeLog2(request.asset);
             const longest = Math.max(graph.size.w, graph.size.h);
             const size = { w: Math.max(4, largest - (longest - graph.size.w)), h: Math.max(4, largest - (longest - graph.size.h)) };
             const outputs = graph.nodes.filter((node) => node.type === OUTPUT_NODE_TYPE);

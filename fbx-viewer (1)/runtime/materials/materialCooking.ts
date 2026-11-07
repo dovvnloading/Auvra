@@ -1,5 +1,6 @@
 import type * as THREE from 'three';
 import type { MaterialAsset, MaterialBinding } from './materialLibrary';
+import type { TextureSettings } from '../../texturing/textureSettings';
 
 /**
  * COOKED PICTURES: TEXTURE GRAPHS RUN BY THE GAME
@@ -10,9 +11,11 @@ import type { MaterialAsset, MaterialBinding } from './materialLibrary';
  * or set during play by blueprints and scripts), and a picture size that follows how large it shows on the screen.
  *
  * Uses asking for the same graph, values, seed and size share one cooked set, found by signature in the game's cache
- * (cookedPictureCache.ts) so a second run loads it. Cooking runs one set at a time, a frame apart, behind what the game
- * draws; until a set is ready, and for good if it fails, the use draws with the baked pictures. A set no use wants any
- * more is let go of. Whether a game cooks at all is its setting: always, when the device can, or never.
+ * (materialCookingSetup.ts) so a second run loads it. The cook never depends on the size a use shows at: every size
+ * reads the same pictures (the editor's), each at a size of its own. Cooking runs one set at a time, a frame apart,
+ * behind what the game draws. A use whose values change keeps showing what it showed until the new set's textures are
+ * loaded, so it is never drawn bare; with nothing cooked yet (or if cooking fails) it draws with the baked pictures.
+ * Sets no use wears are kept a while, so values set again (a blueprint going round) show at once. Whether a game cooks at all is its setting: always, when the device can, or never.
  */
 
 /** The parameter a use sets to give its texture graph a seed of its own. */
@@ -118,28 +121,63 @@ export const steppedPictureSize = (currentLog2: number | undefined, shownPixels:
     return currentLog2;
 };
 
-/** What the planner asks of the material library: textures it may read by id, and drawing an asset's uses again. */
+/** What the planner asks of the material library: textures it may read by id, having them loaded, and drawing an asset's uses again. */
 export interface CookedPictureHost {
     addTextureUrl(textureId: string, url: string): void;
     releaseTexture(textureId: string): void;
     rebindAsset(assetId: string): void;
+    /** Settles once the texture is loaded (or could not be), read in this slot and this way up. */
+    preloadTexture?(textureId: string, slot: 'map' | 'normal' | 'data', flipY: boolean): Promise<void>;
 }
 
+/** How a cooked picture of a role is read: colour, a normal map, or data. */
+const ROLE_SLOTS: Record<CookedRole, 'map' | 'normal' | 'data'> = {
+    baseColor: 'map', emissive: 'map', normal: 'normal', orm: 'data', opacity: 'data', height: 'data', roughness: 'data', metallic: 'data', ambientOcclusion: 'data',
+};
+
+/** The settings a cooked picture is read with: its role, kept whole (it is made at the size it shows at), no larger than `sizeLog2`. */
+export const cookedPictureSettings = (role: CookedRole, sizeLog2: number | undefined): TextureSettings => ({
+    ...(ROLE_SLOTS[role] === 'normal' ? { normalMap: true } : { colorSpace: ROLE_SLOTS[role] === 'map' ? 'colour' as const : 'data' as const }),
+    compression: 'none',
+    ...(sizeLog2 !== undefined ? { maxSize: 2 ** Math.max(8, sizeLog2) } : {}),
+});
+
+/** The texture id a cooked picture is read by, at a size (the whole cook's when undefined). */
+export const cookedTextureId = (key: string, role: CookedRole, sizeLog2?: number): string => `cooked:${key}@${sizeLog2 ?? 'full'}:${role}`;
+
+/** A cooked set's pictures (its files), one for each look of its values and seed. */
 interface CookedSet {
     assetId: string;
+    urls: Partial<Record<CookedRole, string>>;
+    /** Its sizes in use or kept. */
+    variants: Set<string>;
+}
+
+/** A set read at one size: its own texture ids, ready once they are loaded. */
+interface Variant {
+    key: string;
+    sizeLog2: number | undefined;
     ids: Partial<Record<CookedRole, string>>;
-    urls: string[];
+    ready: boolean;
     users: Set<THREE.Material>;
 }
 
-/** The texture id a cooked picture is read by. */
-export const cookedTextureId = (key: string, role: CookedRole): string => `cooked:${key}:${role}`;
+/** Sets no use wears kept loaded for a while, so a value set again (a blueprint going round) shows at once. */
+const SPARE_VARIANTS = 24;
 
 export class MaterialCookPlanner {
     private readonly sets = new Map<string, CookedSet>();
+    private readonly variants = new Map<string, Variant>();
     private readonly waiting = new Map<string, CookRequest>();
     private readonly failed = new Set<string>();
-    private readonly held = new Map<THREE.Material, string>();
+    /** The look each use asks for, the one it shows (until the asked one is ready), and which way up it reads pictures. */
+    private readonly wanted = new Map<THREE.Material, string>();
+    private readonly shown = new Map<THREE.Material, string>();
+    private readonly flips = new Map<THREE.Material, boolean>();
+    /** Variants nobody wears, oldest first. */
+    private spare: string[] = [];
+    /** Variants whose textures are loading. */
+    private readonly preparing = new Set<string>();
     private running = false;
     private scheduled = false;
     /** Cooked sets made (counted for tests and the editor's notes). */
@@ -156,68 +194,132 @@ export class MaterialCookPlanner {
             letGo?: (url: string) => void;
             content?: (asset: MaterialAsset) => string;
             onFailure?: (error: unknown) => void;
+            /** Records how a texture id is read (texturing/textureSettings.ts in the game). */
+            setSettings?: (textureId: string, settings: TextureSettings) => void;
         } = {},
     ) {}
 
     /**
-     * The pictures a use of `asset` draws with: its cooked set once ready, else undefined (its baked pictures). Asking
-     * starts the cook; `material` holds the set until it asks for another or is released.
+     * The pictures a use of `asset` draws with: the cooked set for its values at its size once ready. Until then it
+     * keeps what it showed before (so changing a value never draws it bare), or its baked pictures. Asking starts the
+     * cook; `material` holds what it shows until it shows another or is released.
      */
-    pictures(asset: MaterialAsset, binding: Pick<MaterialBinding, 'parameters'>, material: THREE.Material): Record<string, string> | undefined {
+    pictures(asset: MaterialAsset, binding: Pick<MaterialBinding, 'parameters'> & { flipY?: boolean }, material: THREE.Material): Record<string, string> | undefined {
         if (!cookable(asset)) {
             this.release(material);
             return undefined;
         }
         const request = cookRequestFor(asset, binding.parameters as Record<string, unknown> | undefined);
-        const key = cookSignature(request, this.options.content);
-        if (this.held.get(material) !== key) {
-            this.release(material);
-            this.held.set(material, key);
+        // The cook itself never depends on the size it is shown at: every size reads the same pictures, as the editor's.
+        const key = cookSignature({ ...request, sizeLog2: undefined }, this.options.content);
+        const variantKey = `${key}@${request.sizeLog2 ?? 'full'}`;
+        this.wanted.set(material, variantKey);
+        this.flips.set(material, binding.flipY !== false);
+        const variant = this.variants.get(variantKey);
+        if (variant?.ready) {
+            this.show(material, variantKey);
+            return this.withCooked(asset, variant);
         }
-        const set = this.sets.get(key);
-        if (set) {
-            set.users.add(material);
-            return this.withCooked(asset, set);
-        }
-        if (!this.failed.has(key) && !this.waiting.has(key)) {
-            this.waiting.set(key, request);
+        if (this.sets.has(key)) this.prepare(variantKey, key, request.sizeLog2);
+        else if (!this.failed.has(key) && !this.waiting.has(key)) {
+            this.waiting.set(key, { ...request, sizeLog2: undefined });
             this.schedule();
         }
-        return undefined;
+        // What it showed until now stays until the new look is ready.
+        const before = this.shown.get(material);
+        const showing = before ? this.variants.get(before) : undefined;
+        return showing?.ready && this.sets.get(showing.key)?.assetId === asset.id ? this.withCooked(asset, showing) : undefined;
     }
 
-    /** A use no longer draws with the asset: the set it held goes once no use holds it. */
+    /** A use no longer draws with the asset: what it showed is kept a while, then let go of. */
     release(material: THREE.Material): void {
-        const key = this.held.get(material);
-        if (key === undefined) return;
-        this.held.delete(material);
-        const set = this.sets.get(key);
-        if (!set) {
-            if (![...this.held.values()].includes(key)) this.waiting.delete(key);
-            return;
-        }
-        set.users.delete(material);
-        if (set.users.size) return;
-        this.sets.delete(key);
-        for (const id of Object.values(set.ids)) if (id) this.host.releaseTexture(id);
-        for (const url of set.urls) (this.options.letGo ?? ((value: string) => URL.revokeObjectURL(value)))(url);
+        this.wanted.delete(material);
+        this.flips.delete(material);
+        const shown = this.shown.get(material);
+        this.shown.delete(material);
+        if (shown) this.leave(shown, material);
     }
 
-    /** How many cooked sets are held now. */
+    /** How many cooked sets are held now (worn or kept). */
     get heldSets(): number {
         return this.sets.size;
     }
 
-    /** Settles once nothing waits to be cooked (tests). */
+    /** Settles once nothing waits to be cooked or loaded (tests). */
     async settled(): Promise<void> {
-        while (this.running || this.scheduled || this.waiting.size) await new Promise(resolve => setTimeout(resolve, 0));
+        for (let round = 0; round < 3; round++) {
+            while (this.running || this.scheduled || this.waiting.size || this.preparing.size) await new Promise(resolve => setTimeout(resolve, 0));
+        }
     }
 
-    /** The asset's pictures with those the set holds in their place (any it did not cook stay baked). */
-    private withCooked(asset: MaterialAsset, set: CookedSet): Record<string, string> {
+    /** The asset's pictures with those the variant holds in their place (any it did not cook stay baked). */
+    private withCooked(asset: MaterialAsset, variant: Variant): Record<string, string> {
         const pictures: Record<string, string> = { ...(asset.pictures ?? {}) };
-        for (const [role, id] of Object.entries(set.ids)) if (id) pictures[role] = id;
+        for (const [role, id] of Object.entries(variant.ids)) if (id) pictures[role] = id;
         return pictures;
+    }
+
+    private show(material: THREE.Material, variantKey: string): void {
+        const before = this.shown.get(material);
+        this.variants.get(variantKey)!.users.add(material);
+        this.spare = this.spare.filter(key => key !== variantKey);
+        if (before === variantKey) return;
+        this.shown.set(material, variantKey);
+        if (before) this.leave(before, material);
+    }
+
+    /** A use stops showing a variant: with nobody left it is kept spare, the oldest spare ones let go of. */
+    private leave(variantKey: string, material: THREE.Material): void {
+        const variant = this.variants.get(variantKey);
+        if (!variant) return;
+        variant.users.delete(material);
+        if (!variant.users.size) this.keepSpare(variantKey);
+    }
+
+    private keepSpare(variantKey: string): void {
+        this.spare = [...this.spare.filter(key => key !== variantKey), variantKey];
+        while (this.spare.length > SPARE_VARIANTS) this.drop(this.spare.shift()!);
+    }
+
+    private drop(variantKey: string): void {
+        const variant = this.variants.get(variantKey);
+        if (!variant || variant.users.size) return;
+        this.variants.delete(variantKey);
+        for (const id of Object.values(variant.ids)) if (id) this.host.releaseTexture(id);
+        const set = this.sets.get(variant.key);
+        if (!set) return;
+        set.variants.delete(variantKey);
+        if (set.variants.size) return;
+        this.sets.delete(variant.key);
+        for (const url of Object.values(set.urls)) if (url) (this.options.letGo ?? ((value: string) => URL.revokeObjectURL(value)))(url);
+    }
+
+    /** A cooked set read at a size: its texture ids, loaded before anything draws with them. */
+    private prepare(variantKey: string, key: string, sizeLog2: number | undefined): void {
+        if (this.variants.has(variantKey) || this.preparing.has(variantKey)) return;
+        const set = this.sets.get(key);
+        if (!set) return;
+        const variant: Variant = { key, sizeLog2, ids: {}, ready: false, users: new Set() };
+        this.variants.set(variantKey, variant);
+        set.variants.add(variantKey);
+        this.preparing.add(variantKey);
+        const loads: Array<Promise<void>> = [];
+        const flips = new Set([...this.wanted].filter(([, wanted]) => wanted === variantKey).map(([material]) => this.flips.get(material) ?? true));
+        for (const [role, url] of Object.entries(set.urls) as Array<[CookedRole, string]>) {
+            const id = cookedTextureId(key, role, sizeLog2);
+            this.options.setSettings?.(id, cookedPictureSettings(role, sizeLog2));
+            this.host.addTextureUrl(id, url);
+            variant.ids[role] = id;
+            for (const flipY of flips.size ? flips : [true]) if (this.host.preloadTexture) loads.push(this.host.preloadTexture(id, ROLE_SLOTS[role], flipY));
+        }
+        void Promise.all(loads).then(() => {
+            this.preparing.delete(variantKey);
+            if (this.variants.get(variantKey) !== variant) return;
+            variant.ready = true;
+            // Nobody asks for it any more: kept spare.
+            if (![...this.wanted.values()].includes(variantKey) && !variant.users.size) this.keepSpare(variantKey);
+            this.host.rebindAsset(set.assetId);
+        });
     }
 
     private schedule(): void {
@@ -229,13 +331,18 @@ export class MaterialCookPlanner {
         });
     }
 
+    /** The keys uses ask for now. */
+    private wantedKeys(): Set<string> {
+        return new Set([...this.wanted.values()].map(variantKey => variantKey.slice(0, variantKey.lastIndexOf('@'))));
+    }
+
     private async cookNext(): Promise<void> {
         const next = this.waiting.entries().next();
         if (next.done) return;
         const [key, request] = next.value;
         this.waiting.delete(key);
         // Nobody wants it any more (the use moved on while it waited).
-        if (![...this.held.values()].includes(key)) {
+        if (!this.wantedKeys().has(key)) {
             this.schedule();
             return;
         }
@@ -246,21 +353,19 @@ export class MaterialCookPlanner {
                 pictures = await this.cooker.cook(request);
                 void this.cache?.put(key, pictures).catch(() => undefined);
             }
-            const users = [...this.held].filter(([, held]) => held === key).map(([material]) => material);
-            if (!users.length) return;
-            const set: CookedSet = { assetId: request.asset.id, ids: {}, urls: [], users: new Set(users) };
-            for (const [role, blob] of Object.entries(pictures) as Array<[CookedRole, Blob]>) {
-                const id = cookedTextureId(key, role);
-                const url = (this.options.urlOf ?? ((value: Blob) => URL.createObjectURL(value)))(blob);
-                this.host.addTextureUrl(id, url);
-                set.ids[role] = id;
-                set.urls.push(url);
-            }
+            const set: CookedSet = { assetId: request.asset.id, urls: {}, variants: new Set() };
+            for (const [role, blob] of Object.entries(pictures) as Array<[CookedRole, Blob]>) set.urls[role] = (this.options.urlOf ?? ((value: Blob) => URL.createObjectURL(value)))(blob);
             this.sets.set(key, set);
             this.cooked += 1;
-            this.host.rebindAsset(request.asset.id);
+            // Every size asked for is read from it.
+            for (const variantKey of new Set(this.wanted.values())) {
+                if (variantKey.startsWith(`${key}@`)) {
+                    const size = variantKey.slice(key.length + 1);
+                    this.prepare(variantKey, key, size === 'full' ? undefined : Number(size));
+                }
+            }
         } catch (error) {
-            // The baked pictures stay.
+            // What it showed, or the baked pictures, stays.
             this.failed.add(key);
             this.options.onFailure?.(error);
         } finally {
