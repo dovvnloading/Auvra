@@ -1,20 +1,21 @@
-import React, { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
-import { BookIcon, CopyIcon, CrossIcon, DownloadIcon, FolderIcon, SearchIcon, TagIcon, TrashIcon } from '../UI/Icons';
+import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { BookIcon, CopyIcon, CrossIcon, DownloadIcon, FolderIcon, PackageIcon, PackagePlusIcon, SearchIcon, TagIcon, TrashIcon } from '../UI/Icons';
 import { Button, IconButton, TextInput } from '../UI/kit';
 import { useAssets } from '../../context/AssetContext';
 import { useScene } from '../../context/SceneContext';
 import { useNotification } from '../../context/NotificationContext';
 import { frontendDiagnostics } from '../../diagnostics/runtime';
-import { MATERIALS_DOMAIN, materialAssetDocument, materialLibrary, type MaterialAsset } from '../../runtime/materials/materialLibrary';
-import { setTextureSettings, setTextureSourceAsset, textureSettingsOf } from '../../texturing/textureSettings';
-import type { TextureData } from '../../types';
+import { materialLibrary, type MaterialAsset } from '../../runtime/materials/materialLibrary';
+import { textureSettingsOf } from '../../texturing/textureSettings';
 import { projectService } from '../../utils/projectService';
 import {
     filterLibrary, libraryFolders, libraryMaterial, libraryNodeGraphs, libraryTags, userMaterialLibrary,
-    type LibraryEntry, type LibraryPicture, type RemovedLibraryEntry,
+    type LibraryEntry, type RemovedLibraryEntry,
 } from '../../utils/userMaterialLibrary';
 import { addToLibrary, bringIntoProject, usesInWords } from '../../utils/userMaterialLibraryActions';
 import { renderMaterialBall } from './materialBalls';
+import { useProjectTarget } from './projectTarget';
+import { MaterialPackageImport, useExportLibraryPackage, type MaterialPackageImportHandle } from './MaterialPackageFiles';
 
 /**
  * MY LIBRARY (in the Materials tab)
@@ -70,51 +71,18 @@ export const LibraryBall: React.FC<{ entry: LibraryEntry; size: number }> = ({ e
         : <span aria-hidden className="block animate-pulse rounded bg-gray-800" style={{ width: size, height: size }} />;
 };
 
-/** Adds a picture from the library to the open project as its own texture, in `folder`; returns its id there. */
-const useAddPicture = () => {
-    const { setTextures } = useAssets();
-    const addToList = setTextures as unknown as (update: (previous: TextureData[]) => TextureData[]) => void;
-    return useCallback(async (picture: LibraryPicture, folder: string): Promise<string> => {
-        const id = crypto.randomUUID();
-        const assetId = await projectService.uploadAsset(new File([picture.file], picture.name, { type: picture.file.type }));
-        const previewAssetId = picture.preview ? await projectService.uploadAsset(new File([picture.preview], `${picture.name} preview.png`, { type: 'image/png' })) : null;
-        const settings = previewAssetId ? { ...(picture.settings ?? {}), preview: { assetId: previewAssetId } } : picture.settings;
-        const name = picture.name.slice(0, 256);
-        await projectService.applyChanges([{ domain: 'textures', operation: 'upsert', id, value: { id, name, assetId, dimensions: picture.dimensions, folder, ...(settings ? { settings } : {}) } }]);
-        setTextureSettings(id, settings);
-        setTextureSourceAsset(id, assetId);
-        // A deep picture is shown by its preview and drawn by its own file.
-        const url = URL.createObjectURL(picture.preview ?? picture.file);
-        const sourceUrl = picture.preview ? URL.createObjectURL(picture.file) : undefined;
-        materialLibrary.addTextureUrl(id, sourceUrl ?? url);
-        addToList((previous) => [...previous, { id, name, url, dimensions: picture.dimensions, folder, ...(settings ? { settings } : {}), ...(sourceUrl ? { sourceUrl } : {}) }]);
-        return id;
-    }, [addToList]);
-};
-
 /** Brings a library material into the open project (its own copy, with its pictures); null when it could not. */
 export const useBringIn = () => {
-    const addPicture = useAddPicture();
-    const { projectStatus } = useScene();
+    const projectTarget = useProjectTarget();
     const { addNotification } = useNotification();
     return useCallback(async (entryId: string): Promise<MaterialAsset | null> => {
         const library = userMaterialLibrary();
         const entry = library.get(entryId);
-        if (!projectStatus.projectId || !entry) return null;
+        const target = projectTarget();
+        if (!target || !entry) return null;
         try {
             projectService.assertWritable();
-            const asset = await bringIntoProject(library, entryId, {
-                projectId: projectStatus.projectId,
-                projectName: projectStatus.name ?? '',
-                materialNames: materialLibrary.list().map(material => material.name),
-                addPicture,
-                saveMaterial: async (material) => {
-                    await projectService.applyChanges([{ domain: MATERIALS_DOMAIN, operation: 'upsert', id: material.id, value: materialAssetDocument(material) }]);
-                    materialLibrary.upsert(material);
-                },
-                newId: () => crypto.randomUUID(),
-                hasMaterial: (id) => materialLibrary.get(id) !== undefined,
-            });
+            const asset = await bringIntoProject(library, entryId, target);
             addNotification({ message: `"${asset.name}" is now in this project.`, type: 'success' });
             return asset;
         } catch (failure) {
@@ -122,7 +90,7 @@ export const useBringIn = () => {
             addNotification({ message: failure instanceof Error && failure.message.includes('read-only') ? 'This project is read-only.' : `"${entry.name}" could not be brought into this project.`, type: 'error' });
             return null;
         }
-    }, [addNotification, addPicture, projectStatus.name, projectStatus.projectId]);
+    }, [addNotification, projectTarget]);
 };
 
 /** Adds a project material to My library (or updates the entry it became before). */
@@ -180,6 +148,7 @@ const EntryPage: React.FC<{
     using: boolean;
 }> = ({ entry, folders, projectOpen, projectId, onUse, onDuplicate, onDelete, using }) => {
     const library = userMaterialLibrary();
+    const exportPackage = useExportLibraryPackage();
     const [tag, setTag] = useState('');
     const change = (changes: Parameters<typeof library.change>[1]) => {
         library.change(entry.id, changes).catch((failure: unknown) => frontendDiagnostics.failure('material_library_change_failed', failure));
@@ -245,6 +214,7 @@ const EntryPage: React.FC<{
                     </p>
                     <div className="flex gap-1">
                         <Button size="sm" icon={<CopyIcon size={12} />} onClick={onDuplicate}>Duplicate</Button>
+                        <Button size="sm" icon={<PackageIcon size={12} />} title="Publish it as one .auvramat file, with its pictures and the graphs it uses as nodes" onClick={() => void exportPackage(entry)}>Publish</Button>
                         <span className="flex-1" />
                         <Button size="sm" variant="danger" icon={<TrashIcon size={12} />} onClick={onDelete}>Delete</Button>
                     </div>
@@ -265,6 +235,7 @@ export const MyLibraryPanel: React.FC<{ onBringIn: (entryId: string) => Promise<
     const [deleted, setDeleted] = useState<RemovedLibraryEntry | null>(null);
     const [using, setUsing] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const packageImport = useRef<MaterialPackageImportHandle>(null);
     const folders = useMemo(() => libraryFolders(entries), [entries]);
     const tags = useMemo(() => libraryTags(entries), [entries]);
     const shown = useMemo(() => filterLibrary(entries, { query, folder, tag }), [entries, folder, query, tag]);
@@ -307,6 +278,8 @@ export const MyLibraryPanel: React.FC<{ onBringIn: (entryId: string) => Promise<
                         <SearchIcon size={12} className="pointer-events-none absolute left-2 top-1.5 text-ink-3" />
                         <TextInput aria-label="Search my library" value={query} placeholder="Search names, tags and folders" className="w-60 pl-6" onChange={(event) => setQuery(event.target.value)} />
                     </span>
+                    <IconButton label="Add a material package (.auvramat) to my library" onClick={() => packageImport.current?.pick()}><PackagePlusIcon size={14} /></IconButton>
+                    <MaterialPackageImport ref={packageImport} into="library" onLibraryEntry={(entry) => { setError(null); setQuery(''); setFolder(''); setTag(''); setSelectedId(entry.id); }} />
                 </div>
                 {(folders.length > 0 || tags.length > 0) && (
                     <div className="flex shrink-0 flex-wrap items-center gap-1 border-b border-line px-3 py-1.5">
@@ -332,7 +305,7 @@ export const MyLibraryPanel: React.FC<{ onBringIn: (entryId: string) => Promise<
                         <div className="mx-auto mt-10 max-w-sm space-y-2 text-center">
                             <BookIcon size={22} className="mx-auto text-ink-3" />
                             <p className="text-xs text-ink-2">Your library is empty.</p>
-                            <p className="text-2xs leading-snug text-ink-3">Open one of this project's materials and choose Add to my library. It is kept here with its pictures, ready for any project.</p>
+                            <p className="text-2xs leading-snug text-ink-3">Open one of this project's materials and choose Add to my library, or add a material package (.auvramat) someone published. It is kept here with its pictures, ready for any project.</p>
                         </div>
                     ) : shown.length === 0 ? (
                         <p className="mt-10 text-center text-2xs text-ink-3">Nothing in your library matches.</p>
