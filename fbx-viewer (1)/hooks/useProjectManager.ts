@@ -23,6 +23,7 @@ const DEFAULT_PROJECT_NAMES: Record<ProjectTemplate, string> = {
   arena: 'Arena Sample',
   courtyard: 'Courtyard Sample',
   outpost: 'Outpost Sample',
+  'living-materials': 'Living Materials Lab',
 };
 
 interface UseProjectManagerProps {

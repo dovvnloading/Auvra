@@ -1,3 +1,4 @@
+import { readPoints, type Point } from './curves';
 import { evaluateExpression, type ExprValue } from './expressions';
 import { GRAPH_USING_TYPES, INPUT_NODE_TYPE, MESH_READING_NODE_TYPES, OUTPUT_NODE_TYPE, SUBGRAPH_NODE_TYPE } from './nodes/io';
 import { migrateProcessorParams } from './nodes/processors';
@@ -393,6 +394,7 @@ export const coerceParam = (param: TexParamDef, value: unknown): unknown => {
         case 'font':
         case 'graph':
             return typeof value === 'string' ? value : param.default;
+        case 'points': return readPoints(value, (param.default as Point[]) ?? []);
         case 'function': {
             const graph = value as { nodes?: unknown; links?: unknown } | null;
             if (!graph || typeof graph !== 'object' || !Array.isArray(graph.nodes)) return structuredClone(param.default);

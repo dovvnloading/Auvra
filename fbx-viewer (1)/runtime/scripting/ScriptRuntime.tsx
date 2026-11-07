@@ -1,6 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { useFrame, useThree } from '@react-three/fiber';
+import { releaseSessionMaterials, setObjectMaterialValue } from '../../utils/materialInstances';
+import { findActorObject3D } from '../../hooks/levelBlueprintNodes/world';
 import { frontendDiagnostics } from '../../diagnostics/runtime';
 import type { LevelObject } from '../../types';
 import { animationEvents } from '../animationEvents';
@@ -268,6 +270,11 @@ export const parseScriptCommand = (value: unknown): ScriptCommand | null => {
             }
             return command;
         }
+        case 'setMaterialValue':
+            return hasKeys(v, ['type', 'objectId', 'name', 'value']) && isName(v.objectId) && typeof v.name === 'string' && v.name.length > 0 && v.name.length <= 128
+                && ((typeof v.value === 'number' && Number.isFinite(v.value)) || (Array.isArray(v.value) && v.value.length >= 1 && v.value.length <= 4 && v.value.every((item: unknown) => typeof item === 'number' && Number.isFinite(item))))
+                ? { type: 'setMaterialValue', objectId: v.objectId, name: v.name, value: typeof v.value === 'number' ? v.value : [...(v.value as number[])] }
+                : null;
         case 'setVisible':
             return hasKeys(v, ['type', 'objectId', 'visible']) && isName(v.objectId) && typeof v.visible === 'boolean'
                 ? { type: 'setVisible', objectId: v.objectId, visible: v.visible }
@@ -662,6 +669,8 @@ export interface ScriptCommandServices {
     getObject(id: string): LevelObject | null | undefined;
     setObjectTransform(id: string, partial: TransformPartial): void;
     setVisible(id: string, visible: boolean): void;
+    /** Sets a material value on one object for the session (materialInstances.ts setObjectMaterialValue). */
+    setMaterialValue?(id: string, name: string, value: number | number[]): void;
     applyImpulse(id: string, impulse: Vec3): void;
     destroyObject(id: string): void;
     /** Places a prefab in the session; returns the new object ids, root first. */
@@ -788,6 +797,9 @@ export const applyScriptCommand = (command: ScriptCommand, services: ScriptComma
             results.touched.add(command.objectId);
             return;
         }
+        case 'setMaterialValue':
+            if (services.getObject(command.objectId)) services.setMaterialValue?.(command.objectId, command.name, command.value);
+            return;
         case 'setVisible':
             if (services.getObject(command.objectId)) services.setVisible(command.objectId, command.visible);
             return;
@@ -1085,6 +1097,12 @@ const ScriptHost: React.FC<ScriptRuntimeProps & { scripts: ScriptSource[] }> = (
     const services = useRef(runtimeServices);
     services.current = runtimeServices;
     const scene = useThree(state => state.scene);
+    // Materials copied for values scripts set on one object (setMaterialValue), freed with the session.
+    const sessionMaterials = useRef<THREE.Material[]>([]);
+    useEffect(() => {
+        const made = sessionMaterials.current;
+        return () => releaseSessionMaterials(made);
+    }, []);
     const sceneRef = useRef(scene);
     sceneRef.current = scene;
     const triggerEvents = useTriggerEvents();
@@ -1249,6 +1267,11 @@ const ScriptHost: React.FC<ScriptRuntimeProps & { scripts: ScriptSource[] }> = (
                 if (visible) state.hidden.delete(id);
                 else state.hidden.add(id);
                 visibility.set(id, visible);
+            },
+            setMaterialValue: (id, name, value) => {
+                // Copies made for this object alone, freed with the session (utils/materialInstances.ts).
+                const object = findActorObject3D(scene, id);
+                if (object) setObjectMaterialValue(object, name, value, sessionMaterials.current);
             },
             applyImpulse: (id, impulse) => latest.current.applyImpulse(id, impulse),
             destroyObject: id => latest.current.destroyObject(id),

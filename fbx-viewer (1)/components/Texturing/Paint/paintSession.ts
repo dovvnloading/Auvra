@@ -26,6 +26,7 @@ import { atlasMesh, atlasUvs, markPaintedMaterials, surfaceOfGraph, withPaintedM
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js';
 import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { graphPictureLookup } from './graphPictures';
+import { paintStackEntry } from '../../../texturing/paint/stackNode';
 
 /** A template's picture packed from up to four maps: each channel a component of one (grey maps hold theirs in red), or a value. */
 const PACK_PICTURE = /* glsl */ `
@@ -89,6 +90,9 @@ const COALESCE_MS = 1000;
 
 /** Graphs a painted set can use: the project's texture graph materials and the built-in smart graphs. */
 export const paintGraphResolver = (): GraphResolver => (id) => {
+    // A paint stack (or folder of one) used inside a fill or mask graph.
+    const stack = paintStackEntry(id, (assetId) => materialLibrary.get(assetId));
+    if (stack) return stack;
     const builtin = BUILTIN_GRAPHS.get(id);
     if (builtin) return builtin;
     const asset = materialLibrary.get(id);

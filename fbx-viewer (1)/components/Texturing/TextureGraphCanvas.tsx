@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import {
-    CircleDashedIcon, CubeIcon, DropletsIcon, EyeIcon, GearIcon, GraphIcon, ImageIcon, MaterialIcon, MergeIcon, MountainIcon, MoveIcon, RainIcon, SelectBoxIcon,
-    SlidersIcon, SparklesIcon, TilesIcon, WindIcon, type IconComponent,
+    CameraIcon, CheckCircleIcon, CircleDashedIcon, CubeIcon, CubesIcon, DropletsIcon, EyeIcon, GearIcon, GraphIcon, ImageIcon, MaterialIcon, MergeIcon, MountainIcon, MoveIcon, RainIcon, SelectBoxIcon,
+    SlidersIcon, SparklesIcon, SplineIcon, TilesIcon, WindIcon, type IconComponent,
 } from '../UI/Icons';
 import type { FinderEntry } from '../NodeGraph/finder';
 import type { EditableFrame, EditableGraph, EditableLink, EditableNode, NodeLook, PinSet } from '../NodeGraph/model';
@@ -15,6 +15,7 @@ import { wireFits } from '../../texturing/graph/material';
 import { NAMED_RECEIVE_TYPE, NAMED_SEND_TYPE, linkName, namedLinks } from '../../texturing/graph/namedLinks';
 import { ALL_MESH_MAPS, ANY_MESH_MAP_LABELS, EXTRA_MESH_MAPS, INPUT_NODE_TYPE, ITERATE_NODE_TYPE, MATERIAL_INPUT_NODE_TYPE, MATERIAL_OUTPUT_NODE_TYPE, MESH_MAP_NODE_TYPE, OUTPUT_NODE_TYPE, REROUTE_NODE_TYPE, SUBGRAPH_NODE_TYPE } from '../../texturing/graph/nodes/io';
 import { feedbackPairs } from '../../texturing/graph/iterate';
+import { PAINT_STACK_NODE_TYPE } from '../../texturing/paint/stackNode';
 import { NODE_CATEGORY_ORDER, TEXTURE_NODE_DEFINITIONS, placeholderDefinition, textureNodeDefinition, textureNodeDefinitionByType, type GraphResolver } from '../../texturing/graph/registry';
 import { OUTPUT_CHANNELS, OUTPUT_CHANNEL_LABELS, type OutputChannel, type PinKind, type TexGraphComment, type TexGraphLink, type TexGraphNode, type TexNodeDef, type TexPortDef, type TextureGraph } from '../../texturing/graph/types';
 import { copyNodes, outputKinds, readClipboard, unusedNodes, type Point } from './graphEditing';
@@ -54,16 +55,22 @@ const refusal = (from: string, to: string): string => (to === 'value'
         : to === 'material' ? 'A material input takes a material wire. Make material puts images on one.' : 'These two pins do not fit together.');
 
 const CATEGORY_TINTS: Record<string, string> = {
-    'Inputs and outputs': '#3f4a5c', 'Mesh maps': '#2f5560', Weathering: '#5c4a38', Noises: '#4b3f6b', Patterns: '#523d66', Shapes: '#5a4170',
+    'Inputs and outputs': '#3f4a5c', 'Mesh maps': '#2f5560', Weathering: '#5c4a38', 'Photo and scans': '#4f4a3a', 'Splines and paths': '#57406a', 'SDF shapes': '#3a4f6b', Checks: '#5a3a3a', Noises: '#4b3f6b', Patterns: '#523d66', Shapes: '#5a4170',
     Adjustments: '#2f5a48', Blending: '#2d5653', Transforms: '#5f5230', Warps: '#634a2c', 'Blurs and sharpening': '#45562e',
     'Edges and distance': '#5f3448', 'Height and normals': '#3d4370', Utility: '#46474d', 'Graphs in this project': '#3b4a63', Materials: '#2c5a55',
 };
 const CATEGORY_MARKS: Record<string, IconComponent> = {
-    'Inputs and outputs': ImageIcon, 'Mesh maps': CubeIcon, Weathering: RainIcon, Noises: SparklesIcon, Patterns: TilesIcon, Shapes: CircleDashedIcon,
+    'Inputs and outputs': ImageIcon, 'Mesh maps': CubeIcon, Weathering: RainIcon, 'Photo and scans': CameraIcon, 'Splines and paths': SplineIcon, 'SDF shapes': CubesIcon, Checks: CheckCircleIcon, Noises: SparklesIcon, Patterns: TilesIcon, Shapes: CircleDashedIcon,
     Adjustments: SlidersIcon, Blending: MergeIcon, Transforms: MoveIcon, Warps: WindIcon, 'Blurs and sharpening': DropletsIcon,
     'Edges and distance': SelectBoxIcon, 'Height and normals': MountainIcon, Utility: GearIcon, 'Graphs in this project': GraphIcon, Materials: MaterialIcon,
 };
 const OUTPUT_TINT = '#2b4a6b';
+
+/** A note's short phrase (before its colon) for a node's header, or a plain word when it has none short enough. */
+const noteBadge = (note: string): string => {
+    const short = note.split(':')[0].trim();
+    return short.length > 0 && short.length <= 22 ? short : 'See note';
+};
 const MISSING_TINT = '#5a4317';
 const NODE_WIDTH = 140;
 const GRAPHS_CATEGORY = 'Graphs in this project';
@@ -146,7 +153,7 @@ const typeEntry = (definition: TexNodeDef): FinderEntry => ({
 const NODE_ENTRIES: readonly FinderEntry[] = (() => {
     const entries: FinderEntry[] = [];
     for (const definition of TEXTURE_NODE_DEFINITIONS) {
-        if (definition.type === OUTPUT_NODE_TYPE || definition.type === MESH_MAP_NODE_TYPE || definition.type === SUBGRAPH_NODE_TYPE) continue;
+        if (definition.type === OUTPUT_NODE_TYPE || definition.type === MESH_MAP_NODE_TYPE || definition.type === SUBGRAPH_NODE_TYPE || definition.type === PAINT_STACK_NODE_TYPE) continue;
         entries.push(typeEntry(definition));
         // Ready-set versions (each grunge look) as entries of their own, found by their names.
         for (const variant of definition.variants ?? []) {
@@ -314,7 +321,8 @@ export const TextureGraphCanvas: React.FC<TextureGraphCanvasProps> = (props) => 
                 ...(error ? { error } : {}),
                 ...(missing ? { missing: true } : {}),
                 ...(state && !error && state.milliseconds >= 20 ? { badge: `${Math.round(state.milliseconds)} ms` } : {}),
-                description: node.name ? `${kindTitle}: ${def?.description ?? ''}` : def?.description,
+                ...(state?.notes?.length && !error ? { badge: noteBadge(state.notes[0]) } : {}),
+                description: [state?.notes?.join(' ') ?? '', node.name ? `${kindTitle}: ${def?.description ?? ''}` : def?.description ?? ''].filter(Boolean).join('\n\n'),
                 canBypass: Boolean(!missing && def && mainInput(def)),
                 canDelete: true,
                 ...(isOutput ? { output: true } : {}),

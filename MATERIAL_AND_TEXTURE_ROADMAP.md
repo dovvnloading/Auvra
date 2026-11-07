@@ -97,6 +97,10 @@
   - six families of new nodes (91 nodes), weathering from mesh maps among them;
   - a history panel, particle brushes, wrapped decals and whole-model glTF export;
   - material features drawing on WebGPU as on WebGL2, and balls in the material list.
+- **Round 8** brought:
+  - the node library's last five families, a make-it-tile without ghosting, fur and an HDR range view;
+  - games that cook texture graphs on their own GPU, with per-object seeds and values;
+  - paint stacks as graph nodes, graphs as brushes, filters across UV seams, and Retexture results as layers.
 
 See §6.
 
@@ -613,6 +617,27 @@ One family per pull request, each with picture tooltips and the wrap-edge tiling
 
 **Still to come:** families 7 to 11 (photo processing, splines, vector shapes, SDF shapes, PBR checks), fur, lighting removal and the HDR range view.
 
+**Landed in round 8: families 7 to 11.**
+7. **Photo and scan processing:**
+   - make it tile by cutting along the best-matching joins, with no ghosting;
+   - smart auto tile, clone patch with handles, colour equalizer, atlas splitter;
+   - lighting removal from occlusion and fitted shading.
+8. **Splines and paths, placed in the 2D view:** curve (stroke, fill, gradient), bridge between curves, picture along a curve, scatter along curves, points, and mask to paths.
+9. **Vector shapes:** polygons, stars, rounded boxes and ellipses from exact distances, shape booleans, and SVG shapes.
+10. **SDF shapes:** up to three primitives combined hard or smooth, twisted, bent and repeated, giving height, normal, ID and a 3D view.
+11. **PBR checks:** albedo-safe, metal and roughness ranges, and measured F0 references, striped over the 2D view.
+
+**Also:**
+- fur;
+- an HDR range view;
+- nodes that leave notes as they draw;
+- edge-based weathering that reads stand-in panels when no curvature is wired.
+
+**Still to come:**
+- splines as wires that carry curves between nodes, and path tools such as offset;
+- SDF shapes beyond three, with materials per shape;
+- SVG strokes, clips and text.
+
 ### Stage 6 — Painting at full depth
 
 **Landed in round 2:** painting with whole materials; filter layers; fills and masks that read the layers below; layer opacity and folder blends; saved smart materials, opened as texture graph copies, with rendered previews; recombining only changed areas; sparse pictures; and unwrapping in a worker. Still to come: new mask kinds, the brush engine (alphas, paths, clone, smudge, particles), projections, the 2D painting view and 8K.
@@ -636,6 +661,13 @@ One family per pull request, each with picture tooltips and the wrap-edge tiling
 - **Wrapped decals:** a picture placed on the model and dragged; it follows the surface over curves and across UV seams, and is laid on as one step.
 - **2D painting:** symmetry, the stencil, polygon fills and paths.
 - **Still to come:** warp grids, particles in the 2D view and along any gravity, and particle paths that run over time.
+
+**Landed in round 8:**
+- **Paint stacks as graph nodes:** a painted set, or a folder of it, is a node with a picture per channel, reading the graph's mesh maps or the set's own bake.
+- **Graphs as brushes:** each dab stamps a graph output's brightness.
+- **Filters across UV seams:** blur, sharpen and smudge, as layers, mask effects and brushes, read across seams through the mesh's adjacency.
+- **Retexture results as layers:** fill layers to mask and paint over.
+- **Particles:** they run in the 2D view and fall along a chosen axis.
 
 - **Paint with anything:** materials, textures and smart materials in every channel. Extended channels follow Stage 2.
 - **Layers:**
@@ -738,6 +770,8 @@ One family per pull request, each with picture tooltips and the wrap-edge tiling
   - KTX2.
 
 **Landed in round 7:** glTF export of a whole model: every mesh with its skin and clips, every material, and its painted sets. Bake undo now reaches older bakes within a memory cap.
+
+**Landed in round 8:** cage rays reach the bake shaders by triangle lookup, the way decals do, instead of a per-vertex attribute.
 - **Export:**
   - templates per target (file names, packing, bit depth, normal convention, padding), starting with a web-first glTF template;
   - EXR, TGA and TIFF;
@@ -758,6 +792,18 @@ One family per pull request, each with picture tooltips and the wrap-edge tiling
 - Results are cached by signature, with a baked fallback for weak devices.
 
 **Checked by:** a level where weathering, wetness and damage change live on many objects at a steady frame rate, with smaller downloads than baked pictures.
+
+**Landed in round 8:**
+- **Games cook texture graphs on their own GPU:**
+  - with the editor's evaluator, at the material's baked size;
+  - kept by signature in the game's cache;
+  - with the baked pictures as fallback;
+  - a game setting chooses Cook when the device can, Always or Never.
+- **Download size:** Texture 2's graph is about 4 KB against 6.2 MB of baked pictures, and a game that always cooks leaves the baked pictures out.
+- **Per-object seeds and values:** set in a placed object's "Picture variation", by blueprints or by `object.setMaterialValue` in scripts. Objects with the same values share one cook, and the last cook stays on screen until the next is ready.
+- **Resolution follows how large a material shows,** with hysteresis.
+- **A Living Materials Lab template:** a row per seed, a wetness row, and a row whose wetness a blueprint steps over time.
+- **Still to come:** level of detail in the editor's level views, and cooked pictures compressed for the GPU.
 
 ### Stage 10 — Capture and AI
 - **Photo to material:** lighting removal, tiling, pulling a material out of a photo by label, and multi-angle capture.
@@ -913,25 +959,37 @@ File references are relative to `fbx-viewer (1)/`.
   - Shape glow's shader didn't compile.
   - A new picture-test scene changed another scene on WebGPU when run before it; it now runs last.
 
+### Fixed in round 8
+- **Graph:**
+  - Make it tile cuts along the best joins instead of one cross-fade.
+  - Edge-based weathering shows on stand-ins and says why.
+- **Painting and baking:**
+  - The first decal click after picking a deep picture waits for it.
+  - Mesh-cage bakes no longer use a per-vertex attribute.
+  - Particles run in 2D and along any axis.
+- **Found while checking round 8:**
+  - The UDIM atlas pass declared the size every pass already has, so UDIM sets couldn't be laid on one atlas. It had been that way since round 1; a test now guards it.
+  - In play, cooked crates looked different from the editor's, flashed black when their values changed, and missed steps.
+
 ### Still open
 **Texture graph**
-1. Make it tile is a single cross-fade, so ghosting shows (Stage 5, photo tools).
-2. Update material draws mesh-reading nodes with stand-ins, because a material can go on any model. Per-model results come with Stage 9.
-3. A flood fill box is approximate for an island covering more than about three quarters of a tiling axis.
-4. Function graphs have no WGSL writer yet, and their Noise node has no CPU reference to test against.
-5. Iterate takes picture inputs and outputs only, its graph can't be opened in place, and every node inside redraws on every pass.
-6. A parameter's formula name can't be renamed.
-7. Edge-based weathering (edge wear, notches, metal wear) shows black on the Materials tab's stand-ins unless a curvature map is wired, and says nothing about why.
-8. Leaks and dripping rust are placed by noise and slope, not run down the model.
-9. Read-around filters are checked for tiling by reading their shaders, not by measuring pixels.
+1. Update material draws mesh-reading nodes with stand-ins, because a material can go on any model. Per-model results come with Stage 9's cooking.
+2. A flood fill box is approximate for an island covering more than about three quarters of a tiling axis.
+3. Function graphs have no WGSL writer yet, and their Noise node has no CPU reference to test against.
+4. Iterate takes picture inputs and outputs only, its graph can't be opened in place, and every node inside redraws on every pass.
+5. A parameter's formula name can't be renamed.
+6. Leaks and dripping rust are placed by noise and slope, not run down the model.
+7. Read-around filters are checked for tiling by reading their shaders, not by measuring pixels.
+8. Make it tile finds its cuts at up to 512 pixels; lighting removal fits one light direction.
+9. A finder picture that fails once stays as the category mark until the editor reloads.
 
 **Painting, baking and UVs**
 10. The paint view's smoothing draws into a render target marked as an XR target. Recheck this when three.js is upgraded (`components/Texturing/Paint/PaintViewport.tsx`).
 11. A triangle that crosses a UDIM tile edge can pick a too-coarse mip at that edge.
-12. The first click after picking a deep (EXR) picture for a decal places nothing, while the picture is still being read.
-13. Mesh-cage bakes pass their cage rays through a per-vertex attribute, the way the first decal did; check them in the editor.
-14. Particles work only in the 3D view, fall only down the model's Y axis, and are painted at once rather than over time.
-15. The whole-model glTF keeps only the main maps of the model's other painted sets, and a UDIM set's vertex exactly on a tile edge can land in the wrong cell.
+12. Particles are painted at once rather than over time.
+13. The whole-model glTF keeps only the main maps of the model's other painted sets, and a UDIM set's vertex exactly on a tile edge can land in the wrong cell.
+14. A paint stack node takes many seconds to draw the first time, and its name repeats the set's ("… (painted) (paint stack)").
+15. A graph brush stamps brightness only, not the graph's colour.
 
 **Material graph, engine materials and textures**
 16. Unlit and Phong materials can't take a material asset (a message says so). Converting them is a later step.
@@ -940,8 +998,9 @@ File references are relative to `fbx-viewer (1)/`.
 19. A texture never drawn in the editor has nothing kept, so a built game compresses it as it loads. Compressed terrain arrays are made again each time a terrain loads.
 20. My library lives in the editor's own storage on this machine; painted copies and painting presets can't be added.
 21. MaterialX can't be imported from a zip, and image tiling is ignored.
-22. On WebGPU, anisotropy isn't drawn, and specular can't go below 4%.
+22. On WebGPU, anisotropy isn't drawn and specular can't go below 4%; both need a wider surface buffer.
 23. On WebGPU, a scene drawn before a ray-traced one can still change it slightly (a leak across scenes on one device), seen in the picture tests.
+24. The level view's toolbar runs off a 1264-wide window, hiding Play level.
 
 ## 9. Sources and references
 

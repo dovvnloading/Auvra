@@ -62,11 +62,14 @@ export interface GameSettings {
      * assetMemoryMb: how much a built game holds before freeing what earlier levels used (runtime/assetResidency.ts).
      * renderer: what draws levels (renderer/AuvraCanvas.tsx). auto: WebGPU where the machine has it, WebGL2 elsewhere.
      * shadowPages: on WebGPU, the sun's shadow from one enormous map of which only what is looked at exists (renderer/gpu/passes/virtualShadows.ts).
+     * textureGraphCooking: materials made by texture graphs draw with pictures the game cooks from the graph on its GPU,
+     *   each object with its own seed and values (runtime/materials/materialCooking.ts): always, when the device can, or
+     *   never (the baked pictures).
      */
     quality: {
         shadows: boolean; postProcessing: boolean; maxDpr: number; fov: number; meshLod: boolean; occlusionCulling: boolean; textureCompression: boolean;
         antiAliasing: 'temporal' | 'smaa' | 'none'; renderScale: number; loadLevelsOnDemand: boolean; assetMemoryMb: number;
-        renderer: 'auto' | 'webgpu' | 'webgl2'; shadowPages: boolean;
+        renderer: 'auto' | 'webgpu' | 'webgl2'; shadowPages: boolean; textureGraphCooking: 'always' | 'capable' | 'never';
     };
     input: { mouseSensitivity: number; invertY: boolean };
     audio: { masterVolume: number };
@@ -84,7 +87,7 @@ export const DEFAULT_GAME_SETTINGS: GameSettings = {
     startupLevelId: null,
     playerBlueprintId: null,
     window: { fullscreen: false },
-    quality: { shadows: true, postProcessing: true, maxDpr: 2, fov: 60, meshLod: true, occlusionCulling: true, textureCompression: true, antiAliasing: 'temporal', renderScale: 1, loadLevelsOnDemand: true, assetMemoryMb: 2048, renderer: 'auto', shadowPages: false },
+    quality: { shadows: true, postProcessing: true, maxDpr: 2, fov: 60, meshLod: true, occlusionCulling: true, textureCompression: true, antiAliasing: 'temporal', renderScale: 1, loadLevelsOnDemand: true, assetMemoryMb: 2048, renderer: 'auto', shadowPages: false, textureGraphCooking: 'capable' },
     input: { mouseSensitivity: 0.002, invertY: false },
     audio: { masterVolume: 1 },
     network: DEFAULT_NETWORK_SETTINGS,

@@ -12,7 +12,7 @@ import type { PartMesh } from '../mesh/partMesh';
  * by their UVs), it runs on across UV seams. The GPU then reads the picture at each texel's place.
  */
 
-interface Welded {
+export interface Welded {
     /** For each vertex of the set, its welded vertex. */
     ids: Uint32Array;
     count: number;
@@ -28,7 +28,7 @@ type WeldPart = Pick<PartMesh, 'positions' | 'normals' | 'indices'>;
 const weldCache = new WeakMap<WeldPart, Welded>();
 
 /** The set's vertices joined where they sit at the same place (split by UV seams or hard edges), with their neighbours. */
-const weldOf = (part: WeldPart): Welded => {
+export const weldOf = (part: WeldPart): Welded => {
     const cached = weldCache.get(part);
     if (cached) return cached;
     const { positions, normals, indices } = part;

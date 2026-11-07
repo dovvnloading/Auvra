@@ -3,6 +3,9 @@ import * as THREE from 'three';
 import { DEFAULT_BAKE_SETTINGS, prepareRays } from '../../texturing/bake/meshBaker';
 import { MeshTracer } from '../../texturing/bake/meshTracer';
 import { buildHighPoly, buildPartMesh, buildWholeMesh } from '../../texturing/mesh/partMesh';
+import { cornerTable, cornerValueAt } from '../../texturing/mesh/cornerTable';
+import { UvRaster } from '../../texturing/bake/uvRaster';
+import type { TextureGpu } from '../../texturing/gpu/textureGpu';
 
 /** Two meshes side by side, named as people name low- and high-poly pairs. */
 const pair = (suffix: string, detail: number) => {
@@ -45,5 +48,30 @@ describe('ray structures for a bake', () => {
         expect(single.groups).toHaveLength(1);
         expect(single.groups[0].lowMesh).toBe(-1);
         single.dispose();
+    });
+
+    it('hand each texel its cage ray by triangle, through the geometry the UV raster draws', () => {
+        const low = pair('low', 3);
+        const high = pair('high', 4);
+        const part = buildPartMesh(low.root, new Set([low.material]), { udim: false });
+        const rays = prepareRays({ part, occluder: buildWholeMesh(low.root), highPoly: buildHighPoly(high.root) }, DEFAULT_BAKE_SETTINGS);
+        // Averaged normals make cage rays, laid out by triangle for the shaders.
+        expect(rays.cageTable).not.toBeNull();
+        const table = cornerTable(part, rays.cageRays!);
+        expect(Array.from(rays.cageTable!.image.data as Float32Array)).toEqual(Array.from(table.data));
+        const raster = new UvRaster({} as TextureGpu, part);
+        const tiles = (raster as unknown as { tiles: Map<number, { geometry: THREE.BufferGeometry }> }).tiles;
+        for (const { geometry } of tiles.values()) {
+            const ids = geometry.getAttribute('ids'), position = geometry.getAttribute('position');
+            const edge1 = geometry.getAttribute('edge1'), edge2 = geometry.getAttribute('edge2');
+            for (let corner = 0; corner < position.count; corner++) {
+                const triangle = Math.round(ids.getZ(corner));
+                const value = cornerValueAt(table, triangle, [position.getX(corner), position.getY(corner), position.getZ(corner)], [edge1.getX(corner), edge1.getY(corner), edge1.getZ(corner)], [edge2.getX(corner), edge2.getY(corner), edge2.getZ(corner)]);
+                // At a corner, that corner's own ray, as the attribute gave it.
+                const vertex = part.indices[triangle * 3 + (corner % 3)];
+                for (let i = 0; i < 4; i++) expect(value[i]).toBeCloseTo(rays.cageRays![vertex * 4 + i], 4);
+            }
+        }
+        rays.dispose();
     });
 });

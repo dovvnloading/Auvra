@@ -70,7 +70,7 @@ class TemplateTests(unittest.TestCase):
         return repository
 
     def test_template_names_list_every_template(self) -> None:
-        self.assertEqual(TEMPLATE_NAMES, ("blank", "starter", "arena", "courtyard", "outpost"))
+        self.assertEqual(TEMPLATE_NAMES, ("blank", "starter", "arena", "courtyard", "outpost", "living-materials"))
 
     def test_starter_template_is_a_valid_playable_project(self) -> None:
         repository = self.create("starter")
@@ -88,6 +88,31 @@ class TemplateTests(unittest.TestCase):
         self.assertIn(player["linkedModelId"], model_ids)
         for asset_id in repository.referenced_asset_ids():
             self.assertTrue(repository.assets.verify(asset_id), asset_id)
+
+    def test_living_materials_lab_has_crates_cooking_their_own_wood(self) -> None:
+        repository = self.create("living")
+        apply_template(repository, "living-materials", project_name="Living Materials Lab")
+        material = next(item for item in documents(repository, "materials") if item["id"] == "living-crate")
+        stored = material["textureGraph"]
+        self.assertEqual([parameter["name"] for parameter in stored["graph"]["parameters"]], ["Wetness"])
+        self.assertEqual({node["params"]["channel"] for node in stored["graph"]["nodes"] if node["type"] == "output"}, {"baseColor", "roughness", "metallic", "normal"})
+        crate = next(item for item in documents(repository, "models") if item["id"] == "starter-model-crate")
+        self.assertEqual(crate["materialOverrides"], {"Wood": {"materialId": "living-crate"}})
+        crates = [item for item in documents(repository, "objects") if item.get("modelId") == "starter-model-crate"]
+        values = lambda item: {entry["name"]: entry["value"] for entry in item["materialOverrides"]["Wood"]["parameters"]}
+        seeds = [values(item)["Graph seed"] for item in crates if item["id"].startswith("living-seeded-")]
+        self.assertEqual(len(seeds), 12)
+        self.assertEqual(len(set(seeds)), 12)
+        self.assertEqual([values(item)["Wetness"] for item in crates if item["id"].startswith("living-wet-")], [0.0, 0.25, 0.5, 0.75, 1.0])
+        # The level blueprint steps the front row's wetness and goes round again.
+        level = documents(repository, "levels")[0]
+        setters = [node for node in level["blueprint"]["nodes"] if node["type"] == "SetMaterialNumber"]
+        self.assertEqual({node["data"]["default_Actor"] for node in setters}, {"living-weather-0", "living-weather-1", "living-weather-2"})
+        self.assertEqual(sorted({node["data"]["default_Number"] for node in setters}), [0.0, 0.5, 1.0])
+        pins = {pin["id"] for node in level["blueprint"]["nodes"] for pin in node["inputs"] + node["outputs"]}
+        self.assertTrue(all(wire["fromPinId"] in pins and wire["toPinId"] in pins for wire in level["blueprint"]["connections"]))
+        settings = next(item for item in documents(repository, "metadata") if item["id"] == "game-settings")["settings"]
+        self.assertEqual(settings["startupLevelId"], level["id"])
 
     def test_every_template_crosses_the_host_protocol(self) -> None:
         # The editor reads each document through the protocol, which refuses path-like strings
