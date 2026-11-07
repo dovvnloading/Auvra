@@ -98,7 +98,8 @@ const arcPoints = (from: Point, rxIn: number, ryIn: number, rotation: number, la
 export const parsePathData = (data: string): SvgPath[] => {
     const tokens = data.match(/[MmLlHhVvCcSsQqTtAaZz]|[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?/g) ?? [];
     const paths: SvgPath[] = [];
-    let current: SvgPath | null = null;
+    // Set by begin() too, so typed wide from the start (not narrowed to null).
+    let current = null as SvgPath | null;
     let at: Point = [0, 0];
     let start: Point = [0, 0];
     let lastControl: Point | null = null;
