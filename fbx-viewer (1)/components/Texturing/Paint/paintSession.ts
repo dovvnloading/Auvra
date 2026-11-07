@@ -18,7 +18,7 @@ import { GpuResetError, PaintStack, pictureOwners, type StackHost } from '../../
 import { BUILTIN_GRAPHS } from '../../../texturing/paint/smartLibrary';
 import { applyPixelHistory, trimmedHistory, type HistoryEntry } from '../../../texturing/paint/strokes';
 import { BAKE_HISTORY_BYTES, bakeStepsToForget, branchBeforeStep, branchesToDrop, historyKind, travelTo, type HistoryBranch, type HistoryKind, type HistoryLines } from '../../../texturing/paint/history';
-import { castsFromThreeSides, createPaintDocument, newFillLayer, paintId, readPaintDocument, type PaintChannel, type PaintDocument } from '../../../texturing/paint/paintTypes';
+import { PAINT_CHANNELS, castsFromThreeSides, createPaintDocument, newFillLayer, paintId, readPaintDocument, type PaintChannel, type PaintDocument } from '../../../texturing/paint/paintTypes';
 import { download, makeZip } from '../../../texturing/zip';
 import { fileName, holdsNormalGreen, planPicture, type ChannelSource, type ExportPicture, type ExportSource, type ExportTemplate } from '../../../texturing/paint/exportTemplates';
 import { colourChannels, extensionOf, linearChannels, writePicture, type PictureData } from '../../../texturing/paint/pictureFiles';
@@ -79,9 +79,11 @@ export interface PaintSessionHost {
 }
 
 export const HISTORY_LIMIT = 80;
-/** The channels a comparison keeps: what the view draws the material with. */
-export const COMPARED_CHANNELS = ['baseColor', 'normal', 'roughness', 'metallic', 'emissive', 'ambientOcclusion'] as const;
-export type ComparedChannel = typeof COMPARED_CHANNELS[number];
+/** The channels a comparison keeps: every one a view can show (with the shown layer's mask besides). */
+export type ComparedChannel = PaintChannel | 'ambientOcclusion';
+export const COMPARED_CHANNELS: readonly ComparedChannel[] = [...PAINT_CHANNELS, 'ambientOcclusion'];
+/** A picture a comparison keeps: a channel, or the mask of the layer whose mask is shown. */
+export type ComparedPicture = ComparedChannel | 'mask';
 /** Branches kept at most (the oldest go first). */
 export const MAX_BRANCHES = 12;
 /**
@@ -493,7 +495,7 @@ export class PaintSession {
      * A step to compare with: the set's pictures as they stood just after it (null: at the start), drawn
      * once, and where the view's wipe between it and the set as it is now stands (0 left to 1 right).
      */
-    comparison: { entry: HistoryEntry | null; label: string; images: Map<number, Partial<Record<ComparedChannel, GpuImage>>>; wipe: number } | null = null;
+    comparison: { entry: HistoryEntry | null; label: string; images: Map<number, Partial<Record<ComparedPicture, GpuImage>>>; wipe: number } | null = null;
 
     /** Draws the set as it stood just after `target` and keeps it to compare with, coming back to where it is. */
     async compareWith(target: HistoryEntry | null): Promise<void> {
@@ -505,17 +507,20 @@ export class PaintSession {
         try {
             this.goTo(target);
             await this.stack.compose();
-            const images = new Map<number, Partial<Record<ComparedChannel, GpuImage>>>();
+            const images = new Map<number, Partial<Record<ComparedPicture, GpuImage>>>();
+            const watched = this.stack.watchedLayer;
             for (const tile of this.stack.tiles) {
                 const outputs = this.stack.outputs.get(tile) ?? {};
-                const kept: Partial<Record<ComparedChannel, GpuImage>> = {};
-                for (const name of COMPARED_CHANNELS) {
-                    const image = outputs[name];
-                    if (!image) continue;
+                const kept: Partial<Record<ComparedPicture, GpuImage>> = {};
+                const keep = (name: ComparedPicture, image: GpuImage | null | undefined) => {
+                    if (!image) return;
                     const copy = this.gpu.image(image.width, image.height, image.kind, image.precision);
                     this.gpu.copy(image, copy);
                     kept[name] = copy;
-                }
+                };
+                for (const name of COMPARED_CHANNELS) keep(name, outputs[name]);
+                // The mask view shows the watched layer's mask: kept as it stood then too.
+                if (watched) keep('mask', this.stack.cachedMask(watched, tile));
                 images.set(tile, kept);
             }
             this.comparison = { entry: target, label: target?.label ?? 'Before these steps', images, wipe: 0.5 };
