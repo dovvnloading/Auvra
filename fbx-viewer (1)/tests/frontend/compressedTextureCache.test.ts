@@ -97,8 +97,9 @@ describe('compressed textures kept in the project', () => {
 
     it('are listed with the texture\'s settings, the newest few kept', () => {
         let settings = withKeptCompression(undefined, 'one', 'c'.repeat(64));
-        for (const signature of ['two', 'three', 'four', 'five', 'two']) settings = withKeptCompression(settings, signature, 'd'.repeat(64));
-        expect(settings.compressed?.map(entry => entry.signature)).toEqual(['three', 'four', 'five', 'two']);
+        // Up to eight: a desktop's and phones' versions, each way up.
+        for (const signature of ['two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'two']) settings = withKeptCompression(settings, signature, 'd'.repeat(64));
+        expect(settings.compressed?.map(entry => entry.signature)).toEqual(['three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'two']);
         expect(normalizeTextureSettings({ compressed: [{ signature: 'x', assetId: 'e'.repeat(64) }, { signature: 'y', assetId: 'bad' }] })).toEqual({ compressed: [{ signature: 'x', assetId: 'e'.repeat(64) }] });
     });
 });

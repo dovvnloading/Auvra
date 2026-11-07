@@ -259,6 +259,8 @@ const EXEMPT = new Map(Object.entries({
   'texturing/textureBudget.ts': 'pure-utility',
   'texturing/materialTextureLoader.ts': 'pure-utility',
   'utils/textureCompression/materialTextureEncoder.ts': 'pure-utility',
+  'utils/textureCompression/astcEncoder.ts': 'pure-utility',
+  'utils/textureCompression/etc2Encoder.ts': 'pure-utility',
   'runtime/materials/bounceColour.ts': 'hot-loop',
   'runtime/navGeometry.ts': 'pure-utility',
   'runtime/levelObjectMotion.ts': 'pure-utility',

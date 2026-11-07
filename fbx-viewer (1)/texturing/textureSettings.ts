@@ -1,5 +1,5 @@
 import type { PictureFormat } from './textureDecode';
-import type { MaterialTextureFormat } from '../utils/textureCompression/materialTextureEncoder';
+import type { BcFormat, MaterialTextureFormat } from '../utils/textureCompression/materialTextureEncoder';
 
 /**
  * TEXTURE SETTINGS
@@ -13,7 +13,8 @@ import type { MaterialTextureFormat } from '../utils/textureCompression/material
  */
 
 export type TextureColourSpace = 'colour' | 'data';
-export type TextureCompressionChoice = 'auto' | 'none' | MaterialTextureFormat;
+/** What a texture's settings pick: by what it is, none, or a BC format (phones take ASTC or ETC2 in its place). */
+export type TextureCompressionChoice = 'auto' | 'none' | BcFormat;
 export type TextureWrap = 'repeat' | 'clamp' | 'mirror';
 export type TextureFilter = 'linear' | 'nearest';
 
@@ -45,7 +46,7 @@ export interface TextureSettings {
 }
 
 /** How many compressed versions a texture keeps (one per way it has been drawn), newest last. */
-export const MAX_KEPT_COMPRESSIONS = 4;
+export const MAX_KEPT_COMPRESSIONS = 8;
 
 export const MAX_SIZE_CHOICES = [256, 512, 1024, 2048, 4096, 8192] as const;
 
@@ -158,15 +159,25 @@ export const textureRole = (slot: 'map' | 'normal' | 'data', settings: TextureSe
     return 'colour';
 };
 
-/** What the GPU can take compressed. */
-export interface CompressionSupport { bptc: boolean; rgtc: boolean }
+/** What the GPU can take compressed: BC7 (bptc), BC4 and BC5 (rgtc), ASTC and ETC2. */
+export interface CompressionSupport { bptc: boolean; rgtc: boolean; astc?: boolean; etc2?: boolean }
+
+/**
+ * What phones and tablets take, for keeping their versions of a texture too (so built games carry the
+ * format each device needs): most take ASTC (and ETC2); the rest ETC2 alone.
+ */
+export const PHONE_SUPPORTS: readonly CompressionSupport[] = [
+    { bptc: false, rgtc: false, astc: true, etc2: true },
+    { bptc: false, rgtc: false, astc: false, etc2: true },
+];
 
 export type KeptFormat = MaterialTextureFormat | 'rgba8' | 'half';
 
 /**
  * The format a texture is kept in on the GPU: BC7 for colour, BC5 for normal maps and BC4 for one channel
  * of data, unless its settings pick one, or it holds light beyond white, or it is floating-point colour
- * (both kept as half floats: no compressed format for either is written here), or the GPU cannot take it.
+ * (both kept as half floats: no compressed format for either is written here). A GPU without that BC
+ * format takes ASTC 4×4, else ETC2 (with EAC alpha for colour with alpha), else the texture whole.
  * Kept whole, a floating-point picture stays in half floats and any other in 8 bits.
  */
 export const keptFormat = (
@@ -182,9 +193,13 @@ export const keptFormat = (
     if (choice === 'none' || picture.hdr || linearColour) return whole;
     // Compressed blocks are 4 pixels a side.
     if (picture.width % 4 !== 0 || picture.height % 4 !== 0) return whole;
-    const wanted: MaterialTextureFormat = choice !== 'auto' ? choice : role === 'normal' ? 'bc5' : role === 'data' && picture.channels === 1 ? 'bc4' : 'bc7';
+    const wanted: BcFormat = choice !== 'auto' ? choice : role === 'normal' ? 'bc5' : role === 'data' && picture.channels === 1 ? 'bc4' : 'bc7';
     const supported = wanted === 'bc7' ? support.bptc : support.rgtc;
-    return supported ? wanted : whole;
+    if (supported) return wanted;
+    if (support.astc) return 'astc';
+    // Only colour keeps its alpha; normal maps and data are read without it.
+    if (support.etc2) return role === 'colour' && (picture.channels === 4 || picture.channels === 2) ? 'etc2a' : 'etc2';
+    return whole;
 };
 
 /** The format a texture is kept in uncompressed: half floats for floating-point pictures, 8 bits for the rest. */
@@ -206,6 +221,9 @@ export const FORMAT_WORDS: Record<KeptFormat, string> = {
     bc7: 'Compressed (BC7)',
     bc5: 'Compressed normal map (BC5)',
     bc4: 'Compressed, one channel (BC4)',
+    astc: 'Compressed for phones (ASTC 4×4)',
+    etc2: 'Compressed for phones (ETC2)',
+    etc2a: 'Compressed for phones, with alpha (ETC2)',
     rgba8: 'Uncompressed, 8 bits a channel',
     half: 'Uncompressed, 16-bit floating point',
 };

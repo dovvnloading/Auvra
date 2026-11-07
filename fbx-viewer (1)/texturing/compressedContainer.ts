@@ -34,8 +34,16 @@ export const compressionSignature = (
 ): string => [
     `v${CONTAINER_VERSION}`, sourceAssetId, role, flipY ? 'up' : 'down',
     settings?.compression ?? 'auto', settings?.maxSize ?? 0, settings?.mips === false ? 'nomips' : 'mips', settings?.flipGreen ? 'dx' : 'gl',
-    `${support.bptc ? 'b' : '-'}${support.rgtc ? 'r' : '-'}`,
+    deviceToken(support),
 ].join('|');
+
+/**
+ * What a graphics card takes, in a signature: "br" for one with BC (as before phones' formats came, so blocks
+ * kept then are still found), else its BC, ASTC and ETC2 support, so a phone's blocks are kept apart.
+ */
+const deviceToken = (support: CompressionSupport): string => (support.bptc && support.rgtc
+    ? 'br'
+    : `${support.bptc ? 'b' : '-'}${support.rgtc ? 'r' : '-'}${support.astc ? 'a' : '-'}${support.etc2 ? 'e' : '-'}`);
 
 /** Packs compressed levels into the container. */
 export const packCompressed = (picture: CompressedPicture): Uint8Array => {
