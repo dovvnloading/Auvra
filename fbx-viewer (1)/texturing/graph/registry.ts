@@ -9,11 +9,13 @@ import { ITERATE_PLACEHOLDER, iterateDefinition } from './iterate';
 import { VALUE_SETTING_KINDS, valuePinKey } from './nodeKit';
 import { SCATTER_NODES } from './nodes/scatter';
 import { TRANSFORM_NODES } from './nodes/transform';
+import { TEXT_NODE } from './nodes/text';
+import { conditionHolds, conditionScope } from './parameters';
 import { OUTPUT_CHANNEL_LABELS, outputNodeKind, type NodeCategory, type OutputChannel, type PortKind, type TexGraphLink, type TexGraphNode, type TexNodeDef, type TexParamDef, type TexPortDef, type TextureGraph } from './types';
 
 /** Every node a texture graph can hold, by type; sub-graph nodes are made from the graph they use. */
 
-export const TEXTURE_NODE_DEFINITIONS: readonly TexNodeDef[] = [...IO_NODES, ...PROCESSOR_NODES, ITERATE_PLACEHOLDER, ...GENERATOR_NODES, ...SCATTER_NODES, ...ADJUST_NODES, ...TRANSFORM_NODES, ...DISTANCE_NODES, ...MATERIAL_NODES];
+export const TEXTURE_NODE_DEFINITIONS: readonly TexNodeDef[] = [...IO_NODES, ...PROCESSOR_NODES, ITERATE_PLACEHOLDER, ...GENERATOR_NODES, TEXT_NODE, ...SCATTER_NODES, ...ADJUST_NODES, ...TRANSFORM_NODES, ...DISTANCE_NODES, ...MATERIAL_NODES];
 
 const BY_TYPE = new Map(TEXTURE_NODE_DEFINITIONS.map((definition) => [definition.type, definition]));
 
@@ -44,17 +46,20 @@ const SUBGRAPH_SEED_PARAMS: readonly TexParamDef[] = [
 const subgraphDefinition = (node: TexGraphNode, resolve: GraphResolver): TexNodeDef => {
     const entry = typeof node.params.graph === 'string' ? resolve(node.params.graph) : undefined;
     const graph = entry?.graph;
+    // A pin whose condition does not hold for the node's values is hidden (unless a wire still runs to it).
+    const scope = conditionScope(graph?.parameters ?? [], node.params);
+    const hide = (candidate: TexGraphNode) => (conditionHolds(typeof candidate.params.visibleIf === 'string' ? candidate.params.visibleIf : '', scope) ? {} : { hidden: true });
     // Its inputs and outputs: images, and whole materials (a material wire each).
     const inputs: TexPortDef[] = (graph?.nodes ?? [])
         .filter((candidate) => candidate.type === INPUT_NODE_TYPE || candidate.type === MATERIAL_INPUT_NODE_TYPE)
         .map((candidate) => (candidate.type === MATERIAL_INPUT_NODE_TYPE
-            ? { key: String(candidate.params.name || candidate.id), label: String(candidate.params.name || 'Material'), kind: 'material' as const }
-            : { key: String(candidate.params.name || candidate.id), label: String(candidate.params.name || 'Input'), kind: (candidate.params.kind === 'gray' ? 'gray' : 'color') as PortKind, fallback: 'black' as const }));
+            ? { key: String(candidate.params.name || candidate.id), label: String(candidate.params.name || 'Material'), kind: 'material' as const, ...hide(candidate) }
+            : { key: String(candidate.params.name || candidate.id), label: String(candidate.params.name || 'Input'), kind: (candidate.params.kind === 'gray' ? 'gray' : 'color') as PortKind, fallback: 'black' as const, ...hide(candidate) }));
     const outputs: TexPortDef[] = (graph?.nodes ?? [])
         .filter((candidate) => candidate.type === OUTPUT_NODE_TYPE || candidate.type === MATERIAL_OUTPUT_NODE_TYPE)
         .map((candidate) => (candidate.type === MATERIAL_OUTPUT_NODE_TYPE
-            ? { key: candidate.id, label: String(candidate.params.name || '').trim() || 'Material', kind: 'material' as const }
-            : { key: candidate.id, label: outputLabel(candidate), kind: outputNodeKind(candidate.params) }));
+            ? { key: candidate.id, label: String(candidate.params.name || '').trim() || 'Material', kind: 'material' as const, ...hide(candidate) }
+            : { key: candidate.id, label: outputLabel(candidate), kind: outputNodeKind(candidate.params), ...hide(candidate) }));
     return {
         type: SUBGRAPH_NODE_TYPE,
         label: entry?.name ?? 'Missing graph',

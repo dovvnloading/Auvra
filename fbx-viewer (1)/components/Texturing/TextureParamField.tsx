@@ -10,6 +10,7 @@ import { CurveEditor } from './CurveEditor';
 import { AngleDial, CodeEditor, EyedropperButton, GradientPickButton, PositionPad } from './SettingWidgets';
 import type { Histogram } from './view2d';
 import { ColourFieldRgb } from '../UI/ColourPicker';
+import { availableFonts } from '../../texturing/graph/nodes/text';
 
 /**
  * One node setting in the inspector, by its kind. A setting can instead follow one of the graph's
@@ -22,12 +23,17 @@ const field = 'rounded border border-line bg-panel px-1.5 py-0.5 text-xs text-in
 /** The graph parameter kinds a setting can follow. */
 const FOLLOWS: Partial<Record<TexParamDef['kind'], GraphParameterKind[]>> = {
     float: ['float', 'int'], int: ['int', 'float'], bool: ['bool'], color: ['color'], vec2: ['vec2'], select: ['select', 'int'],
+    ramp: ['ramp'], curve: ['curve'], texture: ['texture'], string: ['string'], font: ['font'],
 };
+/** Settings a formula can give a value to (numbers, switches, colours, pairs, choices). */
+const FORMULA_KINDS: ReadonlySet<TexParamDef['kind']> = new Set(['float', 'int', 'bool', 'color', 'vec2', 'select']);
 
-/** The parameter kind a setting becomes when exposed. */
+/** The parameter kind a setting becomes when exposed: every kind a parameter can hold. */
 export const exposedKind = (param: TexParamDef): GraphParameterKind | null => {
     switch (param.kind) {
-        case 'float': case 'int': case 'bool': case 'color': case 'vec2': case 'select': return param.kind;
+        case 'float': case 'int': case 'bool': case 'color': case 'vec2': case 'select':
+        case 'ramp': case 'curve': case 'texture': case 'string': case 'font':
+            return param.kind;
         default: return null;
     }
 };
@@ -92,11 +98,13 @@ export const DraftText: React.FC<{ label: string; value: string; maxLength?: num
 
 const NumberRow: React.FC<{ param: TexParamDef; value: number; onChange: (value: number) => void }> = ({ param, value, onChange }) => {
     const step = param.step ?? (param.kind === 'int' ? 1 : 0.01);
+    // The slider spans the soft range; typing goes on to the hard limits.
+    const min = param.softMin ?? param.min;
     const max = param.softMax ?? param.max;
     return (
         <div className="flex items-center gap-2">
-            {param.min !== undefined && max !== undefined && (
-                <input type="range" aria-label={`${param.label} slider`} min={param.min} max={max} step={step} value={Math.min(max, value)}
+            {min !== undefined && max !== undefined && (
+                <input type="range" aria-label={`${param.label} slider`} min={min} max={max} step={step} value={Math.max(min, Math.min(max, value))}
                     onChange={(event) => onChange(Number(event.target.value))} className="h-1 min-w-0 flex-1 accent-accent" />
             )}
             <DraftNumber label={param.label} value={value} integer={param.kind === 'int'} className="w-16" limit={(next) => clampToParam(param, next)} onCommit={onChange} />
@@ -193,7 +201,12 @@ export const ParamControl: React.FC<{
         case 'code':
             return <CodeEditor label={param.label} code={String(value ?? '')} onChange={onChange} error={extras?.error} names={extras?.names} />;
         case 'string':
-            return <DraftText label={param.label} value={String(value ?? '')} allowEmpty onCommit={onChange} className="w-full" />;
+            return <DraftText label={param.label} value={String(value ?? '')} maxLength={2000} allowEmpty onCommit={onChange} className="w-full" />;
+        case 'font': {
+            const current = String(value ?? param.default ?? '');
+            const fonts = availableFonts();
+            return <Select value={current} options={[...(fonts.includes(current) || !current ? [] : [{ value: current, label: `${current} (not on this computer)` }]), ...fonts.map((font) => ({ value: font, label: font }))]} onChange={(next) => onChange(next)} className="w-full" />;
+        }
         default:
             return null;
     }
@@ -276,7 +289,7 @@ export const TextureParamField: React.FC<{
                             ))}
                         </div>
                     )}
-                    <div className="space-y-1 border-t border-line pt-2">
+                    {FORMULA_KINDS.has(param.kind) && <div className="space-y-1 border-t border-line pt-2">
                         <div className="px-2 text-2xs text-ink-3">Or a formula of parameters ({names.length ? names.join(', ') : 'none yet'}, $size, $seed, $iteration)</div>
                         <input aria-label="Formula" value={formula} placeholder="wear * 0.5 + 0.1" onChange={(event) => setFormula(event.target.value)}
                             onKeyDown={(event) => { if (event.key === 'Enter' && formula.trim() && !expressionError(formula, names)) { onChange({ $expr: formula.trim() }); setMenu(false); } }}
@@ -286,7 +299,7 @@ export const TextureParamField: React.FC<{
                             <button disabled={!formula.trim() || Boolean(expressionError(formula, names))} onClick={() => { onChange({ $expr: formula.trim() }); setMenu(false); }}
                                 className="rounded bg-accent px-2 py-0.5 text-2xs font-semibold text-accent-ink hover:bg-accent-hover disabled:opacity-40">Use formula</button>
                         </div>
-                    </div>
+                    </div>}
                 </div>
             </Popover>
         </div>

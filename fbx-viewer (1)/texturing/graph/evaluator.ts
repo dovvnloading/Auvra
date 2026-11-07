@@ -296,7 +296,10 @@ export class TextureGraphEvaluator {
             }
             // Precision: as asked, the graph's, else the widest wired in, else by kind.
             const wired = pictures.map((port) => info.get(links?.get(port.key)?.from ?? '')?.precision).filter((bits): bits is ImagePrecision => bits !== undefined);
-            const precision = value ? 32 : resolvePrecision(node.precision, wired, graph.precision, anyKind);
+            let precision = value ? 32 : resolvePrecision(node.precision, wired, graph.precision, anyKind);
+            // A node whose settings need a greater depth (a deep picture) gets it unless it is set to its own.
+            const own = (node.precision === undefined || node.precision === 'auto') ? definition.precisionOf?.(params, this.texture) : undefined;
+            if (own && own > precision) precision = own;
             const tiling = resolveTiling(node.tiling, first?.tiling, graph.tiling ?? 'both', definition.inputs.length > 0);
             const inputSignatures = definition.inputs.map((port) => {
                 const link = links?.get(port.key);
@@ -325,7 +328,9 @@ export class TextureGraphEvaluator {
             for (const param of definition.params) {
                 if (param.kind !== 'texture') continue;
                 const id = params[param.key];
-                extras.push(typeof id === 'string' && id && this.texture(id) ? `${id}:ready` : `${String(id)}:waiting`);
+                // Ready, and at which depth: a picture read again at its own depth draws again.
+                const picture = typeof id === 'string' && id ? this.texture(id) : null;
+                extras.push(picture ? `${id}:ready:${Number(picture.userData?.auvraDepth) || 8}` : `${String(id)}:waiting`);
             }
             if (main) extras.push(`bypass:${main}`);
             if (world[0] !== 1 || world[1] !== 1) extras.push(`world:${world[0]}x${world[1]}`);
