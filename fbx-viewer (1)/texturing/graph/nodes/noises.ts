@@ -10,8 +10,8 @@ import type { TexNodeDef } from '../types';
  * NOISES AND GRUNGES
  *
  * Generators of natural-looking randomness: clouds, simplex, blue noise, dirt, spots, crystal, fibres,
- * moisture, liquid, plasma, caustics, noise and scratches running in a direction, and a set of grunge
- * maps. Every one tiles (each lattice wraps where the picture repeats; a node set not to tile, in its
+ * moisture, liquid, plasma, caustics, noise and scratches running in a direction, fur, and a set of
+ * grunge maps. Every one tiles (each lattice wraps where the picture repeats; a node set not to tile, in its
  * size, bit depth and tiling settings, does not), and many have a Disorder setting that pushes the
  * pattern about by smooth noise. Each shader has its CPU twin below (REFERENCES), for the tests.
  */
@@ -666,6 +666,50 @@ void main() {
     outColor = vec4(scratchField(q, tilePeriod(ivec2(p_along, p_across)), p_density, p_length, p_thickness, p_variation, uSeed));
 }`,
     }),
+    generator({
+        type: 'fur',
+        label: 'Fur',
+        category: 'Noises',
+        description: 'Short hairs lying one way, each a little turned, longer or shorter, thinning and darkening to its tip: fur, felt, grass seen from above or a brushed nap.',
+        keywords: ['fur', 'hair', 'strands', 'felt', 'nap', 'fibres', 'grass from above', 'animal'],
+        inputs: [],
+        outputs: [out('gray')],
+        params: [
+            int('scale', 'Scale', 12, 1, 128), int('density', 'Hairs a cell', 4, 1, 8), float('length', 'Length (cells)', 0.9, 0.1, 1),
+            float('angle', 'Direction (degrees)', 90, -180, 180, { step: 1 }), float('spread', 'Direction randomness (degrees)', 20, 0, 180, { step: 1 }),
+            float('thickness', 'Thickness', 0.12, 0.01, 0.6), float('taper', 'Thinning to the tip', 0.7, 0, 1), float('fade', 'Darker toward the tip', 0.5, 0, 1),
+            float('variation', 'Brightness variety', 0.5, 0, 1), seed(),
+        ],
+        cost: (params) => 9 * whole(params, 'density', 4) * 2,
+        glsl: `void main() {
+    int n = p_scale;
+    vec2 p = vUv * float(n);
+    ivec2 cell = ivec2(floor(p));
+    ivec2 period = tilePeriod(ivec2(n));
+    float best = 0.0;
+    float spread = radians(p_spread);
+    float direction = radians(p_angle);
+    for (int oy = -1; oy <= 1; oy++) for (int ox = -1; ox <= 1; ox++) {
+        ivec2 c = cell + ivec2(ox, oy);
+        ivec2 w = wrapCell(c, period);
+        for (int k = 0; k < 8; k++) {
+            if (k >= p_density) break;
+            float salt = uSeed + float(k) * 7.31;
+            vec3 r = hash3(w, salt);
+            vec3 r2 = hash3(w, salt + 3.7);
+            vec2 root = vec2(c) + r.xy;
+            float a = direction + (r.z - 0.5) * 2.0 * spread;
+            vec2 e = vec2(cos(a), sin(a)) * p_length * (0.6 + 0.4 * r2.x);
+            float t = clamp(dot(p - root, e) / max(dot(e, e), 1e-9), 0.0, 1.0);
+            float d = length(p - root - e * t);
+            float width = p_thickness * 0.5 * (1.0 - p_taper * t);
+            float hair = (1.0 - smoothstep(width * 0.5, width + 1e-4, d)) * mix(1.0, 1.0 - p_fade, t) * mix(1.0, r2.y, p_variation);
+            best = max(best, hair);
+        }
+    }
+    outColor = vec4(best);
+}`,
+    }),
     {
         ...generator({
             type: 'grunge',
@@ -842,6 +886,39 @@ export const NOISE_REFERENCES: Record<string, (u: number, v: number, params: Par
         const across = whole(params, 'across', 48);
         const [x, y] = alongFrame(u, v, dir, along, across);
         return scratchField(x, y, along, across, num(params, 'density', 0.4), num(params, 'length', 2), num(params, 'thickness', 0.15), num(params, 'variation', 0.5), s);
+    },
+    fur: (u, v, params, s) => {
+        const n = whole(params, 'scale', 12);
+        const x = u * n;
+        const y = v * n;
+        const cx = Math.floor(x);
+        const cy = Math.floor(y);
+        const spread = (num(params, 'spread', 20) * Math.PI) / 180;
+        const direction = (num(params, 'angle', 90) * Math.PI) / 180;
+        const count = whole(params, 'density', 4);
+        const length = num(params, 'length', 0.9);
+        let best = 0;
+        for (let oy = -1; oy <= 1; oy++) {
+            for (let ox = -1; ox <= 1; ox++) {
+                const c = [cx + ox, cy + oy];
+                const w = [wrap(c[0], n), wrap(c[1], n)];
+                for (let k = 0; k < Math.min(8, count); k++) {
+                    const salt = Math.fround(s + Math.fround(k * Math.fround(7.31)));
+                    const r = hash3(w[0], w[1], salt);
+                    const r2 = hash3(w[0], w[1], Math.fround(salt + Math.fround(3.7)));
+                    const root = [c[0] + r[0], c[1] + r[1]];
+                    const a = direction + (r[2] - 0.5) * 2 * spread;
+                    const reach = length * (0.6 + 0.4 * r2[0]);
+                    const e = [Math.cos(a) * reach, Math.sin(a) * reach];
+                    const t = saturate(((x - root[0]) * e[0] + (y - root[1]) * e[1]) / Math.max(e[0] * e[0] + e[1] * e[1], 1e-9));
+                    const d = Math.hypot(x - root[0] - e[0] * t, y - root[1] - e[1] * t);
+                    const width = num(params, 'thickness', 0.12) * 0.5 * (1 - num(params, 'taper', 0.7) * t);
+                    const hair = (1 - smoothstep(width * 0.5, width + 1e-4, d)) * mix(1, 1 - num(params, 'fade', 0.5), t) * mix(1, r2[1], num(params, 'variation', 0.5));
+                    best = Math.max(best, hair);
+                }
+            }
+        }
+        return best;
     },
     grunge: grungeReference,
 };

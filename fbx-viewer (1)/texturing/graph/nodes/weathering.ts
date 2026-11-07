@@ -11,8 +11,9 @@ import { NOISE_GLSL } from './noises';
  *
  * Masks of wear and grime built on the maps baked from a model: curvature (edges stand out), cavity,
  * occlusion, position and world normal. Each reads a map wired into its pin, else the model's baked
- * map (in Paint's fills, and on the Materials tab's model or shape), else a stand-in (flat, open,
- * facing up), as the Mesh map node does. Breakup noise runs in the model's own space where there is
+ * map (in Paint's fills, and on the Materials tab's model or shape), else a stand-in (open, facing
+ * up), as the Mesh map node does. With no curvature map at all, stand-in panels give edges to wear,
+ * and the node says so on itself and in its 2D view. Breakup noise runs in the model's own space where there is
  * a position map, so it runs across UV seams unbroken, and as tiling noise on the picture where there
  * is none, so a material made with stand-ins still tiles. The CPU twins (WEATHERING_REFERENCES) give
  * each node's mask from map values, as the shaders do with stand-ins, for the tests.
@@ -46,6 +47,10 @@ const bindMaps = (context: NodeRunContext): { inputs: Record<string, GpuImage | 
     return { inputs, uniforms };
 };
 
+/** Stand-in panels a picture across, how wide their seams are and the map values they give (shaders and twins alike). */
+const PANELS = 3;
+const PANEL_SEAM = '0.03';
+
 const WEATHER_GLSL = `${NOISE_GLSL}
 uniform sampler2D m_curvature;
 uniform sampler2D m_occlusion;
@@ -60,10 +65,16 @@ uniform int m_has_position;
 uniform int m_has_worldNormal;
 uniform int m_has_thickness;
 vec4 grey(float v) { return vec4(vec3(v), 1.0); }
-float edgeTerm() { return clamp((texture(m_curvature, vUv).r - 0.5) * 2.0, 0.0, 1.0); }
+// With no curvature map at all, stand-in panels give the edges something to wear: a grid of panels,
+// their rims standing out and the seams between them sunk and shut in (see standInPanels).
+float panelEdge() { vec2 c = fract(vUv * ${PANELS.toFixed(1)}) - 0.5; return 0.5 - max(abs(c.x), abs(c.y)); }
+float panelSeam() { return 1.0 - smoothstep(0.0, ${PANEL_SEAM}, panelEdge()); }
+float panelRim() { float x = (panelEdge() - ${PANEL_SEAM} - 0.02) / 0.025; return exp(-x * x); }
+float curvatureAt() { return m_has_curvature == 1 ? texture(m_curvature, vUv).r : 0.5 + 0.5 * panelRim() - 0.4 * panelSeam(); }
+float edgeTerm() { return clamp((curvatureAt() - 0.5) * 2.0, 0.0, 1.0); }
 // Crevices from the cavity map, else from the hollow half of the curvature (a bake may not keep a cavity map).
-float concaveTerm() { return clamp((0.5 - (m_has_cavity == 1 ? texture(m_cavity, vUv).r : texture(m_curvature, vUv).r)) * 2.0, 0.0, 1.0); }
-float openTerm() { return texture(m_occlusion, vUv).r; }
+float concaveTerm() { return clamp((0.5 - (m_has_cavity == 1 ? texture(m_cavity, vUv).r : curvatureAt())) * 2.0, 0.0, 1.0); }
+float openTerm() { return m_has_occlusion == 1 || m_has_curvature == 1 ? texture(m_occlusion, vUv).r : 1.0 - 0.5 * (1.0 - smoothstep(0.0, ${PANEL_SEAM} + 0.05, panelEdge())); }
 float thinTerm() { return 1.0 - texture(m_thickness, vUv).r; }
 vec3 placeAt() { return m_has_position == 1 ? texture(m_position, vUv).rgb : vec3(vUv, 0.5); }
 vec3 facingAt() { return m_has_worldNormal == 1 ? normalize(texture(m_worldNormal, vUv).rgb * 2.0 - 1.0) : vec3(0.0, 1.0, 0.0); }
@@ -103,6 +114,19 @@ float streaks(float across, float along, float seed) {
     return pow(valueNoise(q * vec2(cells), tilePeriod(cells), seed), 3.0);
 }`;
 
+/**
+ * The maps the shaders stand in when there is no curvature map at all: panels whose rims stand out
+ * (curvature up), with seams between them sunk (curvature and cavity down) and shut in (occlusion down).
+ */
+export const standInPanels = (u: number, v: number): WeatherMaps => {
+    const fract = (x: number) => x - Math.floor(x);
+    const edge = 0.5 - Math.max(Math.abs(fract(u * PANELS) - 0.5), Math.abs(fract(v * PANELS) - 0.5));
+    const seam = 1 - smoothstep(0, Number(PANEL_SEAM), edge);
+    const x = (edge - Number(PANEL_SEAM) - 0.02) / 0.025;
+    const curvature = 0.5 + 0.5 * Math.exp(-x * x) - 0.4 * seam;
+    return { curvature, occlusion: 1 - 0.5 * (1 - smoothstep(0, Number(PANEL_SEAM) + 0.05, edge)), thickness: 0.5, facing: [0, 1, 0] };
+};
+
 /** The stand-in terms the CPU twins read: as the shaders read them with no model (flat, open, facing up). */
 export interface WeatherMaps { curvature: number; cavity?: number; occlusion: number; thickness: number; facing: [number, number, number] }
 export const STAND_IN_MAPS: WeatherMaps = { curvature: 0.5, cavity: 0.5, occlusion: 1, thickness: 0.5, facing: [0, 1, 0] };
@@ -128,6 +152,9 @@ const weathering = (definition: Omit<TexNodeDef, 'run' | 'sizeFrom' | 'outputs' 
         async run(context) {
             const image = context.image('gray');
             const bound = bindMaps(context);
+            if (bound.uniforms.m_has_curvature === 0 && rest.inputs.some((port) => port.key === 'curvature')) {
+                context.note?.('No curvature map: none is wired in and the model has none baked, so this shows stand-in panel edges. Wire in a curvature map, or use the graph on a baked model.');
+            }
             await context.pass(image, `${WEATHER_GLSL}\n${glsl}`, { inputs: bound.inputs, uniforms: bound.uniforms, cost: cost ?? 12 });
             return { out: image };
         },

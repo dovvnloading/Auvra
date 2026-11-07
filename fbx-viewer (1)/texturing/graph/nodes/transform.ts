@@ -165,24 +165,6 @@ void main() {
 }`,
     }),
     onePass({
-        type: 'makeTile',
-        label: 'Make it tile',
-        category: 'Transforms',
-        description: 'Hides the seams of an image that does not tile by blending a shifted copy in along its edges.',
-        keywords: ['seamless', 'tileable', 'make tile', 'photo'],
-        inputs: [anyIn('in', 'Input')],
-        outputs: [out('any')],
-        params: [float('width', 'Blend width', 0.2, 0.01, 0.5), float('softness', 'Softness', 0.6, 0, 1)],
-        sizeFrom: 'input',
-        kindFrom: 'in',
-        glsl: `void main() {
-    vec2 d = min(vUv, 1.0 - vUv);
-    float edge = min(d.x, d.y);
-    float w = smoothstep(p_width, p_width * (1.0 - p_softness), edge);
-    outColor = mix(c_in(vUv), c_in(fract(vUv + 0.5)), w);
-}`,
-    }),
-    onePass({
         type: 'polar',
         label: 'Polar coordinates',
         category: 'Transforms',

@@ -41,7 +41,7 @@ export interface TexPortDef {
     group?: string;
 }
 
-export type TexParamKind = 'float' | 'int' | 'bool' | 'color' | 'vec2' | 'select' | 'ramp' | 'curve' | 'texture' | 'string' | 'font' | 'code' | 'graph' | 'function' | 'settings';
+export type TexParamKind = 'float' | 'int' | 'bool' | 'color' | 'vec2' | 'select' | 'ramp' | 'curve' | 'texture' | 'string' | 'font' | 'code' | 'graph' | 'function' | 'settings' | 'points';
 
 export interface RampStop { position: number; color: [number, number, number, number] }
 export interface CurvePoint { x: number; y: number }
@@ -65,6 +65,8 @@ export interface TexParamDef {
     showIf?: (params: Readonly<Record<string, unknown>>) => boolean;
     /** A heading it is listed under (a graph's parameter group, on a node using the graph). */
     group?: string;
+    /** Text of many lines (an SVG drawing), typed in a box with a button to read it from a file of these types. */
+    multiline?: { accept: string; limit: number };
 }
 
 /** A node setting following the graph's parameters: one of them as it is, or a formula of them. */
@@ -259,6 +261,11 @@ export interface NodeRunContext {
     external(name: string): GpuImage | THREE.Texture | null;
     /** The channels of the material wired into a material input (null when none is). */
     material(key: string): MaterialImages | null;
+    /**
+     * Says something about how the node drew, shown on it and in its 2D view: a short phrase, then
+     * ": " and the rest ("No curvature map: ..."). Not every caller listens.
+     */
+    note?(text: string): void;
 }
 
 export type NodeCategory =
@@ -275,6 +282,10 @@ export type NodeCategory =
     | 'Height and normals'
     | 'Mesh maps'
     | 'Weathering'
+    | 'Photo and scans'
+    | 'Splines and paths'
+    | 'SDF shapes'
+    | 'Checks'
     | 'Materials'
     | 'Utility';
 

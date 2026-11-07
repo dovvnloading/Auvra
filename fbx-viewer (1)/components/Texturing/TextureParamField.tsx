@@ -96,6 +96,30 @@ export const DraftText: React.FC<{ label: string; value: string; maxLength?: num
     );
 };
 
+/** Text of many lines, applied on leaving the box, and read from a file with a button. */
+const LongText: React.FC<{ label: string; value: string; accept: string; limit: number; onCommit: (value: string) => void }> = ({ label, value, accept, limit, onCommit }) => {
+    const [draft, setDraft] = useState(value);
+    const picker = useRef<HTMLInputElement>(null);
+    useEffect(() => setDraft(value), [value]);
+    const commit = (text: string) => { const next = text.slice(0, limit); if (next !== value) onCommit(next); };
+    return (
+        <div className="space-y-1">
+            <textarea aria-label={label} value={draft} rows={4} spellCheck={false} onChange={(event) => setDraft(event.target.value)} onBlur={(event) => commit(event.target.value)}
+                className={`${field} w-full resize-y font-mono text-2xs leading-snug`} />
+            <div className="flex items-center justify-between gap-2 text-2xs text-ink-3">
+                <span>{draft.length.toLocaleString()} characters</span>
+                <button type="button" onClick={() => picker.current?.click()} className="text-ink-2 hover:text-ink">Read from a file…</button>
+                <input ref={picker} type="file" accept={accept} className="hidden" aria-label={`${label} file`}
+                    onChange={(event) => {
+                        const file = event.target.files?.[0];
+                        event.target.value = '';
+                        if (file) void file.text().then((text) => { setDraft(text.slice(0, limit)); commit(text); });
+                    }} />
+            </div>
+        </div>
+    );
+};
+
 const NumberRow: React.FC<{ param: TexParamDef; value: number; onChange: (value: number) => void }> = ({ param, value, onChange }) => {
     const step = param.step ?? (param.kind === 'int' ? 1 : 0.01);
     // The slider spans the soft range; typing goes on to the hard limits.
@@ -201,7 +225,19 @@ export const ParamControl: React.FC<{
         case 'code':
             return <CodeEditor label={param.label} code={String(value ?? '')} onChange={onChange} error={extras?.error} names={extras?.names} />;
         case 'string':
+            if (param.multiline) return <LongText label={param.label} value={String(value ?? '')} accept={param.multiline.accept} limit={param.multiline.limit} onCommit={onChange} />;
             return <DraftText label={param.label} value={String(value ?? '')} maxLength={2000} allowEmpty onCommit={onChange} className="w-full" />;
+        case 'points': {
+            const count = Array.isArray(value) ? value.length : 0;
+            return (
+                <div className="flex items-start gap-2 rounded border border-line bg-well px-1.5 py-1">
+                    <p className="min-w-0 flex-1 text-2xs leading-snug text-ink-2">
+                        {count} point{count === 1 ? '' : 's'}. In the 2D view: click to add one, drag one to move it, Alt-click one to take it away.
+                    </p>
+                    <button type="button" onClick={() => onChange(structuredClone(param.default))} className="shrink-0 text-2xs text-ink-3 hover:text-ink" title="Put the points back as they started">Start again</button>
+                </div>
+            );
+        }
         case 'font': {
             const current = String(value ?? param.default ?? '');
             const fonts = availableFonts();
