@@ -4,6 +4,10 @@ import { resolve } from 'node:path';
 import { PHOTO_NODES, atlasPlace, pickBand, shadingFit } from '../../texturing/graph/nodes/photo';
 import { closedCut, seamMasks, seamTile, type Picture } from '../../texturing/graph/seamCut';
 import { textureNodeDefinitionByType } from '../../texturing/graph/registry';
+import { coerceParam } from '../../texturing/graph/document';
+import { nearestOn, placementsAlong, quadPlace, resample, segmentsOf, simplify, smoothPath, traceOutlines, windingAt, wrapOffsets, type Point } from '../../texturing/graph/curves';
+import { SPLINE_NODES, outlinePaths, scatterRows, strokeAt } from '../../texturing/graph/nodes/splines';
+import { addPoint, dragPoint, removePoint, type PointList } from '../../components/Texturing/view2d';
 
 /** A smooth random picture that does not tile: a slope across it and lumps of noise. */
 const photo = (width: number, height: number, seed = 1): Picture => {
@@ -110,6 +114,117 @@ describe('photo and scan processing', () => {
             expect(textureNodeDefinitionByType(definition.type), definition.type).toBe(definition);
         }
         expect(textureNodeDefinitionByType('makeTile')?.params.find((param) => param.key === 'method')?.default).toBe('seams');
+    });
+});
+
+describe('splines and paths', () => {
+    const edgeGap = (picture: (u: number, v: number) => number): number => {
+        let gap = 0;
+        for (let i = 0; i <= 60; i++) {
+            const t = (i + 0.37) / 61;
+            gap = Math.max(gap, Math.abs(picture(0, t) - picture(1, t)), Math.abs(picture(t, 0) - picture(t, 1)));
+        }
+        return gap;
+    };
+
+    it('runs a smooth curve through its points, from straight to smooth', () => {
+        const points: Point[] = [[0.1, 0.1], [0.5, 0.8], [0.9, 0.2]];
+        const smooth = smoothPath(points, false, 1, 8);
+        expect(smooth[0]).toEqual([0.1, 0.1]);
+        expect(smooth[8][0]).toBeCloseTo(0.5, 9);
+        expect(smooth[8][1]).toBeCloseTo(0.8, 9);
+        expect(smooth[smooth.length - 1]).toEqual([0.9, 0.2]);
+        expect(smoothPath(points, false, 0)).toEqual(points);
+        const loop = smoothPath(points, true, 1, 4);
+        expect(loop[loop.length - 1]).toEqual(loop[0]);
+    });
+
+    it('finds the nearest place on a path, which side, and how far along', () => {
+        const segments = segmentsOf([[[0, 0.5], [0.5, 0.5], [1, 0.5]]]);
+        const hit = nearestOn([0.7, 0.6], segments);
+        expect(hit.distance).toBeCloseTo(0.1, 9);
+        expect(hit.along).toBeCloseTo(0.7, 9);
+        expect(hit.side).toBe(1);
+        expect(nearestOn([0.7, 0.4], segments).side).toBe(-1);
+        const square = segmentsOf([[[0.2, 0.2], [0.8, 0.2], [0.8, 0.8], [0.2, 0.8], [0.2, 0.2]]]);
+        expect(Math.abs(windingAt([0.5, 0.5], square))).toBe(1);
+        expect(windingAt([0.9, 0.5], square)).toBe(0);
+    });
+
+    it('keeps a curve over the edge tiling: it comes back on the other side', () => {
+        const params = { points: [[0.6, 0.3], [0.95, 0.5], [1.25, 0.55]], closed: false, smoothness: 1, width: 0.08, softness: 0.3, taper: 0 };
+        const tiled = (u: number, v: number) => strokeAt(params, u, v, [true, true]);
+        expect(tiled(0.1, 0.55)).toBeGreaterThan(0.5);
+        expect(edgeGap(tiled)).toBeLessThan(1e-9);
+        // Not tiling, it stops at the edge.
+        expect(edgeGap((u, v) => strokeAt(params, u, v, [false, false]))).toBeGreaterThan(0.5);
+        expect(wrapOffsets(segmentsOf([[[0.9, 0.5], [1.1, 0.5]]]), 0.01, [true, true]).map((o) => o.join(','))).toEqual(expect.arrayContaining(['0,0', '1,0']));
+    });
+
+    it('finds a place inside a quad between two curves again', () => {
+        const a: Point = [0.1, 0.2]; const b: Point = [0.6, 0.1]; const c: Point = [0.2, 0.7]; const d: Point = [0.7, 0.9];
+        const mapped = (s: number, t: number): Point => [0, 1].map((k) => a[k] * (1 - s) * (1 - t) + b[k] * s * (1 - t) + c[k] * (1 - s) * t + d[k] * s * t) as Point;
+        for (const [s, t] of [[0.3, 0.6], [0.9, 0.1], [0.5, 0.5]]) {
+            const found = quadPlace(mapped(s, t), a, b, c, d)!;
+            expect(found[0]).toBeCloseTo(s, 6);
+            expect(found[1]).toBeCloseTo(t, 6);
+        }
+        expect(quadPlace([0.95, 0.05], a, b, c, d)).toBeNull();
+    });
+
+    it('spaces copies evenly along a curve, round a closed one meeting up', () => {
+        const circle = Array.from({ length: 401 }, (_, i): Point => [0.5 + Math.cos((i / 400) * Math.PI * 2) / (2 * Math.PI), 0.5 + Math.sin((i / 400) * Math.PI * 2) / (2 * Math.PI)]);
+        const placed = placementsAlong(circle, 0.1, true);
+        expect(placed.length).toBe(10);
+        for (let i = 1; i < placed.length; i++) expect(placed[i].along - placed[i - 1].along).toBeCloseTo(0.1, 3);
+        expect(resample([[0, 0], [1, 0]], 5).map((p) => p[0])).toEqual([0, 0.25, 0.5, 0.75, 1]);
+    });
+
+    it('traces a mask\'s outlines into closed paths, and runs a band\'s round the repeating picture', () => {
+        const n = 32;
+        const disc = new Float32Array(n * n);
+        for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) disc[y * n + x] = Math.hypot((x + 0.5) / n - 0.5, (y + 0.5) / n - 0.5) < 0.25 ? 1 : 0;
+        const outlines = traceOutlines(disc, n, n, 0.5);
+        expect(outlines.length).toBe(1);
+        const loop = outlines[0];
+        expect(loop[loop.length - 1]).toEqual(loop[0]);
+        for (const [u, v] of loop) expect(Math.abs(Math.hypot(u - 0.5, v - 0.5) - 0.25)).toBeLessThan(0.04);
+        const band = new Float32Array(n * n);
+        for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) band[y * n + x] = y >= 10 && y < 20 ? 1 : 0;
+        const edges = traceOutlines(band, n, n, 0.5);
+        expect(edges.length).toBe(2);
+        for (const path of edges) expect(Math.abs(path[path.length - 1][0] - path[0][0])).toBeCloseTo(1, 6);
+        expect(simplify([[0, 0], [0.25, 0], [0.5, 1e-5], [1, 0]], 1e-3)).toEqual([[0, 0], [1, 0]]);
+        expect(outlinePaths(disc, n, n, 0.5, 0.002, 0.5).length).toBe(1);
+    });
+
+    it('adds, moves and takes away points from the 2D view', () => {
+        const lists: PointList[] = [{ key: 'points', points: [[0.1, 0.5], [0.5, 0.5], [0.9, 0.5]], path: [[0.1, 0.5], [0.9, 0.5]], closed: false, least: 2 }];
+        // Near a span: into it.
+        expect(addPoint(lists, [0.3, 0.51], 0.05)).toEqual({ points: [[0.1, 0.5], [0.3, 0.51], [0.5, 0.5], [0.9, 0.5]] });
+        // Away from it: at the nearer end.
+        expect(addPoint(lists, [0.0, 0.9], 0.05)).toEqual({ points: [[0, 0.9], [0.1, 0.5], [0.5, 0.5], [0.9, 0.5]] });
+        expect(addPoint(lists, [1.0, 0.9], 0.05)?.points.at(-1)).toEqual([1, 0.9]);
+        expect(dragPoint(lists, 'points:1', [0.4, 0.2])).toEqual({ points: [[0.1, 0.5], [0.4, 0.2], [0.9, 0.5]] });
+        expect(removePoint(lists, 'points:0')).toEqual({ points: [[0.5, 0.5], [0.9, 0.5]] });
+        expect(removePoint([{ ...lists[0], points: [[0, 0], [1, 1]] }], 'points:0')).toBeNull();
+        // Two curves: the click goes to the nearer.
+        const two: PointList[] = [lists[0], { key: 'curveB', points: [[0.1, 0.9], [0.9, 0.9]], path: [], closed: false, least: 2 }];
+        expect(Object.keys(addPoint(two, [0.5, 0.88], 0.05) ?? {})).toEqual(['curveB']);
+        // Settings read back clean.
+        expect(coerceParam(textureNodeDefinitionByType('curve')!.params.find((param) => param.key === 'points')!, [[0.2, 'x'], 'no', [0.3, 0.4]])).toEqual([[0.2, 0.5], [0.3, 0.4]]);
+    });
+
+    it('every node says what it does, in its own group, and the copies follow their seed', () => {
+        for (const definition of SPLINE_NODES) {
+            expect(definition.category, definition.type).toBe('Splines and paths');
+            expect(definition.description.length, definition.type).toBeGreaterThan(40);
+            expect(definition.params.some((param) => param.kind === 'points') || definition.type === 'maskToPaths', definition.type).toBe(true);
+        }
+        const params = { points: [[0.1, 0.5], [0.9, 0.5]], spacing: 0.1, size: 0.05, sizeRandom: 0.5, turnRandom: 30, shiftRandom: 0.02 };
+        expect(scatterRows(params, 3)).toEqual(scatterRows(params, 3));
+        expect(scatterRows(params, 3)).not.toEqual(scatterRows(params, 4));
+        expect(scatterRows(params, 3).length).toBe(8);
     });
 });
 

@@ -7,9 +7,11 @@ import { isParamLink, type TexGraphNode } from '../../texturing/graph/types';
 import { IconButton, Segmented } from '../UI/kit';
 import { finishPicking, stopsFrom, usePicking, type Rgba } from './eyedropper';
 import type { TextureGraphSession } from './textureGraphSession';
+import { readPoints, smoothPath } from '../../texturing/graph/curves';
+import { textureNodeDefinitionByType } from '../../texturing/graph/registry';
 import {
-    dragGradient, dragShape, dragTile, dragTransform, gradientFrame, rangeShare, shapeFrame, tileFrame, transformFrame, uvToView, viewToUv,
-    type HandleFrame, type Histogram, type UV, type Vec2, type ViewPlacement,
+    addPoint, cloneFrame, dragClone, dragGradient, dragPoint, dragShape, dragTile, dragTransform, gradientFrame, pointsFrame, rangeShare, removePoint, shapeFrame, tileFrame, transformFrame, uvToView, viewToUv,
+    type HandleFrame, type Histogram, type PointList, type UV, type Vec2, type ViewPlacement,
 } from './view2d';
 
 /**
@@ -17,8 +19,9 @@ import {
  * to check it tiles, as all channels or one at a time, brighter or darker by its exposure, or lit as
  * a normal map. The pixel under the pointer shows with its values; colour pins keep showing theirs.
  * The histogram picks out a range of values in the image; holding a node as A compares it with the
- * one shown, either side of a wipe. Transform, Tile sampler, Linear gradient and Shape nodes get
- * handles to drag on the image. A setting's eyedropper picks a colour here with a click, or a
+ * one shown, either side of a wipe. Transform, Tile sampler, Linear gradient, Shape and Clone nodes get
+ * handles to drag on the image; nodes with points (the spline nodes) get one on each, a click on the
+ * image adds a point and an Alt-click on one takes it away. A setting's eyedropper picks a colour here with a click, or a
  * gradient along a dragged line.
  */
 
@@ -90,6 +93,10 @@ interface Handles {
     drag: (key: string, to: Vec2, uniform: boolean) => Record<string, unknown>;
     /** True for a handle whose setting follows a graph parameter (it cannot be dragged). */
     locked: (key: string) => boolean;
+    /** The settings a click at `at` gives, adding a point (`near`: how close to a span counts as on it). */
+    add?: (at: Vec2, near: number) => Record<string, unknown> | null;
+    /** The settings with a handle's point taken away. */
+    remove?: (key: string) => Record<string, unknown> | null;
 }
 
 /** The handles a node gets on the image, from its settings (and the seed it drew with, for a Tile sampler's random shifts). */
@@ -97,6 +104,22 @@ const handlesFor = (node: TexGraphNode | null | undefined, seed: number | undefi
     if (!node || node.bypass) return null;
     const p = node.params;
     const locked = (key: string) => isParamLink(p[key]);
+    // Nodes with lists of points (the spline nodes): a handle on every point, a click adds one.
+    const lists = (textureNodeDefinitionByType(node.type)?.params ?? []).filter((param) => param.kind === 'points' && !isParamLink(p[param.key])).map((param): PointList => {
+        const points = readPoints(p[param.key], param.default as Vec2[]);
+        const curve = node.type !== 'pointList';
+        const closed = Boolean(p.closed);
+        return { key: param.key, points, closed, least: curve ? 2 : 1, ...(curve ? { path: smoothPath(points, closed, num(p.smoothness, 1)) } : {}) };
+    });
+    if (lists.length) {
+        return {
+            frame: pointsFrame(lists),
+            drag: (key, to) => dragPoint(lists, key, to) ?? {},
+            locked: () => false,
+            add: (at, near) => addPoint(lists, at, near),
+            remove: (key) => removePoint(lists, key),
+        };
+    }
     switch (node.type) {
         case 'transform':
         case 'safeTransform': {
@@ -106,6 +129,11 @@ const handlesFor = (node: TexGraphNode | null | undefined, seed: number | undefi
         case 'shape': {
             const settings = { centre: pair(p.centre, [0.5, 0.5]), size: num(p.size, 0.8), stretch: pair(p.stretch, [1, 1]), rotation: num(p.rotation, 0), tiling: num(p.tiling, 1) };
             return { frame: shapeFrame(settings), drag: (key, to) => ({ ...dragShape(settings, key, to) }), locked };
+        }
+        case 'clone':
+        case 'clonePatch': {
+            const settings = { from: pair(p.from, [0.3, 0.5]), to: pair(p.to, [0.7, 0.5]), size: num(p.size, 0.15) };
+            return { frame: cloneFrame(settings), drag: (key, to) => ({ ...dragClone(settings, key, to) }), locked };
         }
         case 'gradient':
             return { frame: gradientFrame(num(p.angle, 0)), drag: (key, to) => ({ ...dragGradient(key, to) }), locked: () => isParamLink(p.angle) };
@@ -127,7 +155,9 @@ const handlesFor = (node: TexGraphNode | null | undefined, seed: number | undefi
 const HANDLE_WORDS: Record<string, string> = {
     offset: 'Drag to move', centre: 'Drag to move', rotation: 'Drag to turn', scale: 'Drag to scale (Shift keeps proportions)', size: 'Drag to size',
     start: 'Drag to turn the gradient (black end)', end: 'Drag to turn the gradient (white end)',
+    from: 'Drag to choose where the patch comes from', to: 'Drag to move where the patch goes',
 };
+const handleWords = (key: string): string => HANDLE_WORDS[key] ?? (key.includes(':') ? 'Drag to move this point; Alt-click to take it away' : 'Drag');
 
 interface ColourPin { id: number; u: number; v: number }
 
@@ -452,6 +482,14 @@ export const TextureView2D: React.FC<{
         }
         if (pinning && uv.u >= 0 && uv.v >= 0 && uv.u <= 1 && uv.v <= 1) {
             setPins((list) => [...list, { id: nextPin.current++, u: uv.u, v: uv.v }].slice(-MAX_PINS));
+            return;
+        }
+        // A click adds a point to a node with a list of them (within 12 pixels of a span, into it).
+        const current2d = onParams ? handlesFor(node, undefined) : null;
+        if (current2d?.add && node && onParams && placement) {
+            const near = (12 * placement.ratio) / (placement.zoom * Math.max(placement.imageWidth, 1));
+            const patch = current2d.add([uv.u, uv.v], near);
+            if (patch) onParams(node.id, patch, `add-point:${Date.now()}`);
         }
     };
 
@@ -468,6 +506,11 @@ export const TextureView2D: React.FC<{
     const toView = (point: Vec2) => (placement ? uvToView({ u: point[0], v: point[1] }, placement) : { x: 0, y: 0 });
     const onHandleDown = (event: React.PointerEvent, key: string) => {
         event.stopPropagation();
+        if (event.altKey && handles?.remove && node && onParams) {
+            const patch = handles.remove(key);
+            if (patch) onParams(node.id, patch, `remove-point:${Date.now()}`);
+            return;
+        }
         (event.currentTarget as Element).setPointerCapture(event.pointerId);
         handleDrag.current = key;
     };
@@ -524,6 +567,9 @@ export const TextureView2D: React.FC<{
                         {handles && handles.frame.outline.length > 0 && (
                             <polygon points={handles.frame.outline.map((point) => { const at = toView(point); return `${at.x},${at.y}`; }).join(' ')} fill="none" stroke="rgb(240 138 60 / 0.8)" strokeWidth={1} strokeDasharray="4 3" />
                         )}
+                        {handles?.frame.paths?.map((path, index) => (
+                            <polyline key={`path-${index}`} points={path.map((point) => { const at = toView(point); return `${at.x},${at.y}`; }).join(' ')} fill="none" stroke="rgb(240 138 60 / 0.85)" strokeWidth={1.25} strokeDasharray="5 3" />
+                        ))}
                         {handles?.frame.line && (() => { const a = toView(handles.frame.line[0]); const b = toView(handles.frame.line[1]); return <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke="rgb(240 138 60 / 0.8)" strokeWidth={1} strokeDasharray="4 3" />; })()}
                         {handles?.frame.points.map((point) => {
                             const at = toView(point.at);
@@ -534,7 +580,7 @@ export const TextureView2D: React.FC<{
                                     onPointerDown={off ? undefined : (event) => onHandleDown(event, point.key)}
                                     onPointerMove={off ? undefined : onHandleMove}
                                     onPointerUp={() => { handleDrag.current = null; }}>
-                                    <title>{off ? 'This setting follows a graph parameter' : HANDLE_WORDS[point.key] ?? 'Drag'}</title>
+                                    <title>{off ? 'This setting follows a graph parameter' : handleWords(point.key)}</title>
                                     {point.look === 'size'
                                         ? <rect x={at.x - 5} y={at.y - 5} width={10} height={10} fill={fill} stroke="#111214" strokeWidth={1.5} />
                                         : <circle cx={at.x} cy={at.y} r={point.look === 'move' ? 6 : 5} fill={fill} stroke={point.look === 'turn' ? 'rgb(240 138 60)' : '#111214'} strokeWidth={point.look === 'turn' ? 2 : 1.5} />}

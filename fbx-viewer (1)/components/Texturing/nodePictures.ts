@@ -48,6 +48,7 @@ const COLOURFUL_RAMP = { stops: [
 
 /** The sample a node changing images is shown with. */
 const sampleFor = (definition: TexNodeDef): string => {
+    if (definition.type === 'curveScatter' || definition.type === 'pointList') return 'shape';
     if (definition.category === 'Edges and distance' || definition.type.startsWith('flood')) return 'tiles';
     if (definition.category === 'Height and normals') return 'cells';
     return 'perlinNoise';

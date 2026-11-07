@@ -41,7 +41,7 @@ export interface TexPortDef {
     group?: string;
 }
 
-export type TexParamKind = 'float' | 'int' | 'bool' | 'color' | 'vec2' | 'select' | 'ramp' | 'curve' | 'texture' | 'string' | 'font' | 'code' | 'graph' | 'function' | 'settings';
+export type TexParamKind = 'float' | 'int' | 'bool' | 'color' | 'vec2' | 'select' | 'ramp' | 'curve' | 'texture' | 'string' | 'font' | 'code' | 'graph' | 'function' | 'settings' | 'points';
 
 export interface RampStop { position: number; color: [number, number, number, number] }
 export interface CurvePoint { x: number; y: number }

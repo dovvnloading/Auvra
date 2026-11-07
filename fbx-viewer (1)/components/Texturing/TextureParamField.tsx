@@ -202,6 +202,17 @@ export const ParamControl: React.FC<{
             return <CodeEditor label={param.label} code={String(value ?? '')} onChange={onChange} error={extras?.error} names={extras?.names} />;
         case 'string':
             return <DraftText label={param.label} value={String(value ?? '')} maxLength={2000} allowEmpty onCommit={onChange} className="w-full" />;
+        case 'points': {
+            const count = Array.isArray(value) ? value.length : 0;
+            return (
+                <div className="flex items-start gap-2 rounded border border-line bg-well px-1.5 py-1">
+                    <p className="min-w-0 flex-1 text-2xs leading-snug text-ink-2">
+                        {count} point{count === 1 ? '' : 's'}. In the 2D view: click to add one, drag one to move it, Alt-click one to take it away.
+                    </p>
+                    <button type="button" onClick={() => onChange(structuredClone(param.default))} className="shrink-0 text-2xs text-ink-3 hover:text-ink" title="Put the points back as they started">Start again</button>
+                </div>
+            );
+        }
         case 'font': {
             const current = String(value ?? param.default ?? '');
             const fonts = availableFonts();

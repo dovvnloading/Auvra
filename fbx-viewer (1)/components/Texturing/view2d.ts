@@ -3,8 +3,9 @@
  *
  * Where a point of the image (u right, v up, 0 to 1) falls in the view and back, the histogram of an
  * image and the share of its pixels in a range, and the on-screen handles: where each sits for a
- * node's settings, and the settings a dragged handle gives. Transform, Tile sampler, Linear gradient
- * and Shape nodes have handles.
+ * node's settings, and the settings a dragged handle gives. Transform, Tile sampler, Linear gradient,
+ * Shape and Clone nodes have handles, and every node with a list of points (the spline nodes) has one
+ * for each point, with points added by a click and taken away by an Alt-click.
  */
 
 export interface ViewPlacement {
@@ -108,6 +109,8 @@ export interface HandleFrame {
     points: Array<{ key: string; at: Vec2; look: 'move' | 'turn' | 'size' | 'end' }>;
     /** A line drawn between two points (a gradient's ends), or none. */
     line?: [Vec2, Vec2];
+    /** Curves drawn through their points (a spline node's), or none. */
+    paths?: Vec2[][];
 }
 
 // Transform: an output point samples the input at R(turn) * (uv - 0.5 - offset) / scale + 0.5.
@@ -237,4 +240,112 @@ export const dragTile = (settings: TileSettings, key: string, to: Vec2): Partial
     const local = turn(offset, -settings.rotation);
     const size = Math.max(Math.abs(local[0]) / Math.max(settings.stretch[0] * 0.5, 1e-4), Math.abs(local[1]) / Math.max(settings.stretch[1] * 0.5, 1e-4));
     return { size: Math.round(clamp(size, 0, 3) * 1000) / 1000 };
+};
+
+// Clone: a patch round `to` copied from `from`; size is its radius (or half side).
+export interface CloneSettings { from: Vec2; to: Vec2; size: number }
+
+export const cloneFrame = ({ from, to, size }: CloneSettings): HandleFrame => ({
+    outline: Array.from({ length: 24 }, (_, i): Vec2 => [to[0] + Math.cos((i / 24) * Math.PI * 2) * size, to[1] + Math.sin((i / 24) * Math.PI * 2) * size]),
+    line: [from, to],
+    points: [
+        { key: 'from', at: from, look: 'move' },
+        { key: 'to', at: to, look: 'move' },
+        { key: 'size', at: [to[0] + size * Math.SQRT1_2, to[1] + size * Math.SQRT1_2], look: 'size' },
+    ],
+});
+
+export const dragClone = (settings: CloneSettings, key: string, to: Vec2): Partial<CloneSettings> => {
+    const at: Vec2 = [Math.round(clamp(to[0], 0, 1) * 1000) / 1000, Math.round(clamp(to[1], 0, 1) * 1000) / 1000];
+    if (key === 'from') return { from: at };
+    if (key === 'to') return { to: at };
+    return { size: Math.round(clamp(Math.hypot(to[0] - settings.to[0], to[1] - settings.to[1]), 0.005, 0.5) * 1000) / 1000 };
+};
+
+// Point lists: each point a handle keyed `setting:index`.
+export interface PointList {
+    /** The setting holding the points. */
+    key: string;
+    points: Vec2[];
+    /** The curve drawn through them (none for loose points). */
+    path?: Vec2[];
+    closed: boolean;
+    /** The fewest points it may keep. */
+    least: number;
+}
+
+export const pointsFrame = (lists: readonly PointList[]): HandleFrame => ({
+    outline: [],
+    points: lists.flatMap((list) => list.points.map((at, index) => ({ key: `${list.key}:${index}`, at, look: 'move' as const }))),
+    paths: lists.filter((list) => list.path && list.path.length > 1).map((list) => list.path!),
+});
+
+const pointKey = (key: string): { list: string; index: number } | null => {
+    const at = key.lastIndexOf(':');
+    if (at < 0) return null;
+    const index = Number(key.slice(at + 1));
+    return Number.isInteger(index) ? { list: key.slice(0, at), index } : null;
+};
+
+const roundPoint = (point: Vec2): Vec2 => [Math.round(clamp(point[0], -0.5, 1.5) * 10000) / 10000, Math.round(clamp(point[1], -0.5, 1.5) * 10000) / 10000];
+
+/** The settings with one point dragged to `to`. */
+export const dragPoint = (lists: readonly PointList[], key: string, to: Vec2): Record<string, Vec2[]> | null => {
+    const found = pointKey(key);
+    const list = found && lists.find((candidate) => candidate.key === found.list);
+    if (!found || !list || found.index >= list.points.length) return null;
+    return { [list.key]: list.points.map((point, index) => (index === found.index ? roundPoint(to) : point)) };
+};
+
+/** How far `p` lies from the segment a to b. */
+const segmentDistance = (p: Vec2, a: Vec2, b: Vec2): number => {
+    const ex = b[0] - a[0];
+    const ey = b[1] - a[1];
+    const t = clamp(((p[0] - a[0]) * ex + (p[1] - a[1]) * ey) / Math.max(ex * ex + ey * ey, 1e-12), 0, 1);
+    return Math.hypot(p[0] - a[0] - ex * t, p[1] - a[1] - ey * t);
+};
+
+/**
+ * The settings with a point added at `at`: into the span of the nearest list it falls within `near`
+ * of, else at that list's nearer end (round a closed curve, always into its nearest span). Loose
+ * points are added to the end.
+ */
+export const addPoint = (lists: readonly PointList[], at: Vec2, near: number): Record<string, Vec2[]> | null => {
+    if (!lists.length) return null;
+    const point = roundPoint(at);
+    let best: { list: PointList; span: number; distance: number } | null = null;
+    for (const list of lists) {
+        const n = list.points.length;
+        if (!list.path) {
+            const distance = n ? Math.min(...list.points.map((p) => Math.hypot(p[0] - at[0], p[1] - at[1]))) : 0;
+            if (!best || distance < best.distance) best = { list, span: n - 1, distance };
+            continue;
+        }
+        const spans = list.closed ? n : n - 1;
+        for (let i = 0; i < spans; i++) {
+            const distance = segmentDistance(at, list.points[i], list.points[(i + 1) % n]);
+            if (!best || distance < best.distance) best = { list, span: i, distance };
+        }
+        if (n === 1 && (!best || Math.hypot(list.points[0][0] - at[0], list.points[0][1] - at[1]) < best.distance)) best = { list, span: 0, distance: Math.hypot(list.points[0][0] - at[0], list.points[0][1] - at[1]) };
+    }
+    if (!best) return null;
+    const { list } = best;
+    const next = list.points.map((p): Vec2 => [p[0], p[1]]);
+    if (!list.path) next.push(point);
+    else if (list.closed || best.distance <= near) next.splice(best.span + 1, 0, point);
+    else {
+        const first = list.points[0];
+        const last = list.points[list.points.length - 1];
+        if (first && Math.hypot(first[0] - at[0], first[1] - at[1]) < Math.hypot(last[0] - at[0], last[1] - at[1])) next.unshift(point);
+        else next.push(point);
+    }
+    return { [list.key]: next.slice(0, 256) };
+};
+
+/** The settings with one point taken away (never below the list's fewest). */
+export const removePoint = (lists: readonly PointList[], key: string): Record<string, Vec2[]> | null => {
+    const found = pointKey(key);
+    const list = found && lists.find((candidate) => candidate.key === found.list);
+    if (!found || !list || list.points.length <= list.least) return null;
+    return { [list.key]: list.points.filter((_, index) => index !== found.index) };
 };

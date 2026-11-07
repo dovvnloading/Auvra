@@ -17,12 +17,13 @@ import { FILTER_NODES } from './nodes/filters';
 import { GEOMETRY_NODES } from './nodes/geometry';
 import { WEATHERING_NODES } from './nodes/weathering';
 import { PHOTO_NODES } from './nodes/photo';
+import { SPLINE_NODES } from './nodes/splines';
 import { conditionHolds, conditionScope } from './parameters';
 import { OUTPUT_CHANNEL_LABELS, outputNodeKind, type NodeCategory, type OutputChannel, type PortKind, type TexGraphLink, type TexGraphNode, type TexNodeDef, type TexParamDef, type TexPortDef, type TextureGraph } from './types';
 
 /** Every node a texture graph can hold, by type; sub-graph nodes are made from the graph they use. */
 
-export const TEXTURE_NODE_DEFINITIONS: readonly TexNodeDef[] = [...IO_NODES, ...PROCESSOR_NODES, ITERATE_PLACEHOLDER, ...GENERATOR_NODES, ...NOISE_NODES, ...PATTERN_NODES, TEXT_NODE, ...SCATTER_NODES, ...ADJUST_NODES, ...COLOUR_NODES, ...TRANSFORM_NODES, ...FILTER_NODES, ...DISTANCE_NODES, ...GEOMETRY_NODES, ...WEATHERING_NODES, ...PHOTO_NODES, ...MATERIAL_NODES];
+export const TEXTURE_NODE_DEFINITIONS: readonly TexNodeDef[] = [...IO_NODES, ...PROCESSOR_NODES, ITERATE_PLACEHOLDER, ...GENERATOR_NODES, ...NOISE_NODES, ...PATTERN_NODES, TEXT_NODE, ...SCATTER_NODES, ...ADJUST_NODES, ...COLOUR_NODES, ...TRANSFORM_NODES, ...FILTER_NODES, ...DISTANCE_NODES, ...GEOMETRY_NODES, ...WEATHERING_NODES, ...PHOTO_NODES, ...SPLINE_NODES, ...MATERIAL_NODES];
 
 const BY_TYPE = new Map(TEXTURE_NODE_DEFINITIONS.map((definition) => [definition.type, definition]));
 
