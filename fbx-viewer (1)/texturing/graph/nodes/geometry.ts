@@ -437,12 +437,12 @@ void main() {
             const fields = await signedDistance(context, 'mask');
             const result = context.image('gray');
             if (!fields) { context.gpu.clear(result, [0, 0, 0, 1]); return { out: result }; }
-            await context.pass(result, `uniform sampler2D inside;\nuniform sampler2D outside;\nuniform sampler2D maskMap;\nuniform float uSize;
+            await context.pass(result, `uniform sampler2D inside;\nuniform sampler2D outside;\nuniform sampler2D maskMap;\nuniform float uReach;
 void main() {
     bool inMask = texture(maskMap, vUv).r >= 0.5;
     float d = p_side == 1 ? (inMask ? texture(inside, vUv).r : 1e6) : (inMask ? 1e6 : texture(outside, vUv).r);
-    outColor = vec4(clamp(pow(clamp(1.0 - d / uSize, 0.0, 1.0), p_falloff) * p_strength, 0.0, 1.0));
-}`, { inputs: { inside: fields.inside, outside: fields.outside, maskMap: fields.mask }, uniforms: { uSize: num(context.params, 'size', 0.05) * context.width } });
+    outColor = vec4(clamp(pow(clamp(1.0 - d / uReach, 0.0, 1.0), p_falloff) * p_strength, 0.0, 1.0));
+}`, { inputs: { inside: fields.inside, outside: fields.outside, maskMap: fields.mask }, uniforms: { uReach: num(context.params, 'size', 0.05) * context.width } });
             releaseAll(context.gpu, fields.inside, fields.outside, fields.mask);
             return { out: result };
         },
