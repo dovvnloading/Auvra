@@ -55,9 +55,11 @@ const falloff = (t0: number, kind: number): number => {
 
 /** The stone of an arc pavement at a place in cells (scales overlapping row on row, each split into rings of stones). */
 const ARC_GLSL = `vec3 arcStone(vec2 p, ivec2 period, int rings, float segments, float gap, float seed) {
-    // Scales sit a row apart, every other row shifted half a scale; a later row lies over the one before.
+    // Fans hang a row apart, every other row shifted half a fan; a later row lies over the one before.
+    // A fan reaches a row and a half down, so the two rows above a place can both cover it: the later
+    // one wins, and only arcs ever show (no fan's flat top is left uncovered).
     int row = int(floor(p.y));
-    for (int dj = 1; dj >= -1; dj--) {
+    for (int dj = 2; dj >= 0; dj--) {
         int j = row + dj;
         float shift = (((j % 2) + 2) % 2 == 1) ? 0.5 : 0.0;
         int i = int(floor(p.x - shift + 0.5));
@@ -83,7 +85,7 @@ const ARC_GLSL = `vec3 arcStone(vec2 p, ivec2 period, int rings, float segments,
 
 const arcStone = (px: number, py: number, periodX: number, periodY: number, rings: number, segments: number, gap: number, s: number): [number, number, number] => {
     const row = Math.floor(py);
-    for (let dj = 1; dj >= -1; dj--) {
+    for (let dj = 2; dj >= 0; dj--) {
         const j = row + dj;
         const shift = ((j % 2) + 2) % 2 === 1 ? 0.5 : 0;
         const i = Math.floor(px - shift + 0.5);
