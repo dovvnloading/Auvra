@@ -170,6 +170,19 @@ Each placed object can cook its own: in the level inspector's **Material values*
 
 **New** › **Living Materials Lab** is a level built to see it: rows of crates cooking their own wood from one texture graph, a seed each, a wetness each, and a row the level blueprint wets and dries.
 
+### Materials from scripts and the command line
+
+During play, a script sets one object's material values with `object.setMaterialValue(name, value)` (a material graph's parameter, or a texture graph's parameter or its `Graph seed`) and applies one of its texture graphs' presets with `object.applyMaterialPreset(name)`; a game that cooks its texture graphs cooks that object's pictures for them.
+
+Without the editor open (close the project there first), `python -m Auvra.project.material_commands PROJECT COMMAND` works on a project's materials:
+
+- `list`: each material, whether a texture graph makes it, its parameters with their values, and its presets (`--json` for JSON).
+- `set-value MATERIAL NAME VALUE`: sets a texture graph's parameter (VALUE is JSON: `0.4`, `[1, 0.5, 0]`), within its limits, and saves.
+- `apply-preset MATERIAL PRESET`: sets every value a preset holds, and saves.
+- `cook`, `ball`, `bake-mesh-maps`: drawn on a graphics card by the editor, so not headless yet; each says where to do it in the editor and exits with 3.
+
+MATERIAL is a material's id or name (any case). A command that cannot be done exits with 2 and says why.
+
 ### MaterialX
 
 The arrow button beside a material's name exports it as MaterialX: a .zip holding a .mtlx file and its pictures, as **Standard Surface** (read by most tools) or **OpenPBR**. Inputs left unwired are written as their values, inputs read straight from a picture as images (one channel taken out of a packed picture, normal maps through a normal map node); an input the graph works out some other way is written as its value, and the editor says which. **New** › **From a MaterialX file** reads a .mtlx file, picked together with its pictures, into a new shader graph of Texture Sample and Normal Map nodes on a Material Output.
@@ -220,7 +233,7 @@ A texture whose name ends _n, _nrm, _normal, _nor or _nor_gl (a size such as _4k
 
 A texture is compressed once: the result is kept in the project and in built games, so reopening the project or playing the game loads it as it is. The editor keeps its phone versions (ASTC and ETC2) as well, so a built game carries the format each device needs. Terrain layers compress the same way, by what they hold: colour, normals, and height with roughness. Textures named by material overrides and decals take the same path as material textures.
 
-Its preview shows the picture as imported and as kept, side by side, with the memory each takes. Compressed sides must be a multiple of 4 pixels. **Texture memory** (the chip button above the Materials list) shows what a level's textures take against the game's asset memory, its largest textures and what each material asset's textures take, with plain warnings where it is a lot.
+Its preview shows the picture as imported and as kept, side by side, with the memory each takes. Compressed sides must be a multiple of 4 pixels. Under a material's preview, a badge gives what its textures take on the graphics card as the game keeps them; its list says, texture by texture, where compression hurts (banding in smooth colour, normals softening at sharp edges, data stepping) with a fix: keep it uncompressed, or raise the size limit. **Texture memory** (the chip button above the Materials list) shows what a level's textures take against the game's asset memory, its largest textures and what each material asset's textures take, with plain warnings where it is a lot.
 
 ## Folders
 
