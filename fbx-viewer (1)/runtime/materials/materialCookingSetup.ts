@@ -2,6 +2,7 @@ import { frontendDiagnostics } from '../../diagnostics/runtime';
 import { createGraphCooker, deviceCanCook } from './graphCooker';
 import { MaterialCookPlanner, type CookCache, type CookMode, type CookedPictures } from './materialCooking';
 import { materialLibrary, type MaterialAsset } from './materialLibrary';
+import { setTextureSettings } from '../../texturing/textureSettings';
 
 /**
  * Switches cooked pictures on for the open project or built game, by its setting (materialCooking.ts): always, when
@@ -93,7 +94,7 @@ export const setUpMaterialCooking = (mode: CookMode): boolean => {
         materialLibrary,
         createGraphCooker({ material: (id) => materialLibrary.get(id), textureUrl: (id) => materialLibrary.textureUrl(id) }),
         indexedDbCookCache(),
-        { content: graphContent, onFailure: (error) => frontendDiagnostics.failure('material_cook_failed', error) },
+        { content: graphContent, setSettings: setTextureSettings, onFailure: (error) => frontendDiagnostics.failure('material_cook_failed', error) },
     );
     materialLibrary.setPictureSource(planner);
     return true;
