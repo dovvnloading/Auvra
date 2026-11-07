@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { formulaScope, readTextureGraph, resolveNodeParams } from '../../texturing/graph/document';
+import { createTextureGraph, formulaScope, readTextureGraph, resolveNodeParams } from '../../texturing/graph/document';
 import { textureNodeDefinition } from '../../texturing/graph/registry';
-import { PHOTO_PARAMETERS, photoMaterialGraph, photoMaterialName } from '../../texturing/paint/photoMaterial';
+import { captureMaterialGraph } from '../../texturing/paint/captureMaterial';
+import { PHOTO_PARAMETERS, baseColourSource, isPhotoGraph, photoMaterialGraph, photoMaterialName, withAiMaps } from '../../texturing/paint/photoMaterial';
 
 describe('photo to material', () => {
     it('builds a graph of ordinary nodes, every wire to a pin that is there', () => {
@@ -53,6 +54,42 @@ describe('photo to material', () => {
         expect(settings('normalFromHeight').intensity).toBeCloseTo(3);
         expect(graph.nodes.filter((node) => node.type === 'levels').map((node) => resolveNodeParams(textureNodeDefinition(node, () => undefined)!, node, values, scope)).map((resolved) => [resolved.outLow, resolved.outHigh])).toEqual([[1, 0], [0.2, 0.9]]);
         expect(settings('colorToMask')).toMatchObject({ color: [1, 0.8, 0.2, 1], range: 0.25 });
+    });
+
+    it('takes AI maps in beside its own, mixed by a parameter, and replaces them when given again', () => {
+        const graph = photoMaterialGraph('photo', 10);
+        expect(isPhotoGraph(graph)).toBe(true);
+        expect(isPhotoGraph(captureMaterialGraph({ colour: 'c', normal: 'n', height: 'h' }))).toBe(true);
+        expect(isPhotoGraph(createTextureGraph())).toBe(false);
+        // What is sent: the tiled colour with its lighting taken out.
+        expect(baseColourSource(graph)?.name).toBe('Colour evened out');
+        const refined = withAiMaps(graph, [{ role: 'normal', texture: 'ai-n' }, { role: 'roughness', texture: 'ai-r' }, { role: 'metalness', texture: 'ai-m' }]);
+        expect(refined.parameters.find((parameter) => parameter.name === 'aiMix')?.default).toBe(0.5);
+        expect(refined.groups?.map((group) => group.name)).toContain('AI maps');
+        const intoOutput = (channel: string) => {
+            const output = refined.nodes.find((node) => node.type === 'output' && node.params.channel === channel)!;
+            return refined.nodes.find((node) => node.id === refined.links.find((link) => link.to === output.id)!.from)!;
+        };
+        expect(intoOutput('roughness').name).toBe("Roughness with the AI's");
+        expect(intoOutput('metallic').name).toBe("Metallic with the AI's");
+        expect(intoOutput('normal').type).toBe('normalAdjust');
+        // The graph's own roughness is still there, under the mix.
+        const mix = intoOutput('roughness');
+        const under = refined.links.find((link) => link.to === mix.id && link.toInput === 'background')!;
+        expect(refined.nodes.find((node) => node.id === under.from)!.name).toBe('Roughness range');
+        expect(mix.params.opacity).toEqual({ $bind: 'aiMix' });
+        for (const link of refined.links) {
+            const from = textureNodeDefinition(refined.nodes.find((node) => node.id === link.from)!, () => undefined)!;
+            const to = textureNodeDefinition(refined.nodes.find((node) => node.id === link.to)!, () => undefined)!;
+            expect(from.outputs.map((port) => port.key)).toContain(link.fromOutput);
+            expect(to.inputs.map((port) => port.key)).toContain(link.toInput);
+        }
+        expect(readTextureGraph(JSON.parse(JSON.stringify(refined))).problems).toEqual([]);
+        // Given again: the same nodes, new pictures. The graph it came from is untouched.
+        const again = withAiMaps(refined, [{ role: 'normal', texture: 'ai-n2' }]);
+        expect(again.nodes.length).toBe(refined.nodes.length);
+        expect(again.nodes.find((node) => node.name === 'AI normal')!.params.texture).toBe('ai-n2');
+        expect(graph.nodes.some((node) => node.name?.startsWith('AI '))).toBe(false);
     });
 
     it('names the material after the photo', () => {

@@ -42,6 +42,7 @@ import { TextureView2D } from './TextureView2D';
 import type { Histogram } from './view2d';
 import { TextureView3D } from './TextureView3D';
 import { useTextureStore } from './useTextureStore';
+import { RefineWithAi } from './Paint/RefineWithAi';
 import type { GpuImage } from '../../texturing/gpu/textureGpu';
 
 /**
@@ -1005,6 +1006,7 @@ const Workspace: React.FC<{
                     </div>
                 );
             })()}
+            <RefineWithAi session={session} graph={graph} name={asset.name} onGraph={(next) => update(next, true)} />
             <div className="space-y-2 border-t border-line pt-2">
                 <div className="flex items-center gap-1.5">
                     <span className="flex-1 text-2xs font-semibold text-ink-2">Parameters</span>
