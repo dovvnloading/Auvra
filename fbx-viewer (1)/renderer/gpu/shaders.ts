@@ -112,6 +112,8 @@ struct SurfaceOut {
   catchesShadow: bool,
   // See-through as it is, what it mirrors stays at full strength.
   keepsReflections: bool,
+  // How much of the direct light its own relief lets through: a height field's shadow (a material graph's Self-shadow).
+  selfShadow: f32,
 }
 
 fn surfaceDefaults(in: SurfaceIn) -> SurfaceOut {
@@ -129,6 +131,7 @@ fn surfaceDefaults(in: SurfaceIn) -> SurfaceOut {
   out.unlit = false;
   out.catchesShadow = false;
   out.keepsReflections = false;
+  out.selfShadow = 1.0;
   return out;
 }
 
@@ -294,7 +297,8 @@ fn encodeOctahedral(n: vec3f) -> vec2f {
   out.albedo = vec4f(s.albedo, s.occlusion);
   out.normalRoughnessMetal = vec4f(encodeOctahedral(s.normal), s.roughness, s.metalness);
   // Alpha: 0 lit, 1 unlit. A surface with baked light carries it here, on top of what it gives off, and says so with 0.5.
-  // A quarter more says it takes no shadows.
+  // A quarter more says it takes no shadows. Its self-shadow moves it up to a tenth from its quarter, away from where
+  // those are told apart, so every reader of them reads them as before (lightingWgsl.ts surfaceSelfShadow).
   var emitted = s.emissive;
   var model = 0.0;
   if (s.unlit) {
@@ -306,6 +310,8 @@ fn encodeOctahedral(n: vec3f) -> vec2f {
       model = 0.5;
     }
     if ((in.flags & INSTANCE_RECEIVES_SHADOW) == 0u) { model += 0.25; }
+    let shaded = (1.0 - clamp(s.selfShadow, 0.0, 1.0)) * 0.1;
+    model += select(shaded, -shaded, model > 0.625);
   }
   out.emissive = vec4f(emitted, model);
   let now = in.motionNow.xy / in.motionNow.w;

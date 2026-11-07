@@ -181,6 +181,7 @@ fn shade(s: SurfaceOut, input: SurfaceIn, in: SurfaceVarying) -> vec3f {
     light.occlusion = s.occlusion;
     light.hasBakedLight = s.hasBakedLight;
     light.receivesShadow = RECEIVES_SHADOW;
+    light.selfShadow = s.selfShadow;
     color = lightSurface(light) + s.emissive;
     if (s.hasBakedLight) { color += s.bakedLight * s.albedo * (1.0 - s.metalness) / 3.14159265; }
     // Blending takes the colour down by the opacity, and what a pane of glass mirrors is not dimmed by being clear.
@@ -327,6 +328,8 @@ struct LightingInput {
   pixel: vec2f,
   hasBakedLight: bool,
   receivesShadow: bool,
+  // Only direct light is dimmed by it, and the ambient light is all this lights with.
+  selfShadow: f32,
 }
 
 fn lightingInput(worldPosition: vec3f, normal: vec3f, viewDirection: vec3f, albedo: vec3f, roughness: f32, metalness: f32, pixel: vec2f) -> LightingInput {
@@ -341,6 +344,7 @@ fn lightingInput(worldPosition: vec3f, normal: vec3f, viewDirection: vec3f, albe
   input.pixel = pixel;
   input.hasBakedLight = false;
   input.receivesShadow = true;
+  input.selfShadow = 1.0;
   return input;
 }
 

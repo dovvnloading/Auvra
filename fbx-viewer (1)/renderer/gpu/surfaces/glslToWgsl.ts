@@ -800,6 +800,11 @@ export class GlslTranslator {
       const parts = args.map((arg, index) => {
         if (known.outs?.includes(index)) return `&${arg.code}`;
         const type = known.params?.[index];
+        // A texture handed to a function is the texture and the sampler it is read with, as WGSL keeps them apart.
+        if (type === "sampler2D") {
+          if (!arg.texture) this.fail(`${name}() needs a texture`);
+          return `${arg.texture.texture}, ${arg.texture.sampler}`;
+        }
         return type ? this.fit(arg, type) : arg.code;
       });
       if (known.params && known.params.length !== args.length) this.fail(`${name}() takes ${known.params.length} values`);

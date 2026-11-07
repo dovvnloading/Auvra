@@ -237,6 +237,13 @@ struct LightingInput {
   receivesShadow: bool,
   // The sun's shadow when something else has worked it out, 1 lit and 0 in shadow; negative to look it up here.
   sunShade: f32,
+  // How much of the direct light the surface's own relief lets through (SurfaceOut.selfShadow); the sky still reaches it.
+  selfShadow: f32,
+}
+
+// The self-shadow a surface carries in its lighting model (shaders.ts SURFACE_BUFFER_WGSL): how far it sits from its quarter.
+fn surfaceSelfShadow(model: f32) -> f32 {
+  return 1.0 - clamp(abs(model - round(model * 4.0) * 0.25) * 10.0, 0.0, 1.0);
 }
 
 fn lightingInput(worldPosition: vec3f, normal: vec3f, viewDirection: vec3f, albedo: vec3f, roughness: f32, metalness: f32, pixel: vec2f) -> LightingInput {
@@ -254,6 +261,7 @@ fn lightingInput(worldPosition: vec3f, normal: vec3f, viewDirection: vec3f, albe
   input.hasBakedLight = false;
   input.receivesShadow = true;
   input.sunShade = -1.0;
+  input.selfShadow = 1.0;
   return input;
 }
 
@@ -551,7 +559,7 @@ fn lightSurface(s: LightingInput) -> vec3f {
     let toLight = lighting.suns[index].direction;
     let dotNL = saturate(dot(s.normal, toLight));
     if (dotNL <= 0.0) { continue; }
-    var color = lighting.suns[index].color;
+    var color = lighting.suns[index].color * s.selfShadow;
     if (s.receivesShadow && i32(index) == lighting.cascadeSun) {
       if (s.sunShade >= 0.0) {
         color *= s.sunShade;
@@ -583,7 +591,7 @@ fn lightSurface(s: LightingInput) -> vec3f {
         strength *= t * t * (3.0 - 2.0 * t);
       }
       if (strength <= 0.0) { continue; }
-      var color = light.color * strength;
+      var color = light.color * strength * s.selfShadow;
       if (s.receivesShadow && light.shadowEntry >= 0) {
         color *= lightingLocalShadow(s, light, toLight, gap, dotNL, start);
       }

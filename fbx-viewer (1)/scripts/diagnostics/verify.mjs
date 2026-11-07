@@ -96,6 +96,7 @@ const EXEMPT = new Map(Object.entries({
   'renderer/gpu/surfaces/materialWgsl.ts': 'hot-loop',
   'renderer/gpu/surfaces/terrain.ts': 'hot-loop',
   'renderer/gpu/surfaces/water.ts': 'hot-loop',
+  'renderer/gpu/surfaces/physicalLayers.ts': 'hot-loop',
   'renderer/gpu/surfaces/weather.ts': 'hot-loop',
   'renderer/gpu/surfaces/wind.ts': 'hot-loop',
   'renderer/gpu/surfaces/world.ts': 'hot-loop',

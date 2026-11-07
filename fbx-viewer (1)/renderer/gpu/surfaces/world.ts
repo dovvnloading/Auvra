@@ -10,13 +10,13 @@ import type { TexturePool } from "../texturePool";
 /**
  * WHAT EVERY SURFACE READS ALIKE
  *
- * The weather, the wind and the level's baked light are one set of numbers for the whole frame, so a change in them
+ * The weather, the wind, the first sun and the level's baked light are one set of numbers for the whole frame, so a change in them
  * costs one write and nothing per material. They sit behind three bindings at the end of each kind's bind group: the
  * frame's numbers, the baked probes, and the grid of what covers each place from the sky. All three keep their GPU
  * object for good, so what they hold can change every frame without any material's bind group being made again.
  */
 
-const FLOATS = 24;
+const FLOATS = 28;
 const VISIBLE_TO_BOTH = 3;
 const VISIBLE_TO_PIXELS = 2;
 /** Baked light is read this far along the surface normal, and fades out this far past the outer probes, in spacings. */
@@ -45,6 +45,8 @@ struct SurfaceWorld {
   probeExtent: vec4f,
   // Probes along each axis; how far along the normal to read them in w.
   probeCounts: vec4f,
+  // Toward the first sun, as three counts them (the first that casts shadows); nothing when there is none.
+  sun: vec4f,
 }
 @group(2) @binding(${first}) var<uniform> surfaceWorld: SurfaceWorld;
 @group(2) @binding(${first + 1}) var<storage, read> surfaceProbes: array<vec4f>;
@@ -74,6 +76,27 @@ fn instanceLocalPoint(instance: Instance, p: vec3f) -> vec3f {
   return instanceLocalDirection(instance, p - vec3f(instance.world0.w, instance.world1.w, instance.world2.w));
 }
 `;
+
+/**
+ * Toward the sun three would give a material graph as its first (shadow-casting lights come first), from where the
+ * light stands to where it aims, as the lighting reckons it; nothing where there is no sun.
+ */
+const writeFirstSun = (data: Float32Array, at: number, suns: readonly THREE.DirectionalLight[]): void => {
+  const sun = suns.find((light) => light.castShadow) ?? suns[0];
+  data.fill(0, at, at + 4);
+  if (!sun) return;
+  const placed = sun.matrixWorld.elements;
+  const aim = sun.target.matrixWorld.elements;
+  const dx = placed[12] - aim[12];
+  const dy = placed[13] - aim[13];
+  const dz = placed[14] - aim[14];
+  const size = Math.hypot(dx, dy, dz);
+  if (!size) return;
+  data[at] = dx / size;
+  data[at + 1] = dy / size;
+  data[at + 2] = dz / size;
+  data[at + 3] = 1;
+};
 
 class SurfaceWorldResources {
   private readonly numbers: GPUBuffer;
@@ -105,7 +128,7 @@ class SurfaceWorldResources {
     ];
   }
 
-  update(scene: THREE.Object3D): void {
+  update(scene: THREE.Object3D, suns: readonly THREE.DirectionalLight[]): void {
     const { data, device } = this;
     const weather = WEATHER_UNIFORMS;
     data[0] = weather.uWeatherWetness.value;
@@ -118,6 +141,7 @@ class SurfaceWorldResources {
     data[9] = windUniforms.uWindDirection.value[0];
     data[10] = windUniforms.uWindDirection.value[1];
     data[11] = windUniforms.uWindStrength.value;
+    writeFirstSun(data, 24, suns);
 
     const volume = lightVolumeFor(scene);
     if (volume) {
@@ -191,6 +215,6 @@ export const createSurfaceWorldPass = (): GpuPass => ({
   order: -1000,
   execute(frame: GpuFrame) {
     scene = frame.scene;
-    worldOf(frame.textures).update(frame.scene);
+    worldOf(frame.textures).update(frame.scene, frame.gpuScene.directional);
   },
 });

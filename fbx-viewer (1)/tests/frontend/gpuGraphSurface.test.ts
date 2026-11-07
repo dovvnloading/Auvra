@@ -123,6 +123,71 @@ describe("a material graph in WGSL", () => {
     }
   });
 
+  it("marches a Parallax node's height map, and shades toward the first sun without three's lights", () => {
+    const bricks = (selfShadow: boolean) => normalizeMaterialGraph({
+      nodes: [node("out", OUTPUT_NODE_TYPE), node("height", "parallax", { texture: "bumps", selfShadow }), node("colour", "texture", { texture: "bricks" })],
+      links: [link("height", "uv", "colour", "uv"), link("colour", "rgb", "out", "baseColor"), link("height", "shadow", "out", "selfShadow")],
+    });
+    const { wgsl, textures } = compileGraphWgsl(bricks(true));
+    expect(textures.find((texture) => texture.name === "mg_height_texture")?.slot).toBe("data");
+    expect(wgsl).toContain("fn mgParallaxUv(heightMap: texture_2d<f32>, heightSampler: sampler,");
+    expect(wgsl).toContain("fn mgParallaxShadow(heightMap: texture_2d<f32>, heightSampler: sampler,");
+    const body = surfaceBody(wgsl);
+    // A texture handed to a helper is its texture and its sampler.
+    expect(body).toMatch(/mgParallaxUv\(mg_height_texture, mg_height_texture_sampler, /);
+    expect(body).toMatch(/mgParallaxShadow\(mg_height_texture, mg_height_texture_sampler, [^;]*mgSunDirection\(\)/);
+    expect(wgsl).not.toMatch(/directionalLights|NUM_DIR_LIGHTS|#if|#endif/);
+    expect(wgsl).toContain("fn mgSunDirection() -> vec3f { return surfaceWorld.sun.xyz; }");
+    // The shadow shades the direct light only: the surface buffer carries it to the lighting.
+    expect(body).toMatch(/out\.selfShadow = clamp\(mg_height_out_shadow_\d+, 0\.0, 1\.0\);/);
+    expect(surfaceBody(compileGraphWgsl(bricks(false)).wgsl)).not.toContain("mgParallaxShadow");
+    expect(surfaceBody(compileGraphWgsl(tinted()).wgsl)).not.toContain("out.selfShadow");
+  });
+
+  it("takes a Triplanar Normal Map's normal in world space, and reads it at the largest level on vertices", () => {
+    const rock = (normalSpace: string, into = "normal") => normalizeMaterialGraph({
+      nodes: [node("out", OUTPUT_NODE_TYPE, { normalSpace }), node("bumps", "triplanarNormal", { texture: "rock" })],
+      links: [link("bumps", "out", "out", into)],
+    });
+    const world = compileGraphWgsl(rock("world"));
+    expect(world.textures).toEqual([{ name: "mg_bumps_texture", slot: "normal" }]);
+    const worldBody = surfaceBody(world.wgsl);
+    const local = /var (mg_bumps_out_out_\d+): vec3f = mgTriplanarNormal\(mg_bumps_texture, mg_bumps_texture_sampler, /.exec(worldBody)?.[1];
+    expect(local).toBeDefined();
+    expect(worldBody).toContain(`out.normal = normalize(${local});`);
+    expect(worldBody).not.toContain("mappedNormal(");
+    const tangent = compileGraphWgsl(rock("tangent"));
+    expect(surfaceBody(tangent.wgsl)).toContain("mappedNormal(");
+    expect(tangent.key).not.toBe(world.key);
+
+    const offset = compileGraphWgsl(rock("world", "worldPositionOffset"));
+    expect(offset.wgsl).toContain("fn mgTriplanarNormalVertex(");
+    expect(offset.wgsl).toMatch(/textureSampleLevel\(map, mapSampler, [^;]*, 0\.0\)/);
+    const displace = offset.wgsl.slice(offset.wgsl.indexOf("fn displace("), offset.wgsl.indexOf("fn surface(in: SurfaceIn)"));
+    expect(displace).toContain("mgTriplanarNormalVertex(mg_bumps_texture, mg_bumps_texture_sampler, ");
+    expect(displace).not.toMatch(/mgTriplanarNormal\(/);
+  });
+
+  it("builds only the side a Switch picks", () => {
+    const picked = (on: boolean) => normalizeMaterialGraph({
+      nodes: [node("out", OUTPUT_NODE_TYPE), node("pick", "switch", { on }), node("noise", "noise"), node("red", "color", { value: [1, 0, 0] })],
+      links: [link("noise", "out", "pick", "whenOn"), link("red", "out", "pick", "whenOff"), link("pick", "out", "out", "baseColor")],
+    });
+    expect(compileGraphWgsl(picked(true)).wgsl).toContain("mgLegacyNoise(");
+    expect(compileGraphWgsl(picked(false)).wgsl).not.toContain("mgLegacyNoise(");
+  });
+
+  it("calls a Custom GLSL node's own function", () => {
+    const custom = normalizeMaterialGraph({
+      nodes: [node("out", OUTPUT_NODE_TYPE), node("code", "customGlsl")],
+      links: [link("code", "out", "out", "baseColor")],
+    });
+    const { wgsl } = compileGraphWgsl(custom);
+    const name = /fn (mg_code_\w+)\(/.exec(wgsl)?.[1];
+    expect(name).toBeDefined();
+    expect(surfaceBody(wgsl)).toContain(`${name}(`);
+  });
+
   it("passes a bypassed node's main input straight through", () => {
     const plain = compileGraphWgsl(tinted());
     const bypassed = compileGraphWgsl(tinted({}, { bypass: true }));

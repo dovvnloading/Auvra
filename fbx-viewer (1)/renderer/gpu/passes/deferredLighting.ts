@@ -105,6 +105,7 @@ fn lightPixels(@builtin(global_invocation_id) id: vec3u) {
   input.occlusion = albedo.a * loadScreenInput(screenOcclusion, uv).r;
   input.hasBakedLight = emissive.a > 0.375;
   input.receivesShadow = fract(emissive.a * 2.0) < 0.25;
+  input.selfShadow = surfaceSelfShadow(emissive.a);
   if (deferred.hasIndirect != 0u && !input.hasBakedLight) {
     input.indirectIrradiance = loadScreenInput(screenIndirect, uv).rgb;
     input.hasIndirect = true;

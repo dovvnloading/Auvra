@@ -49,6 +49,27 @@ interface WgslHelper {
 
 const RAMP_TYPE = `vec4[${MAX_RAMP_STOPS}]`;
 
+/** A Triplanar Normal Map's projections, `read` reading the map at a UV; `green` is -1 to flip a DirectX map's green. */
+const triplanarNormalWgsl = (name: string, read: (uv: string) => string): string => `
+@diagnostic(off, derivative_uniformity)
+fn ${name}(map: texture_2d<f32>, mapSampler: sampler, position: vec3f, normal: vec3f, sharpness: f32, strength: f32, green: f32) -> vec3f {
+  let n = normalize(normal);
+  var weights = pow(abs(n), vec3f(sharpness));
+  weights /= max(weights.x + weights.y + weights.z, 1e-5);
+  let facing = select(vec3f(1.0), vec3f(-1.0), n < vec3f(0.0));
+  var x = ${read("vec2f(-facing.x * position.z, position.y)")}.xyz * 2.0 - 1.0;
+  var y = ${read("vec2f(-facing.y * position.x, position.z)")}.xyz * 2.0 - 1.0;
+  var z = ${read("vec2f(facing.z * position.x, position.y)")}.xyz * 2.0 - 1.0;
+  // The map's own x turns with each projection's u, and each projection's normal is laid onto the surface's (whiteout).
+  x = vec3f(x.x * strength * -facing.x, x.y * green * strength, x.z);
+  y = vec3f(y.x * strength * -facing.y, y.y * green * strength, y.z);
+  z = vec3f(z.x * strength * facing.z, z.y * green * strength, z.z);
+  x = vec3f(x.xy + n.zy, abs(x.z) * n.x);
+  y = vec3f(y.xy + n.xz, abs(y.z) * n.y);
+  z = vec3f(z.xy + n.xy, abs(z.z) * n.z);
+  return normalize(x.zyx * weights.x + y.xzy * weights.y + z.xyz * weights.z);
+}`;
+
 const HELPERS: Readonly<Record<string, WgslHelper>> = {
   // --- Hashing: pcg3d (Jarzynski and Olano, "Hash Functions for GPU Rendering", 2020) ---
   mgPcg3: {
@@ -306,7 +327,81 @@ fn mgTangentFrame(position: vec3f, normal: vec3f, uv: vec2f) -> mat3x3f {
   return mat3x3f(t * scale, b * scale, normal);
 }`,
   },
+
+  // --- Parallax occlusion mapping: steep parallax refined between its last two steps, and the height field's shadow
+  // toward the light, both marched in the surface's own (tangent) space. A texture is its texture and its sampler. ---
+  mgParallaxUv: {
+    returns: "vec2",
+    params: ["sampler2D", "vec2", "vec3", "float", "float"],
+    source: `
+@diagnostic(off, derivative_uniformity)
+fn mgParallaxUv(heightMap: texture_2d<f32>, heightSampler: sampler, uv: vec2f, toEye: vec3f, depth: f32, layers: f32) -> vec2f {
+  let dx = dpdx(uv);
+  let dy = dpdy(uv);
+  // Fewer steps head-on, where the view crosses few heights.
+  let steps = max(mix(layers, layers * 0.5, abs(toEye.z)), 1.0);
+  let stepDepth = 1.0 / steps;
+  let shift = toEye.xy / max(toEye.z, 0.08) * depth / steps;
+  var at = uv;
+  var ground = 1.0 - textureSampleGrad(heightMap, heightSampler, at, dx, dy).r;
+  var reached = 0.0;
+  for (var i = 0; i < 64; i++) {
+    if (reached >= ground || f32(i) >= steps) { break; }
+    at -= shift;
+    ground = 1.0 - textureSampleGrad(heightMap, heightSampler, at, dx, dy).r;
+    reached += stepDepth;
+  }
+  let before = at + shift;
+  let below = ground - reached;
+  let above = (1.0 - textureSampleGrad(heightMap, heightSampler, before, dx, dy).r) - reached + stepDepth;
+  let weight = clamp(below / min(below - above, -1e-5), 0.0, 1.0);
+  return mix(at, before, weight);
+}`,
+  },
+  mgParallaxShadow: {
+    returns: "float",
+    params: ["sampler2D", "vec2", "vec3", "float", "float"],
+    source: `
+@diagnostic(off, derivative_uniformity)
+fn mgParallaxShadow(heightMap: texture_2d<f32>, heightSampler: sampler, uv: vec2f, light: vec3f, depth: f32, layers: f32) -> f32 {
+  // A light below the surface leaves it unlit anyway; so does no sun, whose direction is nothing.
+  if (light.z <= 0.0) { return 1.0; }
+  let dx = dpdx(uv);
+  let dy = dpdy(uv);
+  let height = textureSampleGrad(heightMap, heightSampler, uv, dx, dy).r;
+  let steps = max(layers, 1.0);
+  let rise = (1.0 - height) / steps;
+  let shift = light.xy / max(light.z, 0.08) * depth * (1.0 - height) / steps;
+  var level = height + rise;
+  var at = uv + shift;
+  var blocked = 0.0;
+  for (var i = 0; i < 64; i++) {
+    if (f32(i) >= steps || level >= 1.0) { break; }
+    // What rises above the ray toward the light shades the point: softer the further away it is.
+    blocked = max(blocked, (textureSampleGrad(heightMap, heightSampler, at, dx, dy).r - level) * (1.0 - f32(i) / steps));
+    level += rise;
+    at += shift;
+  }
+  return 1.0 - clamp(blocked * 8.0, 0.0, 1.0);
+}`,
+  },
+
+  // --- A normal map projected from the three axes (runtime/materials/triplanarNormal.ts), as a world-space normal ---
+  mgTriplanarNormal: {
+    returns: "vec3",
+    params: ["sampler2D", "vec3", "vec3", "float", "float", "float"],
+    source: triplanarNormalWgsl("mgTriplanarNormal", (uv) => `textureSample(map, mapSampler, ${uv})`),
+  },
+  // The same where vertices read it: they have no neighbours to choose a mip level from, so the largest is read.
+  mgTriplanarNormalVertex: {
+    returns: "vec3",
+    params: ["sampler2D", "vec3", "vec3", "float", "float", "float"],
+    source: triplanarNormalWgsl("mgTriplanarNormalVertex", (uv) => `textureSampleLevel(map, mapSampler, ${uv}, 0.0)`),
+  },
 };
+
+/** Helpers that read textures with a mip level chosen by the pixels around, and the one vertices call in their place. */
+const VERTEX_HELPERS: Readonly<Record<string, string>> = { mgTriplanarNormal: "mgTriplanarNormalVertex" };
 
 /** The helpers' WGSL, dependencies first, for the names asked for; names that are not helpers are left out. */
 const helperSource = (names: Iterable<string>): string => {
@@ -436,6 +531,7 @@ const fragmentContext = (specs: readonly MaterialUniformSpec[], functions: Recor
     mgWorldNormal: { returns: "vec3" },
     mgViewNormal: { code: "mgWorldNormal", returns: "vec3" },
     mgVertexColor: { returns: "vec3" },
+    mgSunDirection: { returns: "vec3" },
   },
   called,
 });
@@ -454,8 +550,12 @@ const vertexContext = (specs: readonly MaterialUniformSpec[], functions: Record<
     MG_OBJECT_NORMAL: { code: "mgObjectNormal", type: "vec3" },
   },
   textures: graphTextureNames(specs),
-  functions: { ...functions, mgVertexColorAttribute: { returns: "vec3" } },
-  called,
+  functions: {
+    ...functions,
+    ...Object.fromEntries(Object.entries(VERTEX_HELPERS).map(([name, vertexName]) => [name, { ...functions[name], code: vertexName }])),
+    mgVertexColorAttribute: { returns: "vec3" },
+  },
+  called: (name) => called(VERTEX_HELPERS[name] ?? name),
 });
 
 const graphUniformVariables = (specs: readonly MaterialUniformSpec[]): Record<string, { code: string; type: string }> => {
@@ -475,17 +575,59 @@ const graphTextureNames = (specs: readonly MaterialUniformSpec[]): Record<string
   return textures;
 };
 
-/** A Custom GLSL node's function, or one giving nothing when its code cannot be used: the rest of the graph still draws. */
+/** GLSL without its comments: the compiler marks each node's code with them (runtime/materials/shaderErrors.ts). */
+const withoutComments = (source: string): string => source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+
+/** A global function's return type and name. */
+const functionHeader = (source: string): RegExpExecArray | null => /^\s*(\w+)\s+(\w+)\s*\(/.exec(withoutComments(source));
+
+/**
+ * A Custom GLSL node's function, or one giving nothing when its code cannot be used: the rest of the graph still draws.
+ * Either way it becomes one of `functions`, for the code translated after it to call.
+ */
 const translateGlobal = (source: string, functions: Record<string, GlslFunction>, context: GlslContext): string => {
+  const header = functionHeader(source);
   try {
-    return new GlslTranslator(context).fn(source);
+    const translated = new GlslTranslator(context).fn(source);
+    // The translator makes the function known to the context it was given, a copy for this stage.
+    if (header && context.functions[header[2]]) functions[header[2]] = context.functions[header[2]];
+    return translated;
   } catch (error) {
-    const header = /^\s*(\w+)\s+(\w+)\s*\(([^)]*)\)/.exec(source);
     if (!header || !(error instanceof GlslError)) throw error;
     reportGpu(`[gpu] A Custom GLSL node's code cannot be used: ${error.message}`);
     functions[header[2]] = { returns: header[1], params: ["vec4", "vec4", "vec4", "vec4"] };
     return `fn ${header[2]}(a: vec4f, b: vec4f, c: vec4f, d: vec4f) -> ${wgslType(header[1])} { return ${wgslType(header[1])}(); }`;
   }
+};
+
+const FIRST_SUN_NORMALIZED = /normalize\(\s*inverseTransformDirection\(\s*directionalLights\[0\]\.direction\s*,\s*viewMatrix\s*\)\s*\)/g;
+const FIRST_SUN = /inverseTransformDirection\(\s*directionalLights\[0\]\.direction\s*,\s*viewMatrix\s*\)/g;
+
+/**
+ * What nodes' GLSL reads of three's own lights, in this path's terms. Parallax shades toward the first sun, which three
+ * gives in view space, behind a check that there is one: here mgSunDirection() is that direction in the world, and
+ * nothing where there is no sun, which the code reading it takes as no light, so the check goes. Any other
+ * preprocessor line is left for the translator to refuse.
+ */
+const withThreesLightsTranslated = (statements: readonly string[]): string[] => {
+  const kept: string[] = [];
+  const dropped: boolean[] = [];
+  for (const line of statements.flatMap((statement) => statement.split("\n"))) {
+    const directive = /^\s*#\s*(\w+)\s*(.*?)\s*$/.exec(line);
+    if (!directive) {
+      kept.push(line.replace(FIRST_SUN_NORMALIZED, "mgSunDirection()").replace(FIRST_SUN, "mgSunDirection()"));
+      continue;
+    }
+    const [, word, rest] = directive;
+    if (word === "if" && /^NUM_DIR_LIGHTS\s*>\s*0$/.test(rest)) {
+      dropped.push(true);
+      continue;
+    }
+    if (word.startsWith("if")) dropped.push(false);
+    else if (word === "endif" && dropped.pop()) continue;
+    kept.push(line);
+  }
+  return kept;
 };
 
 /**
@@ -500,7 +642,7 @@ export const compileGraphWgsl = (graph: MaterialGraph, options: CompileGraphWgsl
   const outputs = [...STAGE_OUTPUTS.fragment, ...layers.flatMap((feature) => LAYER_OUTPUTS[feature] ?? [])];
   const fragment = compileMaterialGraph(graph, { stage: "fragment", outputs });
   const vertex: CompiledMaterialGraph | null = fragment.connected.has("worldPositionOffset") ? compileMaterialGraph(graph, { stage: "vertex" }) : null;
-  const key = [fragment.key, vertex?.key ?? "-", settings.blendMode === "opaque", settings.unlit, layers.join(","), sways ? "wind" : "still"].join("#");
+  const key = [fragment.key, vertex?.key ?? "-", settings.blendMode === "opaque", settings.unlit, settings.normalSpace, layers.join(","), sways ? "wind" : "still"].join("#");
 
   const specs = new Map<string, MaterialUniformSpec>();
   for (const stage of [fragment, vertex]) for (const spec of stage?.uniforms ?? []) specs.set(spec.name, spec);
@@ -529,7 +671,7 @@ export const compileGraphWgsl = (graph: MaterialGraph, options: CompileGraphWgsl
   const globals = new Map<string, string>();
   const translateGlobals = (stage: CompiledMaterialGraph | null, context: () => GlslContext) => {
     for (const source of stage?.globals ?? []) {
-      const name = /^\s*\w+\s+(\w+)/.exec(source)?.[1] ?? source;
+      const name = functionHeader(source)?.[2] ?? source;
       if (!globals.has(name)) globals.set(name, translateGlobal(source, functions, context()));
     }
   };
@@ -537,7 +679,7 @@ export const compileGraphWgsl = (graph: MaterialGraph, options: CompileGraphWgsl
   translateGlobals(vertex, () => vertexContext(all, functions, called));
 
   const surfaceTranslator = new GlslTranslator(fragmentContext(all, functions, called));
-  const statements = surfaceTranslator.statements(fragment.statements.join("\n"));
+  const statements = surfaceTranslator.statements(withThreesLightsTranslated(fragment.statements).join("\n"));
   const output = (name: string, type: string) => surfaceTranslator.expression(fragment.outputs[name], type);
   const baseColor = output("baseColor", "vec3");
   const opacity = settings.blendMode === "opaque" ? "1.0" : output("opacity", "float");
@@ -547,6 +689,12 @@ export const compileGraphWgsl = (graph: MaterialGraph, options: CompileGraphWgsl
   const emissiveStrength = output("emissiveStrength", "float");
   const occlusion = output("occlusion", "float");
   const normal = fragment.connected.has("normal") ? output("normal", "vec3") : null;
+  // A world-space normal (Triplanar Normal Map) is the surface's normal as it is; a tangent-space one is a normal map's.
+  const mapped = !normal ? "" : settings.normalSpace === "world"
+    ? `out.normal = normalize(${normal});`
+    : `let mgMapped = ${normal};\n  out.normal = mappedNormal(in, out.normal, vec3f(mgMapped.xy * material.normalScale, mgMapped.z), in.uv0);`;
+  // How much of the direct light its own relief lets through (Parallax's shadow).
+  const selfShadow = fragment.connected.has("selfShadow") ? `out.selfShadow = clamp(${output("selfShadow", "float")}, 0.0, 1.0);` : "";
   // A graph reading the vertex colours uses them as it likes: they are not multiplied in again.
   const albedo = fragment.builtins.has("vertexColor") ? `(${baseColor})` : `(${baseColor}) * mgVertexColor()`;
 
@@ -648,6 +796,8 @@ ${sways ? WIND_WGSL : ""}
 var<private> mgIn: SurfaceIn;
 
 fn mgWorldNormal() -> vec3f { return select(mgIn.normal, mgIn.geometricNormal, (material.flags & ${GRAPH_FLAG.flatShading}u) != 0u); }
+// Toward the first sun, in the world; nothing where there is none (world.ts).
+fn mgSunDirection() -> vec3f { return surfaceWorld.sun.xyz; }
 // The colours three's own shader would multiply in: the vertices', when the material uses them, and the instance's.
 fn mgVertexColor() -> vec3f {
   return select(vec3f(1.0), mgIn.vertexColor.rgb, (material.flags & ${GRAPH_FLAG.vertexColors}u) != 0u) * mgIn.instanceColor.rgb;
@@ -670,7 +820,8 @@ fn surface(in: SurfaceIn) -> SurfaceOut {
   out.emissive = (${emissive}) * (${emissiveStrength});
   out.occlusion = ${occlusion};
   out.normal = mgWorldNormal();
-  ${normal ? `let mgMapped = ${normal};\n  out.normal = mappedNormal(in, out.normal, vec3f(mgMapped.xy * material.normalScale, mgMapped.z), in.uv0);` : ""}
+  ${mapped}
+  ${selfShadow}
   out.unlit = ${settings.unlit};
   ${physical}
   if ((material.flags & ${GRAPH_FLAG.takesWeather}u) != 0u) { out = applyWeather(in, out); }
