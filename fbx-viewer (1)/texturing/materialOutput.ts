@@ -1,6 +1,6 @@
 import * as THREE from 'three';
-import { createMaterialGraph, defaultParams, type MaterialGraph } from '../runtime/materials/materialGraph';
-import { OUTPUT_NODE_TYPE as MATERIAL_OUTPUT, UDIM_ATLAS_NODE_TYPE } from '../runtime/materials/materialNodes';
+import { createMaterialGraph, defaultParams, readsMaterialPictures, type MaterialGraph } from '../runtime/materials/materialGraph';
+import { MATERIAL_PICTURE_NODE_TYPE, OUTPUT_NODE_TYPE as MATERIAL_OUTPUT, UDIM_ATLAS_NODE_TYPE } from '../runtime/materials/materialNodes';
 import type { GpuImage, TextureGpu } from './gpu/textureGpu';
 import { encodePng16 } from './png';
 
@@ -302,4 +302,49 @@ export const materialGraphForTextures = (
         if (options.opacityMode) output.params = { ...output.params, blendMode: options.opacityMode };
     }
     return graph;
+};
+
+/**
+ * The surface graph for a material's pictures read by name: as materialGraphForTextures wires them, but each
+ * picture read by a Material Picture node (and Parallax set to the material's height picture), so making the
+ * pictures again changes only the material's pictures, never this graph.
+ */
+export const surfaceGraphForPictures = (
+    pictures: ChannelTextureIds,
+    options: { opacityMode?: 'masked' | 'translucent'; tiles?: TileLayout | { columns: number; rows: number } } = {},
+): MaterialGraph => {
+    const graph = materialGraphForTextures(pictures, options);
+    const roles = new Set(Object.keys(pictures));
+    const nodes = graph.nodes.map((node) => {
+        if (node.type === 'parallax') return { ...node, params: { ...node.params, heightFrom: 'height', texture: '' } };
+        if ((node.type !== 'texture' && node.type !== 'normalMap') || !roles.has(node.id)) return node;
+        // The generated nodes are named after the picture they read.
+        return { ...node, type: MATERIAL_PICTURE_NODE_TYPE, params: { ...defaultParams(MATERIAL_PICTURE_NODE_TYPE), output: node.id } };
+    });
+    // A normal map's normal comes out of its Material Picture's Normal.
+    const links = graph.links.map(link => (link.fromNode === 'normal' && link.fromOutput === 'out' && roles.has('normal') ? { ...link, fromOutput: 'normal' } : link));
+    return { ...graph, nodes, links };
+};
+
+/**
+ * What making a material's pictures again changes: its pictures by name, and the surface graph only where
+ * it does not read them already (an older material, or one whose set of pictures changed). A surface graph
+ * edited by hand keeps its edits; its UDIM tiles follow the new layout.
+ */
+export const rewriteMaterialPictures = (
+    asset: { graph: MaterialGraph; pictures?: Readonly<Record<string, string>> },
+    pictures: ChannelTextureIds,
+    options: { opacityMode?: 'masked' | 'translucent'; tiles?: TileLayout | { columns: number; rows: number } } = {},
+): { graph: MaterialGraph; pictures: Record<string, string> } => {
+    const kept = Object.fromEntries(Object.entries(pictures).filter(([, id]) => typeof id === 'string' && id)) as Record<string, string>;
+    const sameRoles = JSON.stringify(Object.keys(asset.pictures ?? {}).sort()) === JSON.stringify(Object.keys(kept).sort());
+    if (!readsMaterialPictures(asset.graph) || !sameRoles) return { graph: surfaceGraphForPictures(kept, options), pictures: kept };
+    const tiles = options.tiles && isTileLayout(options.tiles) ? options.tiles : null;
+    const graph = tiles ? {
+        ...asset.graph,
+        nodes: asset.graph.nodes.map(node => (node.type === UDIM_ATLAS_NODE_TYPE
+            ? { ...node, params: { ...node.params, tiles: tiles.tiles.join(' '), columns: tiles.columns, tileSize: tiles.cell, gutter: tiles.gutter } }
+            : node)),
+    } : asset.graph;
+    return { graph, pictures: kept };
 };

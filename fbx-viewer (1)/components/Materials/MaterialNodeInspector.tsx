@@ -4,6 +4,7 @@ import { Select } from '../UI/Select';
 import { CodeField, ParamField } from './MaterialParamField';
 import {
     MAX_PARAMETER_NAME_LENGTH,
+    MATERIAL_PICTURE_NODE_TYPE,
     OUTPUT_NODE_TYPE,
     PARAMETER_NODE_PARAMS,
     getMaterialNodeDefinition,
@@ -40,6 +41,8 @@ export const NodeInspector: React.FC<{
     const field = (param: MaterialParamDef) => {
         // The clip only matters to a masked material.
         if (param.key === 'alphaClip' && blendMode !== 'masked') return null;
+        // Filled from the material's own pictures, by name: nothing to pick.
+        if (param.key === 'texture' && (node.type === MATERIAL_PICTURE_NODE_TYPE || (node.type === 'parallax' && node.params.heightFrom === 'height'))) return null;
         if (wired?.has(param.key)) {
             return (
                 <div key={param.key} className="flex items-center justify-between text-2xs">

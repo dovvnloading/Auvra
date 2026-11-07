@@ -12,7 +12,7 @@ import { bakeSignature, readStoredGraph, type StoredTextureGraph } from '../../t
 import { MATERIAL_CHANNELS, MATERIAL_CHANNEL_LABELS, materialKey, materialOf } from '../../texturing/graph/material';
 import { TILING_MODES } from '../../texturing/graph/inherit';
 import { OUTPUT_CHANNELS, OUTPUT_CHANNEL_LABELS, type GraphParameter, type GraphParameterKind, type OutputChannel, type TexGraphNode, type TexNodeDef, type TexParamDef, type TextureGraph, type TilingMode } from '../../texturing/graph/types';
-import { DEEP_EXPORT, ROLE_LABELS, encodeChannels, materialGraphForTextures, type ChannelImages, type ChannelTextureIds, type MaterialChannel, type PictureLayout, materialReadsPicture } from '../../texturing/materialOutput';
+import { DEEP_EXPORT, ROLE_LABELS, encodeChannels, rewriteMaterialPictures, type ChannelImages, type ChannelTextureIds, type MaterialChannel, type PictureLayout, materialReadsPicture } from '../../texturing/materialOutput';
 import { download, makeZip } from '../../texturing/zip';
 import { Button, IconButton, Segmented, Spinner } from '../UI/kit';
 import { Select } from '../UI/Select';
@@ -465,7 +465,8 @@ const Workspace: React.FC<{
             const previous = Object.values(latestStored.baked?.textures ?? {}).filter((id): id is string => Boolean(id));
             const next: MaterialAsset = {
                 ...current,
-                graph: materialGraphForTextures(ids, { opacityMode: rendered.images.opacity ? 'masked' : undefined }),
+                // Only the material's pictures change; a surface graph edited by hand keeps its edits.
+                ...rewriteMaterialPictures(current, ids, { opacityMode: rendered.images.opacity ? 'masked' : undefined }),
                 textureGraph: { ...latestStored, baked: { textures: ids, signature: bakeSignature(latestStored, resolve), size: latestStored.bakeSize, at: Date.now() } } as unknown as Record<string, unknown>,
             };
             materialLibrary.upsert(next);

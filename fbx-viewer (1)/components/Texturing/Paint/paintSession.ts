@@ -13,7 +13,7 @@ import { buildHighPoly, buildPartMesh, buildWholeMesh, type PartMesh } from '../
 import { meshCage } from '../../../texturing/bake/bakeSetup';
 import type { SurfacePicker } from '../../../texturing/mesh/picker';
 import { SurfaceSelector } from '../../../texturing/paint/selection';
-import { DEEP_EXPORT, ROLE_LABELS, encodeChannels, materialGraphForTextures, tileAtlas, type ChannelTextureIds, type PictureLayout } from '../../../texturing/materialOutput';
+import { DEEP_EXPORT, ROLE_LABELS, encodeChannels, rewriteMaterialPictures, tileAtlas, type ChannelTextureIds, type PictureLayout } from '../../../texturing/materialOutput';
 import { GpuResetError, PaintStack, pictureOwners, type StackHost } from '../../../texturing/paint/paintStack';
 import { BUILTIN_GRAPHS } from '../../../texturing/paint/smartLibrary';
 import { applyPixelHistory, trimmedHistory, type HistoryEntry } from '../../../texturing/paint/strokes';
@@ -555,7 +555,8 @@ export class PaintSession {
             this.stack.setDocument(document);
             this.asset = {
                 ...(materialLibrary.get(this.asset.id) ?? this.asset),
-                graph: materialGraphForTextures(ids, { opacityMode: images.opacity ? 'masked' : undefined, tiles: atlas ?? undefined }),
+                // Only the material's pictures change; a surface graph edited by hand keeps its edits.
+                ...rewriteMaterialPictures(materialLibrary.get(this.asset.id) ?? this.asset, ids, { opacityMode: images.opacity ? 'masked' : undefined, tiles: atlas ?? undefined }),
                 paint: document as unknown as Record<string, unknown>,
             };
             materialLibrary.upsert(this.asset);
