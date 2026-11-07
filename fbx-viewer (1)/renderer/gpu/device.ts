@@ -141,6 +141,20 @@ export const acquireGpuCore = (): Promise<GpuCoreResult> => {
   return pending;
 };
 
+/**
+ * Lets the device go at once when no surface draws with it, so the next surface to ask gets a new one; false while one
+ * still does. The rendering pictures ask between scenes: what one scene left on the device must not change the next.
+ */
+export const releaseIdleGpuCore = async (): Promise<boolean> => {
+  if (surfaces > 0) return false;
+  const current = pending;
+  if (!current) return true;
+  stayAwake();
+  pending = null;
+  (await current).core?.device.destroy();
+  return true;
+};
+
 /** Says a surface is drawing with the device, for as long as it takes to call what this returns. */
 export const holdGpuCore = (core: GpuCore): (() => void) => {
   stayAwake();

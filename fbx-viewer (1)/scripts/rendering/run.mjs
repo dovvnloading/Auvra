@@ -68,13 +68,25 @@ const serve = (root) => new Promise((resolve) => {
   server.listen(0, '127.0.0.1', () => resolve(server));
 });
 
+// On Windows a file the browser is still writing cannot be opened at all (EBUSY): it is read again, as one not there yet.
+const readIfReady = (file) => {
+  try {
+    return existsSync(file) ? readFileSync(file, 'utf8') : '';
+  } catch (error) {
+    if (error.code === 'EBUSY' || error.code === 'EPERM' || error.code === 'EACCES') return '';
+    throw error;
+  }
+};
+
 const waitForFile = async (file, limitMs) => {
   const start = Date.now();
-  while (!existsSync(file) || !readFileSync(file, 'utf8').includes('\n')) {
+  let text = readIfReady(file);
+  while (!text.includes('\n')) {
     if (Date.now() - start > limitMs) throw new Error('The browser did not start');
     await new Promise((resolve) => setTimeout(resolve, 100));
+    text = readIfReady(file);
   }
-  return readFileSync(file, 'utf8');
+  return text;
 };
 
 /** Just enough of the browser's debugging protocol: one page, and running script in it. */
@@ -182,15 +194,17 @@ const main = async () => {
     const failures = [];
     const numbers = {};
     const rows = [];
-    // What the page itself said, for a scene that fails without a picture: the renderer reports its own trouble there.
-    const pageSaid = () => client.events
+    // What the page itself warned of since `from`: the renderer reports its own trouble there.
+    const pageSaid = (from) => client.events
+      .slice(from)
       .filter((event) => event.method === 'Runtime.consoleAPICalled' && ['error', 'warning'].includes(event.params.type))
       .map((event) => event.params.args.map((arg) => arg.value ?? arg.description ?? '').join(' '))
       .slice(-30);
+    const said = (lines) => (lines.length ? `\nThe page said:\n  ${lines.join('\n  ')}` : '');
     for (const name of names) {
+      const sceneStart = client.events.length;
       const { png, numbers: cost } = await run(`window.auvraVisual.capture(${JSON.stringify(name)})`).catch((error) => {
-        const said = pageSaid();
-        throw new Error(`${name}: ${error.message}${said.length ? `\nThe page said:\n  ${said.join('\n  ')}` : ''}`);
+        throw new Error(`${name}: ${error.message}${said(pageSaid(sceneStart))}`);
       });
       numbers[name] = cost;
       const bytes = Buffer.from(png.split(',')[1], 'base64');
@@ -210,7 +224,7 @@ const main = async () => {
           shareText = `${(result.share * 100).toFixed(3)}% worst ${result.worst}`;
           verdict = result.sameSize && result.share <= MOST_DIFFERING ? 'same' : 'DIFFERENT';
           if (verdict !== 'same') {
-            failures.push(`${name}: ${shareText} of the picture differs`);
+            failures.push(`${name}: ${shareText} of the picture differs${said(pageSaid(sceneStart))}`);
             if (result.diff) writeFileSync(path.join(outputDir, `${name}.diff.png`), Buffer.from(result.diff.split(',')[1], 'base64'));
           }
         }
@@ -233,10 +247,19 @@ const main = async () => {
     }
   } finally {
     server?.close();
-    browser?.kill();
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    if (browser && browser.exitCode === null) {
+      // A browser still closing holds its profile's files on Windows: it is waited for, a few seconds at most.
+      const exited = new Promise((resolve) => browser.once('exit', resolve));
+      browser.kill();
+      await Promise.race([exited, new Promise((resolve) => setTimeout(resolve, 5000))]);
+    }
     rmSync(siteDir, { recursive: true, force: true });
-    rmSync(profileDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+    try {
+      rmSync(profileDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 });
+    } catch (error) {
+      // What is left is in the system's temporary folder; the pictures are what this run is for.
+      console.warn(`Could not remove the browser profile ${profileDir}: ${error.message}`);
+    }
   }
 };
 

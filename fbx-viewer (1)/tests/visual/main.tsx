@@ -2,9 +2,9 @@ import './instrument';
 import React, { useEffect } from 'react';
 import { createRoot } from 'react-dom/client';
 import { advance, useThree, type RootState } from '@react-three/fiber';
-import { gpuBytes, realNow, seedChance, stepClock, virtualSeconds, webGpuBytes, webGpuWaiting } from './instrument';
+import { gpuBytes, realNow, resetClock, seedChance, stepClock, virtualSeconds, webGpuBytes, webGpuWaiting } from './instrument';
 import { AuvraCanvas, readRequestedRendererBackend } from '../../renderer/AuvraCanvas';
-import { acceptSoftwareAdapter, acquireGpuCore } from '../../renderer/gpu/device';
+import { acceptSoftwareAdapter, acquireGpuCore, releaseIdleGpuCore } from '../../renderer/gpu/device';
 import { isGpuRenderer } from '../../renderer/gpu/frame';
 import type { GpuRenderer } from '../../renderer/gpu/GpuRenderer';
 import { SCENES, type SceneSteps, type VisualScene } from './scenes';
@@ -81,6 +81,9 @@ const capture = async (name: string) => {
   const scene: VisualScene | undefined = SCENES[name];
   if (!scene) throw new Error(`No scene called ${name}`);
   seedChance(0x2f6e2b1);
+  // A WebGPU scene starts on a device of its own (below) at the same moment, so its picture is the same whatever ran
+  // before it: the traced light's noise follows the clock.
+  if (onWebGpu) resetClock();
   const stage = document.getElementById('stage')!;
   const root = createRoot(stage);
   const started = realNow();
@@ -127,6 +130,14 @@ const capture = async (name: string) => {
   root.unmount();
   // Lets the canvas and what it holds go before the next scene.
   await new Promise((resolve) => setTimeout(resolve, 50));
+  // Each scene starts on a device of its own: what one leaves on the device would otherwise show in the next one's picture.
+  if (onWebGpu) {
+    const released = realNow();
+    while (!(await releaseIdleGpuCore())) {
+      if (realNow() - released > 10_000) throw new Error(`${name} still held the WebGPU device after it was taken down`);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+  }
   return { png, numbers: { loadMs, frameMs, calls, triangles, geometries, textures, programs, gpuBytes: bytes } };
 };
 

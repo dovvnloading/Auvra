@@ -17,6 +17,11 @@ export const stepClock = (ms: number): void => {
   virtualMs += ms;
 };
 
+/** Sets the clock back to where the first scene starts, for a scene that must not depend on what ran before it. */
+export const resetClock = (): void => {
+  virtualMs = 1000;
+};
+
 performance.now = () => virtualMs;
 Date.now = () => 1_700_000_000_000 + virtualMs;
 
