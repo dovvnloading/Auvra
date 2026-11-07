@@ -424,16 +424,41 @@ export const PaintViewport: React.FC<{
         if (!rays.current.length || !context) return;
         const matrix = new THREE.Matrix4().multiplyMatrices(world.camera.projectionMatrix, world.camera.matrixWorldInverse);
         const screen = (p: THREE.Vector3) => { const v = p.clone().applyMatrix4(matrix); return { x: (v.x * 0.5 + 0.5) * element.width, y: (0.5 - v.y * 0.5) * element.height }; };
+        const r = size.ratio;
+        const blue = 'rgb(56, 189, 248)';
+        const amber = 'rgb(251, 191, 36)';
+        /** A line with a dark edge under it, so it reads over any surface. */
+        const line = (from: { x: number; y: number }, to: { x: number; y: number }, colour: string) => {
+            for (const [width, style] of [[6, 'rgba(9, 9, 11, 0.85)'], [3, colour]] as const) {
+                context.lineWidth = width * r;
+                context.strokeStyle = style;
+                context.beginPath(); context.moveTo(from.x, from.y); context.lineTo(to.x, to.y); context.stroke();
+            }
+        };
+        const dot = (at: { x: number; y: number }, radius: number, colour: string, ring = false) => {
+            context.beginPath();
+            context.arc(at.x, at.y, radius * r, 0, Math.PI * 2);
+            context.lineWidth = 2.5 * r;
+            context.strokeStyle = ring ? colour : 'rgba(9, 9, 11, 0.9)';
+            if (ring) context.stroke();
+            else { context.fillStyle = colour; context.fill(); context.stroke(); }
+        };
         context.save();
-        context.lineWidth = 2 * size.ratio;
+        context.lineCap = 'round';
         for (const ray of rays.current) {
             const [a, b, c] = [screen(ray.start), screen(ray.surface), screen(ray.end)];
-            context.strokeStyle = 'rgba(56, 189, 248, 0.95)';
-            context.beginPath(); context.moveTo(a.x, a.y); context.lineTo(b.x, b.y); context.stroke();
-            context.strokeStyle = 'rgba(251, 191, 36, 0.95)';
-            context.beginPath(); context.moveTo(b.x, b.y); context.lineTo(c.x, c.y); context.stroke();
-            context.fillStyle = '#f4f4f5';
-            context.beginPath(); context.arc(b.x, b.y, 3 * size.ratio, 0, Math.PI * 2); context.fill();
+            if (Math.hypot(a.x - c.x, a.y - c.y) < 14 * r) {
+                // Seen head on the ray is a point: rings say where it starts (blue, outer) and ends (amber, inner).
+                dot(b, 10, blue, true);
+                dot(b, 6, amber, true);
+                dot(b, 3, '#f4f4f5');
+                continue;
+            }
+            line(a, b, blue);
+            line(b, c, amber);
+            dot(a, 4.5, blue);
+            dot(c, 4.5, amber);
+            dot(b, 3.5, '#f4f4f5');
         }
         context.restore();
     }, [size.ratio, world.camera]);
@@ -639,7 +664,7 @@ export const PaintViewport: React.FC<{
             const middle = corners.reduce((sum, v) => sum.add(direction(v)), new THREE.Vector3()).normalize();
             const spots: Array<[THREE.Vector3, THREE.Vector3]> = [[hit.point.clone(), middle], ...corners.map((v): [THREE.Vector3, THREE.Vector3] => [new THREE.Vector3(part.positions[v * 3], part.positions[v * 3 + 1], part.positions[v * 3 + 2]), direction(v)])];
             rays.current = spots.map(([at, dir]) => ({ start: at.clone().addScaledVector(dir, front), surface: at, end: at.clone().addScaledVector(dir, -rear) }));
-            onMessage(`Bake rays here start ${front.toPrecision(2)} out (blue) and look ${rear.toPrecision(2)} in (amber)${bakeRays.cage === 'auto' ? '; an automatic cage finds its own distances when baking, so these use the set ones' : bakeRays.cage === 'mesh' ? '; a cage model sets its own, so these use the set distances' : ''}.`);
+            onMessage(`Bake rays here start ${front.toPrecision(2)} out (blue dot) and look ${rear.toPrecision(2)} in to the amber dot; seen head on they show as rings, so turn the view to see them side on${bakeRays.cage === 'auto' ? '; an automatic cage finds its own distances when baking, so these use the set ones' : bakeRays.cage === 'mesh' ? '; a cage model sets its own, so these use the set distances' : ''}.`);
             draw();
             return;
         }
