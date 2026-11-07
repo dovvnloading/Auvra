@@ -209,6 +209,8 @@ export class GlslTranslator {
   private readonly scopes: Map<string, Local>[] = [new Map()];
   private returnType = "void";
   private temporaries = 0;
+  /** The function being translated: its by-value parameters (code to GLSL name), the scope they live in, and those its body assigns to. */
+  private parameters: { codes: Map<string, string>; scope: number; assigned: Set<string> } | null = null;
 
   constructor(private readonly context: GlslContext) {}
 
@@ -257,6 +259,7 @@ export class GlslTranslator {
       this.expect(")");
     }
     this.scopes.push(new Map());
+    const codes = new Map<string, string>();
     // A texture is handed over as WGSL keeps it: the texture and the sampler it is read with.
     const declared = params.map((param) => {
       const code = this.declare(param.name, param.type);
@@ -265,17 +268,38 @@ export class GlslTranslator {
         this.scopes[this.scopes.length - 1].set(param.name, { code: `(*${code})`, type: param.type });
         return `${code}: ptr<function, ${wgslType(param.type)}>`;
       }
-      return param.type === "sampler2D" ? `${code}_t: texture_2d<f32>, ${code}_s: sampler` : `${code}: ${wgslType(param.type)}`;
+      if (param.type === "sampler2D") return `${code}_t: texture_2d<f32>, ${code}_s: sampler`;
+      codes.set(code, param.name);
+      return `${code}: ${wgslType(param.type)}`;
     });
     const outs = params.flatMap((param, index) => (param.out ? [index] : []));
     const previous = this.returnType;
     this.returnType = returns;
+    this.parameters = { codes, scope: this.scopes.length - 1, assigned: new Set() };
     this.expect("{");
     const lines: string[] = [];
     while (!this.accept("}")) lines.push(this.statement());
     this.expectEnd();
     this.returnType = previous;
     this.scopes.pop();
+    // GLSL lets a function change its own (by-value) parameters; WGSL does not. Each one the body assigns to comes
+    // in under another name and is copied into a variable of its own name, which the body then reads and changes.
+    const assigned = this.parameters.assigned;
+    this.parameters = null;
+    if (assigned.size) {
+      const taken = new Set([...(lines.join("\n").match(/[A-Za-z_]\w*/g) ?? []), ...codes.keys()]);
+      const copies: string[] = [];
+      params.forEach((param, index) => {
+        const code = [...codes].find(([, name]) => name === param.name)?.[0];
+        if (!code || !assigned.has(code)) return;
+        let held = `${code}_in`;
+        while (taken.has(held)) held = `${held}_`;
+        taken.add(held);
+        declared[index] = `${held}: ${wgslType(param.type)}`;
+        copies.push(`var ${code} = ${held};`);
+      });
+      lines.unshift(...copies);
+    }
     // A path WGSL cannot see the end of gets a value, as GLSL leaves it to chance.
     if (returns !== "void" && !/^\s*return\b[^;]*;\s*$/.test(lines[lines.length - 1] ?? "")) lines.push(`return ${wgslType(returns)}();`);
     // A second function of a name taking other types is an overload: WGSL has none, so it gets a name of its own.
@@ -527,7 +551,22 @@ export class GlslTranslator {
     return lines;
   }
 
+  /** Notes a by-value parameter of the function an assignment changes (directly, or a component or element of it). */
+  private noteAssigned(left: Value): void {
+    if (!this.parameters) return;
+    const root = /^[A-Za-z_]\w*/.exec((left.mask?.base ?? left).code)?.[0];
+    const name = root ? this.parameters.codes.get(root) : undefined;
+    if (!root || name === undefined) return;
+    // Only when the name is the parameter here, not a local of the same name in a block inside.
+    for (let index = this.scopes.length - 1; index >= 0; index--) {
+      if (!this.scopes[index].has(name)) continue;
+      if (index === this.parameters.scope) this.parameters.assigned.add(root);
+      return;
+    }
+  }
+
   private assign(left: Value, operator: string, right: Value): string {
+    this.noteAssigned(left);
     const value = operator === "=" ? right : this.combine(operator.slice(0, -1), left, right);
     const fitted = this.fit(value, left.type);
     if (!left.mask || left.mask.letters.length === 1) return `${left.code} = ${fitted}`;
