@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as THREE from "three";
 import { OUTPUT_NODE_TYPE, defaultParams, normalizeMaterialGraph, type MaterialGraph } from "../../runtime/materials/materialGraph";
-import { bindMaterialGraph, unbindMaterialGraph } from "../../runtime/materials/graphMaterial";
+import { bindMaterialGraph, boundMaterialGraph, unbindMaterialGraph } from "../../runtime/materials/graphMaterial";
+import { materialLibrary } from "../../runtime/materials/materialLibrary";
 import { patchWeatherMaterial } from "../../runtime/weatherSurfaces";
 import { GRAPH_FLAG, GRAPH_WIND_AT, compileGraphWgsl, graphLayers } from "../../renderer/gpu/surfaces/materialWgsl";
 import { graphFlags, graphSurfaceFor } from "../../renderer/gpu/surfaces/graph";
@@ -65,7 +66,7 @@ describe("a material graph in WGSL", () => {
     expect(body.indexOf("applyWeather")).toBeLessThan(body.indexOf("applyBakedVolume"));
   });
 
-  it("carries the coat, sheen and transmission a graph uses, and no other part of a physical surface", () => {
+  it("carries the coat, sheen and transmission a graph uses as layers over the surface", () => {
     expect(graphLayers(tinted())).toEqual([]);
     expect(compileGraphWgsl(tinted()).wgsl).not.toContain("applyPhysicalLayers");
 
@@ -82,13 +83,58 @@ describe("a material graph in WGSL", () => {
     expect(all.layers).toEqual(["coat", "sheen", "transmission"]);
     expect(count(all.wgsl, "struct PhysicalLayers")).toBe(1);
 
-    // Index of refraction and thin film change the lobe, which the surface buffer does not hold.
+    // Specular and thin film change the reflection rather than lie over it.
     const lobe = compileGraphWgsl(tinted({ ior: 1.8, thinFilm: 0.5 }));
-    expect(lobe.layers).toEqual([]);
+    expect(lobe.layers).toEqual(["specular", "thinFilm"]);
     expect(lobe.wgsl).not.toContain("applyPhysicalLayers");
+    expect(surfaceBody(lobe.wgsl)).toContain("out = applyPhysicalLobe(in, out, PhysicalLobe(");
 
     // An unlit graph shows its colour as it is.
     expect(compileGraphWgsl(tinted({ coat: 1, shading: "unlit" })).layers).toEqual([]);
+  });
+
+  it("draws the specular, index of refraction and thin film a graph works out, under any coat", () => {
+    const gem = compileGraphWgsl(tinted({ ior: 2.4, specularColor: [1, 0.9, 0.8], specularWeight: 0.9, thinFilm: 0.7, thinFilmThickness: 450, coat: 0.5 }));
+    expect(gem.layers).toEqual(["specular", "coat", "thinFilm"]);
+    const body = surfaceBody(gem.wgsl);
+    const field = (suffix: string) => gem.fields.find((candidate) => candidate.name.endsWith(suffix))!.name;
+    // ((ior - 1) / (ior + 1))^2 times the specular colour and strength, then the film's strength and thickness.
+    expect(body).toContain(`((material.${field("_ior")}) - 1.0) / ((material.${field("_ior")}) + 1.0)`);
+    expect(body).toContain(`max(material.${field("_specularColor")}, vec3f(0.0))`);
+    expect(body).toContain(`clamp(material.${field("_specularWeight")}, 0.0, 1.0)`);
+    expect(body).toContain(`clamp(material.${field("_thinFilm")}, 0.0, 1.0)`);
+    expect(body).toContain(`max(material.${field("_thinFilmThickness")}, 0.0)`);
+    expect(body.indexOf("applyPhysicalLobe")).toBeLessThan(body.indexOf("applyPhysicalLayers"));
+    expect(count(gem.wgsl, "fn applyPhysicalLobe")).toBe(1);
+    expect(gem.wgsl).toContain("fn thinFilmColour");
+    // A film alone reflects as the lighting does otherwise.
+    expect(surfaceBody(compileGraphWgsl(tinted({ thinFilm: 1 })).wgsl)).toMatch(/PhysicalLobe\(\s*vec3f\(0\.04\),/);
+  });
+
+  it("reads what a graph keeping the model's own maps leaves unwired off the material, as three's own code does", () => {
+    const keeping = normalizeMaterialGraph({
+      nodes: [node("out", OUTPUT_NODE_TYPE, { ownMaps: true }), node("red", "color", { value: [1, 0, 0] })],
+      links: [link("red", "out", "out", "baseColor")],
+    });
+    const compiled = compileGraphWgsl(keeping);
+    const body = surfaceBody(compiled.wgsl);
+    // The colour is the graph's; roughness, metalness, normal and emission are the material's own maps and values.
+    expect(compiled.textures.filter((texture) => texture.own).map((texture) => [texture.name, texture.own])).toEqual([
+      ["mgOwnRoughnessMap", "roughnessMap"], ["mgOwnMetalnessMap", "metalnessMap"], ["mgOwnNormalMap", "normalMap"], ["mgOwnEmissiveMap", "emissiveMap"],
+    ]);
+    expect(compiled.fields.filter((field) => field.own).map((field) => field.own)).toEqual(["roughness", "metalness", "emissive", "emissiveIntensity"]);
+    expect(body).toContain("out.roughness = clamp(material.mgOwnRoughness * textureSample(mgOwnRoughnessMap, mgOwnRoughnessMap_sampler, mgIn.uv0).g, 0.0, 1.0);");
+    expect(body).toContain("out.metalness = clamp(material.mgOwnMetalness * textureSample(mgOwnMetalnessMap, mgOwnMetalnessMap_sampler, mgIn.uv0).b, 0.0, 1.0);");
+    expect(body).toContain("out.emissive = (material.mgOwnEmissive * textureSample(mgOwnEmissiveMap, mgOwnEmissiveMap_sampler, mgIn.uv0).rgb) * (material.mgOwnEmissiveIntensity);");
+    expect(body).toContain("let mgMapped = mgOwnNormal();");
+    // Blue is rebuilt from red and green, so a BC5 normal map reads as it does on the WebGL path.
+    expect(compiled.wgsl).toMatch(/fn mgOwnNormal\(\) -> vec3f \{[^}]*sqrt\(saturate\(1\.0 - dot\(texel, texel\)\)\)/);
+    expect(compiled.wgsl).toContain("mgOwnEmissiveIntensity: f32,");
+    expect(compiled.textures.some((texture) => texture.name === "mgOwnMap")).toBe(false);
+    // Without the setting, none of it.
+    const plain = compileGraphWgsl(tinted());
+    expect(plain.textures.some((texture) => texture.own)).toBe(false);
+    expect(plain.key).not.toBe(compileGraphWgsl(normalizeMaterialGraph({ ...tinted(), nodes: tinted().nodes.map((each) => (each.id === "out" ? { ...each, params: { ...each.params, ownMaps: true } } : each)) })).key);
   });
 
   it("keeps the wind's numbers ahead of the graph's own", () => {
@@ -166,6 +212,17 @@ describe("a material graph in WGSL", () => {
     const displace = offset.wgsl.slice(offset.wgsl.indexOf("fn displace("), offset.wgsl.indexOf("fn surface(in: SurfaceIn)"));
     expect(displace).toContain("mgTriplanarNormalVertex(mg_bumps_texture, mg_bumps_texture_sampler, ");
     expect(displace).not.toMatch(/mgTriplanarNormal\(/);
+  });
+
+  it("reads nothing across the screen where vertices are worked out", () => {
+    const lifted = normalizeMaterialGraph({
+      nodes: [node("out", OUTPUT_NODE_TYPE), node("noise", "noise"), node("slope", "normalFromHeight")],
+      links: [link("noise", "out", "slope", "height"), link("slope", "out", "out", "worldPositionOffset")],
+    });
+    const wgsl = compileGraphWgsl(lifted).wgsl;
+    const displace = wgsl.slice(wgsl.indexOf("fn displace("), wgsl.indexOf("fn surface(in: SurfaceIn)"));
+    expect(displace).toContain("vec3f(0.0, 0.0, 1.0)");
+    expect(displace).not.toContain("dpdx");
   });
 
   it("builds only the side a Switch picks", () => {
@@ -246,6 +303,50 @@ describe("the kind drawing a graph-shaded material", () => {
 
     material.userData.windSway = null;
     expect(graphSurfaceFor(material)).toBe(still);
+  });
+
+  it("draws a painted copy with the model's own maps and values", () => {
+    const keeping = normalizeMaterialGraph({
+      nodes: [node("out", OUTPUT_NODE_TYPE, { ownMaps: true }), node("red", "color", { value: [1, 0, 0] })],
+      links: [link("red", "out", "out", "baseColor")],
+    });
+    const roughnessMap = new THREE.Texture();
+    const normalMap = new THREE.Texture();
+    const material = new THREE.MeshStandardMaterial({ roughness: 0.3, metalness: 0.6, roughnessMap, normalMap, emissive: new THREE.Color(0.2, 0.4, 0.6), emissiveIntensity: 2 });
+    bindMaterialGraph(material, keeping);
+    const kind = graphSurfaceFor(material)!;
+    expect(kind).not.toBeNull();
+    const textures = kind.textures(material);
+    // In the order the kind lays its textures out: roughness, metalness (none), normal, emission (none).
+    expect(textures).toEqual([roughnessMap, null, normalMap, null]);
+    unbindMaterialGraph(material);
+  });
+
+  it("draws each object's own values through one kind, and a switch an object sets through the kind of its side", () => {
+    const graph = normalizeMaterialGraph({
+      nodes: [
+        node("out", OUTPUT_NODE_TYPE),
+        { ...node("tint", "color", { value: [1, 1, 1] }), parameter: "Tint" },
+        { ...node("pick", "switch", { on: false }), parameter: "Noisy" },
+        node("noise", "noise"),
+      ],
+      links: [link("noise", "out", "pick", "whenOn"), link("tint", "out", "pick", "whenOff"), link("pick", "out", "out", "baseColor")],
+    });
+    materialLibrary.replaceAll([{ id: "shared", name: "Shared", graph }]);
+    const red = new THREE.MeshStandardMaterial();
+    const blue = new THREE.MeshStandardMaterial();
+    const noisy = new THREE.MeshStandardMaterial();
+    materialLibrary.assign(red, "shared", true, { Tint: [1, 0, 0] });
+    materialLibrary.assign(blue, "shared", true, { Tint: [0, 0, 1] });
+    materialLibrary.assign(noisy, "shared", true, { Noisy: true });
+    expect(graphSurfaceFor(red)).not.toBeNull();
+    expect(graphSurfaceFor(blue)).toBe(graphSurfaceFor(red));
+    expect(boundMaterialGraph(red)!.nodes.find((each) => each.id === "tint")!.params.value).toEqual([1, 0, 0]);
+    expect(boundMaterialGraph(blue)!.nodes.find((each) => each.id === "tint")!.params.value).toEqual([0, 0, 1]);
+    expect(graphSurfaceFor(noisy)).not.toBe(graphSurfaceFor(red));
+    expect(graphSurfaceFor(noisy)!.wgsl).toContain("mgLegacyNoise(");
+    for (const material of [red, blue, noisy]) materialLibrary.assign(material, null);
+    materialLibrary.replaceAll([]);
   });
 
   it("is told a blended material from a solid one", () => {
