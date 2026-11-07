@@ -68,6 +68,8 @@ const cook = async (gpu: TexturingGpu): Promise<{ colour: Blob; normal: Blob }> 
     const evaluator = new TextureGraphEvaluator(gpu, () => undefined, () => null);
     try {
         const states = await evaluator.evaluate({ graph: proofGraph(), targets: ['colour', 'normal'] });
+        // Any node the GPU could not draw counts, not only the two shown (a node upstream would leave a stand-in).
+        for (const [id, state] of states) if (state.error) throw new Error(`${id}: ${state.error}`);
         const colour = states.get('colour');
         const normal = states.get('normal');
         if (!colour?.outputs.out || !normal?.outputs.out) throw new Error(colour?.error ?? normal?.error ?? 'The graph drew nothing.');

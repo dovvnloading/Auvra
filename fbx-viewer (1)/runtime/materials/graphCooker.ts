@@ -75,7 +75,7 @@ export const createGraphCooker = (source: GraphCookerSource): Cooker => ({
             if (webgpu) {
                 try {
                     webgpu.takeProblems();
-                    const pictures = await cookOn(webgpu, request, stored, resolve, loaded);
+                    const pictures = await cookOn(webgpu, request, stored, resolve, loaded, true);
                     // A pass drawn at once that the device refused is heard of only afterwards.
                     const problems = webgpu.takeProblems();
                     if (problems.length) throw new Error(problems[0]);
@@ -94,8 +94,11 @@ export const createGraphCooker = (source: GraphCookerSource): Cooker => ({
     },
 });
 
-/** The graph's pictures drawn on one texturing GPU, written as Update material writes them. */
-const cookOn = async (gpu: TexturingGpu, request: CookRequest, stored: ReturnType<typeof readStoredGraph>, resolve: GraphResolver, loaded: ReadonlyMap<string, THREE.Texture>): Promise<CookedPictures> => {
+/**
+ * The graph's pictures drawn on one texturing GPU, written as Update material writes them. `strict` (the WebGPU
+ * attempt) refuses any node that could not be drawn, so the graph is drawn with WebGL2 instead of with a stand-in.
+ */
+const cookOn = async (gpu: TexturingGpu, request: CookRequest, stored: ReturnType<typeof readStoredGraph>, resolve: GraphResolver, loaded: ReadonlyMap<string, THREE.Texture>, strict = false): Promise<CookedPictures> => {
     const evaluator = new TextureGraphEvaluator(gpu, resolve, (textureId) => loaded.get(textureId) ?? null);
     try {
         const graph = stored.graph;
@@ -107,6 +110,11 @@ const cookOn = async (gpu: TexturingGpu, request: CookRequest, stored: ReturnTyp
         // Each channel's image at a time (held, so the next drawing does not take it back).
         const draw = async (at: { w: number; h: number }, time: number): Promise<ChannelImages> => {
             const states = await evaluator.evaluate({ graph, parameters: request.values, targets: outputs.map((node) => node.id), size: at, time, ...(request.seed !== undefined ? { seed: request.seed } : {}) });
+            if (strict) {
+                for (const [id, state] of states) {
+                    if (state.error) throw new Error(`the node "${graph.nodes.find((node) => node.id === id)?.type ?? id}" could not be drawn: ${state.error}`);
+                }
+            }
             const images: ChannelImages = {};
             for (const node of outputs) {
                 const channel = String(node.params.channel ?? '');

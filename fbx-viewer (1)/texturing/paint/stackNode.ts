@@ -164,6 +164,9 @@ export const PAINT_STACK_NODE: TexNodeDef = {
         if (running.has(assetId)) throw new Error('A paint stack cannot use itself (through a fill or mask graph).');
         const fetchStored = storedPictureFetcher;
         if (!fetchStored) throw new Error('A paint stack draws only in the editor, where its painted pictures can be read.');
+        // It is put together by the WebGL2 painting code: on another GPU the graph is drawn with WebGL2 instead.
+        if (!('renderer' in context.gpu)) throw new Error('A paint stack is drawn with WebGL2 only.');
+        const gpu = context.gpu as TextureGpu;
         const [{ materialLibrary }, { PaintStack }, { BUILTIN_GRAPHS }, { readStoredGraph }] = await Promise.all([
             import('../../runtime/materials/materialLibrary'),
             import('./paintStack'),
@@ -207,7 +210,7 @@ export const PAINT_STACK_NODE: TexNodeDef = {
         let stack: import('./paintStack').PaintStack | null = null;
         try {
             stack = await PaintStack.open({
-                gpu: context.gpu,
+                gpu,
                 resolveGraph,
                 texture: (id) => context.texture(id),
                 current: {},
@@ -220,11 +223,11 @@ export const PAINT_STACK_NODE: TexNodeDef = {
             // Drawn at the graph's size (never past the set's own): its pictures are read scaled to it.
             }, await flatSquare(), { ...document, udim: false, layers, size: Math.min(document.size, Math.max(7, Math.round(Math.log2(Math.max(context.width, context.height))))) });
             // The set's own bake lies on the same UV square; the graph's mesh maps, when it has them, take its place.
-            const bake = await bakeFrom(context.gpu, stack.size, (name) => context.external(name));
+            const bake = await bakeFrom(gpu, stack.size, (name) => context.external(name));
             if (bake) {
                 const { releaseTileBake } = await import('../bake/meshBaker');
                 const own = stack.takeBake(bake);
-                for (const result of own?.values() ?? []) releaseTileBake(context.gpu, result);
+                for (const result of own?.values() ?? []) releaseTileBake(gpu, result);
             }
             await stack.compose();
             return await outputsOf(stack);
