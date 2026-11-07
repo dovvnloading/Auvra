@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { TileBake } from '../../texturing/bake/meshBaker';
-import { bakeBytes, bakeStepsToForget, historyKind } from '../../texturing/paint/history';
+import { bakeBytes, bakeStepsToForget, historyKind, strokeLabel } from '../../texturing/paint/history';
+import { DEFAULT_PARTICLES, PARTICLE_PRESETS } from '../../texturing/paint/particles';
 import type { HistoryEntry } from '../../texturing/paint/strokes';
 import type { PaintDocument } from '../../texturing/paint/paintTypes';
 
@@ -32,5 +33,17 @@ describe('the paint history as a list', () => {
         expect(bakeStepsToForget(past, [], maps[3], 0)).toEqual([steps[0], steps[1]]);
         // After undoing the last bake its maps wait in the redo list and count too; the maps in use do not.
         expect(bakeStepsToForget([steps[0], paint, steps[1]], [steps[2]], maps[2], 2 * mb)).toEqual([steps[0]]);
+    });
+
+    it('names brush strokes by what they did, particle ones with their own kind', () => {
+        const drips = PARTICLE_PRESETS.find((each) => each.id === 'drips')!.settings;
+        expect(strokeLabel('paint', { mode: 'paint', particles: drips })).toBe('Drips');
+        expect(strokeLabel('paint', { mode: 'paint', particles: { ...drips, count: 7 } })).toBe('Running particles');
+        expect(strokeLabel('paint', { mode: 'paint', particles: { ...DEFAULT_PARTICLES, enabled: true, motion: 'bounce' } })).toBe('Bouncing particles');
+        expect(strokeLabel('paint', { mode: 'smudge', particles: DEFAULT_PARTICLES })).toBe('Smudge');
+        expect(strokeLabel('erase', { mode: 'paint', particles: drips })).toBe('Erase');
+        expect(strokeLabel('paint', { mode: 'paint' })).toBe('Paint');
+        for (const label of ['Drips', 'Leaks', 'Dust', 'Splashes', 'Running particles']) expect(historyKind({ label, pixels: [] })).toBe('particles');
+        expect(historyKind({ label: 'Lay decal', pixels: [] })).toBe('decal');
     });
 });

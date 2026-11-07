@@ -31,7 +31,7 @@ export const DecalPanel: React.FC<{
                 <Button size="sm" variant="ghost" disabled={!placed} icon={<CrossIcon size={12} />} onClick={onDrop}>Give it up</Button>
             </div>
             <p className="text-2xs leading-snug text-zinc-500">
-                Click the model to place the decal and drag to move it. It wraps over curves and across UV seams by the distance along the surface, so it does not stretch. Size is a share of the texture set's size; it lays its colour on base colour and emission, and the brush's values on the other channels it paints, through the picture's alpha.
+                Click the model to place the decal and drag to move it; after laying it on or giving it up, click again to place the next. It wraps over curves and across UV seams by the distance along the surface, so it does not stretch. Size is a share of the texture set's size; it lays its colour on base colour and emission, and the brush's values on the other channels it paints, through the picture's alpha.
             </p>
         </section>
     );
