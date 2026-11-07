@@ -425,7 +425,7 @@ describe('weathering on stand-ins', () => {
 
 describe('shaders', () => {
     /** Names every pass already declares (its prelude and the kit): a node declaring one again does not compile. */
-    const TAKEN = ['uSize', 'vUv', 'outColor', 'uSeed', 'uTiles', 'uWorld', 'uIteration', 'uIterations'];
+    const TAKEN = ['uSize', 'vUv', 'outColor', 'uSeed', 'uTiles', 'uWorld', 'uIteration', 'uIterations', 'uTime', 'uPhase'];
     it('never declare a name the pass already has', () => {
         const folder = resolve(__dirname, '../../texturing/graph/nodes');
         for (const file of readdirSync(folder).filter((name) => name.endsWith('.ts'))) {

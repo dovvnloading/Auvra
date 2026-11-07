@@ -22,12 +22,13 @@ import { SPLINE_NODES } from './nodes/splines';
 import { VECTOR_NODES } from './nodes/vector';
 import { SDF_NODES } from './nodes/sdf';
 import { PBR_CHECK_NODES } from './nodes/pbrChecks';
+import { TIME_NODE } from './nodes/time';
 import { conditionHolds, conditionScope } from './parameters';
 import { OUTPUT_CHANNEL_LABELS, outputNodeKind, type NodeCategory, type OutputChannel, type PortKind, type TexGraphLink, type TexGraphNode, type TexNodeDef, type TexParamDef, type TexPortDef, type TextureGraph } from './types';
 
 /** Every node a texture graph can hold, by type; sub-graph nodes are made from the graph they use. */
 
-export const TEXTURE_NODE_DEFINITIONS: readonly TexNodeDef[] = [...IO_NODES, ...PROCESSOR_NODES, ITERATE_PLACEHOLDER, ...GENERATOR_NODES, ...NOISE_NODES, ...PATTERN_NODES, TEXT_NODE, ...SCATTER_NODES, ...ADJUST_NODES, ...COLOUR_NODES, ...TRANSFORM_NODES, ...FILTER_NODES, ...DISTANCE_NODES, ...GEOMETRY_NODES, ...WEATHERING_NODES, ...PHOTO_NODES, ...SPLINE_NODES, ...VECTOR_NODES, ...SDF_NODES, ...PBR_CHECK_NODES, ...MATERIAL_NODES, PAINT_STACK_NODE];
+export const TEXTURE_NODE_DEFINITIONS: readonly TexNodeDef[] = [...IO_NODES, ...PROCESSOR_NODES, ITERATE_PLACEHOLDER, ...GENERATOR_NODES, ...NOISE_NODES, ...PATTERN_NODES, TEXT_NODE, ...SCATTER_NODES, ...ADJUST_NODES, ...COLOUR_NODES, ...TRANSFORM_NODES, ...FILTER_NODES, ...DISTANCE_NODES, ...GEOMETRY_NODES, ...WEATHERING_NODES, ...PHOTO_NODES, ...SPLINE_NODES, ...VECTOR_NODES, ...SDF_NODES, ...PBR_CHECK_NODES, TIME_NODE, ...MATERIAL_NODES, PAINT_STACK_NODE];
 
 const BY_TYPE = new Map(TEXTURE_NODE_DEFINITIONS.map((definition) => [definition.type, definition]));
 
@@ -126,6 +127,20 @@ export const textureNodeDefinition = (node: TexGraphNode, resolve: GraphResolver
 };
 
 export const textureNodeDefinitionByType = (type: string): TexNodeDef | undefined => BY_TYPE.get(type);
+
+/** Whether a graph animates: some node in it (or in a graph it uses, however deep) reads the graph's time. */
+export const graphAnimates = (graph: TextureGraph, resolve: GraphResolver, seen: Set<string> = new Set()): boolean => {
+    for (const node of graph.nodes) {
+        if (textureNodeDefinition(node, resolve)?.readsTime?.(node.params)) return true;
+        const used = node.params.graph;
+        if ((node.type === SUBGRAPH_NODE_TYPE || node.type === ITERATE_NODE_TYPE) && typeof used === 'string' && !seen.has(used)) {
+            seen.add(used);
+            const entry = resolve(used);
+            if (entry && graphAnimates(entry.graph, resolve, seen)) return true;
+        }
+    }
+    return false;
+};
 
 /**
  * How the canvas shows a node of a type this build does not know: under its stored type, with a pin

@@ -143,11 +143,12 @@ const runAll = (ir: FunctionIr, env: FunctionEnv): Run => {
     const common = { ...settings };
     const glslNames: Record<string, Value> = {
         ...common, vUv: [...uv], gl_FragCoord: [pixel[0] + 0.5, pixel[1] + 0.5], uSize: [...(env.size ?? [1, 1])], uSeed: [env.seed ?? 0],
-        uIteration: [env.iteration ?? 0], uIterations: [env.iterations ?? 1], uWorld: [...(env.world ?? [1, 1])],
+        uIteration: [env.iteration ?? 0], uIterations: [env.iterations ?? 1], uWorld: [...(env.world ?? [1, 1])], uTime: [env.time ?? 0], uPhase: [env.phase ?? 0],
     };
     const wgslNames: Record<string, Value> = {
         ...common, uv: [...uv], pixel: [pixel[0] + 0.5, pixel[1] + 0.5], u_size: [...(env.size ?? [1, 1])], u_seed: [env.seed ?? 0],
         u_iteration: [env.iteration ?? 0], u_iterations: [env.iterations ?? 1], u_world: [...(env.world ?? [1, 1])], u_tiles: [tiles[0] ? 1 : 0, tiles[1] ? 1 : 0],
+        u_time: [env.time ?? 0], u_phase: [env.phase ?? 0],
     };
     const runLines = (code: string, names: Record<string, Value>, line: (text: string) => { type: string; name: string; expression: string } | null): number[] => {
         const locals = { ...names };
@@ -198,7 +199,7 @@ const graphOf = (nodes: Array<[string, string, Record<string, unknown>?]>, wires
 };
 
 const ENVS: FunctionEnv[] = [
-    { uv: [0.23, 0.71], pixel: [117, 363], size: [512, 512], seed: 7.25, iteration: 2, iterations: 5, world: [2, 3] },
+    { uv: [0.23, 0.71], pixel: [117, 363], size: [512, 512], seed: 7.25, iteration: 2, iterations: 5, world: [2, 3], time: 1.25, phase: 0.3125 },
     { uv: [0.81, 0.07], pixel: [414, 35], size: [512, 512], seed: 101.5, iteration: 0, iterations: 1, world: [1, 1], tiles: [false, true] },
     { uv: [0.5, 0.5], pixel: [256, 256], size: [256, 128], seed: 0, iteration: 4, iterations: 8, world: [0.5, 0.5] },
 ];

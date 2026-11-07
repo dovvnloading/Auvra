@@ -130,7 +130,7 @@ export const fallbackKey = (inputKey: string): string => `in_${inputKey}`;
 // ---- the steps ----
 
 export type IrOp =
-    | 'const' | 'uv' | 'pixel' | 'size' | 'seed' | 'iteration' | 'iterations' | 'world' | 'setting' | 'sample' | 'sampleGray'
+    | 'const' | 'uv' | 'pixel' | 'size' | 'seed' | 'iteration' | 'iterations' | 'world' | 'time' | 'phase' | 'setting' | 'sample' | 'sampleGray'
     | 'construct' | 'swizzle' | 'toFloat' | 'toInt' | 'toBool'
     | 'neg' | 'abs' | 'floor' | 'ceil' | 'fract' | 'round' | 'sqrt' | 'exp' | 'log' | 'sign' | 'saturate'
     | 'sin' | 'cos' | 'tan' | 'asin' | 'acos' | 'normalize' | 'length' | 'not'
@@ -325,6 +325,13 @@ export const FUNCTION_NODE_DEFINITIONS: readonly FnNodeDef[] = [
         description: 'Inside a graph an Iterate node runs: which pass this is (0 first) and how many passes there are. Outside one: 0 and 1.', keywords: ['iteration', 'loop index', 'count', 'iterate'],
         inputs: [], outputs: [port('out', 'Pass', 'int'), port('count', 'Passes', 'int')], params: [],
         build: (b) => ({ out: b.add('int', 'iteration'), count: b.add('int', 'iterations') }),
+    },
+    {
+        type: 'fnTime', label: 'Time', category: 'Inputs',
+        description: 'The graph\'s time going round its loop: seconds into the loop, and how far round it is (0 to 1). What turns by whole turns of How far round meets up at the loop\'s end.',
+        keywords: ['time', 'animation', 'animate', 'seconds', 'loop', 'phase', 'clock'],
+        inputs: [], outputs: [port('out', 'Seconds', 'float'), port('phase', 'How far round', 'float')], params: [],
+        build: (b) => ({ out: b.add('float', 'time'), phase: b.add('float', 'phase') }),
     },
     {
         type: FN_SETTING_TYPE, label: 'Setting', category: 'Inputs',
@@ -564,6 +571,9 @@ export const createFunctionNode = (type: string, x: number, y: number, params: R
     const definition = functionNodeDefinition(type);
     return { id: newFunctionNodeId(), type, x: Math.round(x), y: Math.round(y), params: { ...(definition ? defaultFunctionParams(definition) : {}), ...params } };
 };
+
+/** Whether a function graph reads the graph's time (its owner then animates). */
+export const functionReadsTime = (graph: FunctionGraph): boolean => graph.nodes.some((node) => node.type === 'fnTime');
 
 /** The function a new Pixel processor starts with: picture A as it is. */
 export const defaultPixelFunction = (): FunctionGraph => {
@@ -805,6 +815,8 @@ const glslExpression = (step: IrStep, a: readonly string[], argTypes: readonly F
         case 'iteration': return 'uIteration';
         case 'iterations': return 'uIterations';
         case 'world': return 'uWorld';
+        case 'time': return 'uTime';
+        case 'phase': return 'uPhase';
         case 'setting': return step.type === 'bool' ? `(p_${String(step.data)} != 0)` : `p_${String(step.data)}`;
         case 'sample': return `c_${String(step.data)}(${x})`;
         case 'sampleGray': return `g_${String(step.data)}(${x})`;
@@ -899,12 +911,15 @@ export interface WgslNames {
     iteration?: string;
     iterations?: string;
     world?: string;
+    /** The graph's time: seconds into its loop, and how far round (0 to 1). */
+    time?: string;
+    phase?: string;
     /** Whether the picture repeats across and down (vec2<i32>, 1 for yes), for noise's period. */
     tiles?: string;
 }
 
 const WGSL_DEFAULTS: Required<WgslNames> = {
-    uv: 'uv', pixel: 'pixel', size: 'u_size', seed: 'u_seed', iteration: 'u_iteration', iterations: 'u_iterations', world: 'u_world', tiles: 'u_tiles',
+    uv: 'uv', pixel: 'pixel', size: 'u_size', seed: 'u_seed', iteration: 'u_iteration', iterations: 'u_iterations', world: 'u_world', time: 'u_time', phase: 'u_phase', tiles: 'u_tiles',
 };
 
 /** The step's value as WGSL, from its arguments' names: the GLSL writer's step, said in WGSL. */
@@ -919,6 +934,8 @@ const wgslExpression = (step: IrStep, a: readonly string[], argTypes: readonly F
         case 'iteration': return names.iteration;
         case 'iterations': return names.iterations;
         case 'world': return names.world;
+        case 'time': return names.time;
+        case 'phase': return names.phase;
         case 'setting': return step.type === 'bool' ? `(p_${String(step.data)} != 0i)` : `p_${String(step.data)}`;
         case 'sample': return `c_${String(step.data)}(${x})`;
         case 'sampleGray': return `g_${String(step.data)}(${x})`;
@@ -1039,6 +1056,9 @@ export interface FunctionEnv {
     iteration?: number;
     iterations?: number;
     world?: readonly [number, number];
+    /** The graph's time: seconds into its loop, and how far round (0 to 1). */
+    time?: number;
+    phase?: number;
     settings?: Readonly<Record<string, number | boolean | readonly number[]>>;
     /** A picture's colour at a place (0 to 1 across and down). */
     sample?: (picture: string, at: readonly [number, number]) => readonly number[];
@@ -1082,6 +1102,8 @@ export const runFunction = (ir: FunctionIr, env: FunctionEnv = {}): number[] => 
             case 'iteration': value = [env.iteration ?? 0]; break;
             case 'iterations': value = [env.iterations ?? 1]; break;
             case 'world': value = [...(env.world ?? [1, 1])]; break;
+            case 'time': value = [env.time ?? 0]; break;
+            case 'phase': value = [env.phase ?? 0]; break;
             case 'setting': {
                 const raw = env.settings?.[String(step.data)];
                 value = Array.isArray(raw) ? raw.map(Number) : [typeof raw === 'boolean' ? (raw ? 1 : 0) : Number(raw ?? 0)];

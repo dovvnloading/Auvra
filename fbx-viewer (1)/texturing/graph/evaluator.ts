@@ -1,12 +1,13 @@
 import type * as THREE from 'three';
 import type { GpuImage, ImagePrecision, TextureGpu } from '../gpu/textureGpu';
+import { readAnimation, timeAt, type GraphTime } from './animation';
 import { coerceParam, formulaScope, graphContentKey, hashText, mixSeeds, parameterValues, resolveNodeParams, subgraphRunSeed, MAX_SIZE_LOG2 } from './document';
 import { MATERIAL_CHANNELS, materialKey, materialOf, materialResults, type MaterialImages } from './material';
 import { withNamedLinks } from './namedLinks';
 import { resolvePrecision, resolveSeed, resolveSize, resolveTiling, tilingAxes } from './inherit';
 import { nodeBindings, valuePinKey } from './nodeKit';
 import { ALL_MESH_MAPS, GRAPH_USING_TYPES, INPUT_NODE_TYPE, MATERIAL_INPUT_NODE_TYPE, MATERIAL_OUTPUT_NODE_TYPE, MESH_MAP_NODE_TYPE, MESH_READING_NODE_TYPES, OUTPUT_NODE_TYPE, SUBGRAPH_SEED_KEY, SUBGRAPH_VARY_KEY, meshMapKey } from './nodes/io';
-import { textureNodeDefinition, type GraphResolver } from './registry';
+import { graphAnimates, textureNodeDefinition, type GraphResolver } from './registry';
 import { outputNodeKind, type NodeRunContext, type PortKind, type TexGraphLink, type TexGraphNode, type TexNodeDef, type TextureGraph, type TilingMode } from './types';
 
 /**
@@ -39,6 +40,10 @@ export interface EvaluateRequest {
     world?: { w: number; h: number };
     /** The pass of an Iterate node this run is (shaders see it as uIteration, formulas as $iteration). */
     iteration?: { index: number; count: number };
+    /** Seconds of the graph's time (brought round its loop); 0 unless given. Only nodes reading the time draw again as it changes. */
+    time?: number;
+    /** The loop's length, instead of the graph's own (a graph used inside another keeps that one's loop). */
+    timeLoop?: number;
     /**
      * The seed the graph runs with, instead of its own: a graph used inside another runs with a seed
      * of its own copy, so copies of it look different.
@@ -103,6 +108,7 @@ interface NodeDetails {
     /** Metres the picture spans across and down. */
     world: [number, number];
     iteration: { index: number; count: number };
+    time: GraphTime;
 }
 
 interface Prepared {
@@ -251,6 +257,7 @@ export class TextureGraphEvaluator {
         const metres = graph.physicalSize ?? request.world ?? { w: 1, h: 1 };
         const world: [number, number] = [metres.w, metres.h];
         const iteration = request.iteration ?? { index: 0, count: 1 };
+        const time = timeAt(request.time ?? 0, request.timeLoop ?? readAnimation(graph.animation).loop);
         const scope = formulaScope(graph, values, graphWidth, graphHeight, graphSeed, iteration);
         const external = request.external ?? {};
         const externalToken = (key: string): string => {
@@ -337,8 +344,11 @@ export class TextureGraphEvaluator {
             if (main) extras.push(`bypass:${main}`);
             if (world[0] !== 1 || world[1] !== 1) extras.push(`world:${world[0]}x${world[1]}`);
             if (request.iteration) extras.push(`pass:${iteration.index}/${iteration.count}`);
+            // Nodes reading the time (and graphs used as nodes that animate) draw again as it changes; nothing else does.
+            const usedGraph = GRAPH_USING_TYPES.has(node.type) && typeof params.graph === 'string' ? this.resolve(params.graph) : undefined;
+            if (definition.readsTime?.(params) || (usedGraph && graphAnimates(usedGraph.graph, this.resolve))) extras.push(`time:${time.seconds}/${time.loop}`);
             const signature = hashText(JSON.stringify([node.type, params, width, height, precision, seed, kinds, inputSignatures, extras, tiling]));
-            info.set(node.id, { signature, width, height, kinds, precision, tiling, params, warnings, seed, innerSeed, world, iteration, ...(value ? { value } : {}) });
+            info.set(node.id, { signature, width, height, kinds, precision, tiling, params, warnings, seed, innerSeed, world, iteration, time, ...(value ? { value } : {}) });
         }
         return { plan, info, targets, external, graphSeed };
     }
@@ -536,6 +546,7 @@ export class TextureGraphEvaluator {
             tiling: tilingAxes(details.tiling),
             world: details.world,
             iteration: details.iteration,
+            time: details.time,
             params: details.params,
             signal: request.signal ?? new AbortController().signal,
             input,
@@ -546,7 +557,7 @@ export class TextureGraphEvaluator {
                 return image;
             },
             pass: async (target, fragment, extra = {}) => {
-                const bound = nodeBindings(definition, { input, params: details.params, seed, texture: this.texture, tiling: tilingAxes(details.tiling), world: details.world, iteration: details.iteration }, (name) => gpu.constant(name));
+                const bound = nodeBindings(definition, { input, params: details.params, seed, texture: this.texture, tiling: tilingAxes(details.tiling), world: details.world, iteration: details.iteration, time: details.time }, (name) => gpu.constant(name));
                 await gpu.pass(target, {
                     ...extra,
                     fragment: `${bound.declarations}\n${fragment}`,
@@ -586,6 +597,8 @@ export class TextureGraphEvaluator {
                         seed: options.seedOffset ? mixSeeds(details.innerSeed ?? request.seed ?? request.graph.seed, options.seedOffset) : details.innerSeed,
                         world: { w: details.world[0], h: details.world[1] },
                         ...(options.iteration ? { iteration: options.iteration } : {}),
+                        time: details.time.seconds,
+                        timeLoop: details.time.loop,
                         signal: request.signal,
                     });
                     for (const output of outputs) {

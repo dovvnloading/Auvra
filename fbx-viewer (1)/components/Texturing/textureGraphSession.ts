@@ -3,7 +3,8 @@ import { frontendDiagnostics } from '../../diagnostics/runtime';
 import { textureGpu, type GpuImage, type TextureGpu } from '../../texturing/gpu/textureGpu';
 import { AbortedError, TextureGraphEvaluator, type ExternalImage, type NodeState } from '../../texturing/graph/evaluator';
 import { OUTPUT_NODE_TYPE } from '../../texturing/graph/nodes/io';
-import { textureNodeDefinition, type GraphResolver } from '../../texturing/graph/registry';
+import { readAnimation, timeAt } from '../../texturing/graph/animation';
+import { graphAnimates, textureNodeDefinition, type GraphResolver } from '../../texturing/graph/registry';
 import type { OutputChannel, TextureGraph } from '../../texturing/graph/types';
 import type { ChannelImages, MaterialChannel } from '../../texturing/materialOutput';
 import { histogramOf, type Histogram } from './view2d';
@@ -79,6 +80,9 @@ export class TextureGraphSession {
     private previewSignature = '';
     /** Draws the material's pictures at sizes other than the editing size; kept between uses. */
     private output: TextureGraphEvaluator | null = null;
+    /** The graph's time it is drawn at (seconds), and while it plays, when the loop started (seconds of the page). */
+    time = 0;
+    private playStart: number | null = null;
 
     constructor(graph: TextureGraph, private readonly resolve: GraphResolver, private readonly texture: (id: string) => THREE.Texture | null) {
         this.gpu = textureGpu();
@@ -163,6 +167,40 @@ export class TextureGraphSession {
         this.schedule();
     }
 
+    /** Whether the graph animates: something in it reads the time. */
+    animates(): boolean {
+        return graphAnimates(this.graph, this.resolve);
+    }
+
+    /** The graph's loop length in seconds. */
+    loop(): number {
+        return readAnimation(this.graph.animation).loop;
+    }
+
+    get playing(): boolean {
+        return this.playStart !== null;
+    }
+
+    /** Draws the graph at a time (seconds, brought round its loop); only what reads the time draws again. */
+    setTime(seconds: number): void {
+        const next = timeAt(seconds, this.loop()).seconds;
+        if (this.playStart !== null) this.playStart = performance.now() / 1000 - next;
+        if (next === this.time) return;
+        this.time = next;
+        this.schedule();
+    }
+
+    /**
+     * Plays the animation (or stops it): each drawing done, the next is drawn at the time it is then,
+     * so a slow graph skips frames rather than falling behind.
+     */
+    play(on: boolean): void {
+        if (on === this.playing) return;
+        this.playStart = on ? performance.now() / 1000 - this.time : null;
+        if (on) this.schedule();
+        this.emit();
+    }
+
     /** Something outside the graph changed (a picture finished loading, a model was re-baked). */
     refresh(): void {
         this.schedule();
@@ -231,6 +269,7 @@ export class TextureGraphSession {
                 externalVersion: context ? `${this.externalVersion}|${context.version}` : this.externalVersion,
                 ...(context?.seed !== undefined ? { seed: context.seed } : {}),
                 ...(context?.size ? { size: context.size } : {}),
+                time: this.time,
                 targets: graph.nodes.map((node) => node.id),
                 signal: controller.signal,
                 onNode: (nodeId, state) => {
@@ -249,6 +288,14 @@ export class TextureGraphSession {
                 this.controller = null;
                 this.busy = false;
                 this.emit();
+                // Playing: the next frame, at the time it is now.
+                if (this.playStart !== null && !this.disposed) {
+                    if (!this.animates()) this.playStart = null;
+                    else {
+                        this.time = timeAt(performance.now() / 1000 - this.playStart, this.loop()).seconds;
+                        this.schedule();
+                    }
+                }
             }
         }
     }
@@ -393,6 +440,7 @@ void main() { outColor = vec4(hasAo == 1 ? texture(ao, vUv).r : 1.0, hasRough ==
 
     dispose(): void {
         this.disposed = true;
+        this.playStart = null;
         this.controller?.abort();
         this.evaluator.dispose();
         this.output?.dispose();

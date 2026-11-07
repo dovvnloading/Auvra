@@ -83,5 +83,6 @@ export const bakeSignature = (stored: StoredTextureGraph, resolve: GraphResolver
         }
     };
     visit(stored.graph);
-    return hashText(JSON.stringify([shape(stored.graph), stored.values, stored.bakeSize, stored.layout, used]));
+    // A flipbook's frames, loop and grid are part of the pictures; so is how the game plays it.
+    return hashText(JSON.stringify([shape(stored.graph), stored.values, stored.bakeSize, stored.layout, used, stored.graph.animation ?? null]));
 };

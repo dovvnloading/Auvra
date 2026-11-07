@@ -1,5 +1,6 @@
 import type * as THREE from 'three';
 import type { GpuImage, ImagePrecision, PassOptions, TextureGpu } from '../gpu/textureGpu';
+import type { GraphAnimation, GraphTime } from './animation';
 import type { MaterialImages } from './material';
 
 /**
@@ -192,6 +193,8 @@ export interface TextureGraph {
     groups?: GraphParameterGroup[];
     /** Presets kept with the graph: they go wherever it goes and wherever it is used. */
     presets?: GraphPreset[];
+    /** How long its time takes to come round, and how the game plays it (graphs whose nodes read the time). */
+    animation?: GraphAnimation;
 }
 
 /** Engine material channels an output can feed. */
@@ -241,6 +244,8 @@ export interface NodeRunContext {
     readonly world: [number, number];
     /** Settings with links to the graph's parameters worked out. */
     readonly params: Readonly<Record<string, unknown>>;
+    /** The graph's time: seconds into its loop, the loop's length and how far round it is (shaders: uTime, uPhase). */
+    readonly time?: GraphTime;
     readonly signal: AbortSignal;
     input(key: string): GpuImage | null;
     /** The kind each output resolved to. */
@@ -324,6 +329,8 @@ export interface TexNodeDef {
      * wired in reads it on the GPU; other nodes read such a value back first.
      */
     settingsInShader?: boolean;
+    /** It reads the graph's time (with these settings): drawn again as the time changes, and the graph animates. */
+    readsTime?: (params: Readonly<Record<string, unknown>>) => boolean;
     /** The node's own drawing. */
     run(context: NodeRunContext): Promise<Record<string, GpuImage>>;
 }
