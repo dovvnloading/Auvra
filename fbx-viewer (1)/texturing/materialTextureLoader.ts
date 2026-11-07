@@ -117,6 +117,15 @@ export const textureFromCompressed = (picture: CompressedPicture, role: TextureR
     return texture;
 };
 
+let projectLoader: ((url: string, request?: MaterialTextureRequest) => Promise<THREE.Texture>) | null = null;
+
+/** The open project's texture loader (set as it loads), for textures outside material assets: decals. */
+export const setProjectTextureLoader = (loader: typeof projectLoader): void => { projectLoader = loader; };
+
+/** Loads a project texture the way the open project does, or as a plain picture before one has opened. */
+export const loadProjectTexture = (url: string, request: MaterialTextureRequest): Promise<THREE.Texture> =>
+    (projectLoader ?? createMaterialTextureLoader({ compress: false }))(url, request);
+
 /**
  * Where compressed textures are kept: found by signature (in the project, or a built game), and kept
  * there once made (only where the project can be written, the editor).

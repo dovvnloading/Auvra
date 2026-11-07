@@ -31,7 +31,7 @@ import { loadSkinPaint } from './skinPaint/modelSkin';
 import { applyLayout, decodeLayout } from '../texturing/uv/uvLayout';
 import { setLightVolumeSource } from '../runtime/lighting/lightVolumeLoader';
 import { normalizeTextureSettings, setTextureSettings, setTextureSourceAsset, textureSettingsOf } from '../texturing/textureSettings';
-import { createMaterialTextureLoader, type CompressedTextureCache } from '../texturing/materialTextureLoader';
+import { createMaterialTextureLoader, setProjectTextureLoader, type CompressedTextureCache } from '../texturing/materialTextureLoader';
 
 /** The HUD document in the project 'hud' domain. */
 export const HUD_DOCUMENT_ID = 'hud-main';
@@ -252,6 +252,7 @@ export function createGameContentLoader(
 
   const textureAssetUrls = new Map<string, string>();
   let materialsReady = false;
+  let projectTextureLoader: ReturnType<typeof createMaterialTextureLoader> | undefined;
   const animationDocuments = documents('animations') as Array<{ assetId?: string; modelId?: string; name?: string; clipNames?: unknown }>;
   // Models and attachments load with GPU-compressed textures unless the game turns that off.
   const compressTextures = normalizeGameSettings(documents('metadata').find((doc) => doc?.id === GAME_SETTINGS_DOCUMENT_ID)?.settings).quality.textureCompression;
@@ -323,7 +324,9 @@ export function createGameContentLoader(
         },
         keep: options.keepCompressedTexture,
       };
-      materialLibrary.setTextureSource((textureId) => textureAssetUrls.get(textureId), createMaterialTextureLoader({ compress: compressTextures, cache }));
+      projectTextureLoader = createMaterialTextureLoader({ compress: compressTextures, cache });
+      setProjectTextureLoader(projectTextureLoader);
+      materialLibrary.setTextureSource((textureId) => textureAssetUrls.get(textureId), projectTextureLoader);
       materialLibrary.replaceAll(documents(MATERIALS_DOMAIN).map(readMaterialAsset).filter((asset): asset is MaterialAsset => asset !== null));
       // Levels' baked light volumes are read when a level is shown.
       setLightVolumeSource((assetId) => resolveAssetUrl(assetId), releaseAssetUrl);
@@ -416,6 +419,8 @@ export function createGameContentLoader(
         // way as every other map, so Material Overrides shows them and can clear or replace them.
         loaded.materialOverrides = await hydrateMaterialOverrides(loaded.object, withCurrentMaterialNames(item.materialOverrides), {
           resolveTextureUrl: (textureId) => textureAssetUrls.get(textureId),
+          // Override textures take the material textures' path: decoded at their depth, compressed by role, kept once made.
+          loadTexture: projectTextureLoader,
           assertCurrent,
         }, withCurrentMaterialNames(item.textureOverrides));
         loaded.textureOverrides = {};
