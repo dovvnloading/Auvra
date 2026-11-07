@@ -1,3 +1,4 @@
+import { readAnimation } from './animation';
 import { readPoints, type Point } from './curves';
 import { evaluateExpression, type ExprValue } from './expressions';
 import { GRAPH_USING_TYPES, INPUT_NODE_TYPE, MESH_READING_NODE_TYPES, OUTPUT_NODE_TYPE, SUBGRAPH_NODE_TYPE } from './nodes/io';
@@ -267,6 +268,7 @@ export const readTextureGraph = (value: unknown): { graph: TextureGraph; problem
     if (metres && typeof metres.w === 'number' && typeof metres.h === 'number' && metres.w > 0 && metres.h > 0 && (metres.w !== 1 || metres.h !== 1)) {
         graph.physicalSize = { w: Math.min(10000, metres.w), h: Math.min(10000, metres.h) };
     }
+    if (raw.animation && typeof raw.animation === 'object') graph.animation = readAnimation(raw.animation);
     return { graph, problems };
 };
 

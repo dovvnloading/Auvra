@@ -1,3 +1,4 @@
+import { perlin } from './noiseMath';
 import { floatBits, hash1, hashU } from './scatter';
 import type { TexGraphComment } from './types';
 
@@ -6,9 +7,9 @@ import type { TexGraphComment } from './types';
  *
  * Small graphs of values (numbers and vectors) that a Pixel processor works out for every pixel and a
  * Value processor works out once. They compile in two steps: the graph becomes a list of typed steps
- * that name no shading language (the steps below), then the steps become GLSL (glslFunction). A WGSL
- * writer would read the same steps; nothing before it knows the language. The same steps also run on
- * the CPU (runFunction), which is how they are checked.
+ * that name no shading language (the steps below), then the steps become GLSL (glslFunction) or WGSL
+ * (wgslFunction), step for step; nothing before them knows the language. The same steps also run on
+ * the CPU (runFunction), which is how both writers are checked.
  *
  * Any node's value can be made the result instead of the Result node's (a target), which is how
  * every step in between is previewed.
@@ -129,7 +130,7 @@ export const fallbackKey = (inputKey: string): string => `in_${inputKey}`;
 // ---- the steps ----
 
 export type IrOp =
-    | 'const' | 'uv' | 'pixel' | 'size' | 'seed' | 'iteration' | 'iterations' | 'world' | 'setting' | 'sample' | 'sampleGray'
+    | 'const' | 'uv' | 'pixel' | 'size' | 'seed' | 'iteration' | 'iterations' | 'world' | 'time' | 'phase' | 'setting' | 'sample' | 'sampleGray'
     | 'construct' | 'swizzle' | 'toFloat' | 'toInt' | 'toBool'
     | 'neg' | 'abs' | 'floor' | 'ceil' | 'fract' | 'round' | 'sqrt' | 'exp' | 'log' | 'sign' | 'saturate'
     | 'sin' | 'cos' | 'tan' | 'asin' | 'acos' | 'normalize' | 'length' | 'not'
@@ -324,6 +325,13 @@ export const FUNCTION_NODE_DEFINITIONS: readonly FnNodeDef[] = [
         description: 'Inside a graph an Iterate node runs: which pass this is (0 first) and how many passes there are. Outside one: 0 and 1.', keywords: ['iteration', 'loop index', 'count', 'iterate'],
         inputs: [], outputs: [port('out', 'Pass', 'int'), port('count', 'Passes', 'int')], params: [],
         build: (b) => ({ out: b.add('int', 'iteration'), count: b.add('int', 'iterations') }),
+    },
+    {
+        type: 'fnTime', label: 'Time', category: 'Inputs',
+        description: 'The graph\'s time going round its loop: seconds into the loop, and how far round it is (0 to 1). What turns by whole turns of How far round meets up at the loop\'s end.',
+        keywords: ['time', 'animation', 'animate', 'seconds', 'loop', 'phase', 'clock'],
+        inputs: [], outputs: [port('out', 'Seconds', 'float'), port('phase', 'How far round', 'float')], params: [],
+        build: (b) => ({ out: b.add('float', 'time'), phase: b.add('float', 'phase') }),
     },
     {
         type: FN_SETTING_TYPE, label: 'Setting', category: 'Inputs',
@@ -563,6 +571,9 @@ export const createFunctionNode = (type: string, x: number, y: number, params: R
     const definition = functionNodeDefinition(type);
     return { id: newFunctionNodeId(), type, x: Math.round(x), y: Math.round(y), params: { ...(definition ? defaultFunctionParams(definition) : {}), ...params } };
 };
+
+/** Whether a function graph reads the graph's time (its owner then animates). */
+export const functionReadsTime = (graph: FunctionGraph): boolean => graph.nodes.some((node) => node.type === 'fnTime');
 
 /** The function a new Pixel processor starts with: picture A as it is. */
 export const defaultPixelFunction = (): FunctionGraph => {
@@ -804,6 +815,8 @@ const glslExpression = (step: IrStep, a: readonly string[], argTypes: readonly F
         case 'iteration': return 'uIteration';
         case 'iterations': return 'uIterations';
         case 'world': return 'uWorld';
+        case 'time': return 'uTime';
+        case 'phase': return 'uPhase';
         case 'setting': return step.type === 'bool' ? `(p_${String(step.data)} != 0)` : `p_${String(step.data)}`;
         case 'sample': return `c_${String(step.data)}(${x})`;
         case 'sampleGray': return `g_${String(step.data)}(${x})`;
@@ -874,6 +887,165 @@ export const glslFunction = (ir: FunctionIr, name = 'fn_result', names: GlslName
     return `vec4 ${name}() {\n${lines.join('\n')}\n    return ${glslColour(ir.result.type, `v${ir.result.id}`)};\n}`;
 };
 
+// ---- WGSL ----
+
+/** Each value type as WGSL names it. */
+export const WGSL_TYPES: Record<FnType, string> = { float: 'f32', vec2: 'vec2<f32>', vec3: 'vec3<f32>', vec4: 'vec4<f32>', int: 'i32', bool: 'bool' };
+
+const wgslLiteral = (type: FnType, data: readonly number[]): string => {
+    if (type === 'bool') return data[0] ? 'true' : 'false';
+    if (type === 'int') return `${Math.trunc(data[0] ?? 0)}i`;
+    if (type === 'float') return glslNumber(data[0] ?? 0);
+    return `${WGSL_TYPES[type]}(${data.map(glslNumber).join(', ')})`;
+};
+
+/**
+ * The names a WGSL function reads for what the GLSL one takes from the kit: the pixel's place and
+ * whole pixel (the function's own parameters by default), and the uniforms beside them.
+ */
+export interface WgslNames {
+    uv?: string;
+    pixel?: string;
+    size?: string;
+    seed?: string;
+    iteration?: string;
+    iterations?: string;
+    world?: string;
+    /** The graph's time: seconds into its loop, and how far round (0 to 1). */
+    time?: string;
+    phase?: string;
+    /** Whether the picture repeats across and down (vec2<i32>, 1 for yes), for noise's period. */
+    tiles?: string;
+}
+
+const WGSL_DEFAULTS: Required<WgslNames> = {
+    uv: 'uv', pixel: 'pixel', size: 'u_size', seed: 'u_seed', iteration: 'u_iteration', iterations: 'u_iterations', world: 'u_world', time: 'u_time', phase: 'u_phase', tiles: 'u_tiles',
+};
+
+/** The step's value as WGSL, from its arguments' names: the GLSL writer's step, said in WGSL. */
+const wgslExpression = (step: IrStep, a: readonly string[], argTypes: readonly FnType[], names: Required<WgslNames>): string => {
+    const [x, y, z] = a;
+    switch (step.op) {
+        case 'const': return wgslLiteral(step.type, step.data as number[]);
+        case 'uv': return names.uv;
+        case 'pixel': return `floor(${names.pixel})`;
+        case 'size': return names.size;
+        case 'seed': return names.seed;
+        case 'iteration': return names.iteration;
+        case 'iterations': return names.iterations;
+        case 'world': return names.world;
+        case 'time': return names.time;
+        case 'phase': return names.phase;
+        case 'setting': return step.type === 'bool' ? `(p_${String(step.data)} != 0i)` : `p_${String(step.data)}`;
+        case 'sample': return `c_${String(step.data)}(${x})`;
+        case 'sampleGray': return `g_${String(step.data)}(${x})`;
+        case 'construct': return `${WGSL_TYPES[step.type]}(${a.join(', ')})`;
+        case 'swizzle': return `${x}.${String(step.data)}`;
+        case 'toFloat': return argTypes[0] === 'bool' ? `select(0.0, 1.0, ${x})` : `f32(${x})`;
+        case 'toInt': return argTypes[0] === 'bool' ? `select(0i, 1i, ${x})` : `i32(${x})`;
+        case 'toBool': return argTypes[0] === 'int' ? `(${x} != 0i)` : `(${x} != 0.0)`;
+        case 'neg': return `(-${x})`;
+        case 'round': return `floor(${x} + 0.5)`;
+        case 'saturate': return `saturate(${x})`;
+        // WGSL's select works out both sides: the zero vector's NaN is the side left out.
+        case 'normalize': return `select(${x}, normalize(${x}), length(${x}) > 0.0)`;
+        case 'not': return `(!${x})`;
+        case 'abs': case 'floor': case 'ceil': case 'fract': case 'sqrt': case 'exp': case 'log': case 'sign':
+        case 'sin': case 'cos': case 'tan': case 'asin': case 'acos': case 'length':
+            return `${step.op}(${x})`;
+        case 'add': return `(${x} + ${y})`;
+        case 'sub': return `(${x} - ${y})`;
+        case 'mul': return `(${x} * ${y})`;
+        case 'div': return `(${x} / ${y})`;
+        // GLSL's mod (floored), never WGSL's %, which keeps the first value's sign.
+        case 'mod': return `(${x} - ${y} * floor(${x} / ${y}))`;
+        case 'pow': case 'min': case 'max': case 'step': case 'dot': case 'distance': case 'cross':
+            return `${step.op}(${x}, ${y})`;
+        case 'atan2': return `atan2(${x}, ${y})`;
+        case 'lt': return `(${x} < ${y})`;
+        case 'le': return `(${x} <= ${y})`;
+        case 'gt': return `(${x} > ${y})`;
+        case 'ge': return `(${x} >= ${y})`;
+        case 'eq': return `(${x} == ${y})`;
+        case 'ne': return `(${x} != ${y})`;
+        case 'and': return `(${x} && ${y})`;
+        case 'or': return `(${x} || ${y})`;
+        case 'mix': return `mix(${x}, ${y}, ${z})`;
+        case 'clamp': return `clamp(${x}, ${y}, ${z})`;
+        case 'smoothstep': return `smoothstep(${x}, ${y}, ${z})`;
+        case 'select': return `select(${z}, ${y}, ${x})`;
+        case 'random': {
+            const salt = glslNumber((step.data as number[] | undefined)?.[0] ?? 0);
+            return argTypes[0] === 'float' ? `fn_hashF(${x}, ${names.seed} + ${salt})` : `fn_hash1(vec2<i32>(floor(${x} * 4096.0)), ${names.seed} + ${salt})`;
+        }
+        case 'noise': return `fn_perlin(${x} * ${y}, fn_tilePeriod(vec2<i32>(i32(max(1.0, floor(${y} + 0.5))))), ${names.seed})`;
+        default: return '0.0';
+    }
+};
+
+/** A value of `type` as a colour, in WGSL. */
+const wgslColour = (type: FnType, name: string): string => {
+    switch (type) {
+        case 'vec4': return name;
+        case 'vec3': return `vec4<f32>(${name}, 1.0)`;
+        case 'vec2': return `vec4<f32>(${name}, 0.0, 1.0)`;
+        case 'int': return `vec4<f32>(vec3<f32>(f32(${name})), 1.0)`;
+        case 'bool': return `vec4<f32>(vec3<f32>(select(0.0, 1.0, ${name})), 1.0)`;
+        default: return `vec4<f32>(vec3<f32>(${name}), 1.0)`;
+    }
+};
+
+/**
+ * The steps as a WGSL function `fn name(uv: vec2<f32>, pixel: vec2<f32>) -> vec4<f32>` giving the
+ * result as a colour, matching glslFunction step for step. It reads p_ settings and c_/g_ picture
+ * reads as the GLSL does, the uniforms by `names`, and the helpers in wgslFunctionLibrary.
+ */
+export const wgslFunction = (ir: FunctionIr, name = 'fn_result', given: WgslNames = {}): string => {
+    const names = { ...WGSL_DEFAULTS, ...given };
+    const types = new Map(ir.steps.map((step) => [step.id, step.type]));
+    const lines = ir.steps.map((step) => {
+        const args = step.args.map((arg) => `v${arg}`);
+        return `    let v${step.id}: ${WGSL_TYPES[step.type]} = ${wgslExpression(step, args, step.args.map((arg) => types.get(arg)!), names)};`;
+    });
+    return `fn ${name}(${names.uv}: vec2<f32>, ${names.pixel}: vec2<f32>) -> vec4<f32> {\n${lines.join('\n')}\n    return ${wgslColour(ir.result.type, `v${ir.result.id}`)};\n}`;
+};
+
+/**
+ * The helpers a WGSL function calls: the GLSL library's integer hashes (the same numbers on every
+ * GPU) and its tiling gradient noise, said in WGSL. Their names start fn_ (WGSL has no overloads of
+ * functions of its own).
+ */
+export const wgslFunctionLibrary = (given: WgslNames = {}): string => {
+    const names = { ...WGSL_DEFAULTS, ...given };
+    return `fn fn_hashU(value: u32) -> u32 {
+    var x = value;
+    x = x ^ (x >> 16u); x = x * 0x7feb352du;
+    x = x ^ (x >> 15u); x = x * 0x846ca68bu;
+    x = x ^ (x >> 16u);
+    return x;
+}
+fn fn_hashU2(v: vec2<u32>) -> u32 { return fn_hashU(v.x ^ fn_hashU(v.y + 0x9e3779b9u)); }
+fn fn_hashU3(v: vec3<u32>) -> u32 { return fn_hashU(v.x ^ fn_hashU(v.y ^ fn_hashU(v.z + 0x85ebca6bu))); }
+fn fn_hash1(p: vec2<i32>, seed: f32) -> f32 { return f32(fn_hashU3(vec3<u32>(bitcast<vec2<u32>>(p), bitcast<u32>(seed)))) / 4294967295.0; }
+fn fn_hashF(x: f32, seed: f32) -> f32 { return f32(fn_hashU2(vec2<u32>(bitcast<u32>(x), bitcast<u32>(seed)))) / 4294967295.0; }
+fn fn_wrapCell(c: vec2<i32>, period: vec2<i32>) -> vec2<i32> { return ((c % period) + period) % period; }
+fn fn_tilePeriod(cells: vec2<i32>) -> vec2<i32> { return vec2<i32>(select(1048576i, cells.x, ${names.tiles}.x == 1i), select(1048576i, cells.y, ${names.tiles}.y == 1i)); }
+fn fn_gradientAt(cell: vec2<i32>, period: vec2<i32>, seed: f32) -> vec2<f32> {
+    let a = fn_hash1(fn_wrapCell(cell, period), seed) * 6.28318530717959;
+    return vec2<f32>(cos(a), sin(a));
+}
+fn fn_perlin(p: vec2<f32>, period: vec2<i32>, seed: f32) -> f32 {
+    let i = vec2<i32>(floor(p));
+    let f = fract(p);
+    let u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+    let a = dot(fn_gradientAt(i, period, seed), f);
+    let b = dot(fn_gradientAt(i + vec2<i32>(1i, 0i), period, seed), f - vec2<f32>(1.0, 0.0));
+    let c = dot(fn_gradientAt(i + vec2<i32>(0i, 1i), period, seed), f - vec2<f32>(0.0, 1.0));
+    let d = dot(fn_gradientAt(i + vec2<i32>(1i, 1i), period, seed), f - vec2<f32>(1.0, 1.0));
+    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y) * 1.41421356;
+}`;
+};
+
 // ---- the CPU ----
 
 export interface FunctionEnv {
@@ -884,12 +1056,23 @@ export interface FunctionEnv {
     iteration?: number;
     iterations?: number;
     world?: readonly [number, number];
+    /** The graph's time: seconds into its loop, and how far round (0 to 1). */
+    time?: number;
+    phase?: number;
     settings?: Readonly<Record<string, number | boolean | readonly number[]>>;
     /** A picture's colour at a place (0 to 1 across and down). */
     sample?: (picture: string, at: readonly [number, number]) => readonly number[];
     /** Its grey (a grey picture's value, a colour picture's brightness). */
     gray?: (picture: string, at: readonly [number, number]) => number;
+    /** Whether the picture repeats across and down (noise repeats with it); both by default. */
+    tiles?: readonly [boolean, boolean];
 }
+
+/** The noise step on the CPU: the shaders' perlin at `at` times `scale`, repeating every whole scale where the picture tiles. */
+export const functionNoise = (at: readonly number[], scale: number, seed: number, tiles: readonly [boolean, boolean] = [true, true]): number => {
+    const cells = Math.trunc(Math.max(1, Math.floor(scale + 0.5)));
+    return perlin(Math.fround(at[0] * scale), Math.fround(at[1] * scale), tiles[0] ? cells : 1048576, tiles[1] ? cells : 1048576, Math.fround(seed));
+};
 
 const hashF = (x: number, seed: number): number => {
     const a = floatBits(Math.fround(x));
@@ -919,6 +1102,8 @@ export const runFunction = (ir: FunctionIr, env: FunctionEnv = {}): number[] => 
             case 'iteration': value = [env.iteration ?? 0]; break;
             case 'iterations': value = [env.iterations ?? 1]; break;
             case 'world': value = [...(env.world ?? [1, 1])]; break;
+            case 'time': value = [env.time ?? 0]; break;
+            case 'phase': value = [env.phase ?? 0]; break;
             case 'setting': {
                 const raw = env.settings?.[String(step.data)];
                 value = Array.isArray(raw) ? raw.map(Number) : [typeof raw === 'boolean' ? (raw ? 1 : 0) : Number(raw ?? 0)];
@@ -990,7 +1175,7 @@ export const runFunction = (ir: FunctionIr, env: FunctionEnv = {}): number[] => 
                 value = [x.length === 1 ? hashF(x[0], seed) : hash1(Math.floor(Math.fround(x[0] * 4096)), Math.floor(Math.fround(x[1] * 4096)), seed)];
                 break;
             }
-            case 'noise': throw new FnError('Noise is worked out on the GPU only.');
+            case 'noise': value = [functionNoise(x, y[0], env.seed ?? 0, env.tiles)]; break;
             default: value = [0];
         }
         values.set(step.id, int ? value.map(Math.trunc) : value);

@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import { createNode, normalizeTextureGraph, readTextureGraph } from '../../texturing/graph/document';
-import { MAX_PASSES, feedbackPairs, passCount, runPasses } from '../../texturing/graph/iterate';
+import { MAX_PASSES, feedKeys, feedbackPairs, passCount, runPasses } from '../../texturing/graph/iterate';
+import { TextureGraphEvaluator } from '../../texturing/graph/evaluator';
+import { MATERIAL_CHANNELS, materialKey } from '../../texturing/graph/material';
+import { createFunctionNode, FN_RESULT_TYPE } from '../../texturing/graph/functionGraph';
 import { wireFits } from '../../texturing/graph/material';
 import { nodeBindings, valuePinKey } from '../../texturing/graph/nodeKit';
-import { INPUT_NODE_TYPE, ITERATE_NODE_TYPE, OUTPUT_NODE_TYPE } from '../../texturing/graph/nodes/io';
+import { INPUT_NODE_TYPE, ITERATE_NODE_TYPE, MATERIAL_INPUT_NODE_TYPE, MATERIAL_OUTPUT_NODE_TYPE, OUTPUT_NODE_TYPE } from '../../texturing/graph/nodes/io';
 import { LEGACY_PIXEL_SETTINGS, PIXEL_PROCESSOR_TYPE, VALUE_PROCESSOR_TYPE, readNamedSettings, settingKeyFor } from '../../texturing/graph/nodes/processors';
 import { textureNodeDefinition } from '../../texturing/graph/registry';
 import { createTextureGraph } from '../../texturing/graph/document';
@@ -73,6 +76,50 @@ describe('Iterate', () => {
         expect(definition.description).toContain('state into State');
         expect(definition.params.find((param) => param.key === 'passes')?.max).toBe(MAX_PASSES);
         expect(textureNodeDefinition(createNode(ITERATE_NODE_TYPE, 0, 0), noGraphs)!.inputs).toEqual([]);
+    });
+});
+
+describe('Iterate: whole materials, and only what a pass changes drawn again', () => {
+    it('takes and gives whole materials, a Material output feeding the Material input of its name, every channel', () => {
+        const graph = createTextureGraph();
+        const input = createNode(MATERIAL_INPUT_NODE_TYPE, 0, 0, { name: 'Surface' });
+        const output = createNode(MATERIAL_OUTPUT_NODE_TYPE, 400, 0, { name: 'surface' });
+        const inner: TextureGraph = { ...graph, nodes: [input, output], links: [] };
+        const pairs = feedbackPairs(inner);
+        expect(pairs).toEqual([{ output: output.id, input: 'Surface', material: true }]);
+        const keys = feedKeys(pairs);
+        expect(keys.length).toBe(MATERIAL_CHANNELS.length);
+        expect(keys[0]).toEqual({ output: materialKey(output.id, MATERIAL_CHANNELS[0]), input: materialKey('Surface', MATERIAL_CHANNELS[0]) });
+        const node = createNode(ITERATE_NODE_TYPE, 0, 0, { graph: 'inner' });
+        const definition = textureNodeDefinition(node, (id) => (id === 'inner' ? { id, name: 'Inner', graph: inner } : undefined))!;
+        expect(definition.inputs.map((port) => [port.key, port.kind])).toEqual([['Surface', 'material']]);
+        expect(definition.outputs.map((port) => [port.key, port.kind])).toEqual([[output.id, 'material']]);
+    });
+
+    const signaturesAt = (graph: TextureGraph, iteration: { index: number; count: number }, seed: number) => {
+        const evaluator = new TextureGraphEvaluator({ maxSize: 4096, onRestored: () => () => undefined } as never, () => undefined, () => null);
+        const prepared = (evaluator as unknown as { prepare(request: object): { info: Map<string, { signature: string }> } }).prepare({ graph, targets: graph.nodes.map((n) => n.id), iteration, seed });
+        return new Map([...prepared.info].map(([id, details]) => [id, details.signature]));
+    };
+
+    it('draws again in a pass only what reads the pass, what follows a new seed, and what they reach', () => {
+        const gradient = { ...createNode('gradient', 0, 0), id: 'gradient' };
+        const noise = { ...createNode('perlinNoise', 0, 200), id: 'noise' };
+        const levels = { ...createNode('levels', 200, 0), id: 'levels' };
+        const pass = { ...createFunctionNode('fnPass', 0, 0), id: 'p' };
+        const result = { ...createFunctionNode(FN_RESULT_TYPE, 0, 0), id: 'r' };
+        const counter = { ...createNode(PIXEL_PROCESSOR_TYPE, 0, 400, { mode: 'graph', function: { nodes: [pass, result], links: [{ from: 'p', fromOutput: 'out', to: 'r', toInput: 'value' }] } }), id: 'counter' };
+        const graph = normalizeTextureGraph({ ...createTextureGraph(), nodes: [gradient, noise, levels, counter], links: [{ from: 'gradient', fromOutput: 'out', to: 'levels', toInput: 'in' }] });
+        // Same seed, another pass: only the processor reading the pass changes.
+        const first = signaturesAt(graph, { index: 0, count: 4 }, 7);
+        const second = signaturesAt(graph, { index: 1, count: 4 }, 7);
+        expect(second.get('counter')).not.toBe(first.get('counter'));
+        for (const id of ['gradient', 'noise', 'levels']) expect(second.get(id), id).toBe(first.get(id));
+        // A new seed: the noise (which has a seed) changes; the gradient and its levels do not.
+        const reseeded = signaturesAt(graph, { index: 1, count: 4 }, 8);
+        expect(reseeded.get('noise')).not.toBe(second.get('noise'));
+        expect(reseeded.get('gradient')).toBe(second.get('gradient'));
+        expect(reseeded.get('levels')).toBe(second.get('levels'));
     });
 });
 

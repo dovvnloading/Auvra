@@ -5,15 +5,16 @@ import { useScene } from '../../context/SceneContext';
 import { frontendDiagnostics } from '../../diagnostics/runtime';
 import { materialLibrary, type MaterialAsset } from '../../runtime/materials/materialLibrary';
 import { AbortedError, unknownNodeMessage, type ExternalImage, type TextureGraphEvaluator } from '../../texturing/graph/evaluator';
-import { MAX_SIZE_LOG2, MIN_SIZE_LOG2, coerceParameter, formulaScope, parameterValues, readTextureGraph, resolveNodeParams, subgraphRunSeed, unknownNodeTypes } from '../../texturing/graph/document';
+import { MAX_SIZE_LOG2, MIN_SIZE_LOG2, coerceParameter, formulaScope, mixSeeds, parameterValues, readTextureGraph, resolveNodeParams, subgraphRunSeed, unknownNodeTypes } from '../../texturing/graph/document';
 import { ITERATE_NODE_TYPE, OUTPUT_NODE_TYPE, SUBGRAPH_NODE_TYPE, SUBGRAPH_SEED_KEY, SUBGRAPH_VARY_KEY } from '../../texturing/graph/nodes/io';
-import { feedbackPairs } from '../../texturing/graph/iterate';
+import { feedbackPairs, passCount } from '../../texturing/graph/iterate';
 import { describeMatrix, tileSafeDirection, tileSafeMatrix, transformMatrix } from '../../texturing/graph/safeTransform';
 import { PROCESSOR_PICTURES, PROCESSOR_TYPES, defaultFunctionFor, processorUse, readNamedSettings, settingDefault } from '../../texturing/graph/nodes/processors';
 import { compileFunction, readFunctionGraph, type FunctionGraph, type NamedSetting } from '../../texturing/graph/functionGraph';
-import { PARAMETER_KINDS, PARAMETER_KIND_LABELS, applyPreset, presetFrom, putPreset, removePreset, renamePreset } from '../../texturing/graph/parameters';
+import { PARAMETER_KINDS, PARAMETER_KIND_LABELS, applyPreset, presetFrom, putPreset, removePreset, renameParameter, renamePreset } from '../../texturing/graph/parameters';
 import { VALUE_SETTING_KINDS, valuePinKey } from '../../texturing/graph/nodeKit';
-import { textureNodeDefinition, type GraphEntry, type GraphResolver } from '../../texturing/graph/registry';
+import { graphAnimates, textureNodeDefinition, type GraphEntry, type GraphResolver } from '../../texturing/graph/registry';
+import { DEFAULT_ANIMATION, FLIPBOOK_FRAMES, flipbookFrameSize, flipbookGrid, frameTime, packFlipbook, readAnimation, type GraphAnimation } from '../../texturing/graph/animation';
 import { bakeSignature, readStoredGraph, withParameterPictures, type StoredTextureGraph } from '../../texturing/graph/stored';
 import { MATERIAL_CHANNELS, MATERIAL_CHANNEL_LABELS, materialKey, materialOf } from '../../texturing/graph/material';
 import { TILING_MODES } from '../../texturing/graph/inherit';
@@ -41,6 +42,7 @@ import { TextureView2D } from './TextureView2D';
 import type { Histogram } from './view2d';
 import { TextureView3D } from './TextureView3D';
 import { useTextureStore } from './useTextureStore';
+import type { GpuImage } from '../../texturing/gpu/textureGpu';
 
 /**
  * THE TEXTURE GRAPH WORKSPACE (a texture graph material in the Materials tab)
@@ -127,7 +129,7 @@ export const TextureGraphWorkspace: React.FC<{
             const outer = readStoredGraph(list[list.length - 1].asset.textureGraph).graph;
             const node = outer.nodes.find((candidate) => candidate.id === step.nodeId);
             const inner = assets.find((candidate) => candidate.id === step.assetId && candidate.textureGraph);
-            if (!node || node.type !== SUBGRAPH_NODE_TYPE || node.params.graph !== step.assetId || !inner || list.some((level) => level.asset.id === inner.id)) break;
+            if (!node || (node.type !== SUBGRAPH_NODE_TYPE && node.type !== ITERATE_NODE_TYPE) || node.params.graph !== step.assetId || !inner || list.some((level) => level.asset.id === inner.id)) break;
             list.push({ asset: inner, via: step.nodeId, key: `${list.length}:${inner.id}:${step.nodeId}` });
         }
         return list;
@@ -217,9 +219,13 @@ const contextOf = (outerSession: TextureGraphSession, outer: StoredTextureGraph,
     const values = parameterValues(outer.graph, outer.values);
     const params = resolveNodeParams(definition, node, values, formulaScope(outer.graph, values, width, height));
     const parameters = Object.fromEntries(inner.parameters.map((parameter) => [parameter.name, params[parameter.name]]));
-    const seed = subgraphRunSeed(outer.graph.seed, via, Math.round(Number(params[SUBGRAPH_SEED_KEY]) || 0), params[SUBGRAPH_VARY_KEY] !== false, inner.seed);
+    const runSeed = subgraphRunSeed(outer.graph.seed, via, Math.round(Number(params[SUBGRAPH_SEED_KEY]) || 0), params[SUBGRAPH_VARY_KEY] !== false, inner.seed);
+    // A graph an Iterate node runs is shown at its first pass: the images wired in, pass 1 of its count, the first pass's seed.
+    const iterating = node.type === ITERATE_NODE_TYPE;
+    const seed = iterating && params.newSeed !== false ? mixSeeds(runSeed, 1) : runSeed;
+    const iteration = iterating ? { index: 0, count: passCount(params.passes) } : undefined;
     const size = { w: Math.round(Math.log2(width)), h: Math.round(Math.log2(height)) };
-    return { inputs, parameters, seed, size, version: JSON.stringify([version, parameters, seed, size]) };
+    return { inputs, parameters, seed, size, ...(iteration ? { iteration } : {}), version: JSON.stringify([version, parameters, seed, size, iteration ?? null]) };
 };
 
 /** What the 2D view can show of a node: each image it gives, each channel of a material it gives. */
@@ -430,7 +436,7 @@ const Workspace: React.FC<{
             setTab('node');
             return;
         }
-        const graphId = node?.type === SUBGRAPH_NODE_TYPE ? node.params.graph : undefined;
+        const graphId = node?.type === SUBGRAPH_NODE_TYPE || node?.type === ITERATE_NODE_TYPE ? node.params.graph : undefined;
         if (typeof graphId === 'string' && graphId !== asset.id && entries.has(graphId)) onOpenGraph(graphId, nodeId);
     }, [asset.id, entries, graph.nodes, onOpenGraph]);
 
@@ -458,9 +464,9 @@ const Workspace: React.FC<{
      * other sizes are drawn by an evaluator the session keeps, which keeps only the outputs afterwards,
      * so making the pictures again at that size with nothing changed draws nothing new.
      */
-    const renderChannels = async (size: { w: number; h: number }): Promise<{ images: ChannelImages; done: () => void }> => {
+    const renderChannels = async (size: { w: number; h: number }, time = 0): Promise<{ images: ChannelImages; done: () => void }> => {
         const outputs = graph.nodes.filter((node) => node.type === OUTPUT_NODE_TYPE);
-        const request = { graph, parameters: stored.values, targets: outputs.map((node) => node.id) };
+        const request = { graph, parameters: stored.values, targets: outputs.map((node) => node.id), time };
         // The material's pictures never use the 3D view's mesh maps: they are drawn with stand-ins for them.
         const editingSize = size.w === graph.size.w && size.h === graph.size.h;
         const reuse = editingSize && !session.busy && !Object.keys(session.external).length && session.evaluator.upToDate(request);
@@ -498,12 +504,40 @@ const Workspace: React.FC<{
         setMessage(null);
         let done = () => undefined as void;
         const size = pictureSize(graph, stored.bakeSize);
-        const width = 2 ** size.w;
-        const height = 2 ** size.h;
+        let width = 2 ** size.w;
+        let height = 2 ** size.h;
+        // An animated graph played as a flipbook: its frames round the loop, laid out on each picture.
+        const animation = readAnimation(graph.animation);
+        const flipbook = animation.play === 'flipbook' && graphAnimates(graph, resolve) ? { frames: animation.frames, ...flipbookGrid(animation.frames), loop: animation.loop } : null;
+        const packed: GpuImage[] = [];
         try {
-            const rendered = await renderChannels(size);
-            done = rendered.done;
+            let images: ChannelImages;
+            if (flipbook) {
+                const frameSize = flipbookFrameSize(size, flipbook.frames);
+                const frames: ChannelImages[] = [];
+                const dones: Array<() => void> = [];
+                done = () => { for (const release of dones) release(); };
+                for (let index = 0; index < flipbook.frames; index++) {
+                    setBaking(`Drawing frame ${index + 1} of ${flipbook.frames}…`);
+                    const rendered = await renderChannels(frameSize, frameTime(index, flipbook.frames, flipbook.loop));
+                    dones.push(rendered.done);
+                    frames.push(rendered.images);
+                }
+                images = {};
+                for (const channel of Object.keys(frames[0]) as MaterialChannel[]) {
+                    const atlas = packFlipbook(session.gpu, frames.map((frame) => frame[channel]!), flipbook.columns, flipbook.rows);
+                    packed.push(atlas);
+                    images[channel] = atlas;
+                }
+                const first = packed[0];
+                if (first) { width = first.width; height = first.height; }
+            } else {
+                const rendered = await renderChannels(size);
+                done = rendered.done;
+                images = rendered.images;
+            }
             setBaking('Saving pictures…');
+            const rendered = { images };
             const pictures = await encodeChannels(session.gpu, rendered.images, width, height, stored.layout, true);
             const ids: ChannelTextureIds = {};
             for (const picture of pictures) {
@@ -515,7 +549,7 @@ const Workspace: React.FC<{
             const next: MaterialAsset = {
                 ...current,
                 // Only the material's pictures change; a surface graph edited by hand keeps its edits.
-                ...rewriteMaterialPictures(current, ids, { opacityMode: rendered.images.opacity ? 'masked' : undefined }),
+                ...rewriteMaterialPictures(current, ids, { opacityMode: rendered.images.opacity ? 'masked' : undefined, flipbook }),
                 textureGraph: { ...latestStored, baked: { textures: ids, signature: bakeSignature(latestStored, resolve), size: latestStored.bakeSize, at: Date.now() } } as unknown as Record<string, unknown>,
             };
             materialLibrary.upsert(next);
@@ -524,7 +558,12 @@ const Workspace: React.FC<{
             const saved = await onSave(next, true);
             if (saved !== false) void textureStore.discard(previous);
             const drawn = pictures.filter((picture) => materialReadsPicture(picture.role)).length;
-            setMessage({ text: `The material now draws with ${drawn} new picture${drawn === 1 ? '' : 's'} at ${width} × ${height}.`, tone: 'info' });
+            setMessage({
+                text: flipbook
+                    ? `The material now plays a flipbook of ${flipbook.frames} frames round ${Number(flipbook.loop.toFixed(2))} seconds, on ${drawn} new picture${drawn === 1 ? '' : 's'} at ${width} × ${height}.`
+                    : `The material now draws with ${drawn} new picture${drawn === 1 ? '' : 's'} at ${width} × ${height}.`,
+                tone: 'info',
+            });
         } catch (error) {
             if (!(error instanceof AbortedError)) {
                 frontendDiagnostics.failure('texture_graph_bake_failed', error);
@@ -532,6 +571,7 @@ const Workspace: React.FC<{
             }
         } finally {
             done();
+            for (const atlas of packed) session.gpu.release(atlas);
             setBaking(null);
         }
     };
@@ -935,6 +975,36 @@ const Workspace: React.FC<{
                 </div>
             </div>
             {Math.max(graph.size.w, graph.size.h) >= 12 && <p className="text-2xs leading-snug text-ink-3">Large editing sizes redraw slowly; the material's pictures can be larger than the editing size.</p>}
+            {(() => {
+                const animation = readAnimation(graph.animation);
+                const animates = graphAnimates(graph, resolve);
+                const change = (patch: Partial<GraphAnimation>) => update({ ...graph, animation: { ...(graph.animation ?? DEFAULT_ANIMATION), ...patch } }, true);
+                return (
+                    <div className="space-y-1.5 border-t border-line pt-2">
+                        <div className="text-2xs font-semibold text-ink-2">Animation</div>
+                        {!animates && <p className="text-2xs leading-snug text-ink-3">Nothing in this graph reads the time yet. Add a Time node (or a Time node in a function graph) and wire it into a setting shown as a pin to animate it.</p>}
+                        <div className="grid grid-cols-[1fr_auto] items-center gap-x-2 gap-y-1.5">
+                            <span className="text-2xs text-ink-2" title="Its time comes round after this long, so the animation meets up with itself: it tiles in time.">Loop (seconds)</span>
+                            <DraftNumber label="Loop length in seconds" value={animation.loop} limit={(value) => Math.max(0.1, Math.min(600, value))} onCommit={(loop) => change({ loop })} className="w-16" />
+                            <span className="text-2xs text-ink-2">In the game</span>
+                            <Select value={animation.play} options={[{ value: 'flipbook', label: 'Plays a flipbook' }, { value: 'cook', label: 'Cooked as it plays' }]}
+                                onChange={(play) => change({ play: play as GraphAnimation['play'] })} className="w-[140px]" />
+                            {animation.play === 'flipbook' ? (
+                                <>
+                                    <span className="text-2xs text-ink-2" title="Update material draws this many frames round the loop and lays them out on each picture, the whole at the pictures' size.">Frames</span>
+                                    <Select value={animation.frames} options={FLIPBOOK_FRAMES.map((frames) => ({ value: frames, label: `${frames} (${flipbookGrid(frames).columns} × ${flipbookGrid(frames).rows})` }))}
+                                        onChange={(frames) => change({ frames: Number(frames) })} className="w-[140px]" />
+                                </>
+                            ) : (
+                                <>
+                                    <span className="text-2xs text-ink-2" title="A game that cooks texture graphs draws this one again this many times a second, at the time it is then; one that does not shows its first frame.">Cooks a second</span>
+                                    <DraftNumber label="Cooks a second" value={animation.rate} limit={(value) => Math.max(0.25, Math.min(60, value))} onCommit={(rate) => change({ rate })} className="w-16" />
+                                </>
+                            )}
+                        </div>
+                    </div>
+                );
+            })()}
             <div className="space-y-2 border-t border-line pt-2">
                 <div className="flex items-center gap-1.5">
                     <span className="flex-1 text-2xs font-semibold text-ink-2">Parameters</span>
@@ -975,6 +1045,11 @@ const Workspace: React.FC<{
                             const parameters = renamed ? graph.parameters.map((parameter) => (parameter.group === renamed.from ? { ...parameter, group: renamed.to } : parameter)) : graph.parameters;
                             const { groups: _old, ...rest } = graph;
                             update(groups.length ? { ...rest, parameters, groups } : { ...rest, parameters }, true);
+                        }}
+                        onRename={(from, to) => {
+                            // The graph and its stored values change together, as one undo step.
+                            const renamed = renameParameter(graph, stored.values, from, to);
+                            change({ graph: renamed.graph, values: renamed.values });
                         }}
                         onRemove={(index) => {
                             const parameter = graph.parameters[index];

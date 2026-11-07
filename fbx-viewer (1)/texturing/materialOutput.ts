@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { createMaterialGraph, defaultParams, readsMaterialPictures, type MaterialGraph } from '../runtime/materials/materialGraph';
-import { MATERIAL_PICTURE_NODE_TYPE, OUTPUT_NODE_TYPE as MATERIAL_OUTPUT, UDIM_ATLAS_NODE_TYPE } from '../runtime/materials/materialNodes';
+import { FLIPBOOK_FRAMES_NODE_TYPE, MATERIAL_PICTURE_NODE_TYPE, OUTPUT_NODE_TYPE as MATERIAL_OUTPUT, UDIM_ATLAS_NODE_TYPE } from '../runtime/materials/materialNodes';
 import type { GpuImage, TextureGpu } from './gpu/textureGpu';
 import { encodePng16 } from './png';
 
@@ -225,15 +225,24 @@ export const tileAtlas = (gpu: TextureGpu, tiles: readonly number[], channelImag
 
 const isTileLayout = (value: TileLayout | { columns: number; rows: number }): value is TileLayout => Array.isArray((value as TileLayout).tiles);
 
+/** A texture graph's flipbook: how many frames, the grid they fill from the top left, and the seconds they loop over. */
+export interface FlipbookLayout { frames: number; columns: number; rows: number; loop: number }
+
+const flipbookParams = (flipbook: FlipbookLayout) => ({ frames: flipbook.frames, columns: flipbook.columns, rows: flipbook.rows, loop: flipbook.loop });
+
+type PictureGraphOptions = { opacityMode?: 'masked' | 'translucent'; tiles?: TileLayout | { columns: number; rows: number }; flipbook?: FlipbookLayout | null };
+
 /**
  * A material graph drawing with kept pictures, each wired into the input it is for: occlusion, roughness
  * and metallic from the packed picture, or from one picture each. With `tiles`, the pictures are a tile
- * atlas (tileAtlas), read through a UDIM Atlas node. A height picture drives a Parallax node that moves
- * every other picture's UV and shades the material's low parts, its depth a value each use can change.
+ * atlas (tileAtlas), read through a UDIM Atlas node. With `flipbook`, each picture holds an animated
+ * texture graph's frames, read through a Flipbook Frames node that plays them round the graph's loop.
+ * A height picture drives a Parallax node that moves every other picture's UV and shades the
+ * material's low parts, its depth a value each use can change.
  */
 export const materialGraphForTextures = (
     textures: ChannelTextureIds,
-    options: { opacityMode?: 'masked' | 'translucent'; tiles?: TileLayout | { columns: number; rows: number } } = {},
+    options: PictureGraphOptions = {},
 ): MaterialGraph => {
     const graph = createMaterialGraph();
     const output = graph.nodes.find((node) => node.type === MATERIAL_OUTPUT)!;
@@ -251,6 +260,9 @@ export const materialGraphForTextures = (
             params: { ...defaultParams(UDIM_ATLAS_NODE_TYPE), tiles: atlas.tiles.join(' '), columns: atlas.columns, tileSize: atlas.cell, gutter: atlas.gutter },
         });
     }
+    // A flipbook's frames (never with UDIM tiles, which lay pictures out a way of their own).
+    const flipbook = !atlas && options.flipbook ? options.flipbook : null;
+    if (flipbook) graph.nodes.push({ id: 'flipbook', type: FLIPBOOK_FRAMES_NODE_TYPE, x: -420, y: 40, params: { ...defaultParams(FLIPBOOK_FRAMES_NODE_TYPE), ...flipbookParams(flipbook) } });
     const wire = (fromNode: string, fromOutput: string, toInput: string) => graph.links.push({ fromNode, fromOutput, toNode: output.id, toInput });
     // Height moves what every other picture shows with the view, at a depth each use of the material can set.
     const parallax = Boolean(textures.height);
@@ -258,6 +270,7 @@ export const materialGraphForTextures = (
         graph.nodes.push({ id: 'heightDepth', type: 'float', x: -420, y: 380, params: { ...defaultParams('float'), value: DEFAULT_PARALLAX_DEPTH }, parameter: 'Height depth' });
         graph.nodes.push({ id: 'parallax', type: 'parallax', x: -180, y: 300, params: { ...defaultParams('parallax'), texture: textures.height } });
         if (atlas) graph.links.push({ fromNode: 'udimTiles', fromOutput: 'out', toNode: 'parallax', toInput: 'uv' });
+        else if (flipbook) graph.links.push({ fromNode: 'flipbook', fromOutput: 'out', toNode: 'parallax', toInput: 'uv' });
         graph.links.push({ fromNode: 'heightDepth', fromOutput: 'out', toNode: 'parallax', toInput: 'depth' });
         wire('parallax', 'shadow', 'selfShadow');
     }
@@ -266,6 +279,7 @@ export const materialGraphForTextures = (
         graph.nodes.push({ id, type, x: 80, y: -60 + row++ * 230, params: { ...defaultParams(type), ...params } });
         if (parallax) graph.links.push({ fromNode: 'parallax', fromOutput: 'uv', toNode: id, toInput: 'uv' });
         else if (atlas) graph.links.push({ fromNode: 'udimTiles', fromOutput: 'out', toNode: id, toInput: 'uv' });
+        else if (flipbook) graph.links.push({ fromNode: 'flipbook', fromOutput: 'out', toNode: id, toInput: 'uv' });
     };
     if (textures.baseColor) {
         add('baseColor', 'texture', { texture: textures.baseColor, space: 'color' });
@@ -311,7 +325,7 @@ export const materialGraphForTextures = (
  */
 export const surfaceGraphForPictures = (
     pictures: ChannelTextureIds,
-    options: { opacityMode?: 'masked' | 'translucent'; tiles?: TileLayout | { columns: number; rows: number } } = {},
+    options: PictureGraphOptions = {},
 ): MaterialGraph => {
     const graph = materialGraphForTextures(pictures, options);
     const roles = new Set(Object.keys(pictures));
@@ -334,17 +348,20 @@ export const surfaceGraphForPictures = (
 export const rewriteMaterialPictures = (
     asset: { graph: MaterialGraph; pictures?: Readonly<Record<string, string>> },
     pictures: ChannelTextureIds,
-    options: { opacityMode?: 'masked' | 'translucent'; tiles?: TileLayout | { columns: number; rows: number } } = {},
+    options: PictureGraphOptions = {},
 ): { graph: MaterialGraph; pictures: Record<string, string> } => {
     const kept = Object.fromEntries(Object.entries(pictures).filter(([, id]) => typeof id === 'string' && id)) as Record<string, string>;
     const sameRoles = JSON.stringify(Object.keys(asset.pictures ?? {}).sort()) === JSON.stringify(Object.keys(kept).sort());
-    if (!readsMaterialPictures(asset.graph) || !sameRoles) return { graph: surfaceGraphForPictures(kept, options), pictures: kept };
+    // Pictures becoming a flipbook (or no longer one) change how they are read: the graph is made again.
+    const flipbook = options.flipbook ?? null;
+    const playsFlipbook = asset.graph.nodes.some(node => node.type === FLIPBOOK_FRAMES_NODE_TYPE);
+    if (!readsMaterialPictures(asset.graph) || !sameRoles || Boolean(flipbook) !== playsFlipbook) return { graph: surfaceGraphForPictures(kept, options), pictures: kept };
     const tiles = options.tiles && isTileLayout(options.tiles) ? options.tiles : null;
-    const graph = tiles ? {
+    const graph = tiles || flipbook ? {
         ...asset.graph,
-        nodes: asset.graph.nodes.map(node => (node.type === UDIM_ATLAS_NODE_TYPE
+        nodes: asset.graph.nodes.map(node => (tiles && node.type === UDIM_ATLAS_NODE_TYPE
             ? { ...node, params: { ...node.params, tiles: tiles.tiles.join(' '), columns: tiles.columns, tileSize: tiles.cell, gutter: tiles.gutter } }
-            : node)),
+            : flipbook && node.type === FLIPBOOK_FRAMES_NODE_TYPE ? { ...node, params: { ...node.params, ...flipbookParams(flipbook) } } : node)),
     } : asset.graph;
     return { graph, pictures: kept };
 };

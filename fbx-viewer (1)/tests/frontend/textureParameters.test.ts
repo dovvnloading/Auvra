@@ -7,6 +7,7 @@ import {
     conditionHolds,
     conditionScope,
     formatCondition,
+    formulaNameProblem,
     groupByLabelPrefix,
     hasLabelPrefixes,
     matchesPreset,
@@ -16,12 +17,14 @@ import {
     presetFrom,
     putPreset,
     removePreset,
+    renameParameter,
     renamePreset,
     variationSeeds,
     variationValues,
     visibleParameters,
 } from '../../texturing/graph/parameters';
 import { textureNodeDefinition } from '../../texturing/graph/registry';
+import { renameInFormula } from '../../texturing/graph/expressions';
 import { withParameterPictures } from '../../texturing/graph/stored';
 import type { GraphParameter, TextureGraph } from '../../texturing/graph/types';
 import { readSharedPresets, sharedPresetsDocument } from '../../components/Texturing/projectPresets';
@@ -200,5 +203,35 @@ describe('long labels and sheets with no effect', () => {
         // Not until every cell is drawn, and never for one cell.
         expect(allCellsSame([flat, undefined])).toBe(false);
         expect(allCellsSame([flat])).toBe(false);
+    });
+});
+
+describe('renaming a parameter\'s formula name', () => {
+    it('changes every setting, formula, condition and preset that uses it, and nothing that only looks like it', () => {
+        const blur = { ...createNode('blur', 0, 0), id: 'blur' };
+        blur.params.radius = { $expr: 'dirt * 2 + dirty + min(dirt, 0.5) + dirtier' };
+        const levels = { ...createNode('levels', 0, 0), id: 'levels' };
+        levels.params.inLow = { $bind: 'dirt' };
+        const input = { ...createNode(INPUT_NODE_TYPE, 0, 0, { name: 'mask', visibleIf: 'dirt > 0.2' }), id: 'input' };
+        const graph: TextureGraph = { ...createTextureGraph(), parameters: [...parameters, { name: 'grime', label: 'Grime', kind: 'float', default: 0, visibleIf: 'dirt>0.1&&dirty' }], nodes: [blur, levels, input],
+            presets: [{ id: 'p', name: 'Muddy', values: { dirt: 0.9, mortar: 0.2 } }] };
+        const { graph: next, values } = renameParameter(graph, { dirt: 0.4, mortar: 0.1 }, 'dirt', 'grit');
+        expect(next.parameters.find((parameter) => parameter.label === 'Dirt amount')?.name).toBe('grit');
+        expect(next.nodes.find((node) => node.id === 'blur')?.params.radius).toEqual({ $expr: 'grit * 2 + dirty + min(grit, 0.5) + dirtier' });
+        expect(next.nodes.find((node) => node.id === 'levels')?.params.inLow).toEqual({ $bind: 'grit' });
+        expect(next.nodes.find((node) => node.id === 'input')?.params.visibleIf).toBe('grit > 0.2');
+        expect(next.parameters.find((parameter) => parameter.name === 'grime')?.visibleIf).toBe('grit>0.1&&dirty');
+        expect(next.presets?.[0].values).toEqual({ grit: 0.9, mortar: 0.2 });
+        expect(values).toEqual({ grit: 0.4, mortar: 0.1 });
+        // A function of the same name is still called.
+        expect(renameInFormula('min(min, 2)', 'min', 'least')).toBe('min(least, 2)');
+    });
+
+    it('refuses a name that is taken, empty or not a formula name', () => {
+        expect(formulaNameProblem('mortar', parameters, 'dirt')).toMatch(/already/);
+        expect(formulaNameProblem('', parameters, 'dirt')).toMatch(/empty/);
+        expect(formulaNameProblem('2coats', parameters, 'dirt')).toMatch(/letters/);
+        expect(formulaNameProblem('dirt', parameters, 'dirt')).toBeNull();
+        expect(formulaNameProblem('grit_2', parameters, 'dirt')).toBeNull();
     });
 });

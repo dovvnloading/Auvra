@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { readdirSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { PHOTO_NODES, atlasPlace, pickBand, shadingFit } from '../../texturing/graph/nodes/photo';
+import { PHOTO_NODES, SPECKLED, atlasPlace, occlusionLifted, occlusionSpeckle, pickBand, shadingFit } from '../../texturing/graph/nodes/photo';
+import { growFromExample, grownPicture, grownSource } from '../../texturing/graph/quilting';
 import { closedCut, seamMasks, seamTile, type Picture } from '../../texturing/graph/seamCut';
 import { textureNodeDefinitionByType } from '../../texturing/graph/registry';
+import { picturesToDraw, type NodePicture } from '../../components/Texturing/nodePictures';
 import { nearestOn, placementsAlong, quadPlace, resample, segmentsOf, simplify, smoothPath, traceOutlines, windingAt, wrapOffsets, type Point } from '../../texturing/graph/curves';
 import { SPLINE_NODES, outlinePaths, scatterRows, strokeAt } from '../../texturing/graph/nodes/splines';
 import { addPoint, dragOrbit, dragPoint, removePoint, type PointList } from '../../components/Texturing/view2d';
@@ -103,6 +105,29 @@ describe('photo and scan processing', () => {
         expect(shadingFit({ nx: 0, ny: 0, l: 0.4, nxx: 0, nyy: 0, nxy: 0, lnx: 0, lny: 0 })).toMatchObject({ a: 0, b: 0 });
     });
 
+    it('never blows a colour out when its occlusion is noise, and says the occlusion is speckled', () => {
+        let state = 99;
+        const random = () => { state = (state * 16807) % 2147483647; return state / 2147483647; };
+        const params = { occlusionAmount: 1, floor: 0.35 };
+        const range = { low: [0.5, 0.5, 0.5], high: [0.5, 0.5, 0.5] };
+        for (const noise of [() => (random() < 0.5 ? 0 : 1), random]) {
+            const out: number[] = [];
+            for (let i = 0; i < 4000; i++) out.push(...occlusionLifted([0.5, 0.5, 0.5], noise(), params, range));
+            expect(Math.max(...out)).toBeLessThanOrEqual(0.9);
+            expect(out.reduce((sum, v) => sum + v, 0) / out.length).toBeCloseTo(0.5, 1);
+        }
+        // Real occlusion still lifts what it darkened, never past the trusted floor or the input's range.
+        const lifted = occlusionLifted([0.2, 0.3, 0.1], 0.5, params, { low: [0.05, 0.05, 0.05], high: [0.8, 0.8, 0.8] });
+        expect(lifted[0]).toBeCloseTo(0.4, 6);
+        expect(occlusionLifted([0.2, 0.2, 0.2], 0.1, params, { low: [0, 0, 0], high: [1, 1, 1] })[0]).toBeLessThan(0.2 / 0.35);
+        // Speckle: pure noise is far past the line, a smooth bake far below it.
+        const n = 32;
+        const noisy = Array.from({ length: n * n }, () => (random() < 0.5 ? 0 : 1));
+        const smooth = Array.from({ length: n * n }, (_, i) => 0.5 + 0.4 * Math.sin((2 * Math.PI * (i % n)) / n));
+        expect(occlusionSpeckle(noisy, n, n)).toBeGreaterThan(SPECKLED * 2);
+        expect(occlusionSpeckle(smooth, n, n)).toBeLessThan(SPECKLED / 4);
+    });
+
     it('takes atlas pieces counted from the top left', () => {
         expect(atlasPlace(0, 0, 4, 4, 1)).toEqual([0, 0.75]);
         expect(atlasPlace(0, 0, 4, 4, 6)).toEqual([0.25, 0.5]);
@@ -119,6 +144,42 @@ describe('photo and scan processing', () => {
             expect(textureNodeDefinitionByType(definition.type), definition.type).toBe(definition);
         }
         expect(textureNodeDefinitionByType('makeTile')?.params.find((param) => param.key === 'method')?.default).toBe('seams');
+    });
+});
+
+describe('growing a texture from an example', () => {
+    const example = photo(40, 40, 3);
+    const grow = (seed: number, randomness = 0.3) => growFromExample(example, { width: 96, height: 96, patch: 16, overlap: 0.25, randomness, seed, candidates: 400 });
+
+    it('lays moved copies of the example, every pixel from inside it', () => {
+        const map = grow(5);
+        expect(map.patches).toBeGreaterThan(30);
+        const moves = new Set<string>();
+        for (let y = 0; y < map.height; y++) {
+            for (let x = 0; x < map.width; x++) {
+                const [sx, sy] = grownSource(map, x + 0.5, y + 0.5);
+                expect(sx, `${x},${y}`).toBeGreaterThanOrEqual(0);
+                expect(sy).toBeGreaterThanOrEqual(0);
+                expect(sx).toBeLessThanOrEqual(example.width);
+                expect(sy).toBeLessThanOrEqual(example.height);
+                moves.add(`${map.offset[(y * map.width + x) * 2]},${map.offset[(y * map.width + x) * 2 + 1]}`);
+            }
+        }
+        // Patches, not a pixel-by-pixel scramble: few moves for many pixels.
+        expect(moves.size).toBeLessThan(map.patches * 3);
+    });
+
+    it('tiles: its edges meet as smoothly as its inside', () => {
+        const grown = grownPicture(example, grow(9));
+        const { wrap, inside } = steps(grown);
+        expect(wrap).toBeLessThan(inside * 2.5);
+    });
+
+    it('is the same for the same seed and different for another', () => {
+        expect(Array.from(grow(4).offset)).toEqual(Array.from(grow(4).offset));
+        expect(Array.from(grow(4).offset)).not.toEqual(Array.from(grow(5).offset));
+        const node = PHOTO_NODES.find((definition) => definition.type === 'growFromExample')!;
+        expect(node.params.map((param) => param.key)).toEqual(expect.arrayContaining(['patch', 'randomness', 'seed']));
     });
 });
 
@@ -425,7 +486,7 @@ describe('weathering on stand-ins', () => {
 
 describe('shaders', () => {
     /** Names every pass already declares (its prelude and the kit): a node declaring one again does not compile. */
-    const TAKEN = ['uSize', 'vUv', 'outColor', 'uSeed', 'uTiles', 'uWorld', 'uIteration', 'uIterations'];
+    const TAKEN = ['uSize', 'vUv', 'outColor', 'uSeed', 'uTiles', 'uWorld', 'uIteration', 'uIterations', 'uTime', 'uPhase'];
     it('never declare a name the pass already has', () => {
         const folder = resolve(__dirname, '../../texturing/graph/nodes');
         for (const file of readdirSync(folder).filter((name) => name.endsWith('.ts'))) {
@@ -452,5 +513,16 @@ describe('shaders', () => {
             const source = readFileSync(resolve(root, file), 'utf8');
             expect(source, `${file} declares uSize`).not.toMatch(/uniform\s+\w+\s+uSize\b/);
         }
+    });
+});
+
+describe('finder pictures', () => {
+    it('try a picture that failed once again, once, the next time the finder opens', () => {
+        const requests = [{ key: 'a', type: 'a' }, { key: 'b', type: 'b' }, { key: 'c', type: 'c' }, { key: 'd', type: 'd' }];
+        const drawn = new Map<string, NodePicture>([['a', 'failed'], ['b', 'failed'], ['c', { width: 1, height: 1 } as unknown as NodePicture]]);
+        const tries = new Map([['a', 1], ['b', 2], ['c', 1]]);
+        // a failed once: again; b failed twice: kept as the mark; c drew; d is new; anything waiting is left.
+        expect(picturesToDraw(requests, drawn, tries, new Set()).map((request) => request.key)).toEqual(['a', 'd']);
+        expect(picturesToDraw(requests, drawn, tries, new Set(['d'])).map((request) => request.key)).toEqual(['a']);
     });
 });

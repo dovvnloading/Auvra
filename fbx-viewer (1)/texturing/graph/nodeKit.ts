@@ -190,7 +190,7 @@ float curveValue(sampler2D lut, float value, int channel) {
 /** The GLSL declarations a node's pass gets, and the values they take. */
 export const nodeBindings = (
     definition: TexNodeDef,
-    context: Pick<NodeRunContext, 'input' | 'params' | 'seed' | 'texture' | 'tiling'> & Partial<Pick<NodeRunContext, 'world' | 'iteration'>>,
+    context: Pick<NodeRunContext, 'input' | 'params' | 'seed' | 'texture' | 'tiling'> & Partial<Pick<NodeRunContext, 'world' | 'iteration' | 'time'>>,
     gpuConstant: (name: NonNullable<TexPortDef['fallback']>) => THREE.Texture,
 ): { declarations: string; inputs: Record<string, GpuImage | THREE.Texture>; uniforms: Record<string, unknown> } => {
     // The node's tiling: inputs read past an edge come round where it repeats and stop at the edge where
@@ -202,6 +202,9 @@ export const nodeBindings = (
         'uniform vec2 uWorld;',
         'uniform int uIteration;',
         'uniform int uIterations;',
+        // The graph's time: seconds into its loop, and how far round the loop (0 to 1).
+        'uniform float uTime;',
+        'uniform float uPhase;',
         'vec2 tileUv(vec2 uv) { return vec2(uTiles.x == 1 ? fract(uv.x) : clamp(uv.x, 0.0, 1.0), uTiles.y == 1 ? fract(uv.y) : clamp(uv.y, 0.0, 1.0)); }',
         'ivec2 tilePeriod(ivec2 cells) { return ivec2(uTiles.x == 1 ? cells.x : 1048576, uTiles.y == 1 ? cells.y : 1048576); }',
     ];
@@ -210,6 +213,7 @@ export const nodeBindings = (
     const uniforms: Record<string, unknown> = {
         uSeed: context.seed, uTiles: [context.tiling[0] ? 1 : 0, context.tiling[1] ? 1 : 0], uWorld: new THREE.Vector2(world[0], world[1]),
         uIteration: context.iteration?.index ?? 0, uIterations: context.iteration?.count ?? 1,
+        uTime: context.time?.seconds ?? 0, uPhase: context.time?.phase ?? 0,
     };
     for (const port of definition.inputs) {
         // A material input carries a picture per channel: the node binds the ones it reads itself. A
