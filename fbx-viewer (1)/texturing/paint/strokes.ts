@@ -25,7 +25,16 @@ import { SELECTION_WIDTH, encodeTriangles, selectionBytes } from './selection';
  */
 
 export type BrushShape = 'round' | 'square' | 'picture';
-export type BrushProjection = 'screen' | 'surface';
+/**
+ * How a dab is laid on: cast from the screen, as a disc lying on the surface, flat along one axis through
+ * whatever lies under it (a decal cast straight through), or from three sides blended by how the surface faces.
+ */
+export type BrushProjection = 'screen' | 'surface' | 'planar' | 'triplanar';
+/** The axis a flat brush is cast along: the view's (as the stroke starts) or one of the model's. */
+export type PlanarAxis = 'view' | 'x' | 'y' | 'z';
+
+/** How far along its axis a flat or three-sided dab reaches, either side of where it lands, in its radii. */
+export const PLANAR_DEPTH = 3;
 /**
  * What a stroke does: lays the brush's values on, or works on what is painted already: blurs or sharpens
  * it, pushes it along the stroke, or copies it from elsewhere on the same picture.
@@ -63,6 +72,7 @@ export interface BrushSettings {
     /** A picture from the library for the 'picture' shape (its brightness). */
     alphaTexture: string;
     projection: BrushProjection;
+    planarAxis?: PlanarAxis;
     /** Texels facing away by more than this many degrees are not painted. */
     facingLimit: number;
     /**
@@ -235,6 +245,7 @@ uniform float uStencilAngle;
 uniform float uStencilOpacity;
 uniform int uStencilSrgb;
 uniform int uStencilFlip;
+uniform vec3 uPlanarAxis;
 uniform int uSelecting;
 uniform sampler2D uSelection;
 
@@ -273,6 +284,17 @@ float shapeAt(vec2 local, float radiusPixels) {
     return a;
 }
 
+// A dab cast flat along `axis`: its shape on the plane square to the axis (turned by `angle`), within reach along it.
+float planarAt(vec3 d, vec3 axis, float radius, float angle, float radiusPixels) {
+    float depth = dot(d, axis);
+    if (abs(depth) > radius * ${PLANAR_DEPTH.toFixed(1)}) return 0.0;
+    vec3 helper = abs(axis.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+    vec3 t = normalize(cross(helper, axis));
+    vec3 b = cross(axis, t);
+    vec2 local = rotate2(-angle) * vec2(dot(d, t), dot(d, b)) / radius;
+    return shapeAt(local, radiusPixels);
+}
+
 float coverageAt(vec3 p, vec3 n) {
     float facing = dot(n, normalize(uCamera - p));
     if (uProjection == 0) {
@@ -298,6 +320,28 @@ float coverageAt(vec3 p, vec3 n) {
         }
         if (uHasStencil == 1) a *= stencilAt(screen);
         return a * smoothstep(uFacing, uFacing + 0.15, facing);
+    }
+    if (uProjection >= 2) {
+        float a = 0.0;
+        for (int i = 0; i < ${MAX_DABS}; i++) {
+            if (i >= uCount) break;
+            vec3 d = p - uDabs[i].xyz;
+            float radius = uDabs[i].w;
+            float s = 0.0;
+            if (uProjection == 2) {
+                // Flat along the axis, through everything within reach either side, facing it or not past the limit.
+                if (dot(n, -uPlanarAxis) >= uFacing) s = planarAt(d, uPlanarAxis, radius, uDabs3[i].x, radius * uDabs3[i].w);
+            } else {
+                vec3 w = pow(abs(n), vec3(4.0));
+                w /= max(w.x + w.y + w.z, 1e-5);
+                s = planarAt(d, vec3(1.0, 0.0, 0.0), radius, uDabs3[i].x, radius * uDabs3[i].w) * w.x
+                    + planarAt(d, vec3(0.0, 1.0, 0.0), radius, uDabs3[i].x, radius * uDabs3[i].w) * w.y
+                    + planarAt(d, vec3(0.0, 0.0, 1.0), radius, uDabs3[i].x, radius * uDabs3[i].w) * w.z;
+            }
+            a = 1.0 - (1.0 - a) * (1.0 - s * uDabs2[i].x);
+        }
+        if (uHasStencil == 1 && a > 0.0) a *= stencilOnModel(p);
+        return a;
     }
     float a = 0.0;
     for (int i = 0; i < ${MAX_DABS}; i++) {
@@ -622,9 +666,9 @@ export const footprint = (stack: PaintStack, dabs: readonly Dab[], view: StrokeV
         const once = (triangle: number) => { if (!seen[triangle]) { seen[triangle] = 1; reach(triangle); } };
         for (const dab of dabs) {
             for (const mirror of mirrors) {
-                if (brush.projection === 'surface' && dab.point) {
+                if (brush.projection !== 'screen' && dab.point) {
                     // The disc lies within its radius of the surface and its radius across: √2 of it from the middle.
-                    stack.picker.trianglesNear(dab.point, (dab.worldRadius ?? 0) * Math.SQRT2, mirror, once);
+                    stack.picker.trianglesNear(dab.point, (dab.worldRadius ?? 0) * (brush.projection === 'surface' ? Math.SQRT2 : Math.hypot(PLANAR_DEPTH, Math.SQRT2)), mirror, once);
                 } else {
                     // A square brush's corners reach √2 of its radius.
                     const r = dab.radius * Math.SQRT2 + 1;
@@ -724,7 +768,7 @@ export class Stroke {
             const angle = (brush.angle * Math.PI) / 180 + (brush.followStroke ? direction : 0) + lean + (random(this.seed + n * 7 + 3) - 0.5) * Math.PI * 2 * brush.angleJitter;
             const flow = brush.flow * (brush.pressureFlow ? pushed : 1) * (1 - brush.flowJitter * random(this.seed + n * 7 + 4));
             const dab: Dab = { x: sx, y: sy, radius, angle, flow };
-            if (brush.projection === 'surface') {
+            if (brush.projection !== 'screen') {
                 const found = hit(sx, sy);
                 if (!found) return;
                 dab.point = found.point;
@@ -800,6 +844,9 @@ export class Stroke {
             }
         }
         const copies = copiesOf(this.brush, stack.part.bounds);
+        // A flat brush's axis: the view's (from the camera into the scene), or one of the model's.
+        const planarAxis = this.brush.planarAxis === 'x' ? new THREE.Vector3(1, 0, 0) : this.brush.planarAxis === 'y' ? new THREE.Vector3(0, 1, 0) : this.brush.planarAxis === 'z' ? new THREE.Vector3(0, 0, 1)
+            : new THREE.Vector3().crossVectors(view.cameraRight ?? new THREE.Vector3(1, 0, 0), view.cameraUp ?? new THREE.Vector3(0, 1, 0)).negate().normalize();
         const alpha = this.stampAlpha !== undefined ? this.stampAlpha : this.brush.shape === 'picture' ? this.alpha : null;
         const copyMatrices = Array.from({ length: MAX_COPIES }, (_, i) => (copies[i]?.matrix ? new THREE.Matrix4().fromArray(copies[i].matrix!) : new THREE.Matrix4()));
         const batches: Dab[][] = [];
@@ -828,7 +875,8 @@ export class Stroke {
                     // The disc's "across" direction: the screen's right, turned by the dab's angle, laid on the surface.
                     const right = dab.across ? dab.across.clone() : new THREE.Vector3().copy(view.cameraRight ?? new THREE.Vector3(1, 0, 0)).multiplyScalar(Math.cos(dab.angle))
                         .addScaledVector(view.cameraUp ?? new THREE.Vector3(0, 1, 0), Math.sin(dab.angle));
-                    d3[i].set(right.x, right.y, right.z, dab.radius / Math.max(1e-6, dab.worldRadius ?? 1));
+                    if (this.brush.projection === 'planar' || this.brush.projection === 'triplanar') d3[i].set(dab.angle, 0, 0, dab.radius / Math.max(1e-6, dab.worldRadius ?? 1));
+                    else d3[i].set(right.x, right.y, right.z, dab.radius / Math.max(1e-6, dab.worldRadius ?? 1));
                 }
             });
             for (const [tile, rects] of reach) {
@@ -849,7 +897,8 @@ export class Stroke {
                             uDabs2: d2,
                             uDabs3: d3,
                             uCount: batch.length,
-                            uProjection: this.brush.projection === 'screen' ? 0 : 1,
+                            uProjection: { screen: 0, surface: 1, planar: 2, triplanar: 3 }[this.brush.projection] ?? 0,
+                            uPlanarAxis: planarAxis,
                             uShape: alpha ? 2 : this.brush.shape === 'square' ? 1 : 0,
                             uHardness: this.brush.hardness,
                             uAlpha: alpha ?? gpu.constant('white'),
