@@ -193,7 +193,14 @@ export const TextureView2D: React.FC<{
     node?: TexGraphNode | null;
     /** Changes the shown node's settings (its handles dragged); `key` names the handle, for one undo step a drag. */
     onParams?: (nodeId: string, patch: Record<string, unknown>, key: string) => void;
-}> = ({ session, nodeId, output, label, node, onParams }) => {
+    /** The metres across the graph's picture stands for. */
+    worldWidth?: number;
+    /**
+     * Crops a Bitmap to a picked square, the graph's size in the world times `scale` with it (one undo
+     * step), so features keep their real size; without it only the crop changes.
+     */
+    onPhotoCrop?: (nodeId: string, patch: Record<string, unknown>, scale: number) => void;
+}> = ({ session, nodeId, output, label, node, onParams, worldWidth = 1, onPhotoCrop }) => {
     const host = useRef<HTMLDivElement>(null);
     const canvas = useRef<HTMLCanvasElement>(null);
     const histogramCanvas = useRef<HTMLCanvasElement>(null);
@@ -599,8 +606,8 @@ export const TextureView2D: React.FC<{
             >
                 <canvas ref={canvas} className="absolute inset-0 h-full w-full" />
                 {regionOpen && photoId && node && onParams && (
-                    <PhotoRegionPicker textureId={photoId} cropFrom={node.params.cropFrom} cropSize={node.params.cropSize}
-                        onApply={(patch) => { onParams(node.id, patch, 'region'); setRegionOpen(false); }} onClose={() => setRegionOpen(false)} />
+                    <PhotoRegionPicker textureId={photoId} cropFrom={node.params.cropFrom} cropSize={node.params.cropSize} metres={worldWidth}
+                        onApply={(patch, scale) => { if (onPhotoCrop) onPhotoCrop(node.id, patch, scale); else onParams(node.id, patch, 'region'); setRegionOpen(false); }} onClose={() => setRegionOpen(false)} />
                 )}
                 {image && state?.notes?.length ? (
                     <div className="pointer-events-none absolute inset-x-2 bottom-2 flex gap-1.5 rounded bg-panel/95 px-2 py-1 text-2xs leading-snug text-ink-2 shadow">
