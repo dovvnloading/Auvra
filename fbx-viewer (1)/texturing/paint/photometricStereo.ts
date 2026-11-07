@@ -151,8 +151,12 @@ const isPowerOfTwo = (n: number) => n > 0 && (n & (n - 1)) === 0;
  * pixel up the picture), solved over all frequencies at once (Frankot and Chellappa). A picture that
  * tiles is solved as it repeats; one that doesn't is mirrored each way first, so its edges don't pull.
  * Both sides must be powers of two. Heights in pixels, their mean 0.
+ *
+ * `keepFrom` (waves across the picture) takes out the broad drift integrating gathers from small errors
+ * in the slopes: changes much slower than that many waves across fade out (a Gaussian high pass, as if a
+ * wide blur were taken away), while the surface's own relief, finer, stays.
  */
-export const integrateSlopes = (slopeX: Float32Array, slopeY: Float32Array, width: number, height: number, tiles: boolean): Float32Array => {
+export const integrateSlopes = (slopeX: Float32Array, slopeY: Float32Array, width: number, height: number, tiles: boolean, keepFrom = 0): Float32Array => {
     if (!isPowerOfTwo(width) || !isPowerOfTwo(height)) throw new Error('Slopes are integrated at a power-of-two size.');
     const w = tiles ? width : width * 2;
     const h = tiles ? height : height * 2;
@@ -178,10 +182,13 @@ export const integrateSlopes = (slopeX: Float32Array, slopeY: Float32Array, widt
         const wy = (2 * Math.PI * (v <= h / 2 ? v : v - h)) / h;
         const d = wx * wx + wy * wy;
         if (d === 0) continue;
+        // Waves across the picture itself (a mirrored copy holds it twice).
+        const waves = Math.hypot(((u <= w / 2 ? u : u - w) * width) / w, ((v <= h / 2 ? v : v - h) * height) / h);
+        const keep = keepFrom > 0 ? 1 - Math.exp(-((waves / keepFrom) ** 2)) : 1;
         // H = -i (wx P + wy Q) / |w|^2
         const sRe = wx * pRe + wy * qRe, sIm = wx * pIm + wy * qIm;
-        outRe[k] = sIm / d;
-        outIm[k] = -sRe / d;
+        outRe[k] = (sIm / d) * keep;
+        outIm[k] = (-sRe / d) * keep;
     }
     fft2(outRe, outIm, w, h, true);
     const result = new Float32Array(width * height);
@@ -193,14 +200,14 @@ export const integrateSlopes = (slopeX: Float32Array, slopeY: Float32Array, widt
 };
 
 /** The height of a normal map (unit normals x y z a pixel), in pixels: see integrateSlopes. */
-export const heightFromNormals = (normal: Float32Array, width: number, height: number, tiles: boolean): Float32Array => {
+export const heightFromNormals = (normal: Float32Array, width: number, height: number, tiles: boolean, keepFrom = 0): Float32Array => {
     const slopeX = new Float32Array(width * height), slopeY = new Float32Array(width * height);
     for (let i = 0; i < width * height; i++) {
         const nz = Math.max(normal[i * 3 + 2], 0.1);
         slopeX[i] = -normal[i * 3] / nz;
         slopeY[i] = -normal[i * 3 + 1] / nz;
     }
-    return integrateSlopes(slopeX, slopeY, width, height, tiles);
+    return integrateSlopes(slopeX, slopeY, width, height, tiles, keepFrom);
 };
 
 // ---- the light directions, from the photos ----

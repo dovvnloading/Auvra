@@ -132,3 +132,66 @@ describe('multi-angle capture', () => {
         expect(graph.parameters.map((parameter) => parameter.name)).toEqual(['normalStrength', 'depth', 'roughLow', 'roughHigh', 'metalColour', 'metalRange']);
     });
 });
+
+/** A wrapping Gaussian blur of a square picture of one value a pixel. */
+const blurred = (values: Float32Array, side: number, sigma: number): Float32Array => {
+    const reach = Math.ceil(sigma * 3);
+    const weights = Array.from({ length: reach * 2 + 1 }, (_, i) => Math.exp(-((i - reach) ** 2) / (2 * sigma * sigma)));
+    const total = weights.reduce((sum, w) => sum + w, 0);
+    const pass = (from: Float32Array, dx: number, dy: number) => {
+        const out = new Float32Array(from.length);
+        for (let y = 0; y < side; y++) for (let x = 0; x < side; x++) {
+            let sum = 0;
+            for (let i = 0; i < weights.length; i++) sum += weights[i] * from[(((y + (i - reach) * dy) % side + side) % side) * side + (((x + (i - reach) * dx) % side) + side) % side];
+            out[y * side + x] = sum / total;
+        }
+        return out;
+    };
+    return pass(pass(values, 1, 0), 0, 1);
+};
+
+/**
+ * A brick wall as a capture would photograph it: bricks raised over recessed mortar, the mortar light and
+ * a quarter of the bricks dark, so the parts dark on average are high (no shadow in the crevices). Lit from
+ * the left, top, right and bottom, as photos would be; `broad` adds a slow swell to the height.
+ */
+const brickCapture = (side: number, broad = 0) => {
+    const isMortar = (x: number, r: number) => r % 16 < 3 || (x + (Math.floor(r / 16) % 2) * 16) % 32 < 3;
+    const isDark = (x: number, r: number) => (Math.floor((x + (Math.floor(r / 16) % 2) * 16) / 32) * 3 + Math.floor(r / 16)) % 4 === 0;
+    const sharp = new Float32Array(side * side);
+    for (let r = 0; r < side; r++) for (let x = 0; x < side; x++) sharp[r * side + x] = isMortar(x, r) ? 0 : 2;
+    const relief = blurred(sharp, side, 1.2);
+    const height = relief.map((value, i) => value + broad * Math.cos((TAU * (i % side)) / side) * Math.cos((TAU * Math.floor(i / side)) / side));
+    const slope = (x: number, r: number): Vec3 => {
+        const at = (px: number, pr: number) => height[(((pr % side) + side) % side) * side + (((px % side) + side) % side)];
+        const sx = (at(x + 1, r) - at(x - 1, r)) / 2, sy = -(at(x, r + 1) - at(x, r - 1)) / 2;
+        const l = Math.hypot(sx, sy, 1);
+        return [-sx / l, -sy / l, 1 / l];
+    };
+    const azimuths = [180, 90, 0, 270].map((degrees) => (degrees * Math.PI) / 180);
+    const shots = azimuths.map((azimuth, k) => {
+        const light = lightDirection(azimuth, ELEVATION);
+        const rgb = new Float32Array(side * side * 3);
+        for (let r = 0; r < side; r++) for (let x = 0; x < side; x++) {
+            const n = slope(x, r);
+            const shade = Math.max(0, n[0] * light[0] + n[1] * light[1] + n[2] * light[2]);
+            const colour = isMortar(x, r) ? [0.62, 0.6, 0.56] : isDark(x, r) ? [0.09, 0.04, 0.03] : [0.4, 0.14, 0.1];
+            for (let c = 0; c < 3; c++) rgb[(r * side + x) * 3 + c] = Math.min(1, toSrgb(Math.max(0, colour[c] * shade + noise(r * side + x, k * 3 + c))));
+        }
+        return { rgb };
+    });
+    return { shots, azimuths, relief, lights: azimuths.map((azimuth) => lightDirection(azimuth, ELEVATION)) };
+};
+
+describe('multi-angle capture of a brick wall', () => {
+    it('takes the broad drift out of the height and keeps the bricks', () => {
+        const wall = brickCapture(128, 3);
+        const maps = captureMaps(wall.shots, wall.lights, 128, 128);
+        const spread = (values: Float32Array) => { const mean = values.reduce((sum, v) => sum + v, 0) / values.length; return Math.sqrt(values.reduce((sum, v) => sum + (v - mean) ** 2, 0) / values.length); };
+        // What is left at a scale wider than a brick is small beside the height's whole variation.
+        expect(spread(blurred(maps.heightMap, 128, 16)) / spread(maps.heightMap)).toBeLessThan(0.25);
+        // The bricks stand up and the mortar is sunk: the height follows the wall's own relief.
+        expect(correlation(maps.heightMap, wall.relief).r).toBeGreaterThan(0.8);
+    });
+
+});
