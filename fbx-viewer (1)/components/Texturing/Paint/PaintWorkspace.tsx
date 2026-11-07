@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { BrushIcon, BucketIcon, EraserIcon, EyedropperIcon, FrameIcon, RedoIcon, ScissorsIcon, SelectBoxIcon, SplineIcon, UndoIcon, WarningIcon } from '../../UI/Icons';
+import { BrushIcon, BucketIcon, CompareIcon, EraserIcon, EyedropperIcon, FrameIcon, RedoIcon, ScissorsIcon, SelectBoxIcon, SplineIcon, UndoIcon, WarningIcon } from '../../UI/Icons';
+import { PaintView2D } from './PaintView2D';
 import { useAssets } from '../../../context/AssetContext';
 import { useScene } from '../../../context/SceneContext';
 import { frontendDiagnostics } from '../../../diagnostics/runtime';
@@ -8,7 +9,7 @@ import { overrideTextureFlipY } from '../../../utils/materialOverrides';
 import { MESH_MAP_LABELS, MESH_MAPS } from '../../../texturing/graph/nodes/io';
 import { EXTRA_MAPS, EXTRA_MAP_LABELS, type BakeSettings } from '../../../texturing/bake/meshBaker';
 import { readStoredGraph } from '../../../texturing/graph/stored';
-import { CHANNEL_LABELS, allLayers, mapLayer, paintId, readPaintDocument, type MaskEffect } from '../../../texturing/paint/paintTypes';
+import { CHANNEL_LABELS, allLayers, mapLayer, paintId, readPaintDocument, type MaskEffect, type PaintChannel } from '../../../texturing/paint/paintTypes';
 import type { SurfacePath } from '../../../texturing/paint/paths';
 import { PathPanel } from './PathPanel';
 import { MAX_ID_COLOURS } from '../../../texturing/paint/paintStack';
@@ -166,7 +167,9 @@ export const PaintWorkspace: React.FC = () => {
     const setBrush = useCallback((next: BrushSettings) => { rememberedBrush = next; setBrushState(next); }, []);
     const [selection, setSelection] = useState<LayerSelection>({ layerId: null, effectId: null });
     const [panel, setPanel] = useState<'layers' | 'brush' | 'set' | 'uvs'>('layers');
-    const [view, setView] = useState<ViewMode | 'uv2d'>('material');
+    const [view, setView] = useState<ViewMode | 'uv2d' | 'paint2d'>('material');
+    // Painting on the UV layout beside the 3D view.
+    const [beside, setBeside] = useState(false);
     const [frameSignal, setFrameSignal] = useState(0);
     const sets = usePanelWidth('paint.sets', 224, 180, 360);
     const side = usePanelWidth('paint.panel', 320, 280, 560);
@@ -315,6 +318,7 @@ export const PaintWorkspace: React.FC = () => {
         { value: 'uvChecker', label: 'UV checker' },
         { value: 'uvStretch', label: 'UV stretch' },
         { value: 'uv2d', label: 'UV layout (2D)' },
+        { value: 'paint2d', label: 'Paint in 2D (UV layout)' },
     ], [document, layer]);
 
     return (
@@ -363,16 +367,25 @@ export const PaintWorkspace: React.FC = () => {
                     <span className="flex-1" />
                     <span className="text-2xs text-zinc-500">Show</span>
                     <Select value={view} options={viewOptions} onChange={(value) => setView(value as ViewMode)} className="w-48" />
+                    <IconButton label="Paint on the UV layout beside the 3D view" active={beside} onClick={() => setBeside((value) => !value)}><CompareIcon size={14} /></IconButton>
                 </div>
                 <div className="relative flex min-h-0 flex-1">
                     {session && view === 'uv2d' && uv ? (
                         <UvView2D uv={uv} />
                     ) : session ? (
-                        <PaintViewport session={session} tool={tool} brush={brush} target={target} view={view === 'uv2d' ? 'material' : view} maskImage={maskImage}
+                        <>
+                        {view !== 'paint2d' && <PaintViewport session={session} tool={tool} brush={brush} target={target} view={view === 'uv2d' ? 'material' : view} maskImage={maskImage}
                             onBrushSize={(size) => setBrush({ ...brush, size })}
                             onPick={(color) => { setBrush({ ...brush, values: { ...brush.values, baseColor: color } }); setTool('paint'); }}
                             onMessage={setMessage} frameSignal={frameSignal} uv={uv} pickMode={pickMode} onSurfacePick={onSurfacePick} picking={pickingParts} bakeRays={raySettings}
-                            pathEdit={tool === 'path' ? pathEdit : null} commands={viewportCommands} />
+                            pathEdit={tool === 'path' ? pathEdit : null} commands={viewportCommands} />}
+                        {(view === 'paint2d' || beside) && (
+                            <div className={`flex min-h-0 min-w-0 flex-1 ${view !== 'paint2d' ? 'border-l border-zinc-800' : ''}`}>
+                                <PaintView2D session={session} tool={tool} brush={brush} target={target} maskImage={maskImage} onMessage={setMessage}
+                                    show={view === 'mask' ? 'mask' : (session.document.channels as readonly string[]).includes(view) ? view as PaintChannel : 'baseColor'} />
+                            </div>
+                        )}
+                        </>
                     ) : (
                         <div className="flex flex-1 items-center justify-center text-xs text-zinc-500">
                             {opening ? <span className="flex items-center gap-2"><Spinner /> Laying out the surface…</span> : message ?? (part ? '' : 'Pick a texture set on the left to paint it.')}
