@@ -841,7 +841,8 @@ export const compileMaterialGraph = (stored: MaterialGraph, options: CompileOpti
         if (!wanted.includes(input.key)) continue;
         outputs[input.key] = inputValue(output, input);
     }
-    shape.push(`out:${JSON.stringify(staticParams(output, outputDefinition))}`, `#${[...connected].sort().join(',')}`);
+    // The output's values are uniforms named after it: two graphs alike but for its id must not share a program.
+    shape.push(`out:${output.id}:${JSON.stringify(staticParams(output, outputDefinition))}`, `#${[...connected].sort().join(',')}`);
     const unused = graph.nodes.filter(node => node.type !== OUTPUT_NODE_TYPE && !results.has(node.id)).map(node => node.id);
     const previews = (options.previews ?? []).map((nodeId) => {
         const node = nodes.get(nodeId);
