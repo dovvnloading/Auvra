@@ -654,6 +654,8 @@ export class PaintSession {
             const overrides: MaterialOverrides = { ...(this.host.materialOverrides(this.target.modelId) ?? {}) };
             for (const name of this.target.materialNames) overrides[name] = { ...(overrides[name] ?? {}), materialId: this.asset.id };
             await this.host.setMaterialOverrides(this.target.modelId, overrides);
+            // The old pictures go only once no save still in flight names them (an autosave begun before they changed).
+            if (this.saving) await this.saving.catch(() => undefined);
             void this.host.discardTextures(previous);
             this.changedSinceApply = false;
             this.status = !atlas
