@@ -10,7 +10,7 @@ import { setTextureSettings, setTextureSourceAsset, textureSettingsOf } from '..
 import type { TextureData } from '../../types';
 import { projectService } from '../../utils/projectService';
 import {
-    filterLibrary, libraryFolders, libraryMaterial, libraryTags, userMaterialLibrary,
+    filterLibrary, libraryFolders, libraryMaterial, libraryNodeGraphs, libraryTags, userMaterialLibrary,
     type LibraryEntry, type LibraryPicture, type RemovedLibraryEntry,
 } from '../../utils/userMaterialLibrary';
 import { addToLibrary, bringIntoProject, usesInWords } from '../../utils/userMaterialLibraryActions';
@@ -113,6 +113,7 @@ export const useBringIn = () => {
                     materialLibrary.upsert(material);
                 },
                 newId: () => crypto.randomUUID(),
+                hasMaterial: (id) => materialLibrary.get(id) !== undefined,
             });
             addNotification({ message: `"${asset.name}" is now in this project.`, type: 'success' });
             return asset;
@@ -136,6 +137,7 @@ export const useAddToLibrary = () => {
                 textures,
                 settingsOf: textureSettingsOf,
                 read: async (url) => (await fetch(url)).blob(),
+                materialOf: (id) => materialLibrary.get(id),
             }, renderMaterialBall);
             addNotification({ message: updated ? `"${asset.name}" is updated in your library.` : `"${asset.name}" is in your library, for every project.`, type: 'success' });
         } catch (failure) {
@@ -188,6 +190,7 @@ const EntryPage: React.FC<{
         setTag('');
     };
     const uses = usesInWords(entry, projectId, (materialId) => !!materialLibrary.get(materialId));
+    const nodeGraphs = libraryNodeGraphs(entry);
     return (
         <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
             <div className="flex justify-center border-b border-line p-3"><LibraryBall entry={entry} size={176} /></div>
@@ -227,6 +230,12 @@ const EntryPage: React.FC<{
                         ? <p className="text-2xs text-ink-3">Not brought into any project yet.</p>
                         : <ul className="space-y-0.5 text-xs text-ink-2">{uses.map((use, index) => <li key={index} className="truncate">{use}</li>)}</ul>}
                 </div>
+                {nodeGraphs.length > 0 && (
+                    <div className="space-y-1">
+                        <span className="text-2xs text-ink-3">Graphs it uses as nodes, which come with it</span>
+                        <ul className="space-y-0.5 text-xs text-ink-2">{nodeGraphs.map(graph => <li key={graph.id} className="truncate">{graph.name}</li>)}</ul>
+                    </div>
+                )}
                 <div className="space-y-2 border-t border-line pt-3">
                     <Button variant="primary" size="md" className="w-full" icon={<DownloadIcon size={13} />} disabled={!projectOpen || using} onClick={onUse}>
                         {using ? 'Bringing it in…' : 'Use in this project'}
