@@ -1,10 +1,11 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { ArrowDownIcon, ArrowUpIcon, BrushIcon, BucketIcon, CopyIcon, EyeIcon, EyeOffIcon, FilterIcon, FolderIcon, FolderMoveIcon, GraphIcon, LayersIcon, PackagePlusIcon, PlusIcon, TrashIcon, WandIcon } from '../../UI/Icons';
 import { BLEND_MODES, BLEND_MODE_LABELS, type BlendMode } from '../../../texturing/gpu/glslLibrary';
 import { PICK_LABELS, PICK_MODES, countTriangles, type PickMode } from '../../../texturing/paint/selection';
 import { PROJECTION_LABELS, type ProjectionAxis, type ProjectionMode } from '../../../texturing/paint/projections';
 import { OUTPUT_NODE_TYPE } from '../../../texturing/graph/nodes/io';
-import { OUTPUT_CHANNEL_LABELS, type GraphParameter, type OutputChannel, type TexParamDef } from '../../../texturing/graph/types';
+import { OUTPUT_CHANNEL_LABELS, type OutputChannel } from '../../../texturing/graph/types';
+import { applyPreset } from '../../../texturing/graph/parameters';
 import type { GraphResolver } from '../../../texturing/graph/registry';
 import {
     CHANNEL_IS_COLOR,
@@ -37,7 +38,8 @@ import { saveSmartMaterial, smartMaskGraph, type LeftOut } from '../../../textur
 import type { PreviewHost } from '../../../texturing/paint/previews';
 import { Button, IconButton, Popover, Segmented } from '../../UI/kit';
 import { Select } from '../../UI/Select';
-import { ParamControl } from '../TextureParamField';
+import { GraphParameterPanel, PresetBar, type PlacedPreset } from '../GraphParameterPanel';
+import { sharedPresets } from '../projectPresets';
 import type { PaintSession } from './paintSession';
 import { ColourFieldRgb } from '../../UI/ColourPicker';
 import { SliderRow } from './PaintFields';
@@ -115,21 +117,24 @@ const graphOutputs = (resolve: GraphResolver, graphId: string): Array<{ value: s
     });
 };
 
-const parameterDef = (parameter: GraphParameter): TexParamDef => ({ key: parameter.name, label: parameter.label, kind: parameter.kind, default: parameter.default, min: parameter.min, max: parameter.max, step: parameter.step, options: parameter.options });
-
+/**
+ * A fill's or smart mask's graph settings as the graph lays them out: its groups, parameters shown only
+ * while their conditions hold, their descriptions, a way back to each default, and the graph's presets
+ * (its own and those shared in the project) to apply.
+ */
 const GraphValues: React.FC<{ resolve: GraphResolver; graphId: string; values: Record<string, unknown>; textures: ReadonlyArray<{ id: string; name: string }>; onChange: (values: Record<string, unknown>) => void }> = ({ resolve, graphId, values, textures, onChange }) => {
-    const parameters = resolve(graphId)?.graph.parameters ?? [];
-    if (!parameters.length) return null;
+    useEffect(() => { sharedPresets.load(); }, []);
+    const sharedVersion = useSyncExternalStore(sharedPresets.subscribe, sharedPresets.getVersion);
+    const graph = resolve(graphId)?.graph;
+    const presets = useMemo<PlacedPreset[]>(() => {
+        void sharedVersion;
+        return [...(graph?.presets ?? []).map((preset) => ({ preset, place: 'graph' as const })), ...sharedPresets.of(graphId).map((preset) => ({ preset, place: 'project' as const }))];
+    }, [graph, graphId, sharedVersion]);
+    if (!graph?.parameters.length) return null;
     return (
         <div className="space-y-1.5">
-            {parameters.map((parameter) => (
-                <div key={parameter.name} className="flex items-center gap-2">
-                    <span className="w-20 shrink-0 truncate text-2xs text-zinc-400">{parameter.label}</span>
-                    <div className="min-w-0 flex-1">
-                        <ParamControl param={parameterDef(parameter)} value={values[parameter.name] ?? parameter.default} textures={textures} onChange={(value) => onChange({ ...values, [parameter.name]: value })} />
-                    </div>
-                </div>
-            ))}
+            {presets.length > 0 && <PresetBar presets={presets} parameters={graph.parameters} values={values} onApply={(preset) => onChange(applyPreset(preset, graph.parameters, values))} />}
+            <GraphParameterPanel parameters={graph.parameters} groups={graph.groups} values={values} textures={textures} onChange={(next) => onChange(next)} />
         </div>
     );
 };
