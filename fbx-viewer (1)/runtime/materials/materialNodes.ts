@@ -189,6 +189,7 @@ export const MATERIAL_NODE_DEFINITIONS: MaterialNodeDef[] = [
             float('opacity', 'Opacity', 1, { min: 0, max: 1, step: 0.01, group: 'Opacity' }),
             select('blendMode', 'Alpha mode', [['opaque', 'Opaque'], ['masked', 'Masked (cut-out)'], ['translucent', 'Translucent'], ['additive', 'Additive']]),
             select('normalSpace', 'Normal input', [['tangent', 'Like a normal map'], ['world', 'In world space']]),
+            { key: 'ownMaps', label: 'Keep the model\'s own maps', kind: 'boolean', default: false },
             float('alphaClip', 'Alpha clip', 0.5, { min: 0, max: 1, step: 0.01 }),
             { key: 'twoSided', label: 'Two-sided', kind: 'boolean', default: false },
             select('shading', 'Shading', [['lit', 'Lit'], ['unlit', 'Unlit']]),

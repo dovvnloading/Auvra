@@ -188,7 +188,7 @@ export const materialGraphOffsetsVertices = (material: THREE.Material): boolean 
 /** Whether the graph shapes the material's shadow (a cut-out, or offset vertices). */
 const shapesShadow = (binding: Pick<GraphBinding, 'settings' | 'vertex'>): boolean => binding.settings.blendMode === 'masked' || binding.vertex !== null;
 
-const PREVIEW_SETTINGS: MaterialGraphSettings = { blendMode: 'opaque', alphaClip: 0.5, twoSided: false, unlit: true, normalSpace: 'tangent' };
+const PREVIEW_SETTINGS: MaterialGraphSettings = { blendMode: 'opaque', alphaClip: 0.5, twoSided: false, unlit: true, normalSpace: 'tangent', keepOwnMaps: false };
 
 /**
  * The shaders of a (normalised) graph, drawn as `kind` with the physical `features` it uses. They depend
@@ -290,7 +290,8 @@ const applyFlags = (material: StandardMaterial, binding: GraphBinding): void => 
     material.alphaTest = blendMode === 'masked' ? Math.max(alphaClip, SHADOW_ALPHA_TEST) : shadowShaped ? SHADOW_ALPHA_TEST : binding.own.alphaTest;
     // A map (any) and an alpha test give the material a shadow depth material of its own.
     material.map = shadowShaped ? binding.own.map ?? WHITE : binding.own.map;
-    material.normalMap = binding.fragment.connected.has('normal') ? FLAT_NORMAL : null;
+    // Keeping the model's own maps, its own normal map stays where the graph sets none.
+    material.normalMap = binding.fragment.connected.has('normal') ? FLAT_NORMAL : binding.settings.keepOwnMaps ? binding.own.normalMap : null;
     // The physical parts the graph uses are switched on, the rest (an imported material's own) off.
     if ((material as THREE.MeshPhysicalMaterial).isMeshPhysicalMaterial) switchFeatures(material as THREE.MeshPhysicalMaterial, binding.features);
 };
@@ -406,21 +407,26 @@ const patchShader = (binding: GraphBinding, shader: THREE.WebGLProgramParameters
     let source = shader.fragmentShader;
     source = replaceOnce(source, 'void main() {', `${varyingsFor(fragmentBuiltins).join('\n')}\n${FRAGMENT_FUNCTIONS}\n${preamble([fragment])}\nvoid main() {`);
     // The whole graph runs where the standard material would read its colour map.
+    // Keeping the model's own maps, what the graph leaves unwired is drawn by three's own code from the
+    // material's maps and values (a painted copy changes only what was painted).
+    const own = (input: string) => settings.keepOwnMaps && !preview && !connected.has(input);
     source = replaceOnce(source, '#include <map_fragment>', preview
         ? `${statements.join('\n')}\n${previewSelection(preview, fragment.previews)}\ndiffuseColor.rgb = mgPreview;`
-        : `${statements.join('\n')}\ndiffuseColor.rgb = ${outputs.baseColor};`);
+        : `${statements.join('\n')}\n${own('baseColor') ? '#include <map_fragment>' : `diffuseColor.rgb = ${outputs.baseColor};`}`);
     // A graph reading the vertex colours uses them as it likes: three must not multiply them in again.
     if (fragmentBuiltins.has('vertexColor')) source = replaceOnce(source, '#include <color_fragment>', '');
     source = replaceOnce(source, '#include <alphamap_fragment>', settings.blendMode === 'opaque' ? 'diffuseColor.a = 1.0;' : `diffuseColor.a = ${outputs.opacity};`);
-    source = replaceOnce(source, '#include <roughnessmap_fragment>', `float roughnessFactor = ${outputs.roughness};`);
-    source = replaceOnce(source, '#include <metalnessmap_fragment>', `float metalnessFactor = ${outputs.metalness};`);
+    if (!own('roughness')) source = replaceOnce(source, '#include <roughnessmap_fragment>', `float roughnessFactor = ${outputs.roughness};`);
+    if (!own('metalness')) source = replaceOnce(source, '#include <metalnessmap_fragment>', `float metalnessFactor = ${outputs.metalness};`);
     if (connected.has('normal')) {
         source = replaceOnce(source, '#include <normal_fragment_maps>', settings.normalSpace === 'world'
             // A world-space normal (Triplanar Normal Map) needs no tangent frame: only turning into view space.
             ? `normal = normalize((viewMatrix * vec4(${outputs.normal}, 0.0)).xyz);`
             : THREE.ShaderChunk.normal_fragment_maps.replace(NORMAL_READ, `vec3 mapN = ${outputs.normal};`));
     }
-    source = replaceOnce(source, '#include <emissivemap_fragment>', preview ? 'totalEmissiveRadiance = vec3(0.0);' : `totalEmissiveRadiance = ${outputs.emissive} * ${outputs.emissiveStrength};`);
+    if (!(own('emissive') && own('emissiveStrength'))) {
+        source = replaceOnce(source, '#include <emissivemap_fragment>', preview ? 'totalEmissiveRadiance = vec3(0.0);' : `totalEmissiveRadiance = ${outputs.emissive} * ${outputs.emissiveStrength};`);
+    }
     if (binding.kind === 'physical') {
         // After three sets its physical material up, each part is set again from the graph. The include
         // stays, so the weather (a later stage) still finds where to lie.

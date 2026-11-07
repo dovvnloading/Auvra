@@ -24,6 +24,8 @@ export interface MaterialAsset {
      * read by the graph's Material Picture nodes. Making them again changes only these, not the graph.
      */
     pictures?: Record<string, string>;
+    /** The model (and its material) owning this painted copy (utils/paintedCopies.ts); absent for shared materials. */
+    owner?: { modelId: string; material: string };
 }
 
 export const MATERIALS_DOMAIN = 'materials';
@@ -38,6 +40,7 @@ export interface MaterialAssetDocument {
     textureGraph?: Record<string, unknown>;
     paint?: Record<string, unknown>;
     pictures?: Record<string, string>;
+    owner?: { modelId: string; material: string };
 }
 
 /**
@@ -122,6 +125,7 @@ export const materialAssetDocument = (asset: MaterialAsset): MaterialAssetDocume
         ...(asset.textureGraph ? { textureGraph: asset.textureGraph } : {}),
         ...(asset.paint ? { paint: asset.paint } : {}),
         ...(asset.pictures ? { pictures: asset.pictures } : {}),
+        ...(asset.owner ? { owner: asset.owner } : {}),
     };
 };
 
@@ -163,6 +167,8 @@ export const readMaterialAsset = (value: unknown): MaterialAsset | null => {
     // Its pictures by name; a material from before keeps the ones its texture graph or painting last made.
     const pictures = readMaterialPictures(document.pictures) ?? lastMadePictures(asset);
     if (pictures) asset.pictures = pictures;
+    const owner = (document as { owner?: { modelId?: unknown; material?: unknown } }).owner;
+    if (owner && typeof owner.modelId === 'string' && owner.modelId && typeof owner.material === 'string') asset.owner = { modelId: owner.modelId, material: owner.material };
     return asset;
 };
 

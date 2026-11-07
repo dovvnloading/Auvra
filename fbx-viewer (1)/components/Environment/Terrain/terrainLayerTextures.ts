@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { frontendDiagnostics } from '../../../diagnostics/runtime';
 import { getNeutralLayerTexture } from './terrainLayerMaterial';
+import { pictureToRgba8 } from '../../../texturing/textureDecode';
+import { decodePictureOffPage } from '../../../texturing/texturePipeline';
 
 /**
  * TERRAIN LAYER TEXTURES
@@ -29,12 +31,15 @@ export interface TerrainLayerArrays {
   rayMaps: THREE.Texture[];
 }
 
-type LoadedImages = Map<string, HTMLImageElement | null>;
+/** A layer's picture, decoded at its own depth and ready to draw. */
+type LayerPicture = CanvasImageSource & { width: number; height: number };
+
+type LoadedImages = Map<string, LayerPicture | null>;
 
 let drawCanvas: HTMLCanvasElement | null = null;
 
 /** The picture's pixels at slice size, bottom row first, as textures hold them. */
-const pixelsOf = (image: HTMLImageElement, size: number): Uint8ClampedArray => {
+const pixelsOf = (image: CanvasImageSource, size: number): Uint8ClampedArray => {
   drawCanvas ??= document.createElement('canvas');
   drawCanvas.width = size;
   drawCanvas.height = size;
@@ -66,7 +71,7 @@ export const writeLayerSlices = (
   detail: Uint8Array,
   size: number,
   layer: number,
-  images: { albedo?: HTMLImageElement | null; normal?: HTMLImageElement | null; roughness?: HTMLImageElement | null; height?: HTMLImageElement | null },
+  images: { albedo?: LayerPicture | null; normal?: LayerPicture | null; roughness?: LayerPicture | null; height?: LayerPicture | null },
 ): void => {
   const start = layer * size * size * 4;
   const count = size * size;
@@ -145,15 +150,16 @@ export const useTerrainLayerArrays = (sources: readonly TerrainLayerSources[]): 
     for (const url of wanted) {
       if (images.has(url)) continue;
       images.set(url, null);
-      const image = new Image();
-      image.crossOrigin = 'anonymous';
-      image.onload = () => {
-        if (!active && !images.has(url)) return;
-        images.set(url, image);
-        setVersion(value => value + 1);
-      };
-      image.onerror = (error) => frontendDiagnostics.failure('terrain_layer_texture_load_failed', error);
-      image.src = url;
+      // Decoded at its own depth (16-bit, floating point, TIFF, TGA, PSD), off the page, then laid into the layer's slices.
+      fetch(url)
+        .then(response => response.arrayBuffer())
+        .then(buffer => decodePictureOffPage(new Uint8Array(buffer)))
+        .then(picture => createImageBitmap(new ImageData(new Uint8ClampedArray(pictureToRgba8(picture)), picture.width, picture.height), { premultiplyAlpha: 'none', colorSpaceConversion: 'none' }))
+        .then((bitmap) => {
+          if (!active && !images.has(url)) return;
+          images.set(url, bitmap);
+          setVersion(value => value + 1);
+        }, (error: unknown) => frontendDiagnostics.failure('terrain_layer_texture_load_failed', error));
     }
     return () => { active = false; };
   }, [key]);

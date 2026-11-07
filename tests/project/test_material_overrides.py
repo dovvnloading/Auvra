@@ -83,6 +83,8 @@ class MaterialOverrideSchemaTests(unittest.TestCase):
         one = {"id": "mat-rock", "name": "Rock", "graph": graph, "pictures": pictures, "textureIds": ["tex-albedo", "tex-normal", "tex-height"],
                "textureGraph": {"baked": {"textures": pictures}}}
         older = {"id": "mat-old", "name": "Old", "graph": graph, "textureIds": ["tex-albedo"], "textureGraph": {"baked": {"textures": {"baseColor": "tex-albedo"}}}}
+        copy = {"id": "mat-copy", "name": "Painted Visor", "graph": graph, "pictures": {"baseColor": "tex-albedo"}, "owner": {"modelId": "helmet", "material": "Visor"}, "textureIds": ["tex-albedo"]}
+        self.assertEqual(validate_domain("materials", domain_document("materials", [copy]))["documents"][0]["owner"], copy["owner"])
         document = validate_domain("materials", domain_document("materials", [one, older]))
         self.assertEqual(document["documents"][0]["pictures"], pictures)
         self.assertNotIn("pictures", document["documents"][1])

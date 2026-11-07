@@ -3,6 +3,8 @@ import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LoadedModelData } from '../../types';
 import { UV_ORIGIN_TOP_LEFT_KEY, applyMaterialOverrides, tagOverrideTexture } from '../../utils/materialOverrides';
+import { materialLibrary } from '../../runtime/materials/materialLibrary';
+import { boundMaterialGraph } from '../../runtime/materials/graphMaterial';
 
 const mocks = vi.hoisted(() => ({
   loadFBXFile: vi.fn(),
@@ -115,7 +117,8 @@ describe('useModelManager texture overrides follow the model UV origin', () => {
     const { result } = renderManager(model);
     await act(() => result.current.retextureModel('m1', 'blob:retexture'));
     expect(mocks.dbOperations.addModelTextureOverride).toHaveBeenCalled();
-    expect(body.map!.flipY).toBe(flipY);
+    // Drawn by the painted copy, whose picture is read the way the model's UVs lie.
+    expect(materialLibrary.bindingOf(body)?.flipY).toBe(flipY);
   });
 
   it('retexture puts the picture on as a painted base map of the material overrides, keeping the imported map', async () => {
@@ -131,10 +134,14 @@ describe('useModelManager texture overrides follow the model UV origin', () => {
     // Named for what it is, as the texture library will list it.
     expect((mocks.dbOperations.addModelTextureOverride.mock.calls[0] as unknown[])[2]).toMatchObject({ name: 'Painted Body.png' });
     const updated = result.current.models[0];
-    expect(updated.materialOverrides).toEqual({ Body: { roughness: 0.3, mapTextureId: 'tex-1', paintedMap: true } });
+    // Kept as a painted copy the model owns, its override pointing at it (utils/paintedCopies.ts).
+    const copyId = updated.materialOverrides?.Body?.materialId;
+    expect(updated.materialOverrides).toEqual({ Body: { roughness: 0.3, materialId: copyId } });
+    expect(materialLibrary.get(copyId!)).toMatchObject({ owner: { modelId: 'm1', material: 'Body' }, pictures: { baseColor: 'tex-1' } });
     expect(updated.textureOverrides).toEqual({});
-    expect(body.map).not.toBe(imported);
-    expect([body.transparent, body.alphaTest, body.side]).toEqual([true, 0.5, THREE.DoubleSide]);
+    expect(boundMaterialGraph(body)?.nodes.find(node => node.id === 'painted')?.params.texture).toBe('tex-1');
+    // Cut out where see-through, from both sides; its own map and roughness kept underneath.
+    expect([body.alphaTest, body.side]).toEqual([0.5, THREE.DoubleSide]);
     expect(body.roughness).toBe(0.3);
     // Taken off again, the material wears what it was imported with.
     applyMaterialOverrides(model.object, { Body: { roughness: 0.3 } });

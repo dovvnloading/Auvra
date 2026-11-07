@@ -81,7 +81,8 @@ const historyOf = (id: string): GraphHistory => {
 export const MaterialGraphEditor: React.FC = () => {
     const allAssets = useMaterialAssets();
     // Saved smart materials are painting presets, not materials to edit or give to models.
-    const assets = useMemo(() => allAssets.filter((candidate) => !isSmartMaterialAsset(candidate)), [allAssets]);
+    // Painted copies belong to their models (Material Overrides), not to the material list.
+    const assets = useMemo(() => allAssets.filter((candidate) => !isSmartMaterialAsset(candidate) && !candidate.owner), [allAssets]);
     const { textures, removeMaterialAsset, updateModelMaterialOverrides } = useAssets();
     const { models, levelObjects } = useScene();
     // The last material deleted, and what used it, until it is undone or another goes.

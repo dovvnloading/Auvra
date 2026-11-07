@@ -262,7 +262,7 @@ const MaterialPropField: React.FC<{ label: string; value: string; onChange: (val
     const options = useMemo(() => [
         { value: '', label: 'None: its own texture' },
         ...(version >= 0 ? materialLibrary.list() : [])
-            .filter(asset => materialAssetUse(asset) === 'material' && !isSmartMaterialAsset(asset))
+            .filter(asset => materialAssetUse(asset) === 'material' && !isSmartMaterialAsset(asset) && !asset.owner)
             .map(asset => ({ value: asset.id, label: asset.name })),
     ], [version]);
     return (

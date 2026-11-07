@@ -245,6 +245,7 @@ const EXEMPT = new Map(Object.entries({
   'runtime/materials/physicalSurface.ts': 'pure-utility',
   'runtime/materials/starterMaterials.ts': 'data-model',
   'utils/materialInstances.ts': 'pure-utility',
+  'utils/paintedCopies.ts': 'pure-utility',
   'runtime/materials/triplanarNormal.ts': 'pure-utility',
   'runtime/materials/shaderErrors.ts': 'pure-utility',
   'texturing/textureDecode.ts': 'pure-utility',
