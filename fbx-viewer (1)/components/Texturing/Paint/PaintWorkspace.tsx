@@ -28,7 +28,8 @@ import { BrushPanel } from './BrushPanel';
 import { LayerPanel, type LayerSelection } from './LayerPanel';
 import { useMaterialSections, type MaterialChoice } from './MaterialPicker';
 import { SliderRow } from './PaintFields';
-import { PaintSession, findPaintAsset, paintGraphResolver, type PaintTarget } from './paintSession';
+import { HISTORY_BYTES, HISTORY_LIMIT, PaintSession, findPaintAsset, paintGraphResolver, type PaintTarget } from './paintSession';
+import { HistoryPanel } from './HistoryPanel';
 import { PaintViewport, type PaintTool, type PathEdit, type SurfaceHit, type ViewMode, type ViewportCommands } from './PaintViewport';
 import { SetPanel } from './SetPanel';
 import { UvPanel } from './UvPanel';
@@ -171,7 +172,7 @@ export const PaintWorkspace: React.FC = () => {
     const [brush, setBrushState] = useState<BrushSettings>(rememberedBrush);
     const setBrush = useCallback((next: BrushSettings) => { rememberedBrush = next; setBrushState(next); }, []);
     const [selection, setSelection] = useState<LayerSelection>({ layerId: null, effectId: null });
-    const [panel, setPanel] = useState<'layers' | 'brush' | 'set' | 'uvs'>('layers');
+    const [panel, setPanel] = useState<'layers' | 'brush' | 'set' | 'uvs' | 'history'>('layers');
     const [view, setView] = useState<ViewMode | 'uv2d' | 'paint2d'>('material');
     // Painting on the UV layout beside the 3D view.
     const [beside, setBeside] = useState(false);
@@ -417,7 +418,7 @@ export const PaintWorkspace: React.FC = () => {
             <PanelEdge side="right" width={side.width} onResize={side.setWidth} onDone={side.save} label="Resize the layers panel" />
             <aside className="flex shrink-0 flex-col border-l border-zinc-800" style={{ width: side.width }}>
                 <div className="border-b border-zinc-800 p-2">
-                    <Segmented value={panel} options={[{ value: 'layers', label: 'Layers' }, { value: 'brush', label: 'Brush' }, { value: 'set', label: 'Texture set' }, { value: 'uvs', label: 'UVs' }]} onChange={setPanel} label="Panel" />
+                    <Segmented value={panel} options={[{ value: 'layers', label: 'Layers' }, { value: 'brush', label: 'Brush' }, { value: 'set', label: 'Texture set' }, { value: 'uvs', label: 'UVs' }, { value: 'history', label: 'History' }]} onChange={setPanel} label="Panel" />
                 </div>
                 {session ? (
                     panel === 'layers' ? <LayerPanel session={session} selection={selection} onSelect={setSelection} resolve={resolve} graphs={graphs} textures={textures} onPaintWith={paintWith} onMessage={setMessage} />
@@ -430,6 +431,7 @@ export const PaintWorkspace: React.FC = () => {
                                 onPaint={(how) => { if (activePath) void viewportCommands.current?.paintPath(activePath, how); }} />
                         )}<BrushPanel brush={brush} onChange={setBrush} channels={session.document.channels} paintingMask={target?.kind === 'mask'} textures={textures} onPick={() => setTool('pick')}
                             paintWith={previewHost ? { sections: brushSections, host: previewHost, onPick: paintWith, onMessage: setMessage } : undefined} onMessage={setMessage} /></div>
+                            : panel === 'history' ? <HistoryPanel session={session} stepLimit={HISTORY_LIMIT} memoryMb={HISTORY_BYTES / 1024 / 1024} />
                             : panel === 'uvs' && uv ? <div className="min-h-0 flex-1 overflow-y-auto"><UvPanel uv={uv} otherSets={otherSets} densityOf={densityOf} onSeamTool={() => setTool('seam')} onApplied={() => { if (!uv.proposal) { putOnAfterOpen.current = uv.putOnWhenOpen; setReopen((value) => value + 1); } }} /></div>
                                 : <div className="min-h-0 flex-1 overflow-y-auto"><SetPanel session={session} models={paintable} onReopen={() => setReopen((value) => value + 1)} onShowRays={setRaySettings} showingRays={Boolean(raySettings)}
                                     paintingFix={bakeFix} onPaintFix={(fix) => { setBakeFix(fix); if (fix) { setTool('paint'); setMessage(fix === 'skew' ? 'Painting skew: white leans bake rays to the surface\'s own normals (set the grey in the Brush panel).' : 'Painting cage offset: mid grey leaves the cage as it is, white pushes it out, black pulls it in (set the grey in the Brush panel).'); } }} /></div>
