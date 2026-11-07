@@ -5,8 +5,9 @@ import { DEFAULT_SKY_CONFIG, SkySystem } from '../../components/Environment/SkyS
 import { POST_PROCESS_COMPONENT } from '../../runtime/components/postProcess';
 import { LevelDynamicGi, dynamicGiFor } from '../../runtime/lighting/dynamicGi/LevelDynamicGi';
 import { isGpuRenderer } from '../../renderer/gpu/frame';
-import { GraphMaterial } from '../../runtime/materials/graphMaterial';
-import { normalizeMaterialGraph } from '../../runtime/materials/materialGraph';
+import { GraphMaterial, bindMaterialGraph } from '../../runtime/materials/graphMaterial';
+import { normalizeMaterialGraph, withMaterialPictures } from '../../runtime/materials/materialGraph';
+import { paintedCopyGraph } from '../../utils/paintedCopies';
 import type { LevelComponent, LevelObject, SkyConfig } from '../../types';
 
 /**
@@ -156,6 +157,74 @@ const MaterialsScene: React.FC = () => {
       <mesh position={[2.4, 0.5, -0.8]} castShadow receiveShadow>
         <torusKnotGeometry args={[0.32, 0.12, 96, 16]} />
         <meshStandardMaterial color="#2ecc71" wireframe={false} flatShading roughness={0.4} />
+      </mesh>
+    </>
+  );
+};
+
+/** A material graph's ball with the Material Output's own values. */
+const outputBall = (output: Record<string, unknown>): THREE.Material => new GraphMaterial(normalizeMaterialGraph({
+  nodes: [graphNode('out', 'output', output)],
+  links: [],
+}));
+
+/** Bumps in rows, as a tangent-space normal map. */
+const bumpTexture = (): THREE.DataTexture => {
+  const size = 64;
+  const pixels = new Uint8Array(size * size * 4);
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const slope = Math.sin((x / size) * Math.PI * 16) * 0.6;
+      pixels.set([Math.round((slope * 0.5 + 0.5) * 255), 128, Math.round(Math.sqrt(1 - slope * slope) * 255), 255], (x + y * size) * 4);
+    }
+  }
+  const texture = new THREE.DataTexture(pixels, size, size, THREE.RGBAFormat);
+  texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+  texture.generateMipmaps = true;
+  texture.minFilter = THREE.LinearMipmapLinearFilter;
+  texture.needsUpdate = true;
+  return texture;
+};
+
+/**
+ * What a material graph's physical surface adds, and graphs reading pictures: a coat, sheen, a thin film, glass, a high
+ * index of refraction with a tinted specular; then a picture read by a Material Picture node, and a painted copy (its
+ * picture over the model's own maps) keeping its own normal map and roughness.
+ */
+const PhysicalMaterialsScene: React.FC = () => {
+  const checker = useMemo(checkerTexture, []);
+  const bumps = useMemo(bumpTexture, []);
+  const lobes = useMemo(() => [
+    outputBall({ baseColor: [0.55, 0.05, 0.08], metalness: 0.4, roughness: 0.45, coat: 1, coatRoughness: 0.05 }),
+    outputBall({ baseColor: [0.25, 0.05, 0.35], roughness: 0.9, sheenColor: [0.9, 0.6, 1], sheenRoughness: 0.4 }),
+    outputBall({ baseColor: [0.05, 0.05, 0.06], roughness: 0.2, thinFilm: 1, thinFilmThickness: 420 }),
+    outputBall({ baseColor: [0.9, 0.95, 1], roughness: 0.05, transmission: 1, blendMode: 'translucent', opacity: 0.6 }),
+    outputBall({ baseColor: [0.6, 0.85, 0.95], roughness: 0.1, ior: 2.4, specularColor: [0.8, 0.9, 1] }),
+  ], []);
+  const pictured = useMemo(() => new GraphMaterial(withMaterialPictures(normalizeMaterialGraph({
+    nodes: [graphNode('out', 'output'), graphNode('picture', 'materialPicture', { output: 'baseColor' })],
+    links: [graphLink('picture', 'rgb', 'out', 'baseColor')],
+  }), { baseColor: 'checker' }), (id) => (id === 'checker' ? checker : null)), [checker]);
+  const painted = useMemo(() => {
+    const material = new THREE.MeshStandardMaterial({ normalMap: bumps, roughness: 0.25, metalness: 0.3 });
+    bindMaterialGraph(material, withMaterialPictures(paintedCopyGraph(), { baseColor: 'checker' }), (id) => (id === 'checker' ? checker : null));
+    return material;
+  }, [bumps, checker]);
+  return (
+    <>
+      <LookAt at={[0, 0.4, 0.2]} />
+      <Sky />
+      <Ground />
+      {lobes.map((material, index) => (
+        <mesh key={index} position={[-2.4 + index * 1.2, 0.5, 1.2]} castShadow receiveShadow material={material}>
+          <sphereGeometry args={[0.5, 48, 32]} />
+        </mesh>
+      ))}
+      <mesh position={[-0.6, 0.5, -0.4]} castShadow receiveShadow material={pictured}>
+        <boxGeometry args={[1, 1, 1]} />
+      </mesh>
+      <mesh position={[0.9, 0.5, -0.4]} castShadow receiveShadow material={painted}>
+        <sphereGeometry args={[0.55, 48, 32]} />
       </mesh>
     </>
   );
@@ -316,6 +385,7 @@ const CrowdScene: React.FC = () => {
 
 export const SCENES: Record<string, VisualScene> = {
   materials: { camera: { position: [0, 4.2, 7.2], fov: 45 }, Scene: MaterialsScene, frames: 20 },
+  'physical-materials': { camera: { position: [0, 3.2, 6.4], fov: 45 }, Scene: PhysicalMaterialsScene, frames: 20 },
   lighting: { camera: { position: [0, 3, 7], fov: 45 }, Scene: LightingScene, frames: 10 },
   shadows: { camera: { position: [0, 4, 10], fov: 50, far: 400 }, Scene: ShadowsScene, frames: 20 },
   reflections: { camera: { position: [0, 2, 6], fov: 50 }, Scene: ReflectionsScene, settle: settleWithRays(60) },
