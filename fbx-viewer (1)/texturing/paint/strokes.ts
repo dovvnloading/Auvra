@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { UvSurfaceLookup } from './uvSurface';
 import { DEFAULT_PARTICLES, throwParticles, type ParticleSettings } from './particles';
 import { DECAL_TABLE_WIDTH, decalTable, decalTriangles } from './decals';
+import type { GraphStamp } from './graphStamps';
 import type { GpuImage, TextureGpu } from '../gpu/textureGpu';
 import type { TileBake } from '../bake/meshBaker';
 import { NO_MIRROR, type Mirror } from '../mesh/picker';
@@ -28,7 +29,7 @@ import { SELECTION_WIDTH, encodeTriangles, selectionBytes } from './selection';
  * Undo keeps only the 32×32 blocks of each picture the stroke touched, before and after.
  */
 
-export type BrushShape = 'round' | 'square' | 'picture';
+export type BrushShape = 'round' | 'square' | 'picture' | 'graph';
 /**
  * How a dab is laid on: cast from the screen, as a disc lying on the surface, flat along one axis through
  * whatever lies under it (a decal cast straight through), or from three sides blended by how the surface faces.
@@ -73,6 +74,8 @@ export interface BrushSettings {
     /** Dabs build up on one another within a stroke, as an airbrush does, instead of stopping at the opacity. */
     buildUp: boolean;
     shape: BrushShape;
+    /** The texture graph the 'graph' shape stamps (its output's brightness), with its parameters' values. */
+    graphStamp?: GraphStamp;
     /** A picture from the library for the 'picture' shape (its brightness). */
     alphaTexture: string;
     projection: BrushProjection;
@@ -917,8 +920,11 @@ export class Stroke {
         }
         this.last = { x, y };
         const particles = brush.particles;
-        if (particles?.enabled && !this.view.uvView && dabs.length) {
-            const thrown = this.particleDabs(dabs, particles, hit);
+        if (particles?.enabled && dabs.length) {
+            // On the UV layout the dabs throw from where they lie on the model.
+            const uvView = this.view.uvView;
+            const throwing = uvView ? this.uvCopyDabs(dabs, uvView).dabs : dabs;
+            const thrown = this.particleDabs(throwing, particles, hit);
             if (particles.paintAtBrush) this.draw(dabs);
             if (thrown.length) this.draw(thrown, null, 'surface');
             return;
@@ -1048,12 +1054,14 @@ export class Stroke {
         return { dabs, uv };
     }
 
-    private draw(dabs: Dab[], picked: readonly number[] | null = null, projection: BrushProjection = this.brush.projection): void {
-        // Particle dabs are laid on the surface whatever the brush's own projection.
+    private draw(dabs: Dab[], picked: readonly number[] | null = null, projection?: BrushProjection): void {
+        // Particle dabs are laid on the surface whatever the brush's own projection, in the 2D view too.
+        const forced = projection !== undefined;
+        projection ??= this.brush.projection;
         const brush = projection === this.brush.projection ? this.brush : { ...this.brush, projection };
         const stack = this.stack;
         const gpu = stack.host.gpu;
-        const view = this.view;
+        const view = forced && this.view.uvView ? { ...this.view, uvView: undefined } : this.view;
         // On the UV layout every dab's texel is known straight away.
         if (view.uvView) {
             for (const dab of dabs) {
@@ -1077,7 +1085,7 @@ export class Stroke {
         // A flat brush's axis: the view's (from the camera into the scene), or one of the model's.
         const planarAxis = this.brush.planarAxis === 'x' ? new THREE.Vector3(1, 0, 0) : this.brush.planarAxis === 'y' ? new THREE.Vector3(0, 1, 0) : this.brush.planarAxis === 'z' ? new THREE.Vector3(0, 0, 1)
             : new THREE.Vector3().crossVectors(view.cameraRight ?? new THREE.Vector3(1, 0, 0), view.cameraUp ?? new THREE.Vector3(0, 1, 0)).negate().normalize();
-        const alpha = this.stampAlpha !== undefined ? this.stampAlpha : this.brush.shape === 'picture' ? this.alpha : null;
+        const alpha = this.stampAlpha !== undefined ? this.stampAlpha : this.brush.shape === 'picture' || this.brush.shape === 'graph' ? this.alpha : null;
         const copyMatrices = Array.from({ length: MAX_COPIES }, (_, i) => (copies[i]?.matrix ? new THREE.Matrix4().fromArray(copies[i].matrix!) : new THREE.Matrix4()));
         const batches: Dab[][] = [];
         for (let i = 0; i < dabs.length; i += MAX_DABS) batches.push(dabs.slice(i, i + MAX_DABS));
@@ -1136,7 +1144,8 @@ export class Stroke {
                             uStencilFromUv: dabs.uv ? 1 : 0,
                             uDabsUv: dabs.uv ?? noUv,
                             uStencil: this.stencil ?? gpu.constant('white'),
-                            uHasStencil: stencil.enabled && this.stencil ? 1 : 0,
+                            // Particle dabs thrown in the 2D view have no screen to read a stencil on.
+                            uHasStencil: stencil.enabled && this.stencil && !(forced && this.view.uvView) ? 1 : 0,
                             uStencilPlace: new THREE.Vector4(place.x, place.y, place.width, place.height),
                             uStencilAngle: (place.angle * Math.PI) / 180,
                             uStencilOpacity: stencil.opacity,
@@ -1198,7 +1207,7 @@ export class Stroke {
      * it is now round the area, with the tile texel its first texel stands for; null to lay the brush's
      * values on (painting, erasing, or a smudge or clone with nowhere to take from yet).
      */
-    private sourceFor(key: string, picture: SparsePicture, area: Rect): { image: GpuImage; at: [number, number] } | null {
+    private sourceFor(key: string, picture: SparsePicture, area: Rect, tile: number): { image: GpuImage; at: [number, number] } | null {
         const mode = this.brush.mode;
         // Painting (and a brush saved before it had a mode) lays its values on; erasing always erases.
         if ((mode !== 'blur' && mode !== 'sharpen' && mode !== 'smudge' && mode !== 'clone') || this.tool === 'erase') return null;
@@ -1213,7 +1222,17 @@ export class Stroke {
         const width = region.x1 - region.x0;
         const height = region.y1 - region.y0;
         const raw = gpu.image(width, height, 'color', 16);
-        picture.drawInto(raw, region, [region.x0, region.y0]);
+        const size = this.stack.size;
+        if (this.stack.reachesSeams(tile, region, 0)) {
+            // By a UV seam: the whole tile read, the gaps by its seams filled from across them, and the region
+            // taken from that, so blur, sharpen and smudge read the surface on both sides.
+            const whole = gpu.image(size, size, 'color', 16);
+            picture.drawInto(whole, { x0: 0, y0: 0, x1: size, y1: size }, [0, 0]);
+            const across = this.stack.acrossSeams(whole, tile, { x0: 0, y0: 0, x1: size, y1: size });
+            gpu.release(whole);
+            gpu.passNow(raw, { fragment: 'uniform vec2 uAt;\nvoid main() { outColor = texelFetch(source, ivec2(gl_FragCoord.xy + uAt), 0); }', inputs: { source: across }, uniforms: { uAt: new THREE.Vector2(region.x0, region.y0) } });
+            gpu.release(across);
+        } else picture.drawInto(raw, region, [region.x0, region.y0]);
         let image = raw;
         // A layer's colour is weighted by its coverage; a mask is a value alone.
         if (key.includes(':')) {
@@ -1260,7 +1279,7 @@ export class Stroke {
                 let kept = this.before.get(`${key}|${tile}`);
                 if (!kept) this.before.set(`${key}|${tile}`, kept = new Map());
                 for (const area of rects) {
-                    const source = this.sourceFor(key, picture, area);
+                    const source = this.sourceFor(key, picture, area, tile);
                     for (const [px, py] of pagesOfArea(area, picture)) {
                         const index = py * picture.columns + px;
                         if (!kept.has(index)) {

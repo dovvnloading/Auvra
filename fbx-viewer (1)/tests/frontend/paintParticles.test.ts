@@ -69,4 +69,14 @@ describe('particle brushes', () => {
         const back = readPresets(JSON.parse(JSON.stringify([presetFrom(drips, 'Mine')])))[0];
         expect(back.settings.particles).toEqual(drips.particles);
     });
+
+    it('fall along the way gravity is set to pull', () => {
+        // On the floor, pulled along +X: the drips run that way over it.
+        const dabs = throwParticles(from(new THREE.Vector3(0, -1, 1.5), new THREE.Vector3(0, 1, 0)), { ...preset('drips'), gravityDirection: [1, 0, 0] }, scene(), 2, 5);
+        expect(dabs.length).toBeGreaterThan(10);
+        expect(Math.max(...dabs.map((dab) => dab.point.x))).toBeGreaterThan(0.3);
+        expect(dabs.every((dab) => Math.abs(dab.point.y + 1) < 1e-3)).toBe(true);
+        expect(readParticles({ gravityDirection: [0, 0, 2] }).gravityDirection).toEqual([0, 0, 2]);
+        expect(readParticles({ gravityDirection: [0, 0, 0] }).gravityDirection).toBeUndefined();
+    });
 });

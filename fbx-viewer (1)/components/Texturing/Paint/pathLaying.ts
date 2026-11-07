@@ -1,8 +1,8 @@
 import * as THREE from 'three';
-import { builtInAlphaTexture } from '../../../texturing/paint/brushLibrary';
 import { layoutAlong, sampleAt, samplePath, type SurfacePath, type Vec3 } from '../../../texturing/paint/paths';
 import { Stroke, type BrushSettings, type Dab, type HistoryEntry, type StrokeTarget, type StrokeView } from '../../../texturing/paint/strokes';
 import type { PaintSession } from './paintSession';
+import { brushAlpha } from './brushAlpha';
 
 /**
  * Laying a path along its length (the brush, a ribbon, stitches from a texture graph, letters), as
@@ -51,7 +51,9 @@ export const layPathAlong = async (options: {
         const smallest = Math.max(1e-6, Math.min(...sizes));
         const gap = path.gap ?? 0.2;
         const surface: BrushSettings = style === 'ribbon' ? { ...plain, projection: 'surface', shape: 'square', hardness: 1 } : { ...plain, projection: 'surface' };
-        const alpha = style === 'brush' && brush.shape === 'picture' && brush.alphaTexture ? builtInAlphaTexture(brush.alphaTexture) ?? session.host.texture(brush.alphaTexture) : null;
+        const shaped = style === 'brush' ? brushAlpha(brush, session) : { alpha: null, waiting: null };
+        if (shaped.waiting) { onMessage(shaped.waiting); return null; }
+        const alpha = shaped.alpha;
         const stroke = new Stroke(stack, target, 'paint', surface, view, alpha, null);
         const dabOf = (sample: { position: Vec3; normal: Vec3; size: number; opacity: number; tangent: Vec3 }, scale = 1, follow = true): Dab => {
             const point = new THREE.Vector3(...sample.position);

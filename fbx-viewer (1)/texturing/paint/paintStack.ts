@@ -10,6 +10,7 @@ import { BAKE_VERSION, padImage, releaseTileBake, spaceOfBox, type ExtraBakeMap,
 import { UvRaster } from '../bake/uvRaster';
 import type { PartMesh } from '../mesh/partMesh';
 import { SurfacePicker } from '../mesh/picker';
+import { reachesSeam, seamFlaps, SeamRaster } from './seams';
 import { encodePng, encodePng16, pngBitDepth, readPicture, readPng16Half } from '../png';
 import type { ChannelImages } from '../materialOutput';
 import {
@@ -693,6 +694,22 @@ export class PaintStack {
         }
     }
 
+    private seamRaster: SeamRaster | null = null;
+
+    /** Whether a rectangle of a tile, grown by `reach` texels, reaches a UV seam's gap (filters there read across it). */
+    reachesSeams(tile: number, rect: Rect, reach: number): boolean {
+        return reachesSeam(seamFlaps(this.part, tile), rect, this.size, reach);
+    }
+
+    /**
+     * An image of `rect` of a tile with the gaps by its UV seams filled from across them, so a filter reads
+     * the surface on both sides (a new image; the caller lets go of both).
+     */
+    acrossSeams(image: GpuImage, tile: number, rect: Rect): GpuImage {
+        this.seamRaster ??= new SeamRaster(this.gpu, this.part);
+        return this.seamRaster.extend(image, tile, rect, this.size, this.padding.get(tile)!.coverage);
+    }
+
     /** Each triangle's box of texture coordinates within its tile (made the first time it is needed). */
     uvBoxes(): Float32Array {
         if (this.triangleUvBoxes) return this.triangleUvBoxes;
@@ -1334,6 +1351,9 @@ export class PaintStack {
             // A channel not drawn yet is drawn whole.
             if (written.some((channel) => !(channel === 'normal' ? this.detail.get(tile) : outputs[channel]))) region.markFull();
             const reach = stackReach(layers, this.size);
+            // Filters read across UV seams: an area reaching one is put together whole, as what lies across
+            // the seam can be anywhere on the tile.
+            if (reach > 0 && region.rects.some((inner) => this.reachesSeams(tile, inner, reach))) region.markFull();
             for (const inner of region.rects) {
                 const rect = alignRect(clampRect(expandRect(inner, reach), this.size), this.size);
                 const area: Area = { tile, rect, inner, width: rect.x1 - rect.x0, height: rect.y1 - rect.y0, at: new THREE.Vector2(rect.x0, rect.y0) };
@@ -1565,7 +1585,10 @@ void main() {
         let filtered: GpuImage;
         if (filter.kind === 'blur' || filter.kind === 'sharpen') {
             const { gaussianBlur } = await import('../graph/nodes/transform');
-            const blurred = await gaussianBlur({ gpu: this.gpu }, below, Math.max(0.25, filter.radius * this.size / 3));
+            // Read across UV seams: the islands' gaps filled from the other side first.
+            const across = this.acrossSeams(below, area.tile, area.rect);
+            const blurred = await gaussianBlur({ gpu: this.gpu }, across, Math.max(0.25, filter.radius * this.size / 3));
+            this.gpu.release(across);
             if (filter.kind === 'blur') filtered = blurred;
             else {
                 filtered = this.gpu.image(area.width, area.height, below.kind, 16);
@@ -1770,7 +1793,9 @@ void main() {
     private async applyMaskEffect(layer: PaintLayer, effect: MaskEffect, area: Area, accs: ReadonlyMap<PaintChannel, GpuImage>, m: GpuImage): Promise<GpuImage> {
         if (effect.kind === 'blur') {
             const { gaussianBlur } = await import('../graph/nodes/transform');
-            const blurred = await gaussianBlur({ gpu: this.gpu }, m, (effect.radius ?? 0.005) * this.size / 3);
+            const across = this.acrossSeams(m, area.tile, area.rect);
+            const blurred = await gaussianBlur({ gpu: this.gpu }, across, (effect.radius ?? 0.005) * this.size / 3);
+            this.gpu.release(across);
             const mixed = this.gpu.image(area.width, area.height, 'gray', 16);
             this.gpu.passNow(mixed, { fragment: 'uniform float uOpacity;\nvoid main() { ivec2 p = ivec2(gl_FragCoord.xy); outColor = vec4(mix(texelFetch(a, p, 0).r, texelFetch(b, p, 0).r, uOpacity)); }', inputs: { a: m, b: blurred }, uniforms: { uOpacity: effect.opacity } });
             this.gpu.release(blurred);
@@ -1880,6 +1905,7 @@ void main() {
         for (const padding of this.padding.values()) { this.gpu.release(padding.coverage); this.gpu.release(padding.nearest); }
         if (this.bake) for (const result of this.bake.values()) releaseTileBake(this.gpu, result);
         this.raster.dispose();
+        this.seamRaster?.dispose();
         this.outputs.clear();
         this.detail.clear();
         this.pictures.clear();

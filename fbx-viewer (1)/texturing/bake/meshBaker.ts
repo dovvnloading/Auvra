@@ -5,6 +5,7 @@ import type { MeshMapName } from '../graph/nodes/io';
 import type { PartMesh } from '../mesh/partMesh';
 import { MeshTracer, TRACE_MESH_GLSL } from './meshTracer';
 import { UvRaster } from './uvRaster';
+import { cornerTable, cornerTableGlsl, cornerTexture } from '../mesh/cornerTable';
 import { BAKE_MEMORY_BUDGET, TABLE_WIDTH, autoCage, averagedNormals, bakeBytesPerTexel, bakeGroups, bandRanges, bandRows, planStrips, stripOffsets, supersampled, traceSteps, transferTables, type BakeStrip, type CageMode, type NamedBox, type Supersample, type TransferMaterial } from './bakeSetup';
 
 /** Work one banded draw may do (ray steps): well inside what a GPU does before a driver resets it. */
@@ -410,6 +411,8 @@ const bakeInStrips = async (gpu: TextureGpu, sources: BakeSources, settings: Bak
 export interface BakeRays {
     occluder: MeshTracer;
     cageRays: Float32Array | null;
+    /** The cage rays by triangle, for the bake shaders (cornerTable). */
+    cageTable: THREE.DataTexture | null;
     groups: Array<{ lowMesh: number; tracer: MeshTracer; surface: THREE.DataTexture | null; material: THREE.DataTexture | null }>;
     dispose: () => void;
 }
@@ -474,12 +477,16 @@ export const prepareRays = (sources: BakeSources, settings: BakeSettings): BakeR
             });
         }
     }
+    // The shaders read each texel's cage ray by its triangle, not from a vertex attribute.
+    const cageTable = cageRays ? cornerTexture(cornerTable(part, cageRays)) : null;
     return {
         occluder,
         cageRays,
+        cageTable,
         groups,
         dispose: () => {
             occluder.dispose();
+            cageTable?.dispose();
             for (const group of groups) {
                 group.tracer.dispose();
                 group.surface?.dispose();
@@ -500,9 +507,8 @@ const bakeAtSize = async (gpu: TextureGpu, sources: BakeSources, settings: BakeS
     const extrasWanted = new Set<ExtraBakeMap>(settings.extras ?? []);
     // The ray structures: shared when given (strips of one bake), else made here and let go of after.
     const rays = shared ?? prepareRays(sources, settings);
-    const { occluder, cageRays, groups } = rays;
+    const { occluder, cageRays, cageTable, groups } = rays;
     const highPoly = sources.highPoly;
-    raster.setCage(cageRays);
     const high = groups[0]?.tracer ?? null;
     const occluderBox = new THREE.Box3().setFromBufferAttribute(new THREE.BufferAttribute(sources.occluder.positions, 3));
     const space = sources.space ?? spaceOfBox(occluderBox);
@@ -566,19 +572,20 @@ const bakeAtSize = async (gpu: TextureGpu, sources: BakeSources, settings: BakeS
                         // The whole tile, whatever strip this is.
                         const window = raster.window;
                         raster.window = null;
-                        raster.draw(probe, tile, `${TRACE_MESH_GLSL}
+                        raster.draw(probe, tile, `${TRACE_MESH_GLSL}${cornerTableGlsl('uCageTable')}
     uniform float uReach;
     uniform int uCageRays;
     void main() {
         vec3 n = normalize(vNormal);
-        vec3 dir = uCageRays == 1 && dot(vCage.xyz, vCage.xyz) > 1e-12 ? normalize(vCage.xyz) : n;
+        vec4 cage = uCageRays == 1 ? cornerValue() : vec4(0.0);
+        vec3 dir = uCageRays == 1 && dot(cage.xyz, cage.xyz) > 1e-12 ? normalize(cage.xyz) : n;
         TraceHit outward;
         TraceHit inward;
         bool o = traceMesh(vPos, dir, 0.0, uReach, outward);
         bool i = traceMesh(vPos, -dir, 0.0, uReach, inward);
         float gap = o && (!i || outward.t <= inward.t) ? outward.t : i ? -inward.t : 0.0;
         outColor = vec4(gap, o || i ? 1.0 : 0.0, 0.0, 1.0);
-    }`, { uniforms: { tTris: high.triangles, tNodes: high.nodes, uReach: diagonal * 0.1, uCageRays: cageRays ? 1 : 0 }, clear: [0, 0, 0, 0], edges: false });
+    }`, { uniforms: { tTris: high.triangles, tNodes: high.nodes, uReach: diagonal * 0.1, uCageRays: cageRays ? 1 : 0, uCageTable: cageTable ?? gpu.constant('black') }, clear: [0, 0, 0, 0], edges: false });
                         raster.window = window;
                         const read = gpu.readFloat(probe);
                         gpu.release(probe);
@@ -587,7 +594,7 @@ const bakeAtSize = async (gpu: TextureGpu, sources: BakeSources, settings: BakeS
                         ({ front, rear } = autoCage(gaps, front));
                         memo?.set(tile, { front, rear });
                     }
-                    const detail = `${TRACE_MESH_GLSL}
+                    const detail = `${TRACE_MESH_GLSL}${cornerTableGlsl('uCageTable')}
     uniform float uFront;
     uniform float uRear;
     uniform int uMode;
@@ -602,8 +609,9 @@ const bakeAtSize = async (gpu: TextureGpu, sources: BakeSources, settings: BakeS
         if (uOnlyMesh >= 0 && int(vIds.y + 0.5) != uOnlyMesh) discard;
         vec3 n = normalize(vNormal);
         // Along the cage ray (an averaged normal, or towards the cage mesh) or the texel's own normal.
-        vec3 dir = uCageRays == 1 && dot(vCage.xyz, vCage.xyz) > 1e-12 ? normalize(vCage.xyz) : n;
-        float front = uCageRays == 1 && vCage.w >= 0.0 ? vCage.w : uFront;
+        vec4 cage = uCageRays == 1 ? cornerValue() : vec4(0.0);
+        vec3 dir = uCageRays == 1 && dot(cage.xyz, cage.xyz) > 1e-12 ? normalize(cage.xyz) : n;
+        float front = uCageRays == 1 && cage.w >= 0.0 ? cage.w : uFront;
         // Painted fixes: skew leans the ray towards the surface's own normal; the cage offset moves where it
         // starts out or in by up to as far again as the bake reaches here, whichever cage set the distance
         // (a set one, one found from the models, or a cage model's).
@@ -654,6 +662,7 @@ const bakeAtSize = async (gpu: TextureGpu, sources: BakeSources, settings: BakeS
                                         tTris: group.tracer.triangles, tNodes: group.tracer.nodes, uFront: front, uRear: rear, uMode: target.mode, uCageRays: cageRays ? 1 : 0,
                                         uOnlyMesh: group.lowMesh, ...frame, uSurfaceTable: group.surface ?? gpu.constant('white'), uMaterialTable: group.material ?? gpu.constant('black'),
                                         uSkewMap: sources.fixes?.skew?.get(tile) ?? gpu.constant('black'), uCageMap: sources.fixes?.cage?.get(tile) ?? gpu.constant('mid'),
+                                        uCageTable: cageTable ?? gpu.constant('black'),
                                     },
                                     clear: g === 0 ? target.clear : null,
                                     scissor: { x0: 0, y0, x1: size, y1 },
