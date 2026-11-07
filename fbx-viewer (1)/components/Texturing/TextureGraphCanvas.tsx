@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import {
-    CircleDashedIcon, CubeIcon, DropletsIcon, EyeIcon, GearIcon, GraphIcon, ImageIcon, MaterialIcon, MergeIcon, MountainIcon, MoveIcon, SelectBoxIcon,
+    CircleDashedIcon, CubeIcon, DropletsIcon, EyeIcon, GearIcon, GraphIcon, ImageIcon, MaterialIcon, MergeIcon, MountainIcon, MoveIcon, RainIcon, SelectBoxIcon,
     SlidersIcon, SparklesIcon, TilesIcon, WindIcon, type IconComponent,
 } from '../UI/Icons';
 import type { FinderEntry } from '../NodeGraph/finder';
@@ -54,12 +54,12 @@ const refusal = (from: string, to: string): string => (to === 'value'
         : to === 'material' ? 'A material input takes a material wire. Make material puts images on one.' : 'These two pins do not fit together.');
 
 const CATEGORY_TINTS: Record<string, string> = {
-    'Inputs and outputs': '#3f4a5c', 'Mesh maps': '#2f5560', Noises: '#4b3f6b', Patterns: '#523d66', Shapes: '#5a4170',
+    'Inputs and outputs': '#3f4a5c', 'Mesh maps': '#2f5560', Weathering: '#5c4a38', Noises: '#4b3f6b', Patterns: '#523d66', Shapes: '#5a4170',
     Adjustments: '#2f5a48', Blending: '#2d5653', Transforms: '#5f5230', Warps: '#634a2c', 'Blurs and sharpening': '#45562e',
     'Edges and distance': '#5f3448', 'Height and normals': '#3d4370', Utility: '#46474d', 'Graphs in this project': '#3b4a63', Materials: '#2c5a55',
 };
 const CATEGORY_MARKS: Record<string, IconComponent> = {
-    'Inputs and outputs': ImageIcon, 'Mesh maps': CubeIcon, Noises: SparklesIcon, Patterns: TilesIcon, Shapes: CircleDashedIcon,
+    'Inputs and outputs': ImageIcon, 'Mesh maps': CubeIcon, Weathering: RainIcon, Noises: SparklesIcon, Patterns: TilesIcon, Shapes: CircleDashedIcon,
     Adjustments: SlidersIcon, Blending: MergeIcon, Transforms: MoveIcon, Warps: WindIcon, 'Blurs and sharpening': DropletsIcon,
     'Edges and distance': SelectBoxIcon, 'Height and normals': MountainIcon, Utility: GearIcon, 'Graphs in this project': GraphIcon, Materials: MaterialIcon,
 };

@@ -30,7 +30,11 @@ export const SUBGRAPH_SEED_KEY = '$seed';
 export const SUBGRAPH_VARY_KEY = '$vary';
 
 /** Nodes that read the model's mesh maps (`mesh:...` images) when nothing is wired in their place. */
-export const MESH_READING_NODE_TYPES: ReadonlySet<string> = new Set([MESH_MAP_NODE_TYPE, 'triplanar', 'directionMask', 'axisGradient', 'blendMeshNormals', 'noise3d']);
+export const MESH_READING_NODE_TYPES: ReadonlySet<string> = new Set([
+    MESH_MAP_NODE_TYPE, 'triplanar', 'directionMask', 'axisGradient', 'blendMeshNormals', 'noise3d',
+    // The weathering nodes (nodes/weathering.ts, which reads this file, so they are named here).
+    'edgeWear', 'damage', 'notches', 'meshDirt', 'clothWear', 'leatherWear', 'metalWear', 'meshDust', 'grease', 'meshLeaks', 'drippingRust', 'sunBleach', 'maskBuilder',
+]);
 
 /**
  * Roughly how many samples each pixel of hand-written code takes: its reads of inputs and noise
