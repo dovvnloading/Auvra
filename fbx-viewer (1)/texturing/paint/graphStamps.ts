@@ -19,6 +19,8 @@ export interface GraphStamp {
     /** The Output node's id; empty for the graph's first output. */
     output: string;
     values: Record<string, unknown>;
+    /** Lay the output's colour on the colour channels (else only its brightness shapes the dabs). */
+    colour?: boolean;
 }
 
 /** A graph stamp read back from a saved brush, made safe; null when it is not one. */
@@ -26,7 +28,7 @@ export const readGraphStamp = (value: unknown): GraphStamp | null => {
     const raw = value as Partial<GraphStamp> | null;
     if (!raw || typeof raw !== 'object' || typeof raw.graphId !== 'string' || !raw.graphId) return null;
     const values = raw.values && typeof raw.values === 'object' && !Array.isArray(raw.values) ? JSON.parse(JSON.stringify(raw.values)) as Record<string, unknown> : {};
-    return { graphId: raw.graphId.slice(0, 128), output: typeof raw.output === 'string' ? raw.output.slice(0, 128) : '', values };
+    return { graphId: raw.graphId.slice(0, 128), output: typeof raw.output === 'string' ? raw.output.slice(0, 128) : '', values, ...(raw.colour === true ? { colour: true } : {}) };
 };
 
 /** The Output nodes of a graph a brush can stamp, by id and name. */

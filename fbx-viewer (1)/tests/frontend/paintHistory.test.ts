@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { TileBake } from '../../texturing/bake/meshBaker';
-import { bakeBytes, bakeStepsToForget, historyKind, strokeLabel } from '../../texturing/paint/history';
+import { bakeBytes, bakeStepsToForget, branchBeforeStep, branchesToDrop, historyKind, strokeLabel, travelTo, type HistoryLines } from '../../texturing/paint/history';
 import { DEFAULT_PARTICLES, PARTICLE_PRESETS } from '../../texturing/paint/particles';
 import type { HistoryEntry } from '../../texturing/paint/strokes';
 import type { PaintDocument } from '../../texturing/paint/paintTypes';
@@ -45,5 +45,58 @@ describe('the paint history as a list', () => {
         expect(strokeLabel('paint', { mode: 'paint' })).toBe('Paint');
         for (const label of ['Drips', 'Leaks', 'Dust', 'Splashes', 'Running particles']) expect(historyKind({ label, pixels: [] })).toBe('particles');
         expect(historyKind({ label: 'Lay decal', pixels: [] })).toBe('decal');
+    });
+
+    it('keep undone steps as a branch, and go to any step on any branch, the line left kept as one', () => {
+        const step = (label: string): HistoryEntry => ({ label, pixels: [] });
+        const [a, b, c, d, e] = ['a', 'b', 'c', 'd', 'e'].map(step);
+        // A state that undo and redo change, so the moves can be checked.
+        const applied: string[] = [];
+        const lines: HistoryLines = { past: [a, b, c], future: [], branches: [] };
+        const move = (direction: 'undo' | 'redo') => {
+            if (direction === 'undo') { const entry = lines.past.pop(); if (!entry) return false; lines.future.push(entry); applied.push('-' + entry.label); return true; }
+            const entry = lines.future.pop();
+            if (!entry) return false;
+            lines.past.push(entry);
+            applied.push('+' + entry.label);
+            return true;
+        };
+        // Back to after a, then a new step d: b and c are a branch off a.
+        expect(travelTo(lines, a, move)).toBe(true);
+        branchBeforeStep(lines);
+        lines.past.push(d);
+        expect(lines.branches).toEqual([{ from: a, steps: [b, c] }]);
+        // Going to c: back to a, d kept as a branch, then b and c again.
+        applied.length = 0;
+        expect(travelTo(lines, c, move)).toBe(true);
+        expect(applied).toEqual(['-d', '+b', '+c']);
+        expect(lines.past).toEqual([a, b, c]);
+        expect(lines.branches).toEqual([{ from: a, steps: [d] }]);
+        // A branch off a step of another branch: reached through it.
+        travelTo(lines, b, move);
+        branchBeforeStep(lines);
+        lines.past.push(e);
+        expect(travelTo(lines, d, move)).toBe(true);
+        expect(lines.past).toEqual([a, d]);
+        applied.length = 0;
+        expect(travelTo(lines, c, move)).toBe(true);
+        expect(lines.past).toEqual([a, b, c]);
+        // The start, and a step nobody has.
+        expect(travelTo(lines, null, move)).toBe(true);
+        expect(lines.past).toEqual([]);
+        expect(travelTo(lines, step('gone'), move)).toBe(false);
+    });
+
+    it('let go of the oldest branches first past the memory or the count, and of those nothing reaches', () => {
+        const step = (label: string, bytes: number): HistoryEntry => ({ label, pixels: [{ key: 'k', tile: 1001, rects: [{ x: 0, y: 0, width: 1, height: 1, before: new Uint8Array(bytes), after: null }] }] });
+        const a = step('a', 10), b = step('b', 100), c = step('c', 100), d = step('d', 10);
+        const lines: HistoryLines = { past: [a, d], future: [], branches: [{ from: a, steps: [b] }, { from: b, steps: [c] }] };
+        // Over budget: the oldest branch goes, and the one coming off it with it.
+        expect(branchesToDrop(lines, 150, 10, false)).toEqual(lines.branches);
+        expect(branchesToDrop(lines, 1000, 10, false)).toEqual([]);
+        expect(branchesToDrop(lines, 1000, 1, false)).toEqual(lines.branches);
+        // Off the start, once older steps went, nothing reaches it.
+        expect(branchesToDrop({ past: [d], future: [], branches: [{ from: null, steps: [c] }] }, 1000, 10, true)).toHaveLength(1);
+        expect(branchesToDrop({ past: [d], future: [], branches: [{ from: null, steps: [c] }] }, 1000, 10, false)).toHaveLength(0);
     });
 });

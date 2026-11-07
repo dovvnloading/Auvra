@@ -99,7 +99,12 @@ export interface ParticleDab {
     normal: THREE.Vector3;
     worldRadius: number;
     flow: number;
+    /** Pixels to the model unit of the dab that threw it, passed on to the dabs it leaves. */
+    scale?: number;
 }
+
+/** A direction laid on the plane square to `n`. */
+const tangentOf = (v: THREE.Vector3, n: THREE.Vector3): THREE.Vector3 => v.clone().addScaledVector(n, -v.dot(n));
 
 /** Steady random numbers in 0..1 from a seed. */
 const randoms = (seed: number) => {
@@ -126,71 +131,132 @@ const cone = (axis: THREE.Vector3, spread: number, next: () => number): THREE.Ve
 const STEP = 1 / 60;
 const MAX_STEPS = 600;
 
+/** A particle on its way. */
+interface Live {
+    from: ParticleDab;
+    pos: THREE.Vector3;
+    normal: THREE.Vector3;
+    velocity: THREE.Vector3;
+    step: number;
+    sinceDab: number;
+    bounces: number;
+    done: boolean;
+}
+
 /**
- * The dabs the particles one dab throws leave: `from` is the dab on the surface, `modelSize` the model's
- * size (its box's diagonal). At most `maxDabs` are made.
+ * Particles running over time: dabs throw particles as a stroke is drawn (spawn), and each moment the
+ * stroke goes on (advance, by seconds) they move on, giving the dabs they leave along that part of their
+ * paths; finish runs the rest to their ends. Steady for a given seed and the same calls.
  */
-export const throwParticles = (from: ParticleDab, settings: ParticleSettings, surface: ParticleSurface, modelSize: number, seed: number, maxDabs = 600): ParticleDab[] => {
-    const next = randoms(seed);
-    const dabs: ParticleDab[] = [];
-    const gravity = new THREE.Vector3(...(settings.gravityDirection ?? [0, -1, 0])).normalize().multiplyScalar(settings.gravity * modelSize);
-    const steps = Math.min(MAX_STEPS, Math.ceil(settings.life / STEP));
-    const radiusAt = (step: number) => from.worldRadius * THREE.MathUtils.lerp(settings.sizeStart, settings.sizeEnd, Math.min(1, step / Math.max(1, steps)));
-    const leave = (point: THREE.Vector3, normal: THREE.Vector3, step: number) => {
-        if (dabs.length < maxDabs) dabs.push({ point: point.clone(), normal: normal.clone(), worldRadius: radiusAt(step), flow: from.flow });
-    };
-    const tangent = (v: THREE.Vector3, n: THREE.Vector3) => v.clone().addScaledVector(n, -v.dot(n));
-    for (let p = 0; p < settings.count && dabs.length < maxDabs; p++) {
-        if (settings.motion === 'flow') {
-            // Starting somewhere under the brush, on the surface.
-            const offset = tangent(cone(from.normal, 0.5, next), from.normal).normalize().multiplyScalar(from.worldRadius * 0.6 * Math.sqrt(next()));
-            let at = surface.nearest(from.point.clone().add(offset), from.worldRadius * 2) ?? { point: from.point.clone(), normal: from.normal.clone() };
-            let pos = at.point.clone();
-            let normal = at.normal.clone();
-            const downhill = tangent(gravity, normal);
-            const start = downhill.lengthSq() > 1e-12 ? downhill.normalize() : tangent(cone(normal, 0.5, next), normal).normalize();
-            // Turned off downhill by up to the spread.
-            let velocity = start.applyAxisAngle(normal, (next() - 0.5) * Math.PI * settings.spread).multiplyScalar(settings.speed * modelSize);
-            let sinceDab = Infinity;
-            for (let step = 0; step < steps; step++) {
-                const radius = radiusAt(step);
-                if (sinceDab >= radius * 0.35) { leave(pos, normal, step); sinceDab = 0; }
-                velocity.add(tangent(gravity, normal).multiplyScalar(STEP));
-                // Thick paint: a drag that sets how fast it can run.
-                velocity.multiplyScalar(1 - Math.min(0.9, 2.5 * STEP));
-                if (settings.wander > 0 && velocity.lengthSq() > 1e-16) velocity.applyAxisAngle(normal, (next() - 0.5) * settings.wander * 0.6);
-                const move = velocity.clone().multiplyScalar(STEP);
-                const length = move.length();
-                if (length < modelSize * 1e-6) break;
-                const landed = surface.nearest(pos.clone().add(move), length * 2 + radius);
-                // Off an edge with nothing to run onto: it stops.
-                if (!landed) break;
-                sinceDab += landed.point.distanceTo(pos);
-                pos = landed.point;
-                normal = landed.normal;
-                velocity = tangent(velocity, normal).setLength(velocity.length());
+export class ParticleRun {
+    private readonly next: () => number;
+    private readonly gravity: THREE.Vector3;
+    private readonly steps: number;
+    private live: Live[] = [];
+    /** Time not yet stepped (less than a step). */
+    private owed = 0;
+
+    constructor(private readonly settings: ParticleSettings, private readonly surface: ParticleSurface, private readonly modelSize: number, seed: number) {
+        this.next = randoms(seed);
+        this.gravity = new THREE.Vector3(...(settings.gravityDirection ?? [0, -1, 0])).normalize().multiplyScalar(settings.gravity * modelSize);
+        this.steps = Math.min(MAX_STEPS, Math.ceil(settings.life / STEP));
+    }
+
+    /** Particles still on their way. */
+    get alive(): number { return this.live.length; }
+
+    private radiusAt(particle: Live): number {
+        return particle.from.worldRadius * THREE.MathUtils.lerp(this.settings.sizeStart, this.settings.sizeEnd, Math.min(1, particle.step / Math.max(1, this.steps)));
+    }
+
+    /** The particles one dab throws. */
+    spawn(from: ParticleDab): void {
+        const { settings, surface, modelSize, next } = this;
+        for (let p = 0; p < settings.count; p++) {
+            if (settings.motion === 'flow') {
+                // Starting somewhere under the brush, on the surface.
+                const offset = tangentOf(cone(from.normal, 0.5, next), from.normal).normalize().multiplyScalar(from.worldRadius * 0.6 * Math.sqrt(next()));
+                const at = surface.nearest(from.point.clone().add(offset), from.worldRadius * 2) ?? { point: from.point.clone(), normal: from.normal.clone() };
+                const downhill = tangentOf(this.gravity, at.normal);
+                const start = downhill.lengthSq() > 1e-12 ? downhill.normalize() : tangentOf(cone(at.normal, 0.5, next), at.normal).normalize();
+                // Turned off downhill by up to the spread.
+                const velocity = start.applyAxisAngle(at.normal, (next() - 0.5) * Math.PI * settings.spread).multiplyScalar(settings.speed * modelSize);
+                this.live.push({ from, pos: at.point.clone(), normal: at.normal.clone(), velocity, step: 0, sinceDab: Infinity, bounces: 0, done: false });
+                continue;
             }
-            continue;
-        }
-        // Thrown off the surface into the air, falling.
-        let pos = from.point.clone().addScaledVector(from.normal, from.worldRadius * 0.5);
-        const velocity = cone(from.normal, settings.spread * 0.5, next).multiplyScalar(settings.speed * modelSize * (0.5 + 0.5 * next()));
-        let bounces = settings.motion === 'bounce' ? 4 : 0;
-        for (let step = 0; step < steps; step++) {
-            velocity.add(gravity.clone().multiplyScalar(STEP));
-            if (settings.wander > 0) velocity.add(cone(new THREE.Vector3(0, 1, 0), 1, next).multiplyScalar(settings.wander * settings.speed * modelSize * STEP * 4));
-            const move = velocity.clone().multiplyScalar(STEP);
-            const length = move.length();
-            if (length < 1e-12) continue;
-            const hit = surface.cast(pos, move.clone().divideScalar(length));
-            if (!hit || hit.distance > length) { pos.add(move); continue; }
-            leave(hit.point, hit.normal, step);
-            if (bounces-- <= 0) break;
-            // Bounced off, slower, a little off the surface.
-            velocity.reflect(hit.normal).multiplyScalar(settings.bounce);
-            pos = hit.point.clone().addScaledVector(hit.normal, modelSize * 1e-4);
-            if (velocity.length() < settings.speed * modelSize * 0.05) break;
+            // Thrown off the surface into the air, falling.
+            const pos = from.point.clone().addScaledVector(from.normal, from.worldRadius * 0.5);
+            const velocity = cone(from.normal, settings.spread * 0.5, next).multiplyScalar(settings.speed * modelSize * (0.5 + 0.5 * next()));
+            this.live.push({ from, pos, normal: from.normal.clone(), velocity, step: 0, sinceDab: 0, bounces: settings.motion === 'bounce' ? 4 : 0, done: false });
         }
     }
-    return dabs;
+
+    /** One step of one particle, leaving any dabs into `out`. */
+    private stepOne(particle: Live, out: ParticleDab[]): void {
+        const { settings, surface, modelSize, next, gravity } = this;
+        if (particle.step >= this.steps) { particle.done = true; return; }
+        const leave = (point: THREE.Vector3, normal: THREE.Vector3) => out.push({ point: point.clone(), normal: normal.clone(), worldRadius: this.radiusAt(particle), flow: particle.from.flow, scale: particle.from.scale });
+        if (settings.motion === 'flow') {
+            const radius = this.radiusAt(particle);
+            if (particle.sinceDab >= radius * 0.35) { leave(particle.pos, particle.normal); particle.sinceDab = 0; }
+            particle.velocity.add(tangentOf(gravity, particle.normal).multiplyScalar(STEP));
+            // Thick paint: a drag that sets how fast it can run.
+            particle.velocity.multiplyScalar(1 - Math.min(0.9, 2.5 * STEP));
+            if (settings.wander > 0 && particle.velocity.lengthSq() > 1e-16) particle.velocity.applyAxisAngle(particle.normal, (next() - 0.5) * settings.wander * 0.6);
+            const move = particle.velocity.clone().multiplyScalar(STEP);
+            const length = move.length();
+            particle.step++;
+            if (length < modelSize * 1e-6) { particle.done = true; return; }
+            const landed = surface.nearest(particle.pos.clone().add(move), length * 2 + radius);
+            // Off an edge with nothing to run onto: it stops.
+            if (!landed) { particle.done = true; return; }
+            particle.sinceDab += landed.point.distanceTo(particle.pos);
+            particle.pos = landed.point;
+            particle.normal = landed.normal;
+            particle.velocity = tangentOf(particle.velocity, particle.normal).setLength(particle.velocity.length());
+            return;
+        }
+        particle.velocity.add(gravity.clone().multiplyScalar(STEP));
+        if (settings.wander > 0) particle.velocity.add(cone(new THREE.Vector3(0, 1, 0), 1, next).multiplyScalar(settings.wander * settings.speed * modelSize * STEP * 4));
+        const move = particle.velocity.clone().multiplyScalar(STEP);
+        const length = move.length();
+        if (length < 1e-12) { particle.step++; return; }
+        const hit = surface.cast(particle.pos, move.clone().divideScalar(length));
+        if (!hit || hit.distance > length) { particle.pos.add(move); particle.step++; return; }
+        leave(hit.point, hit.normal);
+        particle.step++;
+        if (particle.bounces-- <= 0) { particle.done = true; return; }
+        // Bounced off, slower, a little off the surface.
+        particle.velocity.reflect(hit.normal).multiplyScalar(settings.bounce);
+        particle.pos = hit.point.clone().addScaledVector(hit.normal, modelSize * 1e-4);
+        if (particle.velocity.length() < settings.speed * modelSize * 0.05) particle.done = true;
+    }
+
+    /** Moves every particle on by \`seconds\`, giving the dabs they leave meanwhile. */
+    advance(seconds: number): ParticleDab[] {
+        const out: ParticleDab[] = [];
+        this.owed += Math.max(0, seconds);
+        while (this.owed >= STEP && this.live.length) {
+            this.owed -= STEP;
+            for (const particle of this.live) this.stepOne(particle, out);
+            this.live = this.live.filter((particle) => !particle.done);
+        }
+        if (!this.live.length) this.owed = 0;
+        return out;
+    }
+
+    /** Runs every particle to the end of its way, giving the dabs it leaves. */
+    finish(): ParticleDab[] {
+        return this.advance(this.steps * STEP + STEP);
+    }
+}
+
+/**
+ * The dabs the particles one dab throws leave, run to their ends at once: \`from\` is the dab on the
+ * surface, \`modelSize\` the model's size (its box's diagonal). At most \`maxDabs\` are given.
+ */
+export const throwParticles = (from: ParticleDab, settings: ParticleSettings, surface: ParticleSurface, modelSize: number, seed: number, maxDabs = 600): ParticleDab[] => {
+    const run = new ParticleRun(settings, surface, modelSize, seed);
+    run.spawn(from);
+    return run.finish().slice(0, maxDabs);
 };

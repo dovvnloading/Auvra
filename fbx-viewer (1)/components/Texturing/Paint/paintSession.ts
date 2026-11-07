@@ -17,7 +17,7 @@ import { DEEP_EXPORT, ROLE_LABELS, encodeChannels, rewriteMaterialPictures, tile
 import { GpuResetError, PaintStack, pictureOwners, type StackHost } from '../../../texturing/paint/paintStack';
 import { BUILTIN_GRAPHS } from '../../../texturing/paint/smartLibrary';
 import { applyPixelHistory, trimmedHistory, type HistoryEntry } from '../../../texturing/paint/strokes';
-import { BAKE_HISTORY_BYTES, bakeStepsToForget, historyKind, type HistoryKind } from '../../../texturing/paint/history';
+import { BAKE_HISTORY_BYTES, bakeStepsToForget, branchBeforeStep, branchesToDrop, historyKind, travelTo, type HistoryBranch, type HistoryKind, type HistoryLines } from '../../../texturing/paint/history';
 import { castsFromThreeSides, createPaintDocument, newFillLayer, paintId, readPaintDocument, type PaintChannel, type PaintDocument } from '../../../texturing/paint/paintTypes';
 import { download, makeZip } from '../../../texturing/zip';
 import { fileName, holdsNormalGreen, planPicture, type ChannelSource, type ExportPicture, type ExportSource, type ExportTemplate } from '../../../texturing/paint/exportTemplates';
@@ -26,7 +26,7 @@ import { atlasMesh, atlasUvs, markPaintedMaterials, surfaceOfGraph, withPaintedM
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js';
 import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { graphPictureLookup } from './graphPictures';
-import { paintStackEntry } from '../../../texturing/paint/stackNode';
+import { paintStackEntry, registerOpenStack } from '../../../texturing/paint/stackNode';
 
 /** A template's picture packed from up to four maps: each channel a component of one (grey maps hold theirs in red), or a value. */
 const PACK_PICTURE = /* glsl */ `
@@ -79,6 +79,11 @@ export interface PaintSessionHost {
 }
 
 export const HISTORY_LIMIT = 80;
+/** The channels a comparison keeps: what the view draws the material with. */
+export const COMPARED_CHANNELS = ['baseColor', 'normal', 'roughness', 'metallic', 'emissive', 'ambientOcclusion'] as const;
+export type ComparedChannel = typeof COMPARED_CHANNELS[number];
+/** Branches kept at most (the oldest go first). */
+export const MAX_BRANCHES = 12;
 /**
  * Pixels the undo history may hold, in bytes (strokes keep the blocks they touched). Past it, the oldest
  * steps go first; the newest step is always kept.
@@ -115,6 +120,22 @@ export class PaintSession {
     asset: MaterialAsset;
     private past: HistoryEntry[] = [];
     private future: HistoryEntry[] = [];
+    /** Steps undone and replaced, kept as branches off the step they came after. */
+    private branches: HistoryBranch[] = [];
+    /** Older steps have gone (memory): a branch off the start no longer has a start to come off. */
+    private startMoved = false;
+    /** The history's lines, as the branching helpers work on them (the set's own lists). */
+    private get lines(): HistoryLines {
+        const session = this;
+        return {
+            get past() { return session.past; },
+            set past(value) { session.past = value; },
+            get future() { return session.future; },
+            set future(value) { session.future = value; },
+            get branches() { return session.branches; },
+            set branches(value) { session.branches = value; },
+        };
+    }
     private readonly listeners = new Set<() => void>();
     private saveTimer: ReturnType<typeof setTimeout> | null = null;
     private saving: Promise<void> | null = null;
@@ -257,6 +278,7 @@ export class PaintSession {
         this.stack.abandon();
         this.past = [];
         this.future = [];
+        this.branches = [];
         try {
             if (!this.retired) await this.keepDocument();
         } catch (error) {
@@ -325,6 +347,8 @@ export class PaintSession {
         }
         const session = new PaintSession(target, host, part, stack, asset, occluder, modelSpace);
         session.releasePictures = graphPictures.dispose;
+        // Graphs using this set's stack draw from it while it is open.
+        session.closeStack = registerOpenStack(asset.id, stack);
         return session;
     }
 
@@ -372,8 +396,8 @@ export class PaintSession {
 
     /** A step already made (a brush stroke) goes into the history. */
     record(entry: HistoryEntry): void {
-        // Undone bakes go for good: the maps they would put back are let go of.
-        for (const undone of this.future) this.letGoOfBake(undone.bakeMaps?.after ?? null);
+        // The undone steps it replaces stay, as a branch the History panel can go back to.
+        branchBeforeStep(this.lines);
         entry.at ??= Date.now();
         this.past.push(entry);
         this.future = [];
@@ -391,7 +415,7 @@ export class PaintSession {
      * maps and keep their place in the list, putting nothing back.
      */
     private forgetOldBakes(): void {
-        for (const older of bakeStepsToForget(this.past, this.future, this.stack.bake, BAKE_HISTORY_BYTES)) {
+        for (const older of bakeStepsToForget(this.past, [...this.future, ...this.branches.flatMap((branch) => branch.steps)], this.stack.bake, BAKE_HISTORY_BYTES)) {
             this.letGoOfBake(older.bakeMaps?.before ?? null);
             delete older.bakeMaps;
             delete older.document;
@@ -406,7 +430,26 @@ export class PaintSession {
 
     /** Keeps the history within its step count and its memory (oldest first, never the newest step). */
     private trimHistory(): void {
+        const oldest = this.past[0];
         this.past = trimmedHistory(this.past, this.future, HISTORY_LIMIT, HISTORY_BYTES);
+        if (oldest && this.past[0] !== oldest) this.startMoved = true;
+        // Branches count against the same memory and go first, oldest first; those nothing reaches go too.
+        for (const branch of branchesToDrop(this.lines, HISTORY_BYTES, MAX_BRANCHES, this.startMoved)) this.forgetBranch(branch);
+    }
+
+    /** Lets go of a branch and the bake maps only its steps held. */
+    private forgetBranch(branch: HistoryBranch): void {
+        this.branches = this.branches.filter((other) => other !== branch);
+        for (const step of branch.steps) this.letGoOfBake(step.bakeMaps?.after ?? null);
+    }
+
+    /** The branches off the history, each with its steps as the panel lists them. */
+    get branchSteps(): Array<{ branch: HistoryBranch; from: HistoryEntry | null; steps: Array<{ entry: HistoryEntry; label: string; kind: HistoryKind; at: number | null; putsBack: boolean }> }> {
+        return this.branches.map((branch) => ({
+            branch,
+            from: branch.from,
+            steps: branch.steps.map((entry) => ({ entry, label: entry.label, kind: historyKind(entry), at: entry.at ?? null, putsBack: Boolean(entry.pixels || entry.document || entry.bakeMaps) })),
+        }));
     }
 
     /**
@@ -415,7 +458,7 @@ export class PaintSession {
      */
     private dropUnusedPictures(): void {
         const documents: PaintDocument[] = [this.stack.document];
-        for (const entry of [...this.past, ...this.future]) if (entry.document) documents.push(entry.document.before, entry.document.after);
+        for (const entry of [...this.past, ...this.future, ...this.branches.flatMap((branch) => branch.steps)]) if (entry.document) documents.push(entry.document.before, entry.document.after);
         this.stack.dropPicturesExcept(pictureOwners(documents));
     }
 
@@ -434,21 +477,69 @@ export class PaintSession {
      */
     goTo(target: HistoryEntry | null): void {
         if (!this.usable || this.lockReason) return;
-        if (target === null || this.past.includes(target)) {
-            while (this.past.length && this.past[this.past.length - 1] !== target) {
-                // A step let go of to keep memory (while undoing) cannot be reached any more.
-                if (target && !this.past.includes(target)) break;
-                const before = this.past.length;
-                this.undo();
-                if (this.past.length >= before) break;
+        const held = (entry: HistoryEntry | null) => entry === null || this.past.includes(entry) || this.future.includes(entry) || this.branches.some((branch) => branch.steps.includes(entry));
+        travelTo(this.lines, target, (direction) => {
+            // A step let go of to keep memory on the way cannot be reached any more.
+            if (!held(target)) return false;
+            const before = this.past[this.past.length - 1];
+            if (direction === 'undo') this.undo();
+            else this.redo();
+            return this.past[this.past.length - 1] !== before;
+        });
+        this.emit();
+    }
+
+    /**
+     * A step to compare with: the set's pictures as they stood just after it (null: at the start), drawn
+     * once, and where the view's wipe between it and the set as it is now stands (0 left to 1 right).
+     */
+    comparison: { entry: HistoryEntry | null; label: string; images: Map<number, Partial<Record<ComparedChannel, GpuImage>>>; wipe: number } | null = null;
+
+    /** Draws the set as it stood just after `target` and keeps it to compare with, coming back to where it is. */
+    async compareWith(target: HistoryEntry | null): Promise<void> {
+        if (this.busy || !this.usable || this.lockReason) return;
+        this.stopComparing();
+        const back = this.past[this.past.length - 1] ?? null;
+        this.busy = 'Drawing the step to compare';
+        this.emit();
+        try {
+            this.goTo(target);
+            await this.stack.compose();
+            const images = new Map<number, Partial<Record<ComparedChannel, GpuImage>>>();
+            for (const tile of this.stack.tiles) {
+                const outputs = this.stack.outputs.get(tile) ?? {};
+                const kept: Partial<Record<ComparedChannel, GpuImage>> = {};
+                for (const name of COMPARED_CHANNELS) {
+                    const image = outputs[name];
+                    if (!image) continue;
+                    const copy = this.gpu.image(image.width, image.height, image.kind, image.precision);
+                    this.gpu.copy(image, copy);
+                    kept[name] = copy;
+                }
+                images.set(tile, kept);
             }
-        } else if (this.future.includes(target)) {
-            while (this.future.length && this.past[this.past.length - 1] !== target) {
-                const before = this.future.length;
-                this.redo();
-                if (this.future.length >= before) break;
-            }
+            this.comparison = { entry: target, label: target?.label ?? 'Before these steps', images, wipe: 0.5 };
+        } finally {
+            this.goTo(back);
+            await this.stack.compose().catch(() => undefined);
+            this.busy = null;
+            this.emit();
         }
+    }
+
+    /** Ends a comparison, letting go of the pictures it kept. */
+    stopComparing(): void {
+        if (!this.comparison) return;
+        for (const images of this.comparison.images.values()) for (const image of Object.values(images)) this.gpu.release(image);
+        this.comparison = null;
+        this.emit();
+    }
+
+    /** Moves the comparison's wipe (0 left to 1 right). */
+    setCompareWipe(wipe: number): void {
+        if (!this.comparison) return;
+        this.comparison.wipe = Math.min(1, Math.max(0, wipe));
+        this.emit();
     }
 
     get canUndo(): boolean { return this.past.length > 0 && this.usable && !this.lockReason; }
@@ -549,6 +640,7 @@ export class PaintSession {
             // Undo steps hold pixels at the old size.
             this.past = [];
             this.future = [];
+            this.branches = [];
             this.changedSinceApply = true;
             return true;
         } finally {
@@ -1051,12 +1143,16 @@ export class PaintSession {
 
     /** Lets go of the copies of pictures the fill graphs read. */
     private releasePictures: () => void = () => undefined;
+    /** Says the set's stack is no longer open to graphs. */
+    private closeStack: () => void = () => undefined;
 
     dispose(): void {
+        this.stopComparing();
+        this.closeStack();
         this.stopListening();
         this.releasePictures();
         // Maps bake steps held for undo go with the set.
-        for (const entry of [...this.past, ...this.future]) { this.letGoOfBake(entry.bakeMaps?.before ?? null); this.letGoOfBake(entry.bakeMaps?.after ?? null); }
+        for (const entry of [...this.past, ...this.future, ...this.branches.flatMap((branch) => branch.steps)]) { this.letGoOfBake(entry.bakeMaps?.before ?? null); this.letGoOfBake(entry.bakeMaps?.after ?? null); }
         this.restoredListeners.clear();
         // Saved on closing (save itself refuses to keep anything from a lost GPU context).
         if (this.saveTimer) {
