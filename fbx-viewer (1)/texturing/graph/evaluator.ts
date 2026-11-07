@@ -267,7 +267,7 @@ export class TextureGraphEvaluator {
             // What the node takes after when it takes after its input: the first picture wired (a value a
             // setting follows is no picture).
             const pictures = definition.inputs.filter((port) => port.kind !== 'value');
-            const first = pictures.map((port) => info.get(links?.get(port.key)?.from ?? '')).find((details): details is NodeDetails => Boolean(details) && !details.value);
+            const first = pictures.map((port) => info.get(links?.get(port.key)?.from ?? '')).find((details): details is NodeDetails => details !== undefined && !details.value);
             // Size: from the first wired input or the graph, then the node's own change.
             let { width, height } = resolveSize(node.size?.mode ?? definition.sizeFrom, node.size, first, { width: graphWidth, height: graphHeight });
             // A bypassed node passes its main input through: it takes that input's size and kind.
