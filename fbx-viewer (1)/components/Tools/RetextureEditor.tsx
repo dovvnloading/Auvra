@@ -13,10 +13,9 @@ import { RetextureStage, type StageLighting } from './Retexture/RetextureStage';
 import { capabilityOfMode, retextureSessions, startingLookName, useRetextureSessions, type RetextureMode, type SessionPart, type SurfaceRole, type Take } from './Retexture/retextureSession';
 import { STATE_WORDS, TakesStrip } from './Retexture/TakesStrip';
 import { expandPaintedCopies } from '../../utils/paintedCopies';
-import { materialLibrary as retextureMaterials } from '../../runtime/materials/materialLibrary';
 
 /** A model's overrides with its painted copies shown as the painted base maps Retexture edits. */
-const editable = (overrides: Parameters<typeof expandPaintedCopies>[0]) => expandPaintedCopies(overrides, (id) => retextureMaterials.get(id));
+const editable = (overrides: Parameters<typeof expandPaintedCopies>[0]) => expandPaintedCopies(overrides, (id) => materialLibrary.get(id));
 
 const SURFACE_WORDS: Record<SurfaceRole, string> = { normal: 'Normal', roughness: 'Roughness', metalness: 'Metal' };
 
