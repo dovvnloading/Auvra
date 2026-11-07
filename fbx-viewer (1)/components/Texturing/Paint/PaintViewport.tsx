@@ -574,6 +574,8 @@ export const PaintViewport: React.FC<{
 
     // ---- pointer ----
     const gesture = useRef<{ kind: 'orbit' | 'pan'; x: number; y: number } | { kind: 'stroke'; stroke: Stroke; depth: GpuImage; anchor: { x: number; y: number } } | { kind: 'pathPoint'; index: number } | { kind: 'decal' } | { kind: 'wipe' } | null>(null);
+    /** The frame particles next move on in, while a stroke throwing them is held. */
+    const particleFrame = useRef<number | null>(null);
     /** Clone: where strokes copy from (Ctrl-click sets it). */
     const cloneSource = useRef<{ triangle: number; uv: THREE.Vector2 } | null>(null);
 
@@ -635,6 +637,16 @@ export const PaintViewport: React.FC<{
         }
         if (brush.mode === 'clone' && cloneSource.current) stroke.cloneSource(cloneSource.current.triangle, cloneSource.current.uv);
         gesture.current = { kind: 'stroke', stroke, depth, anchor: { x, y } };
+        // Particles run on while the stroke is held, between pointer moves too.
+        if (brush.particles?.enabled) {
+            const tick = () => {
+                const current = gesture.current;
+                if (current?.kind !== 'stroke' || current.stroke !== stroke) { particleFrame.current = null; return; }
+                stroke.advanceParticles();
+                particleFrame.current = requestAnimationFrame(tick);
+            };
+            particleFrame.current = requestAnimationFrame(tick);
+        }
         stroke.moveTo(x, y, pressure, (px, py) => hitAt(px, py), tilt);
     };
 
@@ -902,6 +914,7 @@ export const PaintViewport: React.FC<{
     const onPointerUp = () => {
         const current = gesture.current;
         gesture.current = null;
+        if (particleFrame.current !== null) { cancelAnimationFrame(particleFrame.current); particleFrame.current = null; }
         if (current?.kind === 'stroke') {
             const entry = current.stroke.finish(strokeLabel(tool === 'erase' ? 'erase' : 'paint', brush));
             gpu.release(current.depth);

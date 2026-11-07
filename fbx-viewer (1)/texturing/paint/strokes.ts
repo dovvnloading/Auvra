@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { UvSurfaceLookup } from './uvSurface';
-import { DEFAULT_PARTICLES, throwParticles, type ParticleSettings } from './particles';
+import { DEFAULT_PARTICLES, ParticleRun, type ParticleDab, type ParticleSettings } from './particles';
 import { DECAL_TABLE_WIDTH, decalTable, decalTriangles } from './decals';
 import type { GraphStamp } from './graphStamps';
 import type { GpuImage, TextureGpu } from '../gpu/textureGpu';
@@ -811,8 +811,11 @@ export class Stroke {
     private readonly valueImages = new Map<number, GpuImage>();
     /** The value images are weighted by coverage (a colour stamp's are; a decal's are not). */
     private valuesWeighted = false;
-    /** Dabs that have thrown particles in this stroke (each throw its own seed). */
+    /** Dabs particles have left in this stroke (each turned its own way). */
     private particleCount = 0;
+    /** The stroke's particles on their way, and when they last moved. */
+    private particleRun: ParticleRun | null = null;
+    private particleClock = 0;
     /** The 2D view's tile, looked up by UV (for its dabs' copies on the model). */
     private uvSurface: UvSurfaceLookup | null = null;
     /**
@@ -941,24 +944,27 @@ export class Stroke {
             // On the UV layout the dabs throw from where they lie on the model.
             const uvView = this.view.uvView;
             const throwing = uvView ? this.uvCopyDabs(dabs, uvView).dabs : dabs;
-            const thrown = this.particleDabs(throwing, particles, hit);
+            this.spawnParticles(throwing, particles, hit);
             if (particles.paintAtBrush) this.draw(dabs);
-            if (thrown.length) this.draw(thrown, null, 'surface');
+            // The particles move on as the stroke goes on (and between moves: advanceParticles each frame).
+            this.advanceParticles();
             return;
         }
         if (dabs.length) this.draw(dabs);
     }
 
     /**
-     * The dabs the particles thrown by `dabs` leave along their paths, as surface dabs (each the size its
-     * particle has then, in the same pixels to the model unit as the dab that threw it).
+     * Throws particles from `dabs` into the stroke's run: each starts where its dab lies on the model,
+     * sized by it, and leaves dabs in the same pixels to the model unit as the dab that threw it.
      */
-    private particleDabs(dabs: readonly Dab[], settings: ParticleSettings, hit: SurfaceProbe): Dab[] {
-        const part = this.stack.part;
-        const modelSize = Math.max(1e-6, part.bounds.getSize(new THREE.Vector3()).length());
-        const picker = this.stack.picker;
-        const surface = { cast: (origin: THREE.Vector3, direction: THREE.Vector3) => picker.cast(origin, direction), nearest: (point: THREE.Vector3, reach: number) => picker.nearest(point, reach) };
-        const out: Dab[] = [];
+    private spawnParticles(dabs: readonly Dab[], settings: ParticleSettings, hit: SurfaceProbe): void {
+        if (!this.particleRun) {
+            const part = this.stack.part;
+            const modelSize = Math.max(1e-6, part.bounds.getSize(new THREE.Vector3()).length());
+            const picker = this.stack.picker;
+            const surface = { cast: (origin: THREE.Vector3, direction: THREE.Vector3) => picker.cast(origin, direction), nearest: (point: THREE.Vector3, reach: number) => picker.nearest(point, reach) };
+            this.particleRun = new ParticleRun(settings, surface, modelSize, this.seed + 7919);
+        }
         for (const dab of dabs) {
             let { point, normal, worldRadius } = dab;
             if (!point || !normal || !worldRadius) {
@@ -968,14 +974,31 @@ export class Stroke {
                 normal = found.normal;
                 worldRadius = (dab.radius * found.distance) / this.view.perspective;
             }
-            const pixelsPerUnit = dab.radius / Math.max(1e-9, worldRadius);
-            const seed = this.seed + (this.particleCount += 1) * 7919;
-            for (const left of throwParticles({ point, normal, worldRadius, flow: dab.flow }, settings, surface, modelSize, seed, Math.max(0, MAX_PARTICLE_DABS - out.length))) {
-                out.push({ x: dab.x, y: dab.y, radius: Math.max(0.5, left.worldRadius * pixelsPerUnit), angle: random(seed + out.length) * Math.PI * 2, flow: left.flow, point: left.point, normal: left.normal, worldRadius: left.worldRadius });
-            }
-            if (out.length >= MAX_PARTICLE_DABS) break;
+            this.particleRun.spawn({ point, normal, worldRadius, flow: dab.flow, scale: dab.radius / Math.max(1e-9, worldRadius) });
         }
-        return out;
+    }
+
+    /**
+     * Moves the stroke's particles on by the time since they last moved (at most a tenth of a second at a
+     * time), painting along their paths; true while any are still on their way.
+     */
+    advanceParticles(now = performance.now()): boolean {
+        const run = this.particleRun;
+        if (!run) return false;
+        const seconds = this.particleClock ? Math.min(0.1, (now - this.particleClock) / 1000) : 1 / 60;
+        this.particleClock = now;
+        this.layParticleDabs(run.advance(seconds));
+        return run.alive > 0;
+    }
+
+    /** Particles' dabs laid on the surface (at most so many a moment). */
+    private layParticleDabs(left: readonly ParticleDab[]): void {
+        if (!left.length) return;
+        const dabs: Dab[] = left.slice(0, MAX_PARTICLE_DABS).map((dab, i) => ({
+            x: 0, y: 0, radius: Math.max(0.5, dab.worldRadius * (dab.scale ?? 1)), angle: random(this.seed + (this.particleCount += 1) + i) * Math.PI * 2, flow: dab.flow,
+            point: dab.point, normal: dab.normal, worldRadius: dab.worldRadius,
+        }));
+        this.draw(dabs, null, 'surface');
     }
 
     /** Lays dabs placed by the caller (along a path), with their own alpha if one is given. */
@@ -1365,6 +1388,12 @@ export class Stroke {
 
     /** Ends the stroke: what it changed goes into the undo history. */
     finish(label: string): HistoryEntry {
+        // Particles still on their way run to their ends: the step holds their whole paths.
+        if (this.particleRun) {
+            const rest = this.particleRun.finish();
+            for (let i = 0; i < rest.length; i += MAX_PARTICLE_DABS) this.layParticleDabs(rest.slice(i, i + MAX_PARTICLE_DABS));
+            this.particleRun = null;
+        }
         const stack = this.stack;
         const gpu = stack.host.gpu;
         const patches: PixelPatch[] = [];
@@ -1415,6 +1444,7 @@ void main() { ivec2 base = (ivec2(gl_FragCoord.xy) + ivec2(uFirst)) * ${BLOCK}; 
 
     /** Leaves the pictures as they were before the stroke (a stroke given up on). */
     cancel(): void {
+        this.particleRun = null;
         const areas = new Map<number, Rect[]>();
         for (const [entry, kept] of this.before) {
             const [key, tileName] = entry.split('|');
