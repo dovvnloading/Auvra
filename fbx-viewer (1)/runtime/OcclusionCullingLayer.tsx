@@ -2,11 +2,14 @@ import React, { createContext, useEffect, useMemo } from 'react';
 import type * as THREE from 'three';
 import { useFrame, useThree } from '@react-three/fiber';
 import { OCCLUSION_RENDER_ORDER, OcclusionQueries, type OcclusionContext } from './occlusionCulling';
+import { isGpuRenderer } from '../renderer/gpu/frame';
 
 /** The queries instanced sets below ask through (the game's Occlusion culling quality setting); none in the editor. */
 export const OcclusionCullingContext = createContext<OcclusionQueries | null>(null);
 
 const queryContextOf = (gl: THREE.WebGLRenderer): OcclusionContext | null => {
+    // The new renderer culls in its own compute pass, so none of the queries or their draws are made.
+    if (isGpuRenderer(gl)) return null;
     const context = gl.getContext?.() as WebGL2RenderingContext | undefined;
     return context && typeof context.createQuery === 'function' ? context : null;
 };

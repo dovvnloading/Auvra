@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import * as THREE from 'three';
-import { chooseLodLevel, lodPixelsPerUnit, meshLodChain, meshLodReady, MIN_LOD_TRIANGLES, seedMeshLodChain, type MeshLodLevel } from '../../utils/meshLod';
+import { chooseLodLevel, keepFullDetail, lodPixelsPerUnit, meshLodChain, meshLodReady, MIN_LOD_TRIANGLES, seedMeshLodChain, type MeshLodLevel } from '../../utils/meshLod';
 
 beforeAll(async () => { await meshLodReady; });
 
@@ -54,6 +54,26 @@ describe('mesh level of detail chain', () => {
       expect(geometry.groups[1].start).toBe(geometry.groups[0].count);
       expect(geometry.groups[0].count + geometry.groups[1].count).toBe(geometry.index!.count);
     }
+  });
+
+  it('makes no levels for a geometry kept at full detail', () => {
+    const sphere = new THREE.SphereGeometry(1, 64, 48);
+    keepFullDetail(sphere);
+    expect(meshLodChain(sphere)).toEqual([{ geometry: sphere, error: 0, triangles: sphere.index!.count / 3 }]);
+  });
+
+  it('makes levels again for a geometry filled anew after it was disposed', () => {
+    const sphere = new THREE.SphereGeometry(1, 64, 48);
+    const first = meshLodChain(sphere);
+    sphere.dispose();
+    const filled = new THREE.SphereGeometry(2, 32, 24);
+    sphere.setAttribute('position', filled.attributes.position);
+    sphere.setAttribute('normal', filled.attributes.normal);
+    sphere.setAttribute('uv', filled.attributes.uv);
+    sphere.setIndex(filled.index);
+    const again = meshLodChain(sphere);
+    expect(again).not.toBe(first);
+    expect(again[1].geometry.attributes.position).toBe(filled.attributes.position);
   });
 
   it('leaves small meshes with their one level', () => {

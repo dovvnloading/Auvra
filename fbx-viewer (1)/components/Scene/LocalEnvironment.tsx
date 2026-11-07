@@ -1,6 +1,7 @@
 import React, { useLayoutEffect } from 'react';
 import { useThree } from '@react-three/fiber';
 import { captureLocalEnvironment } from './localEnvironmentCapture';
+import { isGpuRenderer } from '../../renderer/gpu/frame';
 
 export interface LocalEnvironmentProps {
     /** Select the cooler, lower-energy night rig used by SkySystem. */
@@ -18,6 +19,8 @@ export const LocalEnvironment: React.FC<LocalEnvironmentProps> = ({ night = fals
     const scene = useThree(state => state.scene);
 
     useLayoutEffect(() => {
+        // The capture is a WebGL cube and prefilter; the new renderer draws its fill from its own environment pass.
+        if (isGpuRenderer(gl)) return undefined;
         const target = captureLocalEnvironment(gl, night);
         const before = scene.environment;
         scene.environment = target.texture;

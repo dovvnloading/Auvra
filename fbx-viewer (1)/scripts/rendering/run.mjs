@@ -5,6 +5,9 @@
 //   node scripts/rendering/run.mjs --update   keep the new pictures as the ones to compare with
 //   node scripts/rendering/run.mjs --gpu      draw on the machine's real GPU, for its numbers (the pictures will differ)
 //   node scripts/rendering/run.mjs --only a,b just those scenes
+//   node scripts/rendering/run.mjs --renderer webgpu
+//                                             the same on the WebGPU renderer, with pictures of its own in
+//                                             tests/visual/references/webgpu/ and its output in tests/visual/output/webgpu/
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
@@ -14,16 +17,20 @@ import { fileURLToPath } from 'node:url';
 import react from '@vitejs/plugin-react';
 import { build } from 'vite';
 
-const projectDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const visualDir = path.join(projectDir, 'tests/visual');
-const referenceDir = path.join(visualDir, 'references');
-const outputDir = path.join(visualDir, 'output');
-
 const args = process.argv.slice(2);
 const updating = args.includes('--update');
 const realGpu = args.includes('--gpu');
 const onlyAt = args.indexOf('--only');
 const only = onlyAt >= 0 ? new Set(args[onlyAt + 1].split(',')) : null;
+const rendererAt = args.indexOf('--renderer');
+const renderer = rendererAt >= 0 ? args[rendererAt + 1] : 'webgl2';
+if (renderer !== 'webgl2' && renderer !== 'webgpu') throw new Error(`No renderer called ${renderer}: webgl2 or webgpu`);
+const onWebGpu = renderer === 'webgpu';
+
+const projectDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+const visualDir = path.join(projectDir, 'tests/visual');
+const referenceDir = path.join(visualDir, 'references', ...(onWebGpu ? ['webgpu'] : []));
+const outputDir = path.join(visualDir, 'output', ...(onWebGpu ? ['webgpu'] : []));
 
 /** A pixel differs when a channel is further off than this: software GPUs round a little differently between machines. */
 const PIXEL_TOLERANCE = 10;
@@ -61,13 +68,25 @@ const serve = (root) => new Promise((resolve) => {
   server.listen(0, '127.0.0.1', () => resolve(server));
 });
 
+// On Windows a file the browser is still writing cannot be opened at all (EBUSY): it is read again, as one not there yet.
+const readIfReady = (file) => {
+  try {
+    return existsSync(file) ? readFileSync(file, 'utf8') : '';
+  } catch (error) {
+    if (error.code === 'EBUSY' || error.code === 'EPERM' || error.code === 'EACCES') return '';
+    throw error;
+  }
+};
+
 const waitForFile = async (file, limitMs) => {
   const start = Date.now();
-  while (!existsSync(file) || !readFileSync(file, 'utf8').includes('\n')) {
+  let text = readIfReady(file);
+  while (!text.includes('\n')) {
     if (Date.now() - start > limitMs) throw new Error('The browser did not start');
     await new Promise((resolve) => setTimeout(resolve, 100));
+    text = readIfReady(file);
   }
-  return readFileSync(file, 'utf8');
+  return text;
 };
 
 /** Just enough of the browser's debugging protocol: one page, and running script in it. */
@@ -117,7 +136,14 @@ const main = async () => {
     });
     server = await serve(siteDir);
 
-    const gpuFlags = realGpu ? ['--ignore-gpu-blocklist'] : ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'];
+    // WebGPU on the processor goes through Vulkan's SwiftShader, which the browser brings along. Asking for GL's
+    // SwiftShader as well leaves the browser with no WebGPU adapter at all.
+    // A headless Linux browser has no window surface for Vulkan, and loses its device without being told not to want one.
+    const linuxVulkan = process.platform === 'linux' ? ['--use-angle=vulkan', '--disable-vulkan-surface'] : [];
+    const softwareGpu = onWebGpu
+      ? ['--enable-unsafe-webgpu', '--enable-features=Vulkan', '--use-vulkan=swiftshader', '--use-webgpu-adapter=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist', ...linuxVulkan]
+      : ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'];
+    const gpuFlags = realGpu ? ['--ignore-gpu-blocklist', ...(onWebGpu ? ['--enable-unsafe-webgpu'] : [])] : softwareGpu;
     browser = spawn(browserPath(), [
       '--headless=new',
       `--user-data-dir=${profileDir}`,
@@ -146,7 +172,7 @@ const main = async () => {
     await send('Page.enable');
     await send('Emulation.setFocusEmulationEnabled', { enabled: true });
     const { address, port: sitePort } = server.address();
-    await send('Page.navigate', { url: `http://${address}:${sitePort}/index.html` });
+    await send('Page.navigate', { url: `http://${address}:${sitePort}/index.html?renderer=${renderer}` });
 
     const run = async (expression) => {
       const result = await Promise.race([
@@ -168,8 +194,18 @@ const main = async () => {
     const failures = [];
     const numbers = {};
     const rows = [];
+    // What the page itself warned of since `from`: the renderer reports its own trouble there.
+    const pageSaid = (from) => client.events
+      .slice(from)
+      .filter((event) => event.method === 'Runtime.consoleAPICalled' && ['error', 'warning'].includes(event.params.type))
+      .map((event) => event.params.args.map((arg) => arg.value ?? arg.description ?? '').join(' '))
+      .slice(-30);
+    const said = (lines) => (lines.length ? `\nThe page said:\n  ${lines.join('\n  ')}` : '');
     for (const name of names) {
-      const { png, numbers: cost } = await run(`window.auvraVisual.capture(${JSON.stringify(name)})`);
+      const sceneStart = client.events.length;
+      const { png, numbers: cost } = await run(`window.auvraVisual.capture(${JSON.stringify(name)})`).catch((error) => {
+        throw new Error(`${name}: ${error.message}${said(pageSaid(sceneStart))}`);
+      });
       numbers[name] = cost;
       const bytes = Buffer.from(png.split(',')[1], 'base64');
       const referenceFile = path.join(referenceDir, `${name}.png`);
@@ -188,7 +224,7 @@ const main = async () => {
           shareText = `${(result.share * 100).toFixed(3)}% worst ${result.worst}`;
           verdict = result.sameSize && result.share <= MOST_DIFFERING ? 'same' : 'DIFFERENT';
           if (verdict !== 'same') {
-            failures.push(`${name}: ${shareText} of the picture differs`);
+            failures.push(`${name}: ${shareText} of the picture differs${said(pageSaid(sceneStart))}`);
             if (result.diff) writeFileSync(path.join(outputDir, `${name}.diff.png`), Buffer.from(result.diff.split(',')[1], 'base64'));
           }
         }
@@ -200,20 +236,30 @@ const main = async () => {
     writeFileSync(path.join(outputDir, 'numbers.json'), `${JSON.stringify(numbers, null, 2)}\n`);
     if (updating && !only) {
       for (const file of readdirSync(referenceDir)) {
-        if (!names.includes(path.basename(file, '.png'))) rmSync(path.join(referenceDir, file));
+        if (file.endsWith('.png') && !names.includes(path.basename(file, '.png'))) rmSync(path.join(referenceDir, file));
       }
     }
     client.close();
     if (failures.length) {
-      console.error(`Rendering has changed:\n  ${failures.join('\n  ')}\nThe pictures are in tests/visual/output/. If the change is meant, keep them with: npm run rendering:verify -- --update`);
+      const again = onWebGpu ? ' --renderer webgpu' : '';
+      console.error(`Rendering has changed on ${renderer}:\n  ${failures.join('\n  ')}\nThe pictures are in ${path.relative(projectDir, outputDir)}/. If the change is meant, keep them with: npm run rendering:verify -- --update${again}`);
       process.exitCode = 1;
     }
   } finally {
     server?.close();
-    browser?.kill();
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    if (browser && browser.exitCode === null) {
+      // A browser still closing holds its profile's files on Windows: it is waited for, a few seconds at most.
+      const exited = new Promise((resolve) => browser.once('exit', resolve));
+      browser.kill();
+      await Promise.race([exited, new Promise((resolve) => setTimeout(resolve, 5000))]);
+    }
     rmSync(siteDir, { recursive: true, force: true });
-    rmSync(profileDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+    try {
+      rmSync(profileDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 });
+    } catch (error) {
+      // What is left is in the system's temporary folder; the pictures are what this run is for.
+      console.warn(`Could not remove the browser profile ${profileDir}: ${error.message}`);
+    }
   }
 };
 

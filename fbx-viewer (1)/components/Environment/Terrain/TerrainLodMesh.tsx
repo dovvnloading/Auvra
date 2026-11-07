@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { useFrame } from '@react-three/fiber';
 import { chooseChunkLevel, chunkBounds, chunkIndices, chunkLayout, MAX_LOD_LEVEL, skirtGeometryData, type TerrainChunk } from './terrainChunks';
 import type { TerrainLiveEdit } from './terrainLiveEdit';
+import { keepFullDetail } from '../../../utils/meshLod';
 
 interface ChunkRender {
     chunk: TerrainChunk;
@@ -43,7 +44,11 @@ export const TerrainLodMesh: React.FC<TerrainLodMeshProps> = ({ source, segments
             const attribute = source.getAttribute(name);
             if (attribute) geometry.setAttribute(name, attribute);
         }
-        return { chunk, geometry, indices: new Array(MAX_LOD_LEVEL + 1).fill(null), skirt: new THREE.BufferGeometry(), level: null, centre: new THREE.Vector3() };
+        const skirt = new THREE.BufferGeometry();
+        // Chunks are the terrain's detail levels already, and a skirt simplified would cut across its chunk.
+        keepFullDetail(geometry);
+        keepFullDetail(skirt);
+        return { chunk, geometry, indices: new Array(MAX_LOD_LEVEL + 1).fill(null), skirt, level: null, centre: new THREE.Vector3() };
     }), [source, segments]);
 
     useEffect(() => () => chunks.forEach(render => {

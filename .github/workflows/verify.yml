@@ -107,6 +107,39 @@ jobs:
           path: fbx-viewer (1)/tests/visual/output
           retention-days: 14
 
+  # The WebGPU pictures are drawn on Windows: a headless Linux browser loses its software WebGPU device before the first
+  # frame, while the same software device on Windows draws them as they were kept.
+  rendering-webgpu:
+    name: Rendering pictures on WebGPU
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: fbx-viewer (1)
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: "24.x"
+          cache: npm
+          cache-dependency-path: fbx-viewer (1)/package-lock.json
+
+      - name: Install editor dependencies
+        run: npm ci
+
+      - name: Draw the scenes on WebGPU and compare them with its kept pictures
+        run: npm run rendering:verify -- --renderer webgpu
+
+      - name: Keep the pictures with the run
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: rendering-pictures-webgpu
+          path: fbx-viewer (1)/tests/visual/output/webgpu
+          retention-days: 14
+
   rendering-history:
     name: Rendering history
     needs: rendering

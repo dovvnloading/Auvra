@@ -1,8 +1,9 @@
 
 import React, { useContext, useMemo, useLayoutEffect, useRef, useState, useCallback } from 'react';
 import * as THREE from 'three';
-import { ThreeEvent, useFrame } from '@react-three/fiber';
+import { ThreeEvent, useFrame, useThree } from '@react-three/fiber';
 import { LoadedModelData, LevelObject } from '../../types';
+import { isGpuRenderer } from '../../renderer/gpu/frame';
 import { materialGraphOffsetsVertices } from '../../runtime/materials/graphMaterial';
 import { OCCLUSION_MIN_TRIANGLES, type OcclusionSet } from '../../runtime/occlusionCulling';
 import { OcclusionCullingContext } from '../../runtime/OcclusionCullingLayer';
@@ -78,6 +79,7 @@ const InstancedModelGroup: React.FC<{
 } & InstanceSelectionProps> = ({ model, instances, onSelect, interactive, placementSurface, hiddenIds, selectedIds }) => {
     const lodReady = useMeshLodReady();
     const lodAllowed = useContext(MeshLodContext);
+    const gpuDrawn = useThree(state => isGpuRenderer(state.gl));
 
     // 1. Decompose the model into renderable parts (Geometries + Materials)
     const parts = useMemo(() => {
@@ -117,8 +119,9 @@ const InstancedModelGroup: React.FC<{
                 // In play the instances draw at the detail their size on the screen calls for, and only
                 // as a view needs them, even with one level to draw; the editor keeps one mesh per part, so
                 // its instance ids stay the objects' for picking, and only that mesh shows the selection.
-                const chain = !interactive && lodReady && lodAllowed ? meshLodChain(part.geometry) : null;
-                const levels = chain && chain.length > 1 ? chain : !interactive && !selectedIds?.size ? soleLevel(part.geometry) : null;
+                // The GPU renderer culls each instance and picks its level itself: one mesh holds the whole set.
+                const chain = !gpuDrawn && !interactive && lodReady && lodAllowed ? meshLodChain(part.geometry) : null;
+                const levels = gpuDrawn ? null : chain && chain.length > 1 ? chain : !interactive && !selectedIds?.size ? soleLevel(part.geometry) : null;
                 if (levels) {
                     return <LodPartInstancer key={part.key} part={part} levels={levels} instances={instances} hiddenIds={hiddenIds} />;
                 }

@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { Effect, EffectAttribute, LookupTexture } from 'postprocessing';
 import { skyLight } from './daylight';
+import { isGpuRenderer } from '../renderer/gpu/frame';
 
 /**
  * CINEMATIC SCREEN EFFECTS
@@ -43,6 +44,7 @@ export class FullscreenPass {
     }
 
     render(renderer: THREE.WebGLRenderer, target: THREE.WebGLRenderTarget): void {
+        if (isGpuRenderer(renderer)) return;
         renderer.setRenderTarget(target);
         renderer.render(this.scene, this.camera);
     }

@@ -3,6 +3,7 @@ import { BAKE_SAMPLES, bakeCurve, bakeGradient, linearColor, type ParticleEffect
 import { MODE_DEFINE, PARTICLE_CORNER, PARTICLE_FRAGMENT, WorldMesh } from './particleRenderer';
 import { MAX_PARTICLE_STEP, type MeshSurface } from './particleSimulation';
 import { FullscreenPass } from './postEffects';
+import { isGpuRenderer } from '../renderer/gpu/frame';
 
 /**
  * GPU PARTICLES
@@ -659,7 +660,8 @@ export class GpuParticleSystem {
      */
     step(renderer: THREE.WebGLRenderer, dt: number, matrix: THREE.Matrix4, ground: number | null): void {
         const effect = this.effect;
-        if (!effect) return;
+        // The state lives in WebGL targets; the new renderer simulates particles in a compute pass of its own.
+        if (!effect || isGpuRenderer(renderer)) return;
         const before = renderer.getRenderTarget();
         if (this.needsClear) {
             const alpha = renderer.getClearAlpha();

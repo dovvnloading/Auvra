@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import { useFrame, useThree } from '@react-three/fiber';
+import { isGpuRenderer } from '../../renderer/gpu/frame';
 import { cascadeSplits, farShadowReach, fitCascade, installDistanceShadows, lookDistance, nearShadowReach, SHADOW_CASCADES, viewSliceSphere } from './distanceShadows';
 
 // Before any lit material compiles: programs built from the plain chunk would be reused for every
@@ -39,7 +40,8 @@ export const DistanceShadows: React.FC<{
     sun?: React.RefObject<THREE.DirectionalLight | null>;
 }> = ({ direction, distance, sun }) => {
     const camera = useThree(state => state.camera);
-    const shadowsOn = useThree(state => state.gl.shadowMap.enabled);
+    // The GPU renderer's shadow pass fits and draws its own cascades from the sun, so no lights stand in for them.
+    const shadowsOn = useThree(state => state.gl.shadowMap.enabled && !isGpuRenderer(state.gl));
     const detail = useContext(ShadowDetailContext);
     const look = useLookDistance();
     const mapSize = detail === 'low' ? LOW_DETAIL_CASCADE_MAP_SIZE : CASCADE_MAP_SIZE;

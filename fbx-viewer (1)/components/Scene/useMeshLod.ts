@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { useFrame } from '@react-three/fiber';
+import { isGpuRenderer } from '../../renderer/gpu/frame';
 import { chooseLodLevel, lodPixelsPerUnit, meshLodChain, meshLodReady } from '../../utils/meshLod';
 
 /** Whether meshes below draw their detail levels (the game's Mesh detail levels quality setting); on by default. */
@@ -41,8 +42,9 @@ export const useMeshLod = (root: THREE.Object3D | null | undefined, requested = 
         fullGeometry.clear();
     }, [root, enabled, fullGeometry]);
 
-    useFrame(({ camera, size }) => {
-        if (!enabled || !ready || !root || frame.current++ % LOD_UPDATE_INTERVAL !== 0) return;
+    useFrame(({ camera, size, gl }) => {
+        // The GPU renderer picks each mesh's level itself, so no geometry is swapped under it.
+        if (!enabled || !ready || !root || isGpuRenderer(gl) || frame.current++ % LOD_UPDATE_INTERVAL !== 0) return;
         const pixelsPerUnit = lodPixelsPerUnit(camera, size.height);
         camera.getWorldPosition(_camera);
         root.traverse((node) => {

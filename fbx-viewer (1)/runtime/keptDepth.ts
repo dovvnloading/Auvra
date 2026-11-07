@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { Pass } from 'postprocessing';
 import { FullscreenPass } from './postEffects';
+import { isGpuRenderer } from '../renderer/gpu/frame';
 
 /**
  * KEPT DEPTH
@@ -21,9 +22,12 @@ void main() {
     copied = vec4( texelFetch( depthMap, ivec2( gl_FragCoord.xy ), 0 ).r, 0.0, 0.0, 1.0 );
 }`;
 
-/** The copy is a float target, which a device must be able to draw into. */
+/**
+ * The copy is a float target, which a device must be able to draw into. WebGL targets are all this asks about, so the
+ * new renderer, which has none and no `extensions` to ask, answers no: what this gates (temporal, dynamic GI) stands down.
+ */
 export const canDrawFloat = (gl: unknown): boolean =>
-    (gl as { extensions?: { has?: (name: string) => boolean } }).extensions?.has?.('EXT_color_buffer_float') !== false;
+    !isGpuRenderer(gl) && (gl as { extensions?: { has?: (name: string) => boolean } }).extensions?.has?.('EXT_color_buffer_float') !== false;
 
 export class DepthCopy {
     private readonly target = new THREE.WebGLRenderTarget(1, 1, {

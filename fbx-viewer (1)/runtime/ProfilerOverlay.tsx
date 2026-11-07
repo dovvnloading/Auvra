@@ -1,5 +1,7 @@
 import React, { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
+import { isGpuRenderer } from '../renderer/gpu/frame';
+import type { FrameTimings, StageTiming } from '../renderer/gpu/frameTimings';
 
 export interface FrameStats {
     fps: number;
@@ -10,6 +12,9 @@ export interface FrameStats {
     geometries: number;
     textures: number;
     heapMb: number | null;
+    /** With the WebGPU renderer: each stage of the frame on the graphics card and on this thread. */
+    stages?: StageTiming[];
+    gpuMs?: number;
 }
 
 /** Rolling frame statistics; pure so it can be tested without a renderer. */
@@ -73,8 +78,10 @@ export const ProfilerProbe: React.FC<{ enabled: boolean }> = ({ enabled }) => {
         elapsed.current += delta;
         if (elapsed.current < 0.25) return;
         elapsed.current = 0;
+        const timings = isGpuRenderer(gl) ? (gl as unknown as { timings: FrameTimings }).timings : null;
         publishStats({
             ...sampler.current.summary(),
+            ...(timings ? { stages: timings.read(), gpuMs: timings.gpuTotalMs } : {}),
             drawCalls,
             triangles,
             geometries: memory.geometries,
@@ -97,6 +104,8 @@ export const ProfilerPanel: React.FC<{ visible: boolean }> = ({ visible }) => {
         ['Geometries', String(stats.geometries)],
         ['Textures', String(stats.textures)],
         ...(stats.heapMb !== null ? [['JS heap', `${stats.heapMb.toFixed(0)} MB`] as [string, string]] : []),
+        ...(stats.gpuMs !== undefined ? [['GPU', `${stats.gpuMs.toFixed(2)} ms`] as [string, string]] : []),
+        ...(stats.stages ?? []).map((entry): [string, string] => [entry.stage, `${entry.gpuMs.toFixed(2)} / ${entry.cpuMs.toFixed(2)} ms`]),
     ];
     return (
         <div className="absolute top-2 right-2 z-[80] rounded bg-black/70 px-3 py-2 font-mono text-[11px] text-white/90 pointer-events-none select-none">

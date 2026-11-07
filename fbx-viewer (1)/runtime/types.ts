@@ -60,10 +60,13 @@ export interface GameSettings {
      * renderScale: the share of the display's size the lit scene is drawn at, with temporal anti-aliasing.
      * loadLevelsOnDemand: a built game loads each level's assets when it starts (runtime/levelAssets.ts); off, all of them at once.
      * assetMemoryMb: how much a built game holds before freeing what earlier levels used (runtime/assetResidency.ts).
+     * renderer: what draws levels (renderer/AuvraCanvas.tsx). auto: WebGPU where the machine has it, WebGL2 elsewhere.
+     * shadowPages: on WebGPU, the sun's shadow from one enormous map of which only what is looked at exists (renderer/gpu/passes/virtualShadows.ts).
      */
     quality: {
         shadows: boolean; postProcessing: boolean; maxDpr: number; fov: number; meshLod: boolean; occlusionCulling: boolean; textureCompression: boolean;
         antiAliasing: 'temporal' | 'smaa' | 'none'; renderScale: number; loadLevelsOnDemand: boolean; assetMemoryMb: number;
+        renderer: 'auto' | 'webgpu' | 'webgl2'; shadowPages: boolean;
     };
     input: { mouseSensitivity: number; invertY: boolean };
     audio: { masterVolume: number };
@@ -81,7 +84,7 @@ export const DEFAULT_GAME_SETTINGS: GameSettings = {
     startupLevelId: null,
     playerBlueprintId: null,
     window: { fullscreen: false },
-    quality: { shadows: true, postProcessing: true, maxDpr: 2, fov: 60, meshLod: true, occlusionCulling: true, textureCompression: true, antiAliasing: 'temporal', renderScale: 1, loadLevelsOnDemand: true, assetMemoryMb: 2048 },
+    quality: { shadows: true, postProcessing: true, maxDpr: 2, fov: 60, meshLod: true, occlusionCulling: true, textureCompression: true, antiAliasing: 'temporal', renderScale: 1, loadLevelsOnDemand: true, assetMemoryMb: 2048, renderer: 'auto', shadowPages: false },
     input: { mouseSensitivity: 0.002, invertY: false },
     audio: { masterVolume: 1 },
     network: DEFAULT_NETWORK_SETTINGS,
