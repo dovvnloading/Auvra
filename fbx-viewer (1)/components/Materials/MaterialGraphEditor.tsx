@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { BookIcon, CameraIcon, ChipIcon, CommentAddIcon, CrossIcon, ExternalLinkIcon, FlowIcon, GraphIcon, ImageIcon, PlusIcon, TrashIcon, WarningIcon } from '../UI/Icons';
+import { BookIcon, CameraIcon, ChipIcon, CommentAddIcon, CrossIcon, ExternalLinkIcon, FlowIcon, GraphIcon, ImageIcon, PackagePlusIcon, PlusIcon, TrashIcon, WarningIcon } from '../UI/Icons';
 import { useAssets } from '../../context/AssetContext';
 import { projectService } from '../../utils/projectService';
 import { frontendDiagnostics } from '../../diagnostics/runtime';
@@ -17,6 +17,7 @@ import {
 import { MATERIALS_DOMAIN, materialAssetDocument, materialAssetUse, materialLibrary, type MaterialAsset } from '../../runtime/materials/materialLibrary';
 import { LIBRARY_DRAG_TYPE, MyLibraryPanel, useAddToLibrary, useBringIn, useUserLibrary } from './MyLibrary';
 import { MaterialXExportButton, MaterialXImport, type MaterialXImportHandle } from './MaterialXFiles';
+import { MaterialPackageExportButton, MaterialPackageImport, type MaterialPackageImportHandle } from './MaterialPackageFiles';
 import { ProjectBall } from './ProjectBalls';
 import { CompressionBadge } from './CompressionBadge';
 import { MaterialFromDescription } from './MaterialFromDescription';
@@ -127,8 +128,10 @@ export const MaterialGraphEditor: React.FC = () => {
         setAdding(false);
     };
     const materialXImport = useRef<MaterialXImportHandle>(null);
+    const packageImport = useRef<MaterialPackageImportHandle>(null);
     const libraryButton = asset && materialAssetUse(asset) !== 'forOtherGraphs' ? (<>
         <MaterialXExportButton asset={asset} />
+        <MaterialPackageExportButton asset={asset} />
         <IconButton label={adding ? 'Adding it to your library…' : inMyLibrary ? 'Update in my library: the copy kept for every project' : 'Add to my library: keep a copy for every project'} disabled={adding} onClick={() => void addAsset()}>
             <BookIcon size={14} />
         </IconButton>
@@ -362,6 +365,7 @@ export const MaterialGraphEditor: React.FC = () => {
                     <IconButton label="Texture memory: what textures take on the graphics card, per level and per material" onClick={() => setMemoryOpen(true)}><ChipIcon size={14} /></IconButton>
                     {memoryOpen && <TextureMemoryDialog onClose={() => setMemoryOpen(false)} />}
                     <MaterialXImport ref={materialXImport} onImported={(imported) => { setSelectedId(imported.id); select([]); setLibraryOpen(false); }} />
+                    <MaterialPackageImport ref={packageImport} into="project" onProjectMaterial={(imported) => { setSelectedId(imported.id); select([]); setLibraryOpen(false); }} />
                     <IconButton ref={newButton} label="New material" active={newMenu} onClick={() => setNewMenu(true)}><PlusIcon size={14} /></IconButton>
                     <Popover anchor={newButton} open={newMenu} onClose={() => setNewMenu(false)} width={280} label="New material">
                         <div className="p-1">
@@ -372,6 +376,7 @@ export const MaterialGraphEditor: React.FC = () => {
                                 { key: 'photo', icon: <ImageIcon size={14} />, title: 'From a photo', text: 'A photo of a surface made into a texture graph: tiled, lighting taken out, with height, normal and roughness worked out. Or drop a photo on the list.', run: () => photoPicker.current?.pick() },
                                 { key: 'capture', icon: <CameraIcon size={14} />, title: 'From photos lit from several sides', text: CAPTURE_MENU_TEXT, run: () => capturePicker.current?.pick() },
                                 { key: 'materialx', icon: <ExternalLinkIcon size={14} />, title: 'From a MaterialX file', text: 'Pick a .mtlx file together with its pictures: its surface becomes a shader graph.', run: () => materialXImport.current?.pick() },
+                                { key: 'package', icon: <PackagePlusIcon size={14} />, title: 'From a material package', text: 'Pick a published .auvramat file: its graph, pictures and the graphs it uses come in, with its parameters and presets still live.', run: () => packageImport.current?.pick() },
                             ].map((item) => (
                                 <button key={item.key} onClick={() => { setNewMenu(false); item.run(); }} className="flex w-full gap-2 rounded px-2 py-1.5 text-left hover:bg-gray-800">
                                     <span className="mt-0.5 text-gray-400">{item.icon}</span>

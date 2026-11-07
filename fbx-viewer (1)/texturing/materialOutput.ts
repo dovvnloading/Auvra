@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { createMaterialGraph, defaultParams, readsMaterialPictures, type MaterialGraph } from '../runtime/materials/materialGraph';
 import { FLIPBOOK_FRAMES_NODE_TYPE, MATERIAL_PICTURE_NODE_TYPE, OUTPUT_NODE_TYPE as MATERIAL_OUTPUT, UDIM_ATLAS_NODE_TYPE } from '../runtime/materials/materialNodes';
 import type { GpuImage, TextureGpu } from './gpu/textureGpu';
+import type { TexturingGpu } from './gpu/texturingGpu';
 import { encodePng16 } from './png';
 
 /**
@@ -58,12 +59,12 @@ export const DEFAULT_PARALLAX_DEPTH = 0.03;
  * Roles in `deep` are written at 16 bits a channel (for files that leave the editor; the engine reads 8),
  * and height always is.
  */
-export const encodeChannels = async (gpu: TextureGpu, images: ChannelImages, width: number, height: number, layout: PictureLayout, flipRows = true, deep: ReadonlyArray<ChannelPicture['role']> = []): Promise<ChannelPicture[]> => {
+export const encodeChannels = async (gpu: TexturingGpu, images: ChannelImages, width: number, height: number, layout: PictureLayout, flipRows = true, deep: ReadonlyArray<ChannelPicture['role']> = []): Promise<ChannelPicture[]> => {
     const pictures: ChannelPicture[] = [];
     const deepRoles = new Set([...deep, ...ALWAYS_DEEP]);
     const add = async (role: ChannelPicture['role'], image: GpuImage, encode: 'color' | 'gray') => {
         const blob = deepRoles.has(role)
-            ? await encodePng16(gpu.readUint16(image, width, height, encode, flipRows), width, height, encode === 'gray' ? 1 : 4)
+            ? await encodePng16(await gpu.readUint16Async(image, width, height, encode, flipRows), width, height, encode === 'gray' ? 1 : 4)
             : await gpu.toPng(image, width, height, encode, flipRows);
         pictures.push({ role, blob, width, height });
     };
@@ -225,10 +226,20 @@ export const tileAtlas = (gpu: TextureGpu, tiles: readonly number[], channelImag
 
 const isTileLayout = (value: TileLayout | { columns: number; rows: number }): value is TileLayout => Array.isArray((value as TileLayout).tiles);
 
-/** A texture graph's flipbook: how many frames, the grid they fill from the top left, and the seconds they loop over. */
-export interface FlipbookLayout { frames: number; columns: number; rows: number; loop: number }
+/**
+ * A texture graph's flipbook: how many frames, the grid they fill from the top left, the seconds they loop over,
+ * and the edge of its own pixels round each frame in its cell (a share of the cell each way; none if absent).
+ */
+export interface FlipbookLayout { frames: number; columns: number; rows: number; loop: number; edge?: { u: number; v: number } }
 
-const flipbookParams = (flipbook: FlipbookLayout) => ({ frames: flipbook.frames, columns: flipbook.columns, rows: flipbook.rows, loop: flipbook.loop });
+const flipbookParams = (flipbook: FlipbookLayout) => ({ frames: flipbook.frames, columns: flipbook.columns, rows: flipbook.rows, loop: flipbook.loop, edgeU: flipbook.edge?.u ?? 0, edgeV: flipbook.edge?.v ?? 0 });
+
+/** The edge a material's Flipbook Frames node reads each frame inside of (none when it has no such node, or one made before edges). */
+export const flipbookEdgeOf = (graph: { nodes: ReadonlyArray<{ type: string; params: Record<string, unknown> }> }): { u: number; v: number } => {
+    const player = graph.nodes.find((node) => node.type === FLIPBOOK_FRAMES_NODE_TYPE);
+    const share = (value: unknown) => Math.min(0.25, Math.max(0, Number(value) || 0));
+    return { u: share(player?.params.edgeU), v: share(player?.params.edgeV) };
+};
 
 type PictureGraphOptions = { opacityMode?: 'masked' | 'translucent'; tiles?: TileLayout | { columns: number; rows: number }; flipbook?: FlipbookLayout | null };
 

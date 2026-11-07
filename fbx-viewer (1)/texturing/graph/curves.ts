@@ -6,7 +6,8 @@
  * nearest point of a set of segments to a place and which side it lies on, winding numbers for fills,
  * the copies of a picture a curve repeats when it crosses the picture's edges, points spaced evenly
  * along a curve, a quad between two curves found again (inverse bilinear), and the outlines of a
- * mask traced into closed paths (marching squares on a repeating grid) and simplified. Places are
+ * mask traced into closed paths (marching squares on a repeating grid) and simplified, and the path
+ * tools' changes to curves on wires: moved to one side, corners rounded, cut to even spans. Places are
  * picture places: u across, v up, 0 to 1.
  */
 
@@ -359,4 +360,99 @@ export const simplify = (path: readonly Point[], tolerance: number): Point[] => 
         }
     }
     return path.filter((_, index) => keep[index]).map((point) => [point[0], point[1]]);
+};
+
+// ---- path tools: curves on wires, changed ----
+
+const samePlace = (a: Point, b: Point): boolean => Math.abs(a[0] - b[0]) < 1e-9 && Math.abs(a[1] - b[1]) < 1e-9;
+
+/** Whether a polyline comes back to where it starts (a closed loop). */
+export const isLoop = (path: readonly Point[]): boolean => path.length > 2 && samePlace(path[0], path[path.length - 1]);
+
+/** A path's own points: repeats in a row dropped, and a closed one's repeated end too (`loop` says whether it was one). */
+const ownPoints = (path: readonly Point[], closed: boolean): { points: Point[]; loop: boolean } => {
+    const points: Point[] = [];
+    for (const point of path) if (!points.length || !samePlace(points[points.length - 1], point)) points.push([point[0], point[1]]);
+    const loop = closed && points.length > 2 && samePlace(points[0], points[points.length - 1]);
+    if (loop) points.pop();
+    return { points, loop: closed && points.length > 2 };
+};
+
+/** Back to a polyline: a loop ends where it starts. */
+const closedAgain = (points: Point[], loop: boolean): Point[] => (loop && points.length ? [...points, [points[0][0], points[0][1]]] : points);
+
+/**
+ * A polyline moved `distance` to its left (negative: to its right), each corner mitred (at most four times
+ * the distance out). Loops stay loops; a large distance on a tight bend can cross itself.
+ */
+export const offsetPath = (path: readonly Point[], closed: boolean, distance: number): Point[] => {
+    const { points, loop } = ownPoints(path, closed);
+    const n = points.length;
+    if (n < 2 || distance === 0) return closedAgain(points, loop);
+    const normalOf = (a: Point, b: Point): Point => {
+        const length = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
+        return [-(b[1] - a[1]) / length, (b[0] - a[0]) / length];
+    };
+    const out: Point[] = [];
+    for (let i = 0; i < n; i++) {
+        const before = i > 0 ? points[i - 1] : loop ? points[n - 1] : null;
+        const after = i < n - 1 ? points[i + 1] : loop ? points[0] : null;
+        const n1 = before ? normalOf(before, points[i]) : null;
+        const n2 = after ? normalOf(points[i], after) : null;
+        let normal: Point = (n1 ?? n2)!;
+        let reach = 1;
+        if (n1 && n2) {
+            const sum: Point = [n1[0] + n2[0], n1[1] + n2[1]];
+            const length = Math.hypot(sum[0], sum[1]);
+            if (length > 1e-9) {
+                normal = [sum[0] / length, sum[1] / length];
+                reach = Math.min(4, 1 / Math.max(0.25, normal[0] * n1[0] + normal[1] * n1[1]));
+            }
+        }
+        out.push([points[i][0] + normal[0] * distance * reach, points[i][1] + normal[1] * distance * reach]);
+    }
+    return closedAgain(out, loop);
+};
+
+/**
+ * A polyline with its corners cut round `passes` times (each cut `amount` of the way, 0 to 1): a smoother path
+ * along the same course. An open path keeps its ends; the points stop doubling at `limit`.
+ */
+export const roundCorners = (path: readonly Point[], closed: boolean, passes: number, amount = 1, limit = 4096): Point[] => {
+    const own = ownPoints(path, closed);
+    const loop = own.loop;
+    let points = own.points;
+    const cut = 0.25 * Math.min(1, Math.max(0, amount));
+    for (let pass = 0; pass < passes && points.length >= 3 && cut > 0 && points.length * 2 <= limit; pass++) {
+        const n = points.length;
+        const next: Point[] = loop ? [] : [points[0]];
+        for (let i = 0; i < (loop ? n : n - 1); i++) {
+            const a = points[i];
+            const b = points[(i + 1) % n];
+            next.push([a[0] + (b[0] - a[0]) * cut, a[1] + (b[1] - a[1]) * cut], [a[0] + (b[0] - a[0]) * (1 - cut), a[1] + (b[1] - a[1]) * (1 - cut)]);
+        }
+        if (!loop) next.push(points[n - 1]);
+        points = next;
+    }
+    return closedAgain(points, loop);
+};
+
+/** A polyline as `count` spans of even length (a loop stays a loop). */
+export const evenSpans = (path: readonly Point[], count: number): Point[] => resample(path, Math.max(1, Math.round(count)) + 1);
+
+/**
+ * Paths made to fit `limit` segments between them: simplified harder until they do, then (if they still do
+ * not) cut to even spans shared out by length.
+ */
+export const fitSegments = (paths: readonly (readonly Point[])[], limit: number): Point[][] => {
+    const count = (list: readonly (readonly Point[])[]) => list.reduce((sum, path) => sum + Math.max(0, path.length - 1), 0);
+    if (count(paths) <= limit) return paths.map((path) => path.map((point): Point => [point[0], point[1]]));
+    let tolerance = 1e-4;
+    for (let tries = 0; tries < 10; tries++, tolerance *= 2) {
+        const simplified = paths.map((path) => simplify(path, tolerance));
+        if (count(simplified) <= limit) return simplified;
+    }
+    const lengths = paths.map(pathLength);
+    const total = lengths.reduce((sum, length) => sum + length, 0) || 1;
+    return paths.map((path, i) => evenSpans(path, Math.max(1, Math.floor((limit - paths.length) * lengths[i] / total))));
 };

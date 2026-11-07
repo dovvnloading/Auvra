@@ -1,5 +1,6 @@
 import * as THREE from 'three';
-import type { GpuImage, TextureGpu } from '../gpu/textureGpu';
+import type { GpuImage } from '../gpu/textureGpu';
+import type { TexturingGpu } from '../gpu/texturingGpu';
 
 /**
  * ANIMATED TEXTURE GRAPHS
@@ -98,10 +99,55 @@ export const flipbookFrameSize = (size: { w: number; h: number }, frames: number
 };
 
 /**
- * Frames laid out into one picture, a grid of `columns` x `rows` from the top left (as flipbookCell
- * places them), each copied into its cell at the frames' size.
+ * The edge of its own pixels round each frame in its flipbook cell, as a share of the cell each way: about
+ * a 64th of the cell (a power of two of pixels, at least one), so filtering, and the smaller mip levels up
+ * to texels that wide, read the frame's own pixels at its edges and never the next frame's. What the
+ * material's Flipbook Frames node reads each frame inside of.
  */
-export const packFlipbook = (gpu: TextureGpu, frames: readonly GpuImage[], columns: number, rows: number): GpuImage => {
+export const flipbookEdge = (cellWidth: number, cellHeight: number): { u: number; v: number } => {
+    const gutter = 2 ** Math.max(0, Math.floor(Math.log2(Math.max(1, Math.min(cellWidth, cellHeight) / 64))));
+    return { u: gutter / Math.max(1, cellWidth), v: gutter / Math.max(1, cellHeight) };
+};
+
+/**
+ * One frame copied into its cell: drawn inside the cell's edge, which holds the frame's own pixels carried
+ * on round its sides (frames tile, as the Flipbook Frames node reads them, so filtering across the edge
+ * meets what it would meet in the frame). Drawn smaller to leave room for the edge, by a sharp
+ * (Catmull-Rom) resampling held within its neighbours' range; with no edge, a plain copy.
+ */
+export const FLIPBOOK_PACK_GLSL = `uniform vec4 uCell;
+uniform vec2 uEdge;
+vec4 wrappedTexel(vec2 at, vec2 size) { return texelFetch(source, ivec2(mod(at, size)), 0); }
+void main() {
+    vec2 size = vec2(textureSize(source, 0));
+    vec2 p = (gl_FragCoord.xy - uCell.xy - uEdge) / max(uCell.zw - 2.0 * uEdge, vec2(1.0)) * size - 0.5;
+    vec2 base = floor(p);
+    vec2 f = p - base;
+    vec2 w0 = f * (-0.5 + f * (1.0 - 0.5 * f));
+    vec2 w1 = 1.0 + f * f * (-2.5 + 1.5 * f);
+    vec2 w2 = f * (0.5 + f * (2.0 - 1.5 * f));
+    vec2 w3 = f * f * (-0.5 + 0.5 * f);
+    vec4 sum = vec4(0.0);
+    vec4 low = vec4(1e30);
+    vec4 high = vec4(-1e30);
+    for (int j = 0; j < 4; j++) {
+        float wy = j == 0 ? w0.y : (j == 1 ? w1.y : (j == 2 ? w2.y : w3.y));
+        for (int i = 0; i < 4; i++) {
+            float wx = i == 0 ? w0.x : (i == 1 ? w1.x : (i == 2 ? w2.x : w3.x));
+            vec4 texel = wrappedTexel(base + vec2(float(i - 1), float(j - 1)), size);
+            sum += wx * wy * texel;
+            if (i >= 1 && i <= 2 && j >= 1 && j <= 2) { low = min(low, texel); high = max(high, texel); }
+        }
+    }
+    outColor = clamp(sum, low, high);
+}`;
+
+/**
+ * Frames laid out into one picture, a grid of `columns` x `rows` from the top left (as flipbookCell
+ * places them), each in a cell the frames' size. With an `edge` (a share of a cell each way, as
+ * flipbookEdge gives), each frame sits inside an edge of its own pixels carried on round it.
+ */
+export const packFlipbook = (gpu: TexturingGpu, frames: readonly GpuImage[], columns: number, rows: number, edge: { u: number; v: number } = { u: 0, v: 0 }): GpuImage => {
     const first = frames[0];
     const atlas = gpu.image(first.width * columns, first.height * rows, first.kind, first.precision);
     gpu.clear(atlas, first.kind === 'gray' ? [0, 0, 0, 1] : [0, 0, 0, 0]);
@@ -110,11 +156,21 @@ export const packFlipbook = (gpu: TextureGpu, frames: readonly GpuImage[], colum
         const x = Math.round(u * atlas.width);
         const y = Math.round(v * atlas.height);
         gpu.passNow(atlas, {
-            fragment: 'uniform vec4 uCell;\nvoid main() { outColor = texture(source, (gl_FragCoord.xy - uCell.xy) / uCell.zw); }',
+            fragment: FLIPBOOK_PACK_GLSL,
             inputs: { source: frame },
-            uniforms: { uCell: new THREE.Vector4(x, y, first.width, first.height) },
+            uniforms: { uCell: new THREE.Vector4(x, y, first.width, first.height), uEdge: new THREE.Vector2(edge.u * first.width, edge.v * first.height) },
             scissor: { x, y, width: first.width, height: first.height },
         });
     });
     return atlas;
+};
+
+/**
+ * Where the Flipbook Frames node reads a place of a frame: `uv` (wrapped round the frame) in cell `index`'s
+ * frame, inside its edge, as a place on the whole picture.
+ */
+export const flipbookPlace = (uv: readonly [number, number], index: number, columns: number, rows: number, edge: { u: number; v: number } = { u: 0, v: 0 }): [number, number] => {
+    const [cu, cv, w, h] = flipbookCell(index, columns, rows);
+    const wrap = (value: number) => value - Math.floor(value);
+    return [cu + w * (edge.u + wrap(uv[0]) * (1 - 2 * edge.u)), cv + h * (edge.v + wrap(uv[1]) * (1 - 2 * edge.v))];
 };

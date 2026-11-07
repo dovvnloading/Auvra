@@ -109,13 +109,16 @@ interface Handles {
     remove?: (key: string) => Record<string, unknown> | null;
 }
 
-/** The handles a node gets on the image, from its settings (and the seed it drew with, for a Tile sampler's random shifts). */
-const handlesFor = (node: TexGraphNode | null | undefined, seed: number | undefined): Handles | null => {
+/**
+ * The handles a node gets on the image, from its settings (and the seed it drew with, for a Tile sampler's random
+ * shifts). `wired` says which of its inputs have a wire: points a curve wired in takes the place of get no handles.
+ */
+const handlesFor = (node: TexGraphNode | null | undefined, seed: number | undefined, wired: (input: string) => boolean = () => false): Handles | null => {
     if (!node || node.bypass) return null;
     const p = node.params;
     const locked = (key: string) => isParamLink(p[key]);
     // Nodes with lists of points (the spline nodes): a handle on every point, a click adds one.
-    const lists = (textureNodeDefinitionByType(node.type)?.params ?? []).filter((param) => param.kind === 'points' && !isParamLink(p[param.key])).map((param): PointList => {
+    const lists = (textureNodeDefinitionByType(node.type)?.params ?? []).filter((param) => param.kind === 'points' && !isParamLink(p[param.key]) && !(param.replacedBy && wired(param.replacedBy))).map((param): PointList => {
         const points = readPoints(p[param.key], param.default as Vec2[]);
         const curve = node.type !== 'pointList';
         const closed = Boolean(p.closed);
@@ -240,6 +243,8 @@ export const TextureView2D: React.FC<{
     const animated = session.animates();
     const loop = session.loop();
     const state = nodeId ? session.state(nodeId) : undefined;
+    // Which of the node's inputs have a wire (a curve wired in takes the place of the points placed on it).
+    const wiredInput = (input: string): boolean => !!node && session.graph.links.some((link) => link.to === node.id && link.toInput === input);
     const other: GpuImage | null = compare && compare.nodeId !== nodeId ? session.imageOf(compare.nodeId, compare.output) : null;
     const ratio = typeof window === 'undefined' ? 1 : window.devicePixelRatio || 1;
 
@@ -513,7 +518,7 @@ export const TextureView2D: React.FC<{
             return;
         }
         // A click adds a point to a node with a list of them (within 12 pixels of a span, into it).
-        const current2d = onParams ? handlesFor(node, undefined) : null;
+        const current2d = onParams ? handlesFor(node, undefined, wiredInput) : null;
         if (current2d?.add && node && onParams && placement) {
             const near = (12 * placement.ratio) / (placement.zoom * Math.max(placement.imageWidth, 1));
             const patch = current2d.add([uv.u, uv.v], near);
@@ -530,7 +535,7 @@ export const TextureView2D: React.FC<{
         return `${place}   R ${values[0].toFixed(3)}  G ${values[1].toFixed(3)}  B ${values[2].toFixed(3)}  A ${values[3].toFixed(3)}`;
     })();
 
-    const handles = onParams ? handlesFor(node, node ? session.state(node.id)?.seed : undefined) : null;
+    const handles = onParams ? handlesFor(node, node ? session.state(node.id)?.seed : undefined, wiredInput) : null;
     const toView = (point: Vec2) => (placement ? uvToView({ u: point[0], v: point[1] }, placement) : { x: 0, y: 0 });
     const onHandleDown = (event: React.PointerEvent, key: string) => {
         event.stopPropagation();

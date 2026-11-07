@@ -14,7 +14,7 @@ import { compileFunction, readFunctionGraph, type FunctionGraph, type NamedSetti
 import { PARAMETER_KINDS, PARAMETER_KIND_LABELS, applyPreset, presetFrom, putPreset, removePreset, renameParameter, renamePreset } from '../../texturing/graph/parameters';
 import { VALUE_SETTING_KINDS, valuePinKey } from '../../texturing/graph/nodeKit';
 import { graphAnimates, textureNodeDefinition, type GraphEntry, type GraphResolver } from '../../texturing/graph/registry';
-import { DEFAULT_ANIMATION, FLIPBOOK_FRAMES, flipbookFrameSize, flipbookGrid, frameTime, packFlipbook, readAnimation, type GraphAnimation } from '../../texturing/graph/animation';
+import { DEFAULT_ANIMATION, FLIPBOOK_FRAMES, flipbookEdge, flipbookFrameSize, flipbookGrid, frameTime, packFlipbook, readAnimation, type GraphAnimation } from '../../texturing/graph/animation';
 import { bakeSignature, readStoredGraph, withParameterPictures, type StoredTextureGraph } from '../../texturing/graph/stored';
 import { MATERIAL_CHANNELS, MATERIAL_CHANNEL_LABELS, materialKey, materialOf } from '../../texturing/graph/material';
 import { TILING_MODES } from '../../texturing/graph/inherit';
@@ -231,15 +231,15 @@ const contextOf = (outerSession: TextureGraphSession, outer: StoredTextureGraph,
     return { inputs, parameters, seed, size, ...(iteration ? { iteration } : {}), version: JSON.stringify([version, parameters, seed, size, iteration ?? null]) };
 };
 
-/** What the 2D view can show of a node: each image it gives, each channel of a material it gives. */
+/** What the 2D view can show of a node: each image it gives, each channel of a material it gives (a curve is no picture). */
 const shownOptions = (definition: TexNodeDef): Array<{ value: string; label: string }> => definition.outputs.flatMap((port) => (port.kind === 'material'
     ? MATERIAL_CHANNELS.map((channel) => ({ value: materialKey(port.key, channel), label: `${port.label}: ${MATERIAL_CHANNEL_LABELS[channel]}` }))
-    : [{ value: port.key, label: port.label }]));
+    : port.kind === 'curve' ? [] : [{ value: port.key, label: port.label }]));
 
 /** The names a node's code can use: its inputs (c_, g_, w_), its settings (p_), the pixel's place and what it writes. */
 const codeNames = (definition: TexNodeDef): string[] => [
     'uv', 'vUv', 'outColor', 'uSeed', 'uSize',
-    ...definition.inputs.filter((port) => port.kind !== 'material').flatMap((port) => [`c_${port.key}`, `g_${port.key}`, `w_${port.key}`]),
+    ...definition.inputs.filter((port) => port.kind !== 'material' && port.kind !== 'curve').flatMap((port) => [`c_${port.key}`, `g_${port.key}`, `w_${port.key}`]),
     ...definition.params.map((param) => `p_${param.key}`),
 ];
 
@@ -519,12 +519,15 @@ const Workspace: React.FC<{
         let height = 2 ** size.h;
         // An animated graph played as a flipbook: its frames round the loop, laid out on each picture.
         const animation = readAnimation(graph.animation);
-        const flipbook = animation.play === 'flipbook' && graphAnimates(graph, resolve) ? { frames: animation.frames, ...flipbookGrid(animation.frames), loop: animation.loop } : null;
+        const frameSize = flipbookFrameSize(size, animation.frames);
+        // Each frame sits inside an edge of its own pixels in its cell, which the Flipbook Frames node reads it inside of.
+        const flipbook = animation.play === 'flipbook' && graphAnimates(graph, resolve)
+            ? { frames: animation.frames, ...flipbookGrid(animation.frames), loop: animation.loop, edge: flipbookEdge(2 ** frameSize.w, 2 ** frameSize.h) }
+            : null;
         const packed: GpuImage[] = [];
         try {
             let images: ChannelImages;
             if (flipbook) {
-                const frameSize = flipbookFrameSize(size, flipbook.frames);
                 const frames: ChannelImages[] = [];
                 const dones: Array<() => void> = [];
                 done = () => { for (const release of dones) release(); };
@@ -536,7 +539,7 @@ const Workspace: React.FC<{
                 }
                 images = {};
                 for (const channel of Object.keys(frames[0]) as MaterialChannel[]) {
-                    const atlas = packFlipbook(session.gpu, frames.map((frame) => frame[channel]!), flipbook.columns, flipbook.rows);
+                    const atlas = packFlipbook(session.gpu, frames.map((frame) => frame[channel]!), flipbook.columns, flipbook.rows, flipbook.edge);
                     packed.push(atlas);
                     images[channel] = atlas;
                 }

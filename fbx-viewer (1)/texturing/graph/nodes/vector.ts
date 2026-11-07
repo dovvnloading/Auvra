@@ -257,10 +257,10 @@ uniform int uWhat;
 ${MASK_AND_DISTANCE}
 void main() {
     if (uSegs == 0) { outColor = vec4(0.0, 0.0, 0.0, 1.0); return; }
-    CurveHit hit = nearestOnCurve(vUv);
+    vec4 hit = nearestOnCurve(vUv);
     float winding = windingOf(vUv);
     bool inside = p_rule == 1 ? mod(abs(winding), 2.0) > 0.5 : abs(winding) > 0.5;
-    writeShape(inside ? -hit.dist : hit.dist);
+    writeShape(inside ? -hit.x : hit.x);
 }`, { inputs: { segs: texture }, uniforms: { uWhat: what, uSegs: segments.length, ...offsetUniforms(offsets) }, cost: Math.ceil(Math.max(1, segments.length) / 4) + 2 });
                     result[key] = image;
                 }

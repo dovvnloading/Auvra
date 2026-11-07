@@ -36,6 +36,7 @@ const KINDS: Readonly<Record<string, PinKindStyle>> = {
     material: { colour: '#5eead4', words: 'a whole material', wide: true },
     anyMaterial: { colour: '#f5f5f5', words: 'colour, grey or a whole material' },
     value: { colour: '#b794f6', words: 'a value (a number or vector worked out on the GPU)' },
+    curve: { colour: '#f472b6', words: 'a curve (paths in the picture)', wide: true },
 };
 /** The kind a pin shows on the canvas: an input that also takes a material wire (an Output's) is a kind of its own. */
 const pinKind = (port: TexPortDef): string => (port.material ? 'anyMaterial' : port.kind);
@@ -48,7 +49,11 @@ const match = (from: string, to: string): number => {
     if (!wireFits(from as PinKind, asPort(to))) return 0;
     return from === to || from === 'any' || to === 'any' || to === 'anyMaterial' ? 2 : 1;
 };
-const refusal = (from: string, to: string): string => (to === 'value'
+const refusal = (from: string, to: string): string => (from === 'curve'
+    ? 'A curve wire goes only into a curve input: a Curve, a Bridge, Picture along a curve, Scatter along curves or a path tool. A Curve draws it as a picture.'
+    : to === 'curve'
+        ? 'A curve input takes a curve wire: a Curve\'s path, Mask to paths\' paths or a path tool\'s.'
+        : to === 'value'
     ? 'A setting shown as a pin follows a value. A Value processor works one out of pictures, on the GPU.'
     : from === 'material'
         ? 'A material wire goes only into a material input or an Output. Split material gives its channels as images.'

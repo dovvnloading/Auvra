@@ -72,9 +72,11 @@ export const materialResults = (port: string, images: MaterialImages): Record<st
 /**
  * The type rules of wires. A material wire goes only into a material input, or into an image input
  * that also takes one (an Output, which keeps its own channel of it). An image goes into any image
- * input (grey reads as grey colour, colour as its brightness), never into a material input.
+ * input (grey reads as grey colour, colour as its brightness), never into a material input. A curve
+ * goes only into a curve input, which takes nothing else.
  */
 export const wireFits = (from: PinKind, to: Pick<TexPortDef, 'kind' | 'material'>): boolean => {
+    if (from === 'curve' || to.kind === 'curve') return from === to.kind;
     // A setting shown as a pin follows a value only; a value into a picture input fills it flat.
     if (to.kind === 'value') return from === 'value';
     if (from === 'material') return to.kind === 'material' || to.material === true;

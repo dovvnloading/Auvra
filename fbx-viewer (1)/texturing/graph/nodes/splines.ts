@@ -1,11 +1,11 @@
 import * as THREE from 'three';
 import { hash3 } from '../noiseMath';
-import { anyIn, bool, float, grayIn, out, seed } from '../nodeKit';
+import { anyIn, bool, curveIn, curveOut, float, grayIn, out, seed, select } from '../nodeKit';
 import {
-    nearestOn, pathLength, placementsAlong, readPoints, resample, segmentsOf, simplify, smoothPath, traceOutlines, wrapOffsets,
-    type Point, type Segment,
+    evenSpans, fitSegments, isLoop, nearestOn, offsetPath, pathLength, placementsAlong, readPoints, resample, roundCorners, segmentsOf, simplify, smoothPath,
+    traceOutlines, wrapOffsets, type Point, type Segment,
 } from '../curves';
-import type { NodeRunContext, TexNodeDef, TexParamDef } from '../types';
+import type { CurvePath, CurvePaths, NodeRunContext, TexNodeDef, TexParamDef } from '../types';
 
 /**
  * SPLINES AND PATHS
@@ -15,7 +15,11 @@ import type { NodeRunContext, TexNodeDef, TexParamDef } from '../types';
  * bridging two curves, a picture laid along a curve, copies of a picture scattered along one, a list
  * of points drawn as dots or stamps, and a mask's outlines traced into paths and drawn. A curve that
  * runs over the picture's edge comes back on the other side where the node tiles, so it stays tiling.
- * The curves' maths is in curves.ts; the shaders read their segments from a small float texture.
+ *
+ * Curves also travel on curve wires: a Curve gives its path, Mask to paths its outlines, and the path
+ * tools (offset, smooth, resample, join) change what comes in. A curve wired into a node takes the place
+ * of the points placed on it. The curves' maths is in curves.ts; the shaders read their segments from a
+ * small float texture.
  */
 
 type Params = Readonly<Record<string, unknown>>;
@@ -29,6 +33,24 @@ const DEFAULT_CURVE: Point[] = [[0.15, 0.3], [0.38, 0.72], [0.62, 0.28], [0.85, 
 /** The node's curve as a polyline, from its points and smoothing. */
 export const curveOf = (params: Params, key = 'points', closedKey = 'closed'): Point[] =>
     smoothPath(readPoints(params[key], DEFAULT_CURVE), Boolean(params[closedKey]), num(params, 'smoothness', 1));
+
+/** The most segments a curve from a wire is drawn with; more are simplified until they fit. */
+const MAX_WIRE_SEGMENTS = 4096;
+
+/** The node's own curve as a path on a wire. */
+const ownPath = (params: Params): CurvePath => ({ points: curveOf(params), closed: Boolean(params.closed) });
+
+/** The paths a node draws: the curve wired into `input` when one is (made to fit what the shaders take), else its own. */
+const pathsOf = (context: NodeRunContext, input = 'curve'): CurvePaths => {
+    const wired = context.curve(input);
+    if (!wired) return [ownPath(context.params)];
+    const fitted = fitSegments(wired.map((path) => path.points), MAX_WIRE_SEGMENTS);
+    return wired.map((path, i) => ({ points: fitted[i], closed: path.closed }));
+};
+
+/** The longest of a curve's paths. */
+const longestPath = (paths: CurvePaths): CurvePath | null =>
+    paths.reduce<CurvePath | null>((best, path) => (path.points.length >= 2 && (!best || pathLength(path.points) > pathLength(best.points)) ? path : best), null);
 
 /** Segments as a float texture: row 0 their ends (a.x, a.y, b.x, b.y), row 1 (start, length, path, path length). */
 export const segmentTexture = (segments: readonly Segment[]): THREE.DataTexture => {
@@ -55,9 +77,9 @@ export const CURVE_GLSL = `uniform sampler2D segs;
 uniform int uSegs;
 uniform vec4 uOffsets[9];
 uniform int uOffsetCount;
-struct CurveHit { float dist; float along; float side; float path; float pathLength; };
-CurveHit nearestOnCurve(vec2 p) {
-    CurveHit hit = CurveHit(1e9, 0.0, 1.0, 0.0, 0.0);
+// The nearest point as (distance, length along its path, side, segment); hitPath gives that segment's path and its length.
+vec4 nearestOnCurve(vec2 p) {
+    vec4 hit = vec4(1e9, 0.0, 1.0, 0.0);
     for (int k = 0; k < 9; k++) {
         if (k >= uOffsetCount) break;
         vec2 q = p + uOffsets[k].xy;
@@ -68,14 +90,15 @@ CurveHit nearestOnCurve(vec2 p) {
             float t = clamp(dot(q - s.xy, e) / max(dot(e, e), 1e-12), 0.0, 1.0);
             vec2 d = q - (s.xy + e * t);
             float dist = length(d);
-            if (dist < hit.dist) {
+            if (dist < hit.x) {
                 vec4 info = texelFetch(segs, ivec2(i, 1), 0);
-                hit = CurveHit(dist, info.x + t * info.y, e.x * d.y - e.y * d.x >= 0.0 ? 1.0 : -1.0, info.z, info.w);
+                hit = vec4(dist, info.x + t * info.y, e.x * d.y - e.y * d.x >= 0.0 ? 1.0 : -1.0, float(i));
             }
         }
     }
     return hit;
 }
+vec2 hitPath(vec4 hit) { return texelFetch(segs, ivec2(int(hit.w), 1), 0).zw; }
 float windingOf(vec2 p) {
     float winding = 0.0;
     for (int k = 0; k < 9; k++) {
@@ -226,20 +249,27 @@ export const outlinePaths = (values: Float32Array, w: number, h: number, level: 
     return [];
 };
 
+/** The most open paths a Curve's fill closes (with a straight span from each one's end back to its start). */
+const MAX_CLOSERS = 8;
+
 const STROKE_GLSL = `uniform float uTaper;
 uniform float uDash;
 uniform float uGap;
 uniform int uWhat;
-uniform int uClosedFill;
-uniform vec4 uClose;
+uniform vec4 uCloses[${MAX_CLOSERS}];
+uniform int uCloseCount;
 float closingDistance(vec2 p) {
     float best = 1e9;
     for (int k = 0; k < 9; k++) {
         if (k >= uOffsetCount) break;
         vec2 q = p + uOffsets[k].xy;
-        vec2 e = uClose.zw - uClose.xy;
-        float t = clamp(dot(q - uClose.xy, e) / max(dot(e, e), 1e-12), 0.0, 1.0);
-        best = min(best, length(q - (uClose.xy + e * t)));
+        for (int j = 0; j < ${MAX_CLOSERS}; j++) {
+            if (j >= uCloseCount) break;
+            vec4 s = uCloses[j];
+            vec2 e = s.zw - s.xy;
+            float t = clamp(dot(q - s.xy, e) / max(dot(e, e), 1e-12), 0.0, 1.0);
+            best = min(best, length(q - (s.xy + e * t)));
+        }
     }
     return best;
 }
@@ -248,29 +278,33 @@ float closingWinding(vec2 p) {
     for (int k = 0; k < 9; k++) {
         if (k >= uOffsetCount) break;
         vec2 q = p + uOffsets[k].xy;
-        vec4 s = uClose;
-        float side = (s.z - s.x) * (q.y - s.y) - (s.w - s.y) * (q.x - s.x);
-        if (s.y <= q.y) { if (s.w > q.y && side > 0.0) winding += 1.0; }
-        else if (s.w <= q.y && side < 0.0) winding -= 1.0;
+        for (int j = 0; j < ${MAX_CLOSERS}; j++) {
+            if (j >= uCloseCount) break;
+            vec4 s = uCloses[j];
+            float side = (s.z - s.x) * (q.y - s.y) - (s.w - s.y) * (q.x - s.x);
+            if (s.y <= q.y) { if (s.w > q.y && side > 0.0) winding += 1.0; }
+            else if (s.w <= q.y && side < 0.0) winding -= 1.0;
+        }
     }
     return winding;
 }
 void main() {
-    CurveHit hit = nearestOnCurve(vUv);
+    vec4 hit = nearestOnCurve(vUv);
+    vec2 path = hitPath(hit);
     float aa = pixelSize();
-    float t = hit.pathLength > 0.0 ? hit.along / hit.pathLength : 0.0;
+    float t = path.y > 0.0 ? hit.y / path.y : 0.0;
     float halfWidth = p_width * 0.5 * (1.0 + (sqrt(max(0.0, 4.0 * t * (1.0 - t))) - 1.0) * uTaper);
     float soft = max(halfWidth * p_softness, aa);
-    float stroke = 1.0 - smoothstep(halfWidth - soft, halfWidth + aa * 0.5, hit.dist);
+    float stroke = 1.0 - smoothstep(halfWidth - soft, halfWidth + aa * 0.5, hit.x);
     if (uDash > 0.0) {
         float period = uDash + uGap;
-        float phase = mod(hit.along, period);
+        float phase = mod(hit.y, period);
         stroke *= step(phase, uDash);
     }
     if (uWhat == 0) { outColor = vec4(vec3(stroke), 1.0); return; }
     if (uWhat == 2) { outColor = vec4(vec3(t * step(0.001, stroke)), 1.0); return; }
-    float winding = windingOf(vUv) + (uClosedFill == 1 ? closingWinding(vUv) : 0.0);
-    float edge = min(hit.dist, uClosedFill == 1 ? closingDistance(vUv) : 1e9);
+    float winding = windingOf(vUv) + closingWinding(vUv);
+    float edge = min(hit.x, closingDistance(vUv));
     float inside = abs(winding) > 0.5 ? 1.0 : 0.0;
     float fill = clamp(0.5 + (inside > 0.5 ? edge : -edge) / aa, 0.0, 1.0);
     outColor = vec4(vec3(fill), 1.0);
@@ -281,26 +315,31 @@ export const SPLINE_NODES: TexNodeDef[] = [
         type: 'curve',
         label: 'Curve',
         category: 'Splines and paths',
-        description: 'A curve through points you place in the 2D view, drawn as a stroke (tapered or dashed if you like), filled, and as a gradient along its length.',
-        keywords: ['curve', 'spline', 'path', 'line', 'stroke', 'bezier', 'draw line', 'fill shape', 'render curve', 'fill curve'],
-        inputs: [],
-        outputs: [out('gray', 'out', 'Stroke'), out('gray', 'fill', 'Fill'), out('gray', 'along', 'Along')],
+        description: 'A curve through points you place in the 2D view (or the curve wired in: a mask\'s outlines, a path tool\'s), drawn as a stroke (tapered or dashed if you like), filled, and as a gradient along its length. Its path goes on along a curve wire.',
+        keywords: ['curve', 'spline', 'path', 'line', 'stroke', 'bezier', 'draw line', 'fill shape', 'render curve', 'fill curve', 'draw path'],
+        inputs: [curveIn('curve', 'Curve')],
+        outputs: [out('gray', 'out', 'Stroke'), out('gray', 'fill', 'Fill'), out('gray', 'along', 'Along'), curveOut('path', 'Path')],
+        bypass: false,
         params: [
-            points('points', 'Points', DEFAULT_CURVE), closed(), smoothness(), width(0.02), float('softness', 'Soft edge', 0.1, 0, 1),
+            points('points', 'Points', DEFAULT_CURVE, { replacedBy: 'curve' }), closed(), smoothness(), width(0.02), float('softness', 'Soft edge', 0.1, 0, 1),
             float('taper', 'Taper to the ends', 0, 0, 1), float('dash', 'Dash length', 0, 0, 0.5, { step: 0.001, hint: '0 draws it unbroken.' }),
             float('gap', 'Gap', 0.02, 0.001, 0.5, { step: 0.001, showIf: (p) => num(p, 'dash', 0) > 0 }),
         ],
         sizeFrom: 'graph',
         settingsInShader: true,
         async run(context) {
-            const path = curveOf(context.params);
-            const segments = segmentsOf([path]);
-            const isClosed = Boolean(context.params.closed);
-            const first = path[0] ?? [0, 0];
-            const last = path[path.length - 1] ?? [0, 0];
+            const paths = pathsOf(context);
+            context.giveCurve('path', paths);
+            const segments = segmentsOf(paths.map((path) => path.points));
+            // The fill closes each open path with a straight span from its end back to its start.
+            const closers = paths.filter((path) => !path.closed && path.points.length > 1).slice(0, MAX_CLOSERS).map((path) => {
+                const first = path.points[0];
+                const last = path.points[path.points.length - 1];
+                return new THREE.Vector4(last[0], last[1], first[0], first[1]);
+            });
             const uniforms = {
                 uTaper: num(context.params, 'taper', 0), uDash: num(context.params, 'dash', 0), uGap: num(context.params, 'gap', 0.02),
-                uClosedFill: isClosed ? 0 : 1, uClose: new THREE.Vector4(last[0], last[1], first[0], first[1]),
+                uCloses: Array.from({ length: MAX_CLOSERS }, (_, i) => closers[i] ?? new THREE.Vector4()), uCloseCount: closers.length,
             };
             const reach = num(context.params, 'width', 0.02);
             const result: Record<string, ReturnType<NodeRunContext['image']>> = {};
@@ -316,13 +355,14 @@ export const SPLINE_NODES: TexNodeDef[] = [
         type: 'curveBridge',
         label: 'Bridge between curves',
         category: 'Splines and paths',
-        description: 'Fills the band between two curves you place in the 2D view, with gradients across it (from the first curve to the second) and along it, for roads, rivers and ribbons.',
+        description: 'Fills the band between two curves (placed in the 2D view, or wired in: the longest path of each wire), with gradients across it (from the first curve to the second) and along it, for roads, rivers and ribbons.',
         keywords: ['bridge', 'between curves', 'band', 'ribbon', 'road', 'river', 'loft', 'sweep'],
-        inputs: [],
+        inputs: [curveIn('a', 'First curve'), curveIn('b', 'Second curve')],
         outputs: [out('gray', 'out', 'Band'), out('gray', 'across', 'Across'), out('gray', 'along', 'Along')],
+        bypass: false,
         params: [
-            points('curveA', 'First curve', [[0.1, 0.35], [0.4, 0.45], [0.65, 0.25], [0.9, 0.4]]),
-            points('curveB', 'Second curve', [[0.1, 0.65], [0.38, 0.8], [0.62, 0.6], [0.9, 0.72]]),
+            points('curveA', 'First curve', [[0.1, 0.35], [0.4, 0.45], [0.65, 0.25], [0.9, 0.4]], { replacedBy: 'a' }),
+            points('curveB', 'Second curve', [[0.1, 0.65], [0.38, 0.8], [0.62, 0.6], [0.9, 0.72]], { replacedBy: 'b' }),
             smoothness(), float('steps', 'Detail', 64, 4, 256, { step: 1, hint: 'How many pieces the band is built of along its length.' }),
         ],
         sizeFrom: 'graph',
@@ -330,8 +370,19 @@ export const SPLINE_NODES: TexNodeDef[] = [
         async run(context) {
             const n = Math.max(4, Math.round(num(context.params, 'steps', 64)));
             const smooth = num(context.params, 'smoothness', 1);
-            const a = resample(smoothPath(readPoints(context.params.curveA), false, smooth), n + 1);
-            const b = resample(smoothPath(readPoints(context.params.curveB), false, smooth), n + 1);
+            // Each edge: the longest path of the curve wired in, else the points placed for it.
+            const edge = (input: string, key: string): Point[] | null => {
+                const wired = context.curve(input);
+                const path = wired ? longestPath(wired)?.points : smoothPath(readPoints(context.params[key]), false, smooth);
+                return path && path.length >= 2 ? resample(path, n + 1) : null;
+            };
+            const a = edge('a', 'curveA');
+            const b = edge('b', 'curveB');
+            if (!a || !b) {
+                const result: Record<string, ReturnType<NodeRunContext['image']>> = {};
+                for (const key of ['out', 'across', 'along']) { result[key] = context.image('gray'); context.gpu.clear(result[key], [0, 0, 0, 1]); }
+                return result;
+            }
             // Each quad as a "segment" pair: row 0 its first curve's edge, row 1 its second's.
             const quads = Array.from({ length: n }, (_, i) => ({ a: a[i], b: a[i + 1], start: 0, length: 0, path: 0, pathLength: 0, c: b[i], d: b[i + 1] }));
             const data = new Float32Array(n * 2 * 4);
@@ -402,12 +453,12 @@ void main() {
         type: 'curveMap',
         label: 'Picture along a curve',
         category: 'Splines and paths',
-        description: 'Lays a picture along a curve you place in the 2D view, its width across the curve and repeating along it: a rope, a trim, a strip of stitching or a road.',
+        description: 'Lays a picture along a curve you place in the 2D view (or the curve wired in), its width across the curve and repeating along it: a rope, a trim, a strip of stitching or a road.',
         keywords: ['picture along curve', 'texture along path', 'map along spline', 'rope', 'trim', 'stitching', 'path texture'],
-        inputs: [anyIn('pattern', 'Picture', 'white')],
+        inputs: [anyIn('pattern', 'Picture', 'white'), curveIn('curve', 'Curve')],
         outputs: [out('any', 'out', 'Picture'), out('gray', 'mask', 'Mask')],
         params: [
-            points('points', 'Points', DEFAULT_CURVE), closed(), smoothness(), width(0.08), float('repeats', 'Repeats along', 4, 0.1, 128, { softMax: 32, hint: 'How many times the picture repeats along the whole curve.' }),
+            points('points', 'Points', DEFAULT_CURVE, { replacedBy: 'curve' }), closed(), smoothness(), width(0.08), float('repeats', 'Repeats along', 4, 0.1, 128, { softMax: 32, hint: 'How many times the picture repeats along the whole curve.' }),
             bool('fit', 'Whole repeats', true, { hint: 'Rounds the repeats so the picture meets up at the ends of a closed curve.' }),
             bool('flip', 'Flip across', false), float('softness', 'Soft sides', 0.05, 0, 1),
         ],
@@ -415,20 +466,20 @@ void main() {
         kindFrom: 'pattern',
         settingsInShader: true,
         async run(context) {
-            const path = curveOf(context.params);
-            const segments = segmentsOf([path]);
+            const segments = segmentsOf(pathsOf(context).map((path) => path.points));
             const repeats = context.params.fit ? Math.max(1, Math.round(num(context.params, 'repeats', 4))) : num(context.params, 'repeats', 4);
             const picture = context.image(context.outputKind('out'));
             const mask = context.image('gray');
             const glsl = `uniform float uRepeats;
 uniform int uWhat;
 void main() {
-    CurveHit hit = nearestOnCurve(vUv);
+    vec4 hit = nearestOnCurve(vUv);
+    vec2 path = hitPath(hit);
     float aa = pixelSize();
     float halfWidth = p_width * 0.5;
-    float m = 1.0 - smoothstep(halfWidth - max(halfWidth * p_softness, aa), halfWidth + aa * 0.5, hit.dist);
-    float across = (p_flip == 1 ? -hit.side : hit.side) * hit.dist / max(p_width, 1e-5) + 0.5;
-    float along = hit.pathLength > 0.0 ? hit.along / hit.pathLength * uRepeats : 0.0;
+    float m = 1.0 - smoothstep(halfWidth - max(halfWidth * p_softness, aa), halfWidth + aa * 0.5, hit.x);
+    float across = (p_flip == 1 ? -hit.z : hit.z) * hit.x / max(p_width, 1e-5) + 0.5;
+    float along = path.y > 0.0 ? hit.y / path.y * uRepeats : 0.0;
     if (uWhat == 1) { outColor = vec4(vec3(m), 1.0); return; }
     vec4 c = texture(t_pattern, vec2(fract(along), clamp(across, 0.0, 1.0)));
     outColor = vec4(c.rgb, c.a * m);
@@ -442,12 +493,12 @@ void main() {
         type: 'curveScatter',
         label: 'Scatter along curves',
         category: 'Splines and paths',
-        description: 'Places copies of a picture (or soft dots) along a curve you place in the 2D view, spaced evenly, turned to follow it, with random sizes, turns and shifts.',
+        description: 'Places copies of a picture (or soft dots) along a curve you place in the 2D view (or along every path of the curve wired in), spaced evenly, turned to follow it, with random sizes, turns and shifts.',
         keywords: ['scatter along curve', 'scatter along path', 'stamp along', 'beads', 'chain', 'footprints', 'stitches'],
-        inputs: [anyIn('pattern', 'Picture', 'white')],
+        inputs: [anyIn('pattern', 'Picture', 'white'), curveIn('curve', 'Curve')],
         outputs: [out('any', 'out', 'Copies'), out('gray', 'id', 'Random grey'), out('gray', 'mask', 'Mask')],
         params: [
-            points('points', 'Points', DEFAULT_CURVE), closed(), smoothness(),
+            points('points', 'Points', DEFAULT_CURVE, { replacedBy: 'curve' }), closed(), smoothness(),
             float('spacing', 'Spacing', 0.06, 0.002, 1, { softMax: 0.3, step: 0.001 }), float('size', 'Size', 0.05, 0.001, 1, { softMax: 0.3, step: 0.001 }),
             float('sizeRandom', 'Size randomness', 0, 0, 1), bool('follow', 'Turn with the curve', true), float('turn', 'Turn (degrees)', 0, -180, 180, { step: 1 }),
             float('turnRandom', 'Turn randomness (degrees)', 0, 0, 180, { step: 1 }), float('shiftRandom', 'Shift across', 0, 0, 0.5, { step: 0.001, hint: 'How far each copy may stray to either side of the curve.' }),
@@ -457,7 +508,7 @@ void main() {
         kindFrom: 'pattern',
         settingsInShader: true,
         async run(context) {
-            const rows = scatterRows(context.params, context.seed);
+            const rows = scatterRows(context.params, context.seed, pathsOf(context));
             const kind = context.outputKind('out');
             const copies = context.image(kind);
             const id = context.image('gray');
@@ -503,10 +554,10 @@ void main() {
         type: 'maskToPaths',
         label: 'Mask to paths',
         category: 'Splines and paths',
-        description: 'Traces the outlines of a mask into smooth paths and draws them as strokes, with a gradient along each path and a random grey for each: outlines, contour lines, stitching round a shape.',
-        keywords: ['mask to paths', 'outline', 'trace', 'contour', 'vectorize', 'edge path', 'stroke outline'],
+        description: 'Traces the outlines of a mask into smooth paths and draws them as strokes, with a gradient along each path and a random grey for each: outlines, contour lines, stitching round a shape. The paths go on along a curve wire, to a Curve, a Bridge or the path tools.',
+        keywords: ['mask to paths', 'outline', 'trace', 'contour', 'vectorize', 'edge path', 'stroke outline', 'mask to curve'],
         inputs: [grayIn('in', 'Mask')],
-        outputs: [out('gray', 'out', 'Stroke'), out('gray', 'along', 'Along'), out('gray', 'id', 'Random grey')],
+        outputs: [out('gray', 'out', 'Stroke'), out('gray', 'along', 'Along'), out('gray', 'id', 'Random grey'), curveOut('paths', 'Paths')],
         params: [
             float('level', 'Level', 0.5, 0.01, 0.99), width(0.01), float('softness', 'Soft edge', 0.2, 0, 1),
             float('simplify', 'Simplify', 0.002, 0, 0.05, { step: 0.0005, hint: 'How far a path may stray from the outline to drop points.' }), float('smoothness', 'Smoothing', 0.5, 0, 1),
@@ -517,23 +568,26 @@ void main() {
         async run(context) {
             const input = context.input('in');
             const results = { out: context.image('gray'), along: context.image('gray'), id: context.image('gray') };
+            context.giveCurve('paths', []);
             if (!input) { for (const image of Object.values(results)) context.gpu.clear(image, [0, 0, 0, 1]); return results; }
             const read = await readGrey(context, input, 256);
             if (!read) { for (const image of Object.values(results)) context.gpu.clear(image, [0, 0, 0, 1]); return results; }
             const paths = outlinePaths(read.values, read.width, read.height, num(context.params, 'level', 0.5), num(context.params, 'simplify', 0.002), num(context.params, 'smoothness', 0.5));
+            context.giveCurve('paths', paths.map((points) => ({ points, closed: isLoop(points) })));
             const segments = segmentsOf(paths);
             const glsl = `uniform float uDash;
 uniform float uGap;
 uniform int uWhat;
 uniform float uSeedValue;
 void main() {
-    CurveHit hit = nearestOnCurve(vUv);
+    vec4 hit = nearestOnCurve(vUv);
+    vec2 path = hitPath(hit);
     float aa = pixelSize();
     float halfWidth = p_width * 0.5;
-    float m = 1.0 - smoothstep(halfWidth - max(halfWidth * p_softness, aa), halfWidth + aa * 0.5, hit.dist);
-    if (uDash > 0.0) m *= step(mod(hit.along, uDash + uGap), uDash);
-    if (uWhat == 1) outColor = vec4(vec3((hit.pathLength > 0.0 ? hit.along / hit.pathLength : 0.0) * step(0.001, m)), 1.0);
-    else if (uWhat == 2) outColor = vec4(vec3(hash1(ivec2(int(hit.path), 7), uSeedValue) * step(0.001, m)), 1.0);
+    float m = 1.0 - smoothstep(halfWidth - max(halfWidth * p_softness, aa), halfWidth + aa * 0.5, hit.x);
+    if (uDash > 0.0) m *= step(mod(hit.y, uDash + uGap), uDash);
+    if (uWhat == 1) outColor = vec4(vec3((path.y > 0.0 ? hit.y / path.y : 0.0) * step(0.001, m)), 1.0);
+    else if (uWhat == 2) outColor = vec4(vec3(hash1(ivec2(int(path.x), 7), uSeedValue) * step(0.001, m)), 1.0);
     else outColor = vec4(vec3(m), 1.0);
 }`;
             const common = { uDash: num(context.params, 'dash', 0), uGap: num(context.params, 'gap', 0.01), uSeedValue: context.seed };
@@ -545,10 +599,130 @@ void main() {
     },
 ];
 
-/** Where Scatter along curves puts each copy: along the curve, turned, sized and shifted at random by its seed. */
-export const scatterRows = (params: Params, seedValue: number): Array<{ at: Point; angle: number; size: number; grey: number }> => {
-    const path = curveOf(params);
-    const placed = placementsAlong(path, num(params, 'spacing', 0.06), Boolean(params.closed));
+/** A thin stroke along paths: what a path tool shows of the curve it gives. */
+const PATH_STROKE_GLSL = `void main() {
+    vec4 hit = nearestOnCurve(vUv);
+    float aa = pixelSize();
+    float halfWidth = p_width * 0.5;
+    outColor = vec4(vec3(1.0 - smoothstep(halfWidth - aa, halfWidth + aa * 0.5, hit.x)), 1.0);
+}`;
+
+/** Gives a path tool's curve, and draws it as a thin stroke (the node's picture). */
+const givePaths = async (context: NodeRunContext, paths: CurvePaths): Promise<Record<string, ReturnType<NodeRunContext['image']>>> => {
+    const fitted = fitSegments(paths.map((path) => path.points), MAX_WIRE_SEGMENTS);
+    const given = paths.map((path, i) => ({ points: fitted[i], closed: path.closed }));
+    context.giveCurve('path', given);
+    const stroke = context.image('gray');
+    await curvePass(context, stroke, PATH_STROKE_GLSL, segmentsOf(given.map((path) => path.points)), num(context.params, 'width', 0.004));
+    return { out: stroke };
+};
+
+/** The paths wired into a path tool (none when nothing is). */
+const wiredPaths = (context: NodeRunContext, input = 'in'): CurvePaths => context.curve(input) ?? [];
+
+const strokeWidth = () => float('width', 'Stroke width', 0.004, 0.0005, 0.1, { step: 0.0005, hint: 'How thick the node\'s picture draws the path (the path itself has no width).' });
+
+/** Nodes that change curves on curve wires. */
+export const PATH_TOOL_NODES: TexNodeDef[] = [
+    {
+        type: 'pathOffset',
+        label: 'Offset path',
+        category: 'Splines and paths',
+        description: 'Moves a curve\'s paths to one side by a distance (to the left of the way each runs; below 0, to the right), corners mitred. With copies, makes rings one after another: contour lines, a road\'s two edges, a seam allowance.',
+        keywords: ['offset path', 'offset curve', 'parallel', 'inset', 'outset', 'contour lines', 'grow path', 'shrink path'],
+        inputs: [curveIn('in', 'Curve')],
+        outputs: [out('gray', 'out', 'Stroke'), curveOut('path', 'Path')],
+        params: [
+            float('distance', 'Distance', 0.03, -0.25, 0.25, { step: 0.001, hint: 'To the left of the way each path runs; below 0, to its right. A large distance on a tight bend can cross itself.' }),
+            float('copies', 'Copies', 1, 1, 16, { step: 1, hint: 'More than one: each copy the distance further out.' }),
+            bool('keep', 'Keep the original', false), strokeWidth(),
+        ],
+        sizeFrom: 'graph',
+        async run(context) {
+            const distance = num(context.params, 'distance', 0.03);
+            const copies = Math.max(1, Math.min(16, Math.round(num(context.params, 'copies', 1))));
+            const paths: CurvePath[] = [];
+            for (const path of wiredPaths(context)) {
+                if (context.params.keep === true) paths.push(path);
+                for (let k = 1; k <= copies; k++) paths.push({ points: offsetPath(path.points, path.closed, distance * k), closed: path.closed });
+            }
+            return givePaths(context, paths);
+        },
+    },
+    {
+        type: 'pathSmooth',
+        label: 'Smooth path',
+        category: 'Splines and paths',
+        description: 'Rounds a curve\'s corners away, pass after pass, so its paths run smoothly along the same course: softens traced outlines and hand-placed zigzags. Open paths keep their ends.',
+        keywords: ['smooth path', 'smooth curve', 'round corners', 'relax', 'fillet', 'soften outline'],
+        inputs: [curveIn('in', 'Curve')],
+        outputs: [out('gray', 'out', 'Stroke'), curveOut('path', 'Path')],
+        params: [
+            float('passes', 'Passes', 3, 1, 6, { step: 1, hint: 'Each pass rounds every corner again (and doubles the points).' }),
+            float('amount', 'Rounding', 1, 0, 1, { hint: 'How far into each span a corner is cut.' }), strokeWidth(),
+        ],
+        sizeFrom: 'graph',
+        async run(context) {
+            const passes = Math.max(1, Math.min(6, Math.round(num(context.params, 'passes', 3))));
+            const amount = num(context.params, 'amount', 1);
+            return givePaths(context, wiredPaths(context).map((path) => ({ points: roundCorners(path.points, path.closed, passes, amount, MAX_WIRE_SEGMENTS), closed: path.closed })));
+        },
+    },
+    {
+        type: 'pathResample',
+        label: 'Resample path',
+        category: 'Splines and paths',
+        description: 'Rebuilds a curve\'s paths from spans of even length, by a spacing or a count: evenly spaced points for scatters and bridges, or coarse straight spans for a faceted look.',
+        keywords: ['resample path', 'even spacing', 'subdivide', 'decimate', 'respace points', 'polyline'],
+        inputs: [curveIn('in', 'Curve')],
+        outputs: [out('gray', 'out', 'Stroke'), curveOut('path', 'Path')],
+        params: [
+            select('by', 'Spans by', 'spacing', [['spacing', 'Spacing'], ['count', 'Count per path']]),
+            float('spacing', 'Spacing', 0.02, 0.001, 0.5, { step: 0.001, showIf: (p) => p.by !== 'count' }),
+            float('count', 'Spans', 24, 1, 1024, { step: 1, showIf: (p) => p.by === 'count' }), strokeWidth(),
+        ],
+        sizeFrom: 'graph',
+        async run(context) {
+            const byCount = context.params.by === 'count';
+            const spacing = Math.max(0.001, num(context.params, 'spacing', 0.02));
+            return givePaths(context, wiredPaths(context).map((path) => {
+                const spans = byCount ? num(context.params, 'count', 24) : pathLength(path.points) / spacing;
+                return { points: evenSpans(path.points, Math.min(MAX_WIRE_SEGMENTS, Math.max(path.closed ? 3 : 1, Math.round(spans)))), closed: path.closed };
+            }));
+        },
+    },
+    {
+        type: 'pathJoin',
+        label: 'Join paths',
+        category: 'Splines and paths',
+        description: 'Puts two curves\' paths on one wire, or joins each path\'s end to the next one\'s start into a single path (closed if you like): two edges into one outline, pieces into one line.',
+        keywords: ['join paths', 'merge curves', 'combine paths', 'connect curves', 'append path', 'close path'],
+        inputs: [curveIn('a', 'First curve'), curveIn('b', 'Second curve')],
+        outputs: [out('gray', 'out', 'Stroke'), curveOut('path', 'Path')],
+        params: [
+            bool('flip', 'Turn the second round', false, { hint: 'Runs the second curve\'s paths the other way.' }),
+            bool('connect', 'Connect end to start', false, { hint: 'Joins the end of each path to the start of the next, into one path.' }),
+            bool('close', 'Close', false, { showIf: (p) => p.connect === true, hint: 'Joins the end of the path back to its start.' }), strokeWidth(),
+        ],
+        sizeFrom: 'graph',
+        async run(context) {
+            const second = wiredPaths(context, 'b').map((path) => (context.params.flip === true ? { points: [...path.points].reverse(), closed: path.closed } : path));
+            const paths = [...wiredPaths(context, 'a'), ...second];
+            if (context.params.connect !== true || !paths.length) return givePaths(context, paths);
+            // A closed path is opened where it starts and ends, and joined in there.
+            const points: Point[] = paths.flatMap((path) => (path.closed && isLoop(path.points) ? path.points.slice(0, -1) : path.points));
+            const close = context.params.close === true && points.length > 2;
+            return givePaths(context, [{ points: close ? [...points, points[0]] : points, closed: close }]);
+        },
+    },
+];
+
+/** The most copies Scatter along curves places. */
+const MAX_STAMPS = 4096;
+
+/** Where Scatter along curves puts each copy: along each path (its own curve's unless given), turned, sized and shifted at random by its seed. */
+export const scatterRows = (params: Params, seedValue: number, paths: CurvePaths = [ownPath(params)]): Array<{ at: Point; angle: number; size: number; grey: number }> => {
+    const placed = paths.flatMap((path) => placementsAlong(path.points, num(params, 'spacing', 0.06), path.closed)).slice(0, MAX_STAMPS);
     const size = num(params, 'size', 0.05);
     const turn = (num(params, 'turn', 0) * Math.PI) / 180;
     const turnRandom = (num(params, 'turnRandom', 0) * Math.PI) / 180;
