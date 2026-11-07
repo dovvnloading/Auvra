@@ -9,6 +9,8 @@ import {
     coerceParameter,
     conditionError,
     formatCondition,
+    groupByLabelPrefix,
+    hasLabelPrefixes,
     parameterSetting,
     parseCondition,
     type ConditionTest,
@@ -152,7 +154,7 @@ const ParameterCard: React.FC<{
             </div>
             {open && (
                 <div className="space-y-2 border-t border-line p-1.5">
-                    <div className="grid grid-cols-[72px_minmax(0,1fr)] items-center gap-x-1.5 gap-y-1.5">
+                    <div className="grid grid-cols-[76px_minmax(0,1fr)] items-center gap-x-1.5 gap-y-1.5">
                         <span className="text-2xs text-ink-2">Label</span>
                         <DraftText label="Parameter label" value={parameter.label} maxLength={64} className="w-full" onCommit={(label) => onChange({ label: label.trim() || parameter.name })} />
                         <span className="text-2xs text-ink-2">In formulas</span>
@@ -162,7 +164,7 @@ const ParameterCard: React.FC<{
                             ? <DraftText label="New group name" value="" allowEmpty placeholder="Group name" maxLength={64} className="w-full" onCommit={(group) => { setNaming(false); onChange(group.trim() ? { group: group.trim() } : without('group')); }} />
                             : <Select value={parameter.group ?? ''} options={[{ value: '', label: 'None' }, ...groups.map((group) => ({ value: group, label: group })), { value: NEW_GROUP, label: 'A new group…' }]}
                                 onChange={(group: string) => (group === NEW_GROUP ? setNaming(true) : onChange(group ? { group } : without('group')))} className="w-full" />}
-                        <span className="self-start pt-1 text-2xs text-ink-2">Words</span>
+                        <span className="self-start pt-1 text-2xs text-ink-2">Description</span>
                         <DraftText label="Parameter description" value={parameter.description ?? ''} maxLength={256} allowEmpty placeholder="What it does, shown on hover" className="w-full"
                             onCommit={(text) => onChange(text.trim() ? { description: text.trim() } : without('description'))} />
                     </div>
@@ -177,7 +179,7 @@ const ParameterCard: React.FC<{
                         </div>
                     )}
                     {ranged && (
-                        <div className="grid grid-cols-[72px_1fr_auto_1fr] items-center gap-1 text-2xs text-ink-3">
+                        <div className="grid grid-cols-[76px_1fr_auto_1fr] items-center gap-1 text-2xs text-ink-3">
                             <span className="text-ink-2" title="A value never goes past these">Limits</span>
                             <DraftNumber label="Lowest value" value={parameter.min ?? 0} integer={parameter.kind === 'int'} className="w-full"
                                 onCommit={(min) => onChange({ min, max: Math.max(min, parameter.max ?? min + 1) })} />
@@ -232,7 +234,7 @@ const GroupsEditor: React.FC<{
                             Starts folded
                         </label>
                     </div>
-                    <DraftText label="Group description" value={of(name).description ?? ''} maxLength={256} allowEmpty placeholder="Words shown under the group's name" className="w-full"
+                    <DraftText label="Group description" value={of(name).description ?? ''} maxLength={256} allowEmpty placeholder="Shown under the group's name" className="w-full"
                         onCommit={(text) => put(name, { description: text.trim() || undefined })} />
                 </div>
             ))}
@@ -266,6 +268,12 @@ export const ParameterEditor: React.FC<{
     const names = [...new Set(parameters.map((parameter) => parameter.group).filter((group): group is string => Boolean(group)))];
     return (
         <div className="space-y-1.5">
+            {hasLabelPrefixes(parameters) && (
+                <div className="flex items-center gap-1.5 rounded border border-line bg-well px-1.5 py-1 text-2xs text-ink-2">
+                    <span className="min-w-0 flex-1">Labels like "Layer: name" can go under a group named after the layer.</span>
+                    <Button size="sm" variant="ghost" onClick={() => onParameters(groupByLabelPrefix(parameters))}>Group them</Button>
+                </div>
+            )}
             {parameters.map((parameter, index) => (
                 <ParameterCard key={parameter.name} parameter={parameter} parameters={parameters} index={index} textures={textures} bound={boundChoices.has(parameter.name)}
                     onChange={(patch, coalesce) => change(index, patch, coalesce)} onMove={(by) => move(index, by)} onRemove={() => onRemove(index)} />

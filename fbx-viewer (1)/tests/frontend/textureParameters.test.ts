@@ -7,6 +7,8 @@ import {
     conditionHolds,
     conditionScope,
     formatCondition,
+    groupByLabelPrefix,
+    hasLabelPrefixes,
     matchesPreset,
     parameterSections,
     parameterSetting,
@@ -23,6 +25,7 @@ import { textureNodeDefinition } from '../../texturing/graph/registry';
 import { withParameterPictures } from '../../texturing/graph/stored';
 import type { GraphParameter, TextureGraph } from '../../texturing/graph/types';
 import { readSharedPresets, sharedPresetsDocument } from '../../components/Texturing/projectPresets';
+import { allCellsSame, pictureFingerprint } from '../../components/Texturing/VariationSheet';
 
 const parameters: GraphParameter[] = [
     { name: 'pattern', label: 'Pattern', kind: 'select', default: 'bricks', options: [{ value: 'tiles', label: 'Tiles' }, { value: 'bricks', label: 'Bricks' }, { value: 'planks', label: 'Planks' }] },
@@ -171,5 +174,31 @@ describe('variation sheets', () => {
         expect(seeds[0]).toBe(5);
         expect(new Set(seeds).size).toBe(16);
         expect(seeds.every((seed) => seed >= 0 && seed < 1000)).toBe(true);
+    });
+});
+
+describe('long labels and sheets with no effect', () => {
+    it('puts "Layer: name" parameters under a group named after the layer', () => {
+        const made: GraphParameter[] = [
+            { name: 'a', label: 'Polished edges: Sharpness', kind: 'float', default: 1 },
+            { name: 'b', label: 'Iron: Noise scale', kind: 'float', default: 1 },
+            { name: 'c', label: 'Ratio 2:1', kind: 'float', default: 1 },
+            { name: 'd', label: 'Kept: as is', kind: 'float', default: 1, group: 'Mine' },
+        ];
+        expect(hasLabelPrefixes(made)).toBe(true);
+        const grouped = groupByLabelPrefix(made);
+        expect(grouped.map((parameter) => [parameter.group, parameter.label])).toEqual([
+            ['Polished edges', 'Sharpness'], ['Iron', 'Noise scale'], [undefined, 'Ratio 2:1'], ['Mine', 'Kept: as is'],
+        ]);
+        expect(hasLabelPrefixes(grouped)).toBe(false);
+    });
+
+    it('notices when every cell of a variation sheet came out the same', () => {
+        const flat = pictureFingerprint(new Uint8Array([1, 2, 3, 4]));
+        expect(allCellsSame([flat, flat, flat])).toBe(true);
+        expect(allCellsSame([flat, pictureFingerprint(new Uint8Array([1, 2, 3, 5])), flat])).toBe(false);
+        // Not until every cell is drawn, and never for one cell.
+        expect(allCellsSame([flat, undefined])).toBe(false);
+        expect(allCellsSame([flat])).toBe(false);
     });
 });

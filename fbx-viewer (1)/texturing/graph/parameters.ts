@@ -154,6 +154,28 @@ export const parameterSections = (parameters: readonly GraphParameter[], groups:
     return sections;
 };
 
+/** A label "Layer: name" split into the part before the colon and the rest, or null. */
+const PREFIXED = /^([^:]{1,48}):\s+(\S.*)$/;
+
+/**
+ * Parameters labelled "Layer: name" and in no group put into a group named after the part before the
+ * colon, with that part taken off the label (as graphs made from smart materials label theirs). Others
+ * as they are; the same list when nothing changes.
+ */
+export const groupByLabelPrefix = (parameters: readonly GraphParameter[]): GraphParameter[] => {
+    let changed = false;
+    const next = parameters.map((parameter) => {
+        const match = parameter.group ? null : PREFIXED.exec(parameter.label);
+        if (!match) return parameter;
+        changed = true;
+        return { ...parameter, group: match[1].trim(), label: match[2].trim() };
+    });
+    return changed ? next : [...parameters];
+};
+
+/** Whether any parameter could be grouped by its label's prefix. */
+export const hasLabelPrefixes = (parameters: readonly GraphParameter[]): boolean => parameters.some((parameter) => !parameter.group && PREFIXED.test(parameter.label));
+
 /** A parameter as a setting: for its value control, and as a setting of a node using the graph. */
 export const parameterSetting = (parameter: GraphParameter, parameters?: readonly GraphParameter[]): TexParamDef => {
     const setting: TexParamDef = {
