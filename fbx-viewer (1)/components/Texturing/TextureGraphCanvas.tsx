@@ -15,6 +15,7 @@ import { wireFits } from '../../texturing/graph/material';
 import { NAMED_RECEIVE_TYPE, NAMED_SEND_TYPE, linkName, namedLinks } from '../../texturing/graph/namedLinks';
 import { ALL_MESH_MAPS, ANY_MESH_MAP_LABELS, EXTRA_MESH_MAPS, INPUT_NODE_TYPE, ITERATE_NODE_TYPE, MATERIAL_INPUT_NODE_TYPE, MATERIAL_OUTPUT_NODE_TYPE, MESH_MAP_NODE_TYPE, OUTPUT_NODE_TYPE, REROUTE_NODE_TYPE, SUBGRAPH_NODE_TYPE } from '../../texturing/graph/nodes/io';
 import { feedbackPairs } from '../../texturing/graph/iterate';
+import { PAINT_STACK_NODE_TYPE } from '../../texturing/paint/stackNode';
 import { NODE_CATEGORY_ORDER, TEXTURE_NODE_DEFINITIONS, placeholderDefinition, textureNodeDefinition, textureNodeDefinitionByType, type GraphResolver } from '../../texturing/graph/registry';
 import { OUTPUT_CHANNELS, OUTPUT_CHANNEL_LABELS, type OutputChannel, type PinKind, type TexGraphComment, type TexGraphLink, type TexGraphNode, type TexNodeDef, type TexPortDef, type TextureGraph } from '../../texturing/graph/types';
 import { copyNodes, outputKinds, readClipboard, unusedNodes, type Point } from './graphEditing';
@@ -146,7 +147,7 @@ const typeEntry = (definition: TexNodeDef): FinderEntry => ({
 const NODE_ENTRIES: readonly FinderEntry[] = (() => {
     const entries: FinderEntry[] = [];
     for (const definition of TEXTURE_NODE_DEFINITIONS) {
-        if (definition.type === OUTPUT_NODE_TYPE || definition.type === MESH_MAP_NODE_TYPE || definition.type === SUBGRAPH_NODE_TYPE) continue;
+        if (definition.type === OUTPUT_NODE_TYPE || definition.type === MESH_MAP_NODE_TYPE || definition.type === SUBGRAPH_NODE_TYPE || definition.type === PAINT_STACK_NODE_TYPE) continue;
         entries.push(typeEntry(definition));
         // Ready-set versions (each grunge look) as entries of their own, found by their names.
         for (const variant of definition.variants ?? []) {
