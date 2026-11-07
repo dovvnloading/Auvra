@@ -4,7 +4,7 @@ import { describeProviderFailure, hostProviderService, type InferenceJob, type P
 import { estimateJobCost, formatCost } from '../../services/providerPricing';
 import { picksFor } from '../../services/providerPicks';
 import { textureService, type TexturePreview } from '../../services/TextureGenerationService';
-import { Button, Popover, Spinner, TextArea } from '../UI/kit';
+import { Button, IconButton, Popover, Spinner, TextArea } from '../UI/kit';
 
 const PROVIDER = 'fal';
 const MAX_NAME = 128;
@@ -33,10 +33,12 @@ interface DescribeWithAIProps {
   onPainted: (painted: PaintedFromWords) => Promise<void>;
   /** What a run comes to, in megapixels, for a model priced by them. */
   megapixels?: number;
+  /** Shown as an icon with its title as the tooltip, where a row is narrow. */
+  compact?: boolean;
 }
 
 /** A button that opens a small window for describing a picture, which paints it and hands it over. */
-export const DescribeWithAI: React.FC<DescribeWithAIProps> = ({ capability, title, hint, placeholder, instruction, onPainted, megapixels }) => {
+export const DescribeWithAI: React.FC<DescribeWithAIProps> = ({ capability, title, hint, placeholder, instruction, onPainted, megapixels, compact = false }) => {
   const [open, setOpen] = useState(false);
   const [description, setDescription] = useState('');
   const [model, setModel] = useState<ProviderModel | null>(null);
@@ -83,7 +85,9 @@ export const DescribeWithAI: React.FC<DescribeWithAIProps> = ({ capability, titl
 
   return (
     <>
-      <Button ref={trigger} size="sm" icon={<SparklesIcon size={12} />} aria-expanded={open} onClick={() => setOpen((value) => !value)}>Describe</Button>
+      {compact
+        ? <IconButton ref={trigger} label={title} aria-expanded={open} onClick={() => setOpen((value) => !value)}><SparklesIcon size={14} /></IconButton>
+        : <Button ref={trigger} size="sm" icon={<SparklesIcon size={12} />} aria-expanded={open} onClick={() => setOpen((value) => !value)}>Describe</Button>}
       <Popover anchor={trigger} open={open} onClose={() => { if (!working) setOpen(false); }} width={320} label={title}>
         <div className="space-y-2 p-3">
           <h3 className="text-xs font-medium text-ink">{title}</h3>

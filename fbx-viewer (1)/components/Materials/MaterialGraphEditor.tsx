@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { BookIcon, CommentAddIcon, CrossIcon, ExternalLinkIcon, FlowIcon, GraphIcon, PlusIcon, TrashIcon, WarningIcon } from '../UI/Icons';
+import { BookIcon, ChipIcon, CommentAddIcon, CrossIcon, ExternalLinkIcon, FlowIcon, GraphIcon, PlusIcon, TrashIcon, WarningIcon } from '../UI/Icons';
 import { useAssets } from '../../context/AssetContext';
 import { projectService } from '../../utils/projectService';
 import { frontendDiagnostics } from '../../diagnostics/runtime';
@@ -348,16 +348,15 @@ export const MaterialGraphEditor: React.FC = () => {
     return (
         <div className="flex h-full min-h-0 w-full bg-gray-950 text-white">
             <aside className="flex w-56 shrink-0 flex-col border-r border-gray-800">
-                <div className="flex items-center gap-1.5 border-b border-gray-800 px-3 py-2">
-                    <span className="text-xs font-bold text-gray-400">Materials</span>
-                    <span className="flex-1" />
+                {/* Icons with tooltips, so the row fits the sidebar however narrow the window. */}
+                <div className="flex h-9 shrink-0 items-center gap-0.5 border-b border-gray-800 pl-3 pr-2">
+                    <span className="min-w-0 flex-1 truncate text-xs font-bold text-gray-400">Materials</span>
                     <IconButton label="My library: your materials for every project" active={libraryOpen} onClick={() => setLibraryOpen(open => !open)}><BookIcon size={14} /></IconButton>
                     <MaterialFromDescription onCreated={createFromDescription} />
-                    <button onClick={() => setMemoryOpen(true)} title="What textures take on the graphics card, per level and per material"
-                        className="rounded bg-gray-800 px-2 py-1 text-2xs text-gray-200 hover:bg-gray-700">Memory</button>
+                    <IconButton label="Texture memory: what textures take on the graphics card, per level and per material" onClick={() => setMemoryOpen(true)}><ChipIcon size={14} /></IconButton>
                     {memoryOpen && <TextureMemoryDialog onClose={() => setMemoryOpen(false)} />}
                     <MaterialXImport ref={materialXImport} onImported={(imported) => { setSelectedId(imported.id); select([]); setLibraryOpen(false); }} />
-                    <button ref={newButton} onClick={() => setNewMenu(true)} aria-label="New material" className="flex items-center gap-1 rounded bg-gray-800 px-2 py-1 text-2xs text-gray-200 hover:bg-gray-700"><PlusIcon size={12} /> New</button>
+                    <IconButton ref={newButton} label="New material" active={newMenu} onClick={() => setNewMenu(true)}><PlusIcon size={14} /></IconButton>
                     <Popover anchor={newButton} open={newMenu} onClose={() => setNewMenu(false)} width={280} label="New material">
                         <div className="p-1">
                             {[
