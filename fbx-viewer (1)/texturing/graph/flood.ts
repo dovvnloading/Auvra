@@ -69,6 +69,40 @@ export const labelReference = (mask: ArrayLike<number>, width: number, height: n
 export const shortestOffset = (d: number, size: number, repeats: boolean): number => (repeats ? d - size * Math.round(d / size) : d);
 
 /**
+ * Where offsets from an island's root wrap round, as parts of the picture, on an axis that repeats: the
+ * shortest way (halfway round) and three more a quarter apart. A box is worked out for each; the
+ * narrowest is the island's, since its seam lies in the gap beside the island. So an island more than
+ * half the picture across still gets its own box, whenever a quarter of the picture is free of it.
+ */
+export const FLOOD_SEAMS: readonly number[] = [0.5, 0.75, 1, 0.25];
+
+/** An offset made to lie from `seam` (as a part of the picture) less the picture's size, up to `seam`. */
+export const seamOffset = (d: number, size: number, seam: number, repeats: boolean): number => {
+    if (!repeats) return d;
+    const s = seam * size;
+    return d - size * (Math.floor((d - s) / size) + 1);
+};
+
+/**
+ * One axis of an island's box as the shaders work it out: the low end (from the root) and the size, the
+ * narrowest over the seams. `places` are the island's pixels along the axis; `root` its root's.
+ */
+export const islandSpan = (places: readonly number[], root: number, size: number, repeats: boolean): { low: number; size: number } => {
+    let best = { low: 0, size: Infinity };
+    for (const seam of repeats ? FLOOD_SEAMS : [0.5]) {
+        let low = Infinity;
+        let high = -Infinity;
+        for (const place of places) {
+            const d = seamOffset(place - root, size, seam, repeats);
+            low = Math.min(low, d);
+            high = Math.max(high, d);
+        }
+        if (high - low + 1 < best.size) best = { low, size: high - low + 1 };
+    }
+    return best;
+};
+
+/**
  * A bounding box's size kept in one float exactly: 12 bits each of its width and height, as parts of the
  * image (so to 1/4095 of the image each way).
  */
@@ -141,27 +175,53 @@ export const FLOOD_ANY = `void main() {
 }`;
 
 /** A point a pixel, drawn at its island's root, carrying its offset from the root both ways (kept largest). */
+const SEAM_OFFSET = `vec2 seamOffset(vec2 d, vec2 seam) {
+    if (uWrapAxes.x == 1) d.x -= uSize.x * (floor((d.x - seam.x * uSize.x) / uSize.x) + 1.0);
+    if (uWrapAxes.y == 1) d.y -= uSize.y * (floor((d.y - seam.y * uSize.y) / uSize.y) + 1.0);
+    return d;
+}`;
+
+/** Each pixel adds its offset from its root (wrapping at the seam uSeam) into the root, largest each way. */
 export const FLOOD_BOX_VERTEX = `${COMMON}
+${SEAM_OFFSET}
 uniform int uWidth;
+uniform vec2 uSeam;
 void placeCopy(int copy, vec2 corner, vec2 shift) {
     ivec2 p = ivec2(copy % uWidth, copy / uWidth);
     vec4 l = texelFetch(labels, p, 0);
     if (l.z < 0.5) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
-    vec2 d = shortestOffset(vec2(p) - l.xy);
+    vec2 d = seamOffset(vec2(p) - l.xy, uSeam);
     gl_Position = vec4((l.xy + 0.5) / uSize * 2.0 - 1.0, 0.0, 1.0);
     vBox = vec4(-d, d);
 }`;
 
 /** Each pixel: where it lies in its island's box, the island's random value, and the box's size (packed). */
 export const FLOOD_RESULT = `${COMMON}
+${SEAM_OFFSET}
+uniform int uSeamCount;
+uniform vec4 uSeamsX;
+uniform vec4 uSeamsY;
 void main() {
     ivec2 p = ivec2(gl_FragCoord.xy);
     vec4 l = texelFetch(labels, p, 0);
     if (l.z < 0.5) { outColor = vec4(0.0, 0.0, -1.0, 0.0); return; }
-    vec4 box = texelFetch(boxes, ivec2(l.xy), 0);
-    vec2 low = -box.xy;
-    vec2 size = box.zw - low + 1.0;
-    vec2 d = shortestOffset(vec2(p) - l.xy);
+    ivec2 r = ivec2(l.xy);
+    vec4 b[4];
+    b[0] = texelFetch(boxes0, r, 0);
+    b[1] = texelFetch(boxes1, r, 0);
+    b[2] = texelFetch(boxes2, r, 0);
+    b[3] = texelFetch(boxes3, r, 0);
+    // Each way, the seam giving the narrowest box lies in the gap beside the island: that box is its own.
+    int bx = 0;
+    int by = 0;
+    for (int i = 1; i < 4; i++) {
+        if (i >= uSeamCount) break;
+        if (b[i].z + b[i].x < b[bx].z + b[bx].x) bx = i;
+        if (b[i].w + b[i].y < b[by].w + b[by].y) by = i;
+    }
+    vec2 low = -vec2(b[bx].x, b[by].y);
+    vec2 size = vec2(b[bx].z, b[by].w) - low + 1.0;
+    vec2 d = seamOffset(vec2(p) - l.xy, vec2(uSeamsX[bx], uSeamsY[by]));
     vec2 local = (d - low + 0.5) / size;
     vec2 corner = mod(l.xy + low, uSize);
     // A random value from the island's place and size, so it stays the same as the mask changes

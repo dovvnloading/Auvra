@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import type { GpuImage, TextureGpu } from '../../gpu/textureGpu';
 import { anyIn, bool, colorIn, float, grayIn, int, onePass, out, select, seed } from '../nodeKit';
 import type { NodeRunContext, TexNodeDef } from '../types';
-import { FLOOD_ANY, FLOOD_BOX_VERTEX, FLOOD_CHANGED, FLOOD_HOOK, FLOOD_JUMP, FLOOD_RESULT, FLOOD_START } from '../flood';
+import { FLOOD_ANY, FLOOD_BOX_VERTEX, FLOOD_CHANGED, FLOOD_HOOK, FLOOD_JUMP, FLOOD_RESULT, FLOOD_SEAMS, FLOOD_START } from '../flood';
 import { gaussianBlur } from './transform';
 
 /**
@@ -283,12 +283,24 @@ void main() { float d = texture(distanceMap, vUv).r; outColor = vec4(1.0 - smoot
             const labels = await labelIslandsGpu(context, mask, Number(context.params.threshold) || 0.5);
             const wrapAxes = [context.tiling[0] ? 1 : 0, context.tiling[1] ? 1 : 0];
             // Each island's box: every pixel adds its offset from the root into the root, largest each way.
-            const boxes = context.image('color', width, height, 32);
-            await context.gpu.drawInstances(boxes, {
-                count: width * height, points: true, varyings: ['vec4 vBox'], vertex: FLOOD_BOX_VERTEX, fragment: 'void main() { outColor = vBox; }',
-                inputs: { labels }, uniforms: { uWidth: width, uWrapAxes: wrapAxes }, stack: 'max', clear: [-1e9, -1e9, -1e9, -1e9],
+            // Where the image tiles, once for each place offsets can wrap round (the narrowest box wins), so
+            // an island more than half the picture across gets its own box.
+            const seams = wrapAxes[0] || wrapAxes[1] ? FLOOD_SEAMS : [0.5];
+            const boxes: GpuImage[] = [];
+            for (const seam of seams) {
+                const box = context.image('color', width, height, 32);
+                await context.gpu.drawInstances(box, {
+                    count: width * height, points: true, varyings: ['vec4 vBox'], vertex: FLOOD_BOX_VERTEX, fragment: 'void main() { outColor = vBox; }',
+                    inputs: { labels }, uniforms: { uWidth: width, uWrapAxes: wrapAxes, uSeam: new THREE.Vector2(seam, seam) }, stack: 'max', clear: [-1e9, -1e9, -1e9, -1e9],
+                });
+                boxes.push(box);
+            }
+            const seamVector = new THREE.Vector4(...[0, 1, 2, 3].map((index) => seams[Math.min(index, seams.length - 1)]));
+            await context.gpu.pass(result, {
+                fragment: FLOOD_RESULT,
+                inputs: { labels, boxes0: boxes[0], boxes1: boxes[1] ?? boxes[0], boxes2: boxes[2] ?? boxes[0], boxes3: boxes[3] ?? boxes[0] },
+                uniforms: { uWrapAxes: wrapAxes, uSeamCount: seams.length, uSeamsX: seamVector, uSeamsY: seamVector },
             });
-            await context.gpu.pass(result, { fragment: FLOOD_RESULT, inputs: { labels, boxes }, uniforms: { uWrapAxes: wrapAxes } });
             context.gpu.release(labels);
             return { out: result };
         },
