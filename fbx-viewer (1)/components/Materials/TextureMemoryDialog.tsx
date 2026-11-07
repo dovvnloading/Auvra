@@ -7,6 +7,7 @@ import { useNativeProjectDocument } from '../../utils/useNativeProjectDocument';
 import { DEFAULT_GAME_SETTINGS, GAME_SETTINGS_DOCUMENT_ID, normalizeGameSettings, type GameSettings } from '../../runtime/types';
 import { graphTextures, materialAssetDocument, materialLibrary } from '../../runtime/materials/materialLibrary';
 import { isSmartMaterialAsset } from '../../texturing/paint/smartMaterials';
+import { isExportTemplatesAsset } from '../../texturing/paint/exportTemplates';
 import { compressionSupport } from '../../texturing/materialTextureLoader';
 import { subscribeTextureSettings, textureSettingsOf, textureSettingsVersion, FORMAT_WORDS } from '../../texturing/textureSettings';
 import { budgetWarnings, levelTextureCost, materialTextureCost, memoryWords, type TextureCost } from '../../texturing/textureBudget';
@@ -48,7 +49,7 @@ export const TextureMemoryDialog: React.FC<{ onClose: () => void }> = ({ onClose
 
     const { materials, byMaterial, textureInfo } = useMemo(() => {
         const info = new Map(textures.map(texture => [texture.id, { ...texture, settings: textureSettingsOf(texture.id) ?? texture.settings }]));
-        const assets = (libraryVersion >= 0 && settingsVersion >= 0 ? materialLibrary.list() : []).filter(asset => !isSmartMaterialAsset(asset));
+        const assets = (libraryVersion >= 0 && settingsVersion >= 0 ? materialLibrary.list() : []).filter(asset => !isSmartMaterialAsset(asset) && !isExportTemplatesAsset(asset));
         const list = assets.map(asset => ({
             id: asset.id,
             name: asset.name,

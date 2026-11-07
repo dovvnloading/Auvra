@@ -29,6 +29,7 @@ import { Popover } from '../UI/kit';
 import { FRAME_COLOURS, FRAME_COLOUR_NAMES } from '../NodeGraph/frames';
 import { OPEN_MATERIAL_EVENT, takeOpenMaterialRequest } from '../Texturing/Paint/openMaterial';
 import { isSmartMaterialAsset } from '../../texturing/paint/smartMaterials';
+import { isExportTemplatesAsset } from '../../texturing/paint/exportTemplates';
 import { createFunctionGraph, createTextureGraph } from '../../texturing/graph/document';
 import { TextureGraphWorkspace, newTextureGraphStored } from '../Texturing/TextureGraphWorkspace';
 
@@ -82,7 +83,7 @@ export const MaterialGraphEditor: React.FC = () => {
     const allAssets = useMaterialAssets();
     // Saved smart materials are painting presets, not materials to edit or give to models.
     // Painted copies belong to their models (Material Overrides), not to the material list.
-    const assets = useMemo(() => allAssets.filter((candidate) => !isSmartMaterialAsset(candidate) && !candidate.owner), [allAssets]);
+    const assets = useMemo(() => allAssets.filter((candidate) => !isSmartMaterialAsset(candidate) && !isExportTemplatesAsset(candidate) && !candidate.owner), [allAssets]);
     const { textures, removeMaterialAsset, updateModelMaterialOverrides } = useAssets();
     const { models, levelObjects } = useScene();
     // The last material deleted, and what used it, until it is undone or another goes.

@@ -5,6 +5,7 @@ import type { LoadedModelData, TextureData } from '../../types';
 import { Select } from '../UI/Select';
 import { materialAssetUse, materialLibrary } from '../../runtime/materials/materialLibrary';
 import { isSmartMaterialAsset } from '../../texturing/paint/smartMaterials';
+import { isExportTemplatesAsset } from '../../texturing/paint/exportTemplates';
 import { materialGraphParameters, type MaterialParameter, type MaterialParameterValue } from '../../runtime/materials/materialGraph';
 import { Segmented } from '../UI/kit';
 import { assetShaderVersions, type ObjectMaterialOverrides } from '../../utils/materialInstances';
@@ -302,8 +303,8 @@ const MaterialAssetField: React.FC<{
   const version = useSyncExternalStore((listener) => materialLibrary.subscribe(listener), () => materialLibrary.version);
   // Painted copies are each model's own: shown as its painted base map, never offered as an asset.
   const assets = useMemo(() => materialLibrary.list().filter(asset => !isPaintedCopy(asset)), [version]);
-  const drawing = useMemo(() => assets.filter((asset) => !isSmartMaterialAsset(asset) && materialAssetUse(asset) === 'material'), [assets]);
-  const waiting = useMemo(() => assets.filter((asset) => !isSmartMaterialAsset(asset) && materialAssetUse(asset) === 'needsPictures'), [assets]);
+  const drawing = useMemo(() => assets.filter((asset) => !isSmartMaterialAsset(asset) && !isExportTemplatesAsset(asset) && materialAssetUse(asset) === 'material'), [assets]);
+  const waiting = useMemo(() => assets.filter((asset) => !isSmartMaterialAsset(asset) && !isExportTemplatesAsset(asset) && materialAssetUse(asset) === 'needsPictures'), [assets]);
   const options = useMemo(() => {
     const list = [{ label: 'Its own', value: '' }, ...drawing.map((asset) => ({ label: asset.name, value: asset.id }))];
     if (value && !drawing.some((asset) => asset.id === value)) {

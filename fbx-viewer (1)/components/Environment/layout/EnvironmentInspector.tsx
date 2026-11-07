@@ -3,6 +3,7 @@ import React, { useCallback, useMemo, useRef, useState, useSyncExternalStore } f
 import { Select } from '../../UI/Select';
 import { materialAssetUse, materialLibrary } from '../../../runtime/materials/materialLibrary';
 import { isSmartMaterialAsset } from '../../../texturing/paint/smartMaterials';
+import { isExportTemplatesAsset } from '../../../texturing/paint/exportTemplates';
 import * as THREE from 'three';
 import { BranchIcon, CrossIcon, CubeIcon, CubesIcon, FogIcon, HashIcon, LayersIcon, LoopIcon, MountainIcon, MoveIcon, MusicIcon, MuteIcon, PersonIcon, PlusIcon, PuzzleIcon, RadioIcon, ResetIcon, RotateIcon, RouteIcon, ScaleIcon, SkullIcon, SunIcon, TimerIcon, TrashIcon, UserPlusIcon, UsersIcon, VolumeIcon, WarningIcon, WindIcon } from '../../UI/Icons';
 import { EditorState } from '../types';
@@ -262,7 +263,7 @@ const MaterialPropField: React.FC<{ label: string; value: string; onChange: (val
     const options = useMemo(() => [
         { value: '', label: 'None: its own texture' },
         ...(version >= 0 ? materialLibrary.list() : [])
-            .filter(asset => materialAssetUse(asset) === 'material' && !isSmartMaterialAsset(asset) && !asset.owner)
+            .filter(asset => materialAssetUse(asset) === 'material' && !isSmartMaterialAsset(asset) && !isExportTemplatesAsset(asset) && !asset.owner)
             .map(asset => ({ value: asset.id, label: asset.name })),
     ], [version]);
     return (
