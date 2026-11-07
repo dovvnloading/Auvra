@@ -226,10 +226,20 @@ export const tileAtlas = (gpu: TextureGpu, tiles: readonly number[], channelImag
 
 const isTileLayout = (value: TileLayout | { columns: number; rows: number }): value is TileLayout => Array.isArray((value as TileLayout).tiles);
 
-/** A texture graph's flipbook: how many frames, the grid they fill from the top left, and the seconds they loop over. */
-export interface FlipbookLayout { frames: number; columns: number; rows: number; loop: number }
+/**
+ * A texture graph's flipbook: how many frames, the grid they fill from the top left, the seconds they loop over,
+ * and the edge of its own pixels round each frame in its cell (a share of the cell each way; none if absent).
+ */
+export interface FlipbookLayout { frames: number; columns: number; rows: number; loop: number; edge?: { u: number; v: number } }
 
-const flipbookParams = (flipbook: FlipbookLayout) => ({ frames: flipbook.frames, columns: flipbook.columns, rows: flipbook.rows, loop: flipbook.loop });
+const flipbookParams = (flipbook: FlipbookLayout) => ({ frames: flipbook.frames, columns: flipbook.columns, rows: flipbook.rows, loop: flipbook.loop, edgeU: flipbook.edge?.u ?? 0, edgeV: flipbook.edge?.v ?? 0 });
+
+/** The edge a material's Flipbook Frames node reads each frame inside of (none when it has no such node, or one made before edges). */
+export const flipbookEdgeOf = (graph: { nodes: ReadonlyArray<{ type: string; params: Record<string, unknown> }> }): { u: number; v: number } => {
+    const player = graph.nodes.find((node) => node.type === FLIPBOOK_FRAMES_NODE_TYPE);
+    const share = (value: unknown) => Math.min(0.25, Math.max(0, Number(value) || 0));
+    return { u: share(player?.params.edgeU), v: share(player?.params.edgeV) };
+};
 
 type PictureGraphOptions = { opacityMode?: 'masked' | 'translucent'; tiles?: TileLayout | { columns: number; rows: number }; flipbook?: FlipbookLayout | null };
 

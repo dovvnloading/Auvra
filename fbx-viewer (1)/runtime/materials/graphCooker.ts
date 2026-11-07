@@ -10,7 +10,7 @@ import type { TexturingGpu } from '../../texturing/gpu/texturingGpu';
 import { cookingDevice, webgpuFallbacks } from '../../texturing/gpu/cookingDevice';
 import { webgpuTexturing, type WgpuDevice } from '../../texturing/gpu/webgpuTexturing';
 import { frontendDiagnostics } from '../../diagnostics/runtime';
-import { encodeChannels, type ChannelImages, type MaterialChannel } from '../../texturing/materialOutput';
+import { encodeChannels, flipbookEdgeOf, type ChannelImages, type MaterialChannel } from '../../texturing/materialOutput';
 import { gpuExtensions } from '../../utils/textureCompression/compressTextures';
 import { bakedSizeLog2, type CookRequest, type CookedPictures, type Cooker } from './materialCooking';
 import type { MaterialAsset } from './materialLibrary';
@@ -132,8 +132,10 @@ const cookOn = async (gpu: TexturingGpu, request: CookRequest, stored: ReturnTyp
                     frames.push(frame);
                 }
                 images = {};
+                // Each frame inside the edge the material's Flipbook Frames node reads it inside of (none on one made before edges).
+                const edge = flipbookEdgeOf(request.asset.graph);
                 for (const channel of Object.keys(frames[0]) as MaterialChannel[]) {
-                    const atlas = packFlipbook(gpu, frames.map((frame) => frame[channel]!), columns, rows);
+                    const atlas = packFlipbook(gpu, frames.map((frame) => frame[channel]!), columns, rows, edge);
                     held.push(atlas);
                     images[channel] = atlas;
                     width = atlas.width;

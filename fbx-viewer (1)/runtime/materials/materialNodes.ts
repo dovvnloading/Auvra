@@ -397,7 +397,7 @@ export const MATERIAL_NODE_DEFINITIONS: MaterialNodeDef[] = [
         type: FLIPBOOK_FRAMES_NODE_TYPE,
         label: 'Flipbook Frames',
         category: 'UV',
-        description: "The UV of the frame a texture graph's flipbook shows now: its Frames laid along the rows of a Columns × Rows grid from the top left, played once round every Loop seconds as the graph's time goes round, so the animation loops with no jump. Start later shifts one use's animation from another's. Wire it into every picture the flipbook made.",
+        description: "The UV of the frame a texture graph's flipbook shows now: its Frames laid along the rows of a Columns × Rows grid from the top left, played once round every Loop seconds as the graph's time goes round, so the animation loops with no jump. Each frame is read inside the edge of its own pixels round it in its cell, so filtering never reaches the next frame (Update material sets the edge). Start later shifts one use's animation from another's. Wire it into every picture the flipbook made.",
         keywords: ['flipbook', 'animated texture', 'texture graph', 'frames', 'loop', 'animation'],
         inputs: [
             { key: 'uv', label: 'UV', type: 'vec2', fallback: builtin('uv') },
@@ -409,19 +409,24 @@ export const MATERIAL_NODE_DEFINITIONS: MaterialNodeDef[] = [
             float('columns', 'Columns', 4, { min: 1, max: 64, step: 1 }),
             float('rows', 'Rows', 4, { min: 1, max: 64, step: 1 }),
             float('loop', 'Loop (seconds)', 4, { min: 0.1, max: 600, step: 0.1 }),
+            float('edgeU', 'Edge round each frame, across (share of its cell)', 0, { min: 0, max: 0.25, step: 0.001 }),
+            float('edgeV', 'Edge round each frame, up (share of its cell)', 0, { min: 0, max: 0.25, step: 0.001 }),
         ],
         emit: (inputs, context) => {
             const frames = context.param('frames');
             const columns = context.param('columns');
             const rows = context.param('rows');
+            const edge = context.local('edge');
             const frame = context.local('frame');
             const cell = context.local('cell');
             return {
                 statements: [
                     `float ${frame} = min(floor(fract((${context.builtin('time')} + ${inputs.offset}) / max(${context.param('loop')}, 0.001)) * ${frames}), ${frames} - 1.0);`,
                     `vec2 ${cell} = vec2(mod(${frame}, ${columns}), ${rows} - 1.0 - floor(${frame} / ${columns}));`,
+                    `vec2 ${edge} = vec2(${context.param('edgeU')}, ${context.param('edgeV')});`,
                 ],
-                outputs: { out: `((fract(${inputs.uv}) + ${cell}) / vec2(${columns}, ${rows}))` },
+                // Inside the frame's edge: the place in the frame (wrapped round it) scaled into what the edge leaves.
+                outputs: { out: `((${cell} + ${edge} + fract(${inputs.uv}) * (1.0 - 2.0 * ${edge})) / vec2(${columns}, ${rows}))` },
             };
         },
     },
