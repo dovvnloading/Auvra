@@ -709,7 +709,7 @@ const Workspace: React.FC<{
                 <span className="text-2xs text-ink-2">Bit depth (nodes set to the graph's)</span>
                 <Select value={graph.precision ?? 0} options={[{ value: 0, label: 'By kind' }, { value: 8, label: '8-bit' }, { value: 16, label: 'Half float' }, { value: 32, label: 'Full float' }]}
                     onChange={(value) => { const { precision: _old, ...rest } = graph; update(value ? { ...rest, precision: Number(value) as 8 | 16 | 32 } : rest, true); }} className="w-[140px]" />
-                <span className="text-2xs text-ink-2" title="The size the picture stands for in the world, so normals can be worked out in world units">Size in the world (metres)</span>
+                <span className="text-2xs text-ink-2" title="The size the picture stands for in the world. Normal from height, Height from normal, Curvature, Ambient occlusion from height and Emboss measure slopes per metre of it, so the same heights make the same bumps at any picture size.">Size in the world (metres)</span>
                 <div className="flex items-center gap-1">
                     <DraftNumber label="Width in metres" value={graph.physicalSize?.w ?? 1} limit={(value) => Math.max(0.001, Math.min(10000, value))}
                         onCommit={(w) => update({ ...graph, physicalSize: { w, h: graph.physicalSize?.h ?? 1 } }, true)} className="w-14" />

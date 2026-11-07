@@ -35,6 +35,8 @@ export interface EvaluateRequest {
     targets?: readonly string[];
     /** The graph's size for this request (powers of two), instead of its own. */
     size?: { w: number; h: number };
+    /** Metres the pictures span when the graph has no size in the world of its own (a graph used inside another takes that one's). */
+    world?: { w: number; h: number };
     /**
      * The seed the graph runs with, instead of its own: a graph used inside another runs with a seed
      * of its own copy, so copies of it look different.
@@ -92,6 +94,8 @@ interface NodeDetails {
     seed: number;
     /** A sub-graph node's: the seed the graph inside runs with. */
     innerSeed?: number;
+    /** Metres the picture spans across and down. */
+    world: [number, number];
 }
 
 interface Prepared {
@@ -237,6 +241,8 @@ export class TextureGraphEvaluator {
         const graphWidth = 2 ** Math.min(MAX_SIZE_LOG2, sizeLog2.w);
         const graphHeight = 2 ** Math.min(MAX_SIZE_LOG2, sizeLog2.h);
         const graphSeed = request.seed ?? graph.seed;
+        const metres = graph.physicalSize ?? request.world ?? { w: 1, h: 1 };
+        const world: [number, number] = [metres.w, metres.h];
         const scope = formulaScope(graph, values, graphWidth, graphHeight, graphSeed);
         const external = request.external ?? {};
         const externalToken = (key: string): string => {
@@ -311,8 +317,9 @@ export class TextureGraphEvaluator {
                 extras.push(typeof id === 'string' && id && this.texture(id) ? `${id}:ready` : `${String(id)}:waiting`);
             }
             if (main) extras.push(`bypass:${main}`);
+            if (world[0] !== 1 || world[1] !== 1) extras.push(`world:${world[0]}x${world[1]}`);
             const signature = hashText(JSON.stringify([node.type, params, width, height, precision, seed, kinds, inputSignatures, extras, tiling]));
-            info.set(node.id, { signature, width, height, kinds, precision, tiling, params, warnings, seed, innerSeed });
+            info.set(node.id, { signature, width, height, kinds, precision, tiling, params, warnings, seed, innerSeed, world });
         }
         return { plan, info, targets, external, graphSeed };
     }
@@ -484,6 +491,7 @@ export class TextureGraphEvaluator {
             seed,
             precision: details.precision,
             tiling: tilingAxes(details.tiling),
+            world: details.world,
             params: details.params,
             signal: request.signal ?? new AbortController().signal,
             input,
@@ -494,7 +502,7 @@ export class TextureGraphEvaluator {
                 return image;
             },
             pass: async (target, fragment, extra = {}) => {
-                const bound = nodeBindings(definition, { input, params: details.params, seed, texture: this.texture, tiling: tilingAxes(details.tiling) }, (name) => gpu.constant(name));
+                const bound = nodeBindings(definition, { input, params: details.params, seed, texture: this.texture, tiling: tilingAxes(details.tiling), world: details.world }, (name) => gpu.constant(name));
                 await gpu.pass(target, {
                     ...extra,
                     fragment: `${bound.declarations}\n${fragment}`,
@@ -530,6 +538,7 @@ export class TextureGraphEvaluator {
                         targets: outputs.map((candidate) => candidate.id),
                         size: { w: Math.log2(details.width), h: Math.log2(details.height) },
                         seed: details.innerSeed,
+                        world: { w: details.world[0], h: details.world[1] },
                         signal: request.signal,
                     });
                     const result: Record<string, GpuImage> = {};

@@ -17,7 +17,8 @@ import {
     unknownNodeTypes,
     wouldCycle,
 } from '../../texturing/graph/document';
-import { sampleCurve } from '../../texturing/graph/nodeKit';
+import * as THREE from 'three';
+import { nodeBindings, sampleCurve } from '../../texturing/graph/nodeKit';
 import { pixelProcessorCost } from '../../texturing/graph/nodes/io';
 import { mainInput } from '../../texturing/graph/evaluator';
 import { TEXTURE_NODE_DEFINITIONS, placeholderDefinition, textureNodeDefinition, textureNodeDefinitionByType } from '../../texturing/graph/registry';
@@ -341,5 +342,25 @@ describe('materials made by texture graphs', () => {
         const cleared = withoutAssetTexture(asset, 'photo');
         expect(materialAssetDocument(cleared).textureIds).toEqual(['made-1']);
         expect(withoutAssetTexture(asset, 'unrelated')).toBe(asset);
+    });
+});
+
+describe("the graph's size in the world", () => {
+    const bind = (world?: [number, number]) => nodeBindings(textureNodeDefinitionByType('normalFromHeight')!, {
+        input: () => null, params: { intensity: 4, format: 'opengl' }, seed: 0.5, texture: () => null, tiling: [true, true], ...(world ? { world } : {}),
+    }, () => new THREE.Texture());
+
+    it('reaches the shaders of slope-based nodes, one metre each way when the graph has none', () => {
+        expect(bind().declarations).toContain('uniform vec2 uWorld;');
+        expect((bind().uniforms.uWorld as THREE.Vector2).toArray()).toEqual([1, 1]);
+        expect((bind([2, 0.5]).uniforms.uWorld as THREE.Vector2).toArray()).toEqual([2, 0.5]);
+        expect(textureNodeDefinitionByType('normalFromHeight')!.description).toContain('per metre');
+    });
+
+    it('is kept with the graph only when it is not one metre square', () => {
+        const graph = createTextureGraph();
+        expect(normalizeTextureGraph({ ...graph, physicalSize: { w: 2, h: 3 } }).physicalSize).toEqual({ w: 2, h: 3 });
+        expect(normalizeTextureGraph({ ...graph, physicalSize: { w: 1, h: 1 } }).physicalSize).toBeUndefined();
+        expect(normalizeTextureGraph({ ...graph, physicalSize: { w: -1, h: 3 } }).physicalSize).toBeUndefined();
     });
 });

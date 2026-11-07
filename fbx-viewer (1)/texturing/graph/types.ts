@@ -187,6 +187,11 @@ export interface NodeRunContext {
     readonly precision: ImagePrecision;
     /** Whether the node's image repeats across and down (its tiling). */
     readonly tiling: [boolean, boolean];
+    /**
+     * Metres the picture spans across and down: the graph's size in the world ([1, 1] when it has
+     * none). Slope-based nodes measure slopes over it, so the same heights make the same bumps.
+     */
+    readonly world: [number, number];
     /** Settings with links to the graph's parameters worked out. */
     readonly params: Readonly<Record<string, unknown>>;
     readonly signal: AbortSignal;
