@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import { buildPartMesh } from '../../texturing/mesh/partMesh';
-import { UvSurfaceLookup } from '../../texturing/paint/uvSurface';
+import { SurfacePicker } from '../../texturing/mesh/picker';
+import { UvSurfaceLookup, layoutPlaceOf } from '../../texturing/paint/uvSurface';
 
 const partOf = (geometry: THREE.BufferGeometry) => {
     const material = new THREE.MeshStandardMaterial();
@@ -32,5 +33,16 @@ describe('the surface under a point of the UV layout', () => {
         expect(hit.alongU.x).toBeCloseTo(-2);
         expect(new THREE.Vector3().crossVectors(hit.normal, hit.alongU).dot(hit.alongV)).toBeLessThan(0);
         expect(hit.scale).toBeCloseTo(Math.SQRT2);
+    });
+
+    it('finds where a point of the model lies on the layout, and back', () => {
+        const part = partOf(new THREE.PlaneGeometry(2, 2, 4, 4));
+        const place = layoutPlaceOf(part, new SurfacePicker(part), new THREE.Vector3(-0.5, 0.5, 0.01), 0.1)!;
+        expect(place.tile).toBe(1001);
+        expect(place.u).toBeCloseTo(0.25, 5);
+        expect(place.v).toBeCloseTo(0.75, 5);
+        const back = new UvSurfaceLookup(part, place.tile).at(place.u, place.v)!;
+        expect(back.point.toArray().map((value) => Number(value.toFixed(5)))).toEqual([-0.5, 0.5, 0]);
+        expect(layoutPlaceOf(part, new SurfacePicker(part), new THREE.Vector3(0, 0, 3), 0.1)).toBeNull();
     });
 });

@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { BrushIcon, BucketIcon, CompareIcon, EraserIcon, EyedropperIcon, FrameIcon, ImageIcon, RedoIcon, ScissorsIcon, SelectBoxIcon, SplineIcon, UndoIcon, WarningIcon } from '../../UI/Icons';
 import { DecalPanel } from './DecalPanel';
-import { PaintView2D } from './PaintView2D';
+import { PaintView2D, type View2DCommands } from './PaintView2D';
 import { useAssets } from '../../../context/AssetContext';
 import { useScene } from '../../../context/SceneContext';
 import { frontendDiagnostics } from '../../../diagnostics/runtime';
@@ -248,6 +248,8 @@ export const PaintWorkspace: React.FC = () => {
 
     // Paths: kept in the set's document; the path tool adds, picks and drags their points.
     const viewportCommands = useRef<ViewportCommands | null>(null);
+    // The 2D painting view lays paths on when it is shown alone.
+    const view2dCommands = useRef<View2DCommands | null>(null);
     const [pathId, setPathId] = useState<string | null>(null);
     const [pathPoint, setPathPoint] = useState<number | null>(null);
     const paths = useMemo(() => document?.paths ?? [], [document]);
@@ -398,6 +400,7 @@ export const PaintWorkspace: React.FC = () => {
                         {(view === 'paint2d' || beside) && (
                             <div className={`flex min-h-0 min-w-0 flex-1 ${view !== 'paint2d' ? 'border-l border-zinc-800' : ''}`}>
                                 <PaintView2D session={session} tool={tool} brush={brush} target={target} maskImage={maskImage} onMessage={setMessage}
+                                    pickMode={pickMode} pathEdit={tool === 'path' ? pathEdit : null} commands={view2dCommands}
                                     show={view === 'mask' || bakeFix ? 'mask' : (session.document.channels as readonly string[]).includes(view) ? view as PaintChannel : 'baseColor'} />
                             </div>
                         )}
@@ -440,7 +443,7 @@ export const PaintWorkspace: React.FC = () => {
                                 onChange={(next, label, coalesce) => changePaths(paths.map((each) => (each.id === next.id ? next : each)), label, coalesce)}
                                 onDelete={(id) => { changePaths(paths.filter((each) => each.id !== id), 'Delete path'); setPathId(null); setPathPoint(null); }}
                                 onSelectPoint={setPathPoint}
-                                onPaint={(how) => { if (activePath) void viewportCommands.current?.paintPath(activePath, how); }} />
+                                onPaint={(how) => { if (activePath) void (viewportCommands.current ?? view2dCommands.current)?.paintPath(activePath, how); }} />
                         )}<BrushPanel brush={brush} onChange={setBrush} channels={session.document.channels} paintingMask={target?.kind === 'mask'} textures={textures} onPick={() => setTool('pick')}
                             paintWith={previewHost ? { sections: brushSections, host: previewHost, onPick: paintWith, onMessage: setMessage } : undefined} onMessage={setMessage} /></div>
                             : panel === 'history' ? <HistoryPanel session={session} stepLimit={HISTORY_LIMIT} memoryMb={HISTORY_BYTES / 1024 / 1024} />
