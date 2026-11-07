@@ -40,7 +40,12 @@ export interface TextureSettings {
     source?: TextureSource;
     /** An 8-bit picture of it, for the places that show one (the Content Browser, terrain, decals). */
     preview?: { assetId: string };
+    /** Its compressed blocks, kept by signature (texturing/compressedContainer.ts), so they are made once. */
+    compressed?: Array<{ signature: string; assetId: string }>;
 }
+
+/** How many compressed versions a texture keeps (one per way it has been drawn), newest last. */
+export const MAX_KEPT_COMPRESSIONS = 4;
 
 export const MAX_SIZE_CHOICES = [256, 512, 1024, 2048, 4096, 8192] as const;
 
@@ -89,6 +94,13 @@ export const normalizeTextureSettings = (value: unknown): TextureSettings | unde
     }
     const preview = source.preview as Record<string, unknown> | undefined;
     if (preview && typeof preview.assetId === 'string' && ASSET_ID.test(preview.assetId)) result.preview = { assetId: preview.assetId };
+    if (Array.isArray(source.compressed)) {
+        const kept = source.compressed.filter((entry): entry is { signature: string; assetId: string } => !!entry && typeof entry === 'object'
+            && typeof (entry as { signature?: unknown }).signature === 'string' && (entry as { signature: string }).signature.length <= 512
+            && ASSET_ID.test(String((entry as { assetId?: unknown }).assetId))).slice(-MAX_KEPT_COMPRESSIONS)
+            .map(entry => ({ signature: entry.signature, assetId: entry.assetId }));
+        if (kept.length) result.compressed = kept;
+    }
     return Object.keys(result).length ? result : undefined;
 };
 
@@ -109,9 +121,21 @@ export const setTextureSettings = (textureId: string, settings: TextureSettings 
     for (const listener of listeners) listener();
 };
 
+/** The asset holding each texture's file (its hash), which compressed blocks are kept against. */
+const sourceAssets = new Map<string, string>();
+export const textureSourceAssetOf = (textureId: string): string | undefined => sourceAssets.get(textureId);
+export const setTextureSourceAsset = (textureId: string, assetId: string): void => { sourceAssets.set(textureId, assetId); };
+
+/** The settings with `assetId` kept as the compressed blocks for `signature` (replacing older ones of it, keeping the newest few). */
+export const withKeptCompression = (settings: TextureSettings | undefined, signature: string, assetId: string): TextureSettings => ({
+    ...(settings ?? {}),
+    compressed: [...(settings?.compressed ?? []).filter(entry => entry.signature !== signature), { signature, assetId }].slice(-MAX_KEPT_COMPRESSIONS),
+});
+
 /** Forgets every texture's settings (another project opens). */
 export const clearTextureSettings = (): void => {
     registry.clear();
+    sourceAssets.clear();
     version += 1;
 };
 
