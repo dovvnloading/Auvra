@@ -161,7 +161,7 @@ export const PAINT_STACK_NODE: TexNodeDef = {
             return found?.textureGraph ? { id, name: found.name, graph: readStoredGraph(found.textureGraph).graph } : undefined;
         };
         running.add(assetId);
-        let stack: InstanceType<typeof PaintStack> | null = null;
+        let stack: import('./paintStack').PaintStack | null = null;
         try {
             stack = await PaintStack.open({
                 gpu: context.gpu,

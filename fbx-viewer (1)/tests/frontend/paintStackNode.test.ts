@@ -7,7 +7,7 @@ import { PAINT_STACK_NODE, PAINT_STACK_NODE_TYPE, paintStackEntries, paintStackE
 const painted = (): PaintDocument => {
     const document = createPaintDocument('model', ['Body'], 10);
     const grime = newFolder('Grime', [newPaintLayer(document, 'Streaks')]);
-    document.layers = [newFillLayer(document, 'Base', { baseColor: { kind: 'colour', value: [0.5, 0.2, 0.1] } }), grime];
+    document.layers = [newFillLayer(document, 'Base', { baseColor: { kind: 'value', value: [0.5, 0.2, 0.1] } }), grime];
     return document;
 };
 
