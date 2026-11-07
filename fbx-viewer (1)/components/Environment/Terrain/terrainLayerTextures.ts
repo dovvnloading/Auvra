@@ -31,7 +31,10 @@ export interface TerrainLayerArrays {
   rayMaps: THREE.Texture[];
 }
 
-type LoadedImages = Map<string, CanvasImageSource & { width: number; height: number } | null>;
+/** A layer's picture, decoded at its own depth and ready to draw. */
+type LayerPicture = CanvasImageSource & { width: number; height: number };
+
+type LoadedImages = Map<string, LayerPicture | null>;
 
 let drawCanvas: HTMLCanvasElement | null = null;
 
@@ -68,7 +71,7 @@ export const writeLayerSlices = (
   detail: Uint8Array,
   size: number,
   layer: number,
-  images: { albedo?: HTMLImageElement | null; normal?: HTMLImageElement | null; roughness?: HTMLImageElement | null; height?: HTMLImageElement | null },
+  images: { albedo?: LayerPicture | null; normal?: LayerPicture | null; roughness?: LayerPicture | null; height?: LayerPicture | null },
 ): void => {
   const start = layer * size * size * 4;
   const count = size * size;
