@@ -1,8 +1,7 @@
 import type { MaterialAsset } from '../../../runtime/materials/materialLibrary';
 import { encodePng, encodePng16 } from '../../../texturing/png';
-import { captureMaps, captureMaterialGraph } from '../../../texturing/paint/captureMaterial';
+import { captureMaps, captureMaterialGraph, captureName } from '../../../texturing/paint/captureMaterial';
 import { estimateLightAzimuths, lightDirection, linearBrightness, type CapturePhoto, type LightEstimate } from '../../../texturing/paint/photometricStereo';
-import { photoMaterialName } from '../../../texturing/paint/photoMaterial';
 import { isPhotoFile, keepGraphMaterial, type StorePicture } from './photoImport';
 
 /** How many photos a capture takes. */
@@ -80,7 +79,7 @@ export const createCaptureMaterial = async (set: CaptureSet, azimuths: readonly 
         colour[i * 4 + 3] = normal[i * 4 + 3] = 255;
         height[i] = Math.round(maps.heightMap[i] * 65535);
     }
-    const base = photoMaterialName(set.names[0]);
+    const base = captureName(set.names);
     const dimensions = { width: size, height: size };
     // One at a time: each is a change to the project.
     const colourId = await store(await encodePng(colour, size, size), `${base} colour`, dimensions, 'Photos');

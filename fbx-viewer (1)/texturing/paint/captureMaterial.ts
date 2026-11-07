@@ -56,6 +56,22 @@ export const captureMaps = (photos: readonly CapturePhoto[], lights: readonly Ve
  */
 const DRIFT_WAVES = 2.5;
 
+/** Words a camera puts in its file names, which say nothing of the surface. */
+const CAMERA_WORDS = /^(img|image|dsc|dscn|dcim|pxl|photo|pic|picture|scan|capture)$/i;
+
+/**
+ * A capture's name from its photos' file names: the words they all share, in the first one's order
+ * ("brick_left.png", "brick_top.png" give "Brick"), or "Captured material" when they share none that say
+ * anything (numbers and a camera's words don't).
+ */
+export const captureName = (fileNames: readonly string[]): string => {
+    const wordsOf = (name: string) => name.replace(/\.[^.]+$/, '').split(/[\s_.-]+/).filter((word) => word && !/^\d+$/.test(word) && !CAMERA_WORDS.test(word));
+    const [first, ...rest] = fileNames.map(wordsOf);
+    const shared = (first ?? []).filter((word) => rest.every((words) => words.some((other) => other.toLowerCase() === word.toLowerCase())));
+    const name = shared.join(' ').trim();
+    return name ? (name.charAt(0).toUpperCase() + name.slice(1)).slice(0, 120) : 'Captured material';
+};
+
 /** Heights stretched to 0 to 1 between their half-percent lowest and highest (a stray few don't squash the rest). */
 const stretched = (values: Float32Array): Float32Array => {
     const sorted = Float32Array.from(values).sort();

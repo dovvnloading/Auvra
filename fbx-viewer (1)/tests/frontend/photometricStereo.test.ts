@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { readTextureGraph } from '../../texturing/graph/document';
 import { textureNodeDefinition } from '../../texturing/graph/registry';
-import { captureMaps, captureMaterialGraph } from '../../texturing/paint/captureMaterial';
+import { captureMaps, captureMaterialGraph, captureName } from '../../texturing/paint/captureMaterial';
 import { estimateLightAzimuths, heightFromNormals, integrateSlopes, lightDirection, linearBrightness, photometricStereo, type CapturePhoto, type Vec3 } from '../../texturing/paint/photometricStereo';
 
 /**
@@ -200,4 +200,10 @@ describe('multi-angle capture of a brick wall', () => {
         expect(correlation(maps.heightMap, wall.relief).r).toBeGreaterThan(0.8);
     });
 
+    it('names a capture after what its photos share', () => {
+        expect(captureName(['brick_left.png', 'brick_top.png', 'brick_right.png', 'brick_bottom.png'])).toBe('Brick');
+        expect(captureName(['Old wall - left.jpg', 'old wall - right.jpg', 'Old Wall top.jpg'])).toBe('Old wall');
+        expect(captureName(['IMG_0001.jpg', 'IMG_0002.jpg', 'IMG_0003.jpg'])).toBe('Captured material');
+        expect(captureName(['a.png', 'b.png', 'c.png'])).toBe('Captured material');
+    });
 });
