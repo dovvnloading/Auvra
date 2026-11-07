@@ -5,6 +5,7 @@ import { PHOTO_NODES, SPECKLED, atlasPlace, occlusionLifted, occlusionSpeckle, p
 import { growFromExample, grownPicture, grownSource } from '../../texturing/graph/quilting';
 import { closedCut, seamMasks, seamTile, type Picture } from '../../texturing/graph/seamCut';
 import { textureNodeDefinitionByType } from '../../texturing/graph/registry';
+import { picturesToDraw, type NodePicture } from '../../components/Texturing/nodePictures';
 import { nearestOn, placementsAlong, quadPlace, resample, segmentsOf, simplify, smoothPath, traceOutlines, windingAt, wrapOffsets, type Point } from '../../texturing/graph/curves';
 import { SPLINE_NODES, outlinePaths, scatterRows, strokeAt } from '../../texturing/graph/nodes/splines';
 import { addPoint, dragOrbit, dragPoint, removePoint, type PointList } from '../../components/Texturing/view2d';
@@ -512,5 +513,16 @@ describe('shaders', () => {
             const source = readFileSync(resolve(root, file), 'utf8');
             expect(source, `${file} declares uSize`).not.toMatch(/uniform\s+\w+\s+uSize\b/);
         }
+    });
+});
+
+describe('finder pictures', () => {
+    it('try a picture that failed once again, once, the next time the finder opens', () => {
+        const requests = [{ key: 'a', type: 'a' }, { key: 'b', type: 'b' }, { key: 'c', type: 'c' }, { key: 'd', type: 'd' }];
+        const drawn = new Map<string, NodePicture>([['a', 'failed'], ['b', 'failed'], ['c', { width: 1, height: 1 } as unknown as NodePicture]]);
+        const tries = new Map([['a', 1], ['b', 2], ['c', 1]]);
+        // a failed once: again; b failed twice: kept as the mark; c drew; d is new; anything waiting is left.
+        expect(picturesToDraw(requests, drawn, tries, new Set()).map((request) => request.key)).toEqual(['a', 'd']);
+        expect(picturesToDraw(requests, drawn, tries, new Set(['d'])).map((request) => request.key)).toEqual(['a']);
     });
 });
