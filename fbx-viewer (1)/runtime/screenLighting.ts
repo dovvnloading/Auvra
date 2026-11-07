@@ -3,6 +3,7 @@ import { Effect } from 'postprocessing';
 import { SurfaceBuffer } from './gbuffer';
 import { DYNAMIC_GI_UNIFORMS, GI_SAMPLE_GLSL, MIRROR_RAY_GLSL, noteRayReflections, sceneReadsGi, sceneReflectionTracer } from './lighting/dynamicGi/giMaterials';
 import { effectTarget, FullscreenPass } from './postEffects';
+import { isGpuRenderer } from '../renderer/gpu/frame';
 
 /**
  * SCREEN-SPACE LIGHTING
@@ -531,6 +532,7 @@ export class ScreenLightingEffect extends Effect {
     }
 
     override update(renderer: THREE.WebGLRenderer, inputBuffer: THREE.WebGLRenderTarget): void {
+        if (isGpuRenderer(renderer)) return;
         const camera = this.camera as THREE.PerspectiveCamera;
         const { bounce, reflections } = this.options;
         const active = camera.isPerspectiveCamera === true && (bounce > 0 || reflections > 0);

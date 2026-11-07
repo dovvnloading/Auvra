@@ -1,4 +1,6 @@
 import * as THREE from 'three';
+import { computeBurstParts } from '../../renderer/gpu/particles/effectParts';
+import type { ParticleWorld } from '../../renderer/gpu/particles/particleWorld';
 import { SURFACES, type SurfaceKind } from '../surfaces';
 import { createSkidTrail, extendSkidTrail, markIntensity, skidMarks, type SkidTrail } from '../skidMarks';
 import type { VehicleTelemetry } from '../vehicles';
@@ -46,7 +48,11 @@ interface Emitter {
     effect: ParticleEffect;
 }
 
-const createEmitter = (effect: ParticleEffect): Emitter => {
+const createEmitter = (effect: ParticleEffect, world: ParticleWorld | null): Emitter => {
+    if (world) {
+        const parts = computeBurstParts(world, effect, effect.maxParticles, builtinSpriteTexture('smoke'), SPRITE_GRIDS.smoke);
+        return { simulation: parts.simulation as unknown as ParticleSimulation, renderer: parts.renderer as unknown as ParticleRenderer, effect };
+    }
     const simulation = new ParticleSimulation(effect, effect.maxParticles);
     // Emits only what the tyres put into it.
     simulation.stop();
@@ -66,9 +72,10 @@ export interface TyreEffects {
     dispose(): void;
 }
 
-export const createTyreEffects = (): TyreEffects => {
-    const smoke = createEmitter(TYRE_SMOKE);
-    const dust = createEmitter(TYRE_DUST);
+/** `world`: on the WebGPU renderer, where the particles run. */
+export const createTyreEffects = (world: ParticleWorld | null = null): TyreEffects => {
+    const smoke = createEmitter(TYRE_SMOKE, world);
+    const dust = createEmitter(TYRE_DUST, world);
     return {
         smoke,
         dust,

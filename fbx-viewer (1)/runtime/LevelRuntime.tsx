@@ -6,6 +6,7 @@ import { PerformanceMonitor } from '@react-three/drei';
 import { Bloom, SMAA, Vignette, ToneMapping } from '@react-three/postprocessing';
 import { ToneMappingMode } from 'postprocessing';
 import { AuvraCanvas } from '../renderer/AuvraCanvas';
+import { isGpuRenderer } from '../renderer/gpu/frame';
 import { ProfilerPanel, ProfilerProbe, useProfilerToggle } from './ProfilerOverlay';
 import { MovementDebugPanel, MovementDebugProbe, useMovementDebugToggle } from './MovementDebug';
 import { levelVariables } from './levelVariables';
@@ -67,7 +68,7 @@ import { DialogueOverlay } from './DialogueOverlay';
 import { LevelStreamingContext, streamedObjects, streamedRoots, type LevelStreaming } from './levelStreaming';
 import { OwnedComposer, TemporalPipeline } from './temporal/TemporalPipeline';
 import { MIN_RENDER_SCALE } from './temporal/temporalSettings';
-import { AutoExposure, LightShafts, PostProcessAllowedContext, PostProcessQualityContext, ScreenLighting, SunHaze, useAllowedAntialias, usePostProcessClaimed } from './components/postProcess';
+import { AutoExposure, GpuPostProcess, LightShafts, PostProcessAllowedContext, PostProcessQualityContext, ScreenLighting, SunHaze, useAllowedAntialias, usePostProcessClaimed } from './components/postProcess';
 import { MeshLodContext } from '../components/Scene/useMeshLod';
 import { OcclusionCullingLayer } from './OcclusionCullingLayer';
 import type { InputState } from './input';
@@ -787,7 +788,6 @@ const LevelSession: React.FC<LevelSessionProps> = ({ level, navigation, content,
                         visible={true}
                         castShadow
                         receiveShadow
-
                         lod
                     />
                 ))}
@@ -954,9 +954,11 @@ const DEFAULT_STACK_SMAA = [...DEFAULT_STACK, <SMAA key="smaa" />];
 const DefaultPostProcess: React.FC = React.memo(() => {
     const quality = useContext(PostProcessQualityContext);
     const camera = useThree(state => state.camera);
+    const gpuDrawn = useThree(state => isGpuRenderer(state.gl));
     const claimed = usePostProcessClaimed();
     const antialias = useAllowedAntialias('temporal', !claimed);
     if (claimed) return null;
+    if (gpuDrawn) return <GpuPostProcess />;
     if (antialias === 'temporal') {
         return <TemporalPipeline key={camera.uuid} renderScale={quality.renderScale} sharpness={0.25} lit={DEFAULT_LIT} display={DEFAULT_DISPLAY} />;
     }
@@ -1074,6 +1076,8 @@ export const LevelRuntime: React.FC<LevelRuntimeProps> = ({ level, settings, pla
             <AuvraCanvas
                 surfaceId="runtime-level-game-loop"
                 role="runtime"
+                backend={settings.quality.renderer}
+                shadowPages={settings.quality.shadowPages}
                 shadows={settings.quality.shadows}
                 camera={{ fov: settings.quality.fov }}
                 dpr={dpr}

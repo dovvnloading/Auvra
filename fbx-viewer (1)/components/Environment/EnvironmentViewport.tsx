@@ -19,8 +19,18 @@ import { MODEL_DRAG_TYPE } from '../UI/Browser/browserFolders';
 import { frontendDiagnostics } from '../../diagnostics/runtime';
 import { useEditorNavMesh } from './hooks/useEditorNavMesh';
 import { getLiveSpline } from '../../runtime/splineRegistry';
+import { useNativeProjectDocument } from '../../utils/useNativeProjectDocument';
+import { DEFAULT_GAME_SETTINGS, GAME_SETTINGS_DOCUMENT_ID, normalizeGameSettings, type GameSettings } from '../../runtime/types';
 
 type FocusRequest = { id: string; nonce: number };
+
+interface GameSettingsDocument {
+    id: string;
+    settings: GameSettings;
+}
+
+// Module scoped so the document hook sees a stable factory.
+const createDefaultGameSettingsDocument = (): GameSettingsDocument => ({ id: GAME_SETTINGS_DOCUMENT_ID, settings: DEFAULT_GAME_SETTINGS });
 
 interface EnvironmentViewportProps {
     activeModelId: string | null;
@@ -62,7 +72,7 @@ const FOCUS_DURATION = 0.25; // seconds
 const FOCUS_PADDING = 1.25;
 const MIN_FOCUS_RADIUS = 0.5;
 
-/** Camera-local WASD; Q/E move along world up, as in Unreal. */
+/** Camera-local WASD; Q/E move along world up. */
 const FLY_KEYS: Readonly<Record<string, readonly [number, number, number]>> = {
     KeyW: [0, 0, -1],
     KeyS: [0, 0, 1],
@@ -433,6 +443,13 @@ export const EnvironmentViewport: React.FC<EnvironmentViewportProps> = ({
     const { levelObjects, addLevelObject, addLevelObjects, removeLevelObjects, updateLevelObject, snapshotHistory } = useLevel();
     const navMesh = useEditorNavMesh(showNavigation ? levelObjects : null, models);
     const containerRef = useRef<HTMLDivElement>(null);
+    // The view draws with the renderer the project is set to, as Play does. The canvas waits for the setting the first
+    // time only: a canvas cannot change renderer, and a revision bump re-hydrates the document without changing it.
+    const { document: settingsDocument, hydrated: settingsHydrated } = useNativeProjectDocument<GameSettingsDocument>('metadata', GAME_SETTINGS_DOCUMENT_ID, createDefaultGameSettingsDocument);
+    const renderer = useMemo(() => normalizeGameSettings(settingsDocument.settings).quality.renderer, [settingsDocument]);
+    const shadowPages = useMemo(() => normalizeGameSettings(settingsDocument.settings).quality.shadowPages, [settingsDocument]);
+    const settingsLoaded = useRef(false);
+    if (settingsHydrated) settingsLoaded.current = true;
 
     // Active View State (the selection itself lives in the editor state)
     const [activeView, setActiveView] = useState<string>('main');
@@ -613,9 +630,11 @@ export const EnvironmentViewport: React.FC<EnvironmentViewportProps> = ({
             )}
 
             {/* Shared Canvas */}
-            <AuvraCanvas
+            {settingsLoaded.current && <AuvraCanvas
                 surfaceId="editor-environment-viewport"
                 role="editor"
+                backend={renderer}
+                shadowPages={shadowPages}
                 className="absolute inset-0 pointer-events-none"
                 eventSource={containerRef as React.MutableRefObject<HTMLElement>}
                 shadows
@@ -710,7 +729,7 @@ export const EnvironmentViewport: React.FC<EnvironmentViewportProps> = ({
                     </>
                 )}
                 </PostProcessAllowedContext.Provider>
-            </AuvraCanvas>
+            </AuvraCanvas>}
         </div>
     );
 };

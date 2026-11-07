@@ -10,6 +10,9 @@ import { useGameContent } from '../GameContentContext';
 import { objectIdFromCollider, objectIdFromRigidBody, PLAYER_PHYSICS_ID, usePhysicsAvailable, usePhysicsQueries } from '../physicsQueries';
 import { useRuntimeServices } from '../RuntimeServicesContext';
 import { SpatialParamWriter, SpatialPositionalAudio } from '../spatialAudio';
+import { GpuSkidMarks } from '../../renderer/gpu/effects/skidMarks';
+import { isGpuRenderer } from '../../renderer/gpu/frame';
+import { particleWorldOf } from '../../renderer/gpu/particles/particleWorld';
 import { releaseSkidMarks, skidMarks } from '../skidMarks';
 import { SURFACES, surfaceOfHit, type SurfaceKind } from '../surfaces';
 import { createWorldSplineFrame, getLiveSpline, liveSplineWorldScale, sampleLiveSpline, type LiveSpline } from '../splineRegistry';
@@ -412,7 +415,8 @@ const VehicleRuntime: React.FC<VehicleRuntimeProps> = ({ object, component, sett
     // Knocks: the chassis's velocity last frame, each wheel's time in the air, and when the last knock was.
     const knocks = useRef({ velocity: new THREE.Vector3(), primed: false, airborne: [] as number[], last: 0, clock: 0 });
     // Smoke, dust and marks from the tyres: world-space, so they stay where they were laid.
-    const effects = useMemo(createTyreEffects, []);
+    const renderer = useThree(state => state.gl);
+    const effects = useMemo(() => createTyreEffects(isGpuRenderer(renderer) ? particleWorldOf(renderer) : null), [renderer]);
     useEffect(() => () => effects.dispose(), [effects]);
     const objectId = object.id;
     const ownsBody = useMemo(() => planPhysicsBody(object)?.ownerId === component.id, [object, component.id]);
@@ -1174,9 +1178,10 @@ const VehicleRender: React.FC<ComponentRenderProps> = ({ object, component, mode
 
 /** The play session's tyre marks, laid by every vehicle. Mount once per play session; they go when it ends. */
 export const VehicleSkidMarks: React.FC = () => {
-    const mesh = useMemo(() => skidMarks().mesh, []);
+    const marks = useMemo(() => skidMarks(), []);
+    const gpuDrawn = useThree(state => isGpuRenderer(state.gl));
     useEffect(() => () => releaseSkidMarks(), []);
-    return <primitive object={mesh} />;
+    return gpuDrawn ? <GpuSkidMarks source={marks} /> : <primitive object={marks.mesh} />;
 };
 
 // ---------------------------------------------------------------------------

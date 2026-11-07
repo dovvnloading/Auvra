@@ -99,6 +99,8 @@ const sanitizeGameSettings = (value: GameSettings): GameSettings => {
       fov: clamp(settings.quality.fov, LIMITS.fov.min, LIMITS.fov.max, defaults.quality.fov),
       antiAliasing: settings.quality.antiAliasing === 'smaa' || settings.quality.antiAliasing === 'none' ? settings.quality.antiAliasing : 'temporal',
       renderScale: clamp(settings.quality.renderScale, LIMITS.renderScale.min, LIMITS.renderScale.max, defaults.quality.renderScale),
+      renderer: settings.quality.renderer === 'webgl2' || settings.quality.renderer === 'webgpu' ? settings.quality.renderer : 'auto',
+      shadowPages: settings.quality.shadowPages === true,
     },
     input: {
       mouseSensitivity: clamp(settings.input.mouseSensitivity, LIMITS.mouseSensitivity.min, LIMITS.mouseSensitivity.max, defaults.input.mouseSensitivity),
@@ -277,7 +279,15 @@ export const GameSettingsPanel: React.FC<GameSettingsPanelProps> = ({ onClose })
           <div className={sectionClass}>
             <div className={sectionTitleClass}>Window & quality</div>
             <Toggle label="Fullscreen" checked={draft.window.fullscreen} disabled={disabled} onChange={(fullscreen) => update((current) => ({ ...current, window: { ...current.window, fullscreen } }))} />
+            <label className="block text-[9px] uppercase text-gray-500">Renderer
+              <select aria-label="Renderer" value={draft.quality.renderer} disabled={disabled} onChange={(event) => { const renderer = event.target.value as GameSettings['quality']['renderer']; update((current) => ({ ...current, quality: { ...current.quality, renderer } })); }} className={`mt-1 ${inputClass}`}>
+                <option value="webgl2">WebGL2</option>
+                <option value="webgpu">WebGPU</option>
+                <option value="auto">Auto</option>
+              </select>
+            </label>
             <Toggle label="Shadows" checked={draft.quality.shadows} disabled={disabled} onChange={(shadows) => update((current) => ({ ...current, quality: { ...current.quality, shadows } }))} />
+            <Toggle label="Sharp sun shadows (WebGPU)" checked={draft.quality.shadowPages} disabled={disabled} onChange={(shadowPages) => update((current) => ({ ...current, quality: { ...current.quality, shadowPages } }))} />
             <Toggle label="Post-processing" checked={draft.quality.postProcessing} disabled={disabled} onChange={(postProcessing) => update((current) => ({ ...current, quality: { ...current.quality, postProcessing } }))} />
             <Toggle label="Mesh detail levels" checked={draft.quality.meshLod} disabled={disabled} onChange={(meshLod) => update((current) => ({ ...current, quality: { ...current.quality, meshLod } }))} />
             <Toggle label="Occlusion culling" checked={draft.quality.occlusionCulling} disabled={disabled} onChange={(occlusionCulling) => update((current) => ({ ...current, quality: { ...current.quality, occlusionCulling } }))} />

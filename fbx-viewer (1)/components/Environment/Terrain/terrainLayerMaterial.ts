@@ -369,6 +369,7 @@ export function createTerrainLayerMaterial(splat: THREE.DataTexture): TerrainLay
   material.name = 'TerrainLayerMaterial';
   // Rain wets it and snow settles on it (runtime/weatherSurfaces.ts).
   material.userData.weatherSurface = true;
+  material.userData.terrainSurface = 'layers';
   material.userData.raySolid = true;
   material.userData.terrainUniforms = uniforms;
   const region = createTerrainRegionUniform();
@@ -399,6 +400,7 @@ export function createTerrainGroundMaterial(): THREE.MeshStandardMaterial {
   material.name = 'TerrainGroundMaterial';
   // Rain wets it and snow settles on it (runtime/weatherSurfaces.ts).
   material.userData.weatherSurface = true;
+  material.userData.terrainSurface = 'ground';
   // What bounced light takes from it: its colours are worked out in the shader, mostly grass.
   material.userData.rayAlbedo = new THREE.Color(0.068, 0.112, 0.03);
   material.userData.raySolid = true;

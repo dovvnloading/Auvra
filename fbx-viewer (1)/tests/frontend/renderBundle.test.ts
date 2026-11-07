@@ -68,7 +68,7 @@ const fakeRenderer = () => {
   vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({
     createImageData: (width: number, height: number) => ({ data: new Uint8ClampedArray(width * height * 4) }),
     putImageData: () => undefined,
-  } as unknown as CanvasRenderingContext2D);
+  } as never);
   vi.spyOn(HTMLCanvasElement.prototype, 'toDataURL').mockReturnValue('data:image/png;base64,AAAA');
   return { renderer, drawn, scenes };
 };

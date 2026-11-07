@@ -4,6 +4,7 @@ import { useInstanceHandle, useThree } from '@react-three/fiber';
 import { EffectComposer } from '@react-three/postprocessing';
 import { Effect, EffectAttribute, EffectPass, Pass, type EffectComposer as PostComposer } from 'postprocessing';
 import { canDrawFloat, KeepDepthPass } from '../keptDepth';
+import { isGpuRenderer } from '../../renderer/gpu/frame';
 import '../passDispose';
 import { TemporalStage } from './temporalStage';
 
@@ -37,6 +38,8 @@ export const OwnedComposer = React.forwardRef<PostComposer, { children: React.Re
     const pixelRatio = useThree(state => state.viewport.dpr);
     const size = useThree(state => state.size);
     useEffect(() => { composer.current?.setSize(size.width, size.height); }, [pixelRatio, size]);
+    // A composer draws through WebGL targets. The new renderer's post stack is its own passes, so none of the effects mount.
+    if (isGpuRenderer(gl)) return null;
     return <EffectComposer ref={composer} multisampling={0} enableNormalPass={false}>{children}</EffectComposer>;
 });
 OwnedComposer.displayName = 'OwnedComposer';
@@ -69,16 +72,24 @@ const passesOf = (children: unknown[], camera: THREE.Camera): { passes: Pass[]; 
     return { passes, merged };
 };
 
-/**
- * A post-process stack with temporal anti-aliasing: `lit` runs on the scene at the render scale, inside the
- * stage; `display` runs on the resolved picture at the display's size.
- */
-export const TemporalPipeline: React.FC<{
+interface TemporalPipelineProps {
     renderScale: number;
     sharpness: number;
     lit: React.ReactNode;
     display: React.ReactNode;
-}> = ({ renderScale, sharpness, lit, display }) => {
+}
+
+/**
+ * A post-process stack with temporal anti-aliasing: `lit` runs on the scene at the render scale, inside the
+ * stage; `display` runs on the resolved picture at the display's size. The stage is a WebGL composer, so on the
+ * new renderer, whose temporal resolve is a pass of its own, there is nothing here to mount.
+ */
+export const TemporalPipeline: React.FC<TemporalPipelineProps> = (props) => {
+    const gl = useThree(state => state.gl);
+    return isGpuRenderer(gl) ? null : <WebGlTemporalPipeline {...props} />;
+};
+
+const WebGlTemporalPipeline: React.FC<TemporalPipelineProps> = ({ renderScale, sharpness, lit, display }) => {
     const gl = useThree(state => state.gl);
     const scene = useThree(state => state.scene);
     const camera = useThree(state => state.camera);

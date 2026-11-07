@@ -231,6 +231,9 @@ cargo +1.98.0 build --release --locked --manifest-path native/Cargo.toml
 (lighting, shadows, reflections, bounce light, materials and post-processing) on a
 software GPU and compares them with the pictures kept beside them. A change that is
 meant to alter a picture keeps the new one with `npm run rendering:verify -- --update`.
+`npm run rendering:verify -- --renderer webgpu` draws the same scenes on the WebGPU
+renderer, through the browser's software Vulkan, against pictures of its own in
+`tests/visual/references/webgpu` (kept the same way, with `--update` added).
 What each scene costs to load and draw is recorded per commit on the
 `rendering-history` branch and shown against `main` on every pull request.
 

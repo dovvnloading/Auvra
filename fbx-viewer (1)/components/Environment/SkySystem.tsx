@@ -28,6 +28,7 @@ import { skyDirector, skyLookOf, type SkyLook } from '../../runtime/sky/skyDirec
 import { useGameContent } from '../../runtime/GameContentContext';
 import { skyRenderer, WEATHER_TILES_PER_KM, type SkyFrame } from './sky/SkyRenderer';
 import { dayPreview } from './sky/dayPreview';
+import { isGpuRenderer } from '../../renderer/gpu/frame';
 
 const _sliceCentre = new THREE.Vector3();
 
@@ -303,7 +304,7 @@ interface SkySystemProps {
     live?: boolean;
 }
 
-export const SkySystem: React.FC<SkySystemProps> = ({ levelObjects, live = false }) => {
+const WebGlSkySystem: React.FC<SkySystemProps> = ({ levelObjects, live = false }) => {
     // 1. Find the Sky Sphere object (First one wins)
     const skyObject = useMemo(() => {
         return levelObjects.find(obj => obj.type === 'sky_sphere');
@@ -814,5 +815,36 @@ export const SkySystem: React.FC<SkySystemProps> = ({ levelObjects, live = false
             {/* Environment Reflections (Synced roughly to time); a Sky Light captures the sky instead */}
             {!skyLit && <LocalEnvironment night={isNight} intensity={reflections} />}
         </>
+    );
+};
+
+/** The sky on the GPU renderer, which only a canvas drawing with WebGPU loads. */
+const GpuSkySystem = React.lazy(() => import('../../renderer/gpu/sky/GpuSkySystem').then(module => ({ default: module.GpuSkySystem })));
+
+/**
+ * Marks materials as taking the weather and the wind, as the WebGL sky does: the GPU renderer's surfaces read that mark,
+ * and their rain, snow and sway wait on it.
+ */
+const GpuSurfaceWeather: React.FC = () => {
+    const scene = useThree(state => state.scene);
+    const windScan = useRef(0);
+    const wetScan = useRef(0);
+    const surfacesWet = useRef(false);
+    useFrame(() => {
+        if (windUniforms.uWindStrength.value > 0.05 && windScan.current++ % SURFACE_SCAN_FRAMES === 0) patchWindSurfaces(scene);
+        if (worldClock.wetness > 0.001 || worldClock.snowCover > 0.001) surfacesWet.current = true;
+        if (surfacesWet.current && wetScan.current++ % SURFACE_SCAN_FRAMES === 0) patchWeatherSurfaces(scene);
+    }, -1);
+    return null;
+};
+
+export const SkySystem: React.FC<SkySystemProps> = (props) => {
+    const gpuDrawn = useThree(state => isGpuRenderer(state.gl));
+    if (!gpuDrawn) return <WebGlSkySystem {...props} />;
+    return (
+        <React.Suspense fallback={null}>
+            <GpuSkySystem {...props} />
+            <GpuSurfaceWeather />
+        </React.Suspense>
     );
 };

@@ -1,8 +1,10 @@
 import React, { useContext, useEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
-import { useFrame } from '@react-three/fiber';
+import { useFrame, useThree } from '@react-three/fiber';
 import { useBeforePhysicsStep, useRapier } from '@react-three/rapier';
 import type { RapierCollider, RapierContext } from '@react-three/rapier';
+import { GpuWaterSurface } from '../../renderer/gpu/effects/water';
+import { isGpuRenderer } from '../../renderer/gpu/frame';
 import type { LevelComponent } from '../../types';
 import { objectIdFromRigidBody, usePhysicsAvailable } from '../physicsQueries';
 import { ComponentHostContext } from './builtins';
@@ -265,9 +267,11 @@ const WaterRender: React.FC<ComponentRenderProps> = ({ object, component, mode }
     const host = useContext(ComponentHostContext);
     const physicsAvailable = usePhysicsAvailable();
     const settings = useMemo(() => resolveWaterSettings(component), [component]);
+    const waves = useMemo(() => waveSet(settings), [settings]);
+    const gpuDrawn = useThree(state => isGpuRenderer(state.gl));
     return (
         <>
-            <WaterSurface settings={settings} />
+            {gpuDrawn ? <GpuWaterSurface settings={settings} waves={waves} /> : <WaterSurface settings={settings} />}
             {mode === 'runtime' && settings.buoyancy && physicsAvailable && host && <WaterBuoyancy settings={settings} host={host} ownerId={object.id} />}
         </>
     );

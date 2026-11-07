@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { useFrame, useThree } from '@react-three/fiber';
 import { CuboidCollider, RigidBody } from '@react-three/rapier';
 import { createPlacementQuery } from '../../utils/surfacePlacement';
+import { isGpuRenderer } from '../../renderer/gpu/frame';
 import { useGameContent } from '../GameContentContext';
 import { physicsUserData, usePhysicsAvailable } from '../physicsQueries';
 import {
@@ -58,6 +59,8 @@ class CellView {
     readonly far = new THREE.Group();
     tier: ScatterTier = 'full';
     private impostorsBuilt = false;
+    /** Far copies stay as their models: no picture of them can be made on this renderer. */
+    private modelsWhenFar = false;
 
     constructor(readonly cell: ScatterCell, private readonly models: (LayerModel | null)[], castShadow: boolean) {
         cell.layers.forEach((matrices, index) => {
@@ -81,6 +84,11 @@ class CellView {
     buildImpostors(renderer: THREE.WebGLRenderer): void {
         if (this.impostorsBuilt) return;
         this.impostorsBuilt = true;
+        // The picture is drawn into a WebGL target; the new renderer's culling and detail levels look after far copies.
+        if (isGpuRenderer(renderer)) {
+            this.modelsWhenFar = true;
+            return;
+        }
         this.cell.layers.forEach((matrices, index) => {
             const model = this.models[index];
             if (!model || matrices.length === 0 || model.parts.length === 0) return;
@@ -101,7 +109,7 @@ class CellView {
 
     show(tier: ScatterTier): void {
         this.tier = tier;
-        this.full.visible = tier === 'full';
+        this.full.visible = tier === 'full' || (tier === 'impostor' && this.modelsWhenFar);
         this.far.visible = tier === 'impostor';
     }
 

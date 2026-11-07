@@ -26,6 +26,7 @@ const frame = vi.hoisted(() => ({ callback: null as (() => void) | null }));
 
 vi.mock('@react-three/fiber', () => ({
   useFrame: (callback: () => void) => { frame.callback = callback; },
+  useThree: (selector: (state: { gl: object; scene: object }) => unknown) => selector({ gl: {}, scene: {} }),
 }));
 
 const lit = () => new THREE.MeshStandardMaterial();
