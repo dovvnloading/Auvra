@@ -99,6 +99,8 @@ export interface ObjectHandle {
      * texture graph's parameter or its 'Graph seed' (its pictures are then cooked for it). Numbers, or [r, g, b].
      */
     setMaterialValue(name: string, value: number | number[]): void;
+    /** Sets every value one of its texture graphs' presets holds (by name), for this object alone while the game plays. */
+    applyMaterialPreset(preset: string): void;
     /** Impulses issued in one frame add up. */
     applyImpulse(x: number | ScriptVec3, y?: number, z?: number): void;
     destroy(): void;
@@ -822,6 +824,11 @@ export const createScriptHost = (options: ScriptHostOptions = {}): ScriptHost =>
                 const pending = merged.get(`material:${id}:${name}`);
                 if (pending?.type === 'setMaterialValue') pending.value = numbers;
                 else queue(record, { type: 'setMaterialValue', objectId: id, name, value: numbers }, `material:${id}:${name}`);
+            },
+            applyMaterialPreset: (preset: string) => {
+                if (typeof preset !== 'string' || !preset.trim() || preset.length > 128) throw new TypeError('applyMaterialPreset expects a preset name');
+                if (!writable()) return;
+                queue(record, { type: 'applyMaterialPreset', objectId: id, preset }, `preset:${id}`);
             },
             applyImpulse: (x: number | ScriptVec3, y?: number, z?: number) => {
                 const impulse = readVec3('applyImpulse', x, y, z);

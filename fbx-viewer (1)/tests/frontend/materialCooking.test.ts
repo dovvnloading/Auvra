@@ -4,7 +4,7 @@ import { GRAPH_SEED, MaterialCookPlanner, PICTURE_SIZE, cookRequestFor, cookSign
 import { boundMaterialGraph } from '../../runtime/materials/graphMaterial';
 import { materialLibrary, type MaterialAsset } from '../../runtime/materials/materialLibrary';
 import { surfaceGraphForPictures } from '../../texturing/materialOutput';
-import { setObjectMaterialValue, releaseSessionMaterials } from '../../utils/materialInstances';
+import { applyObjectMaterialPreset, setObjectMaterialValue, releaseSessionMaterials } from '../../utils/materialInstances';
 
 /** A material whose pictures a texture graph makes, with a Wetness parameter. */
 const crate = (): MaterialAsset => ({
@@ -246,6 +246,19 @@ describe('texture graphs cooked by the game', () => {
         plain.planner.pictures(asset, { parameters: {} }, material);
         await plain.planner.settled();
         expect(plain.planner.pictures(asset, { parameters: {} }, material)?.baseColor).not.toContain('#c');
+    });
+
+    it('apply a texture graph preset to one object during play, as a script does', () => {
+        const withPreset = { ...crate(), textureGraph: { ...crate().textureGraph!, graph: { ...(crate().textureGraph!.graph as object), presets: [{ id: 'soaked', name: 'Soaked', values: { Wetness: 1 } }] } } };
+        materialLibrary.replaceAll([withPreset]);
+        const material = new THREE.MeshStandardMaterial();
+        const mesh = new THREE.Mesh(new THREE.BoxGeometry(), material);
+        materialLibrary.assign(material, 'crate');
+        const made: THREE.Material[] = [];
+        expect(applyObjectMaterialPreset(new THREE.Group().add(mesh), 'soaked', made)).toBe(1);
+        expect(materialLibrary.bindingOf(mesh.material as THREE.Material)?.parameters?.Wetness).toBe(1);
+        expect(applyObjectMaterialPreset(new THREE.Group().add(mesh), 'Nope', made)).toBe(0);
+        releaseSessionMaterials(made);
     });
 });
 
