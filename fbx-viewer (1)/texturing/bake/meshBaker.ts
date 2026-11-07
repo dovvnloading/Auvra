@@ -132,6 +132,8 @@ export interface BakeSources {
     highPoly?: { positions: Float32Array; normals: Float32Array; indices: Uint32Array; triangleMesh?: ArrayLike<number>; meshNames?: string[]; triangleMaterial?: ArrayLike<number>; materials?: TransferMaterial[] };
     /** A cage mesh: per part vertex, the unit way out to its cage vertex and the distance (bakeSetup.meshCage). */
     cage?: Float32Array | null;
+    /** Fixes painted onto the model, by tile: skew (towards the surface's own normals) and cage offset (0.5 as it is). */
+    fixes?: { skew?: ReadonlyMap<number, GpuImage>; cage?: ReadonlyMap<number, GpuImage> };
     /** The surface's own normal map, used for its details when there is no high-poly model. */
     normalMap?: THREE.Texture | null;
 }
@@ -193,6 +195,65 @@ export const bakeMeshMaps = async (gpu: TextureGpu, sources: BakeSources, settin
         return await bakeInStrips(gpu, sources, { ...settings, size: plan.size }, strips, outputSize, progress, signal);
     } catch (error) {
         // A lost context makes every later step fail ("did not compile"...): say what happened instead.
+        if (gpu.renderer.getContext().isContextLost()) throw new BakeLostError();
+        throw error;
+    }
+};
+
+/**
+ * The set's bake with the detail maps (normal, world normal, height, and what is carried over from the
+ * high-poly model) baked again inside `regions` (texels, by tile), as fixes painted there now ask; the
+ * rest kept. A new bake is returned, sharing what did not change; `current` is left as it was.
+ */
+export const rebakeRegion = async (gpu: TextureGpu, sources: BakeSources, settings: BakeSettings, current: ReadonlyMap<number, TileBake>, regions: ReadonlyMap<number, { x0: number; y0: number; x1: number; y1: number }>,
+    outputPower: number, progress: BakeProgress = () => undefined, signal?: AbortSignal): Promise<Map<number, TileBake>> => {
+    const size = 2 ** outputPower;
+    const detail: BakeSettings = {
+        ...settings, size: outputPower, supersample: 1,
+        maps: settings.maps.filter((name) => name === 'normal' || name === 'worldNormal' || name === 'height'),
+        extras: (settings.extras ?? []).filter((name) => name === 'color' || name === 'opacity' || name === 'material'),
+    };
+    const next = new Map<number, TileBake>();
+    for (const [tile, bake] of current) {
+        for (const image of [...Object.values(bake.maps), ...Object.values(bake.extras ?? {})]) if (image) gpu.retain(image);
+        next.set(tile, { maps: { ...bake.maps }, extras: { ...(bake.extras ?? {}) }, coverage: gpu.retain(bake.coverage), nearest: gpu.retain(bake.nearest) });
+    }
+    try {
+        let done = 0;
+        for (const [tile, rect] of regions) {
+            const into = next.get(tile);
+            if (!into) continue;
+            const strip = { from: Math.max(0, Math.floor(rect.y0) - 4), to: Math.min(size, Math.ceil(rect.y1) + 4) };
+            const baked = await bakeAtSize(gpu, sources, detail, (fraction, step) => progress((done + fraction) / regions.size, step), signal, true, strip);
+            try {
+                assertAlive(gpu);
+                const fresh = baked.get(tile);
+                if (!fresh) continue;
+                const swap = (store: Partial<Record<string, GpuImage>>, name: string, image: GpuImage) => {
+                    const old = store[name];
+                    if (!old) return;
+                    const changed = gpu.image(old.width, old.height, old.kind, old.precision);
+                    gpu.copy(old, changed);
+                    gpu.passNow(changed, {
+                        fragment: 'uniform vec2 uAt;\nvoid main() { outColor = texelFetch(source, ivec2(gl_FragCoord.xy) - ivec2(uAt), 0); }',
+                        inputs: { source: image },
+                        uniforms: { uAt: new THREE.Vector2(0, strip.from) },
+                        scissor: { x: Math.floor(rect.x0), y: Math.floor(rect.y0), width: Math.ceil(rect.x1) - Math.floor(rect.x0), height: Math.ceil(rect.y1) - Math.floor(rect.y0) },
+                    });
+                    store[name] = padImage(gpu, changed, into.coverage, into.nearest);
+                    gpu.release(changed);
+                    gpu.release(old);
+                };
+                for (const [name, image] of Object.entries(fresh.maps)) if (image) swap(into.maps, name, image);
+                for (const [name, image] of Object.entries(fresh.extras ?? {})) if (image) swap(into.extras as Partial<Record<string, GpuImage>>, name, image);
+            } finally {
+                for (const result of baked.values()) releaseTileBake(gpu, result);
+            }
+            done++;
+        }
+        return next;
+    } catch (error) {
+        for (const result of next.values()) releaseTileBake(gpu, result);
         if (gpu.renderer.getContext().isContextLost()) throw new BakeLostError();
         throw error;
     }
@@ -499,12 +560,17 @@ const bakeAtSize = async (gpu: TextureGpu, sources: BakeSources, settings: BakeS
     uniform int uDirectX;
     uniform sampler2D uSurfaceTable;
     uniform sampler2D uMaterialTable;
+    uniform sampler2D uSkewMap;
+    uniform sampler2D uCageMap;
     void main() {
         if (uOnlyMesh >= 0 && int(vIds.y + 0.5) != uOnlyMesh) discard;
         vec3 n = normalize(vNormal);
         // Along the cage ray (an averaged normal, or towards the cage mesh) or the texel's own normal.
         vec3 dir = uCageRays == 1 && dot(vCage.xyz, vCage.xyz) > 1e-12 ? normalize(vCage.xyz) : n;
         float front = uCageRays == 1 && vCage.w >= 0.0 ? vCage.w : uFront;
+        // Painted fixes: skew leans the ray towards the surface's own normal; the cage offset scales how far out it starts.
+        dir = normalize(mix(dir, n, texture(uSkewMap, vUv).r));
+        front *= 2.0 * texture(uCageMap, vUv).r;
         vec3 world = n;
         float offset = 0.0;
         TraceHit hit;
@@ -547,6 +613,7 @@ const bakeAtSize = async (gpu: TextureGpu, sources: BakeSources, settings: BakeS
                                     uniforms: {
                                         tTris: group.tracer.triangles, tNodes: group.tracer.nodes, uFront: front, uRear: rear, uMode: target.mode, uCageRays: cageRays ? 1 : 0,
                                         uOnlyMesh: group.lowMesh, ...frame, uSurfaceTable: group.surface ?? gpu.constant('white'), uMaterialTable: group.material ?? gpu.constant('black'),
+                                        uSkewMap: sources.fixes?.skew?.get(tile) ?? gpu.constant('black'), uCageMap: sources.fixes?.cage?.get(tile) ?? gpu.constant('mid'),
                                     },
                                     clear: g === 0 ? target.clear : null,
                                     scissor: { x0: 0, y0, x1: size, y1 },

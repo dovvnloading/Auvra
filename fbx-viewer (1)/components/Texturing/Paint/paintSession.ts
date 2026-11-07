@@ -5,7 +5,7 @@ import { materialLibrary, MATERIALS_DOMAIN, materialAssetDocument, type Material
 import { createMaterialGraph } from '../../../runtime/materials/materialGraph';
 import { projectService } from '../../../utils/projectService';
 import { overrideTextureFlipY, type MaterialOverrides } from '../../../utils/materialOverrides';
-import { bakeMeshMaps, spaceOfBox, type BakeSettings, type PositionSpace } from '../../../texturing/bake/meshBaker';
+import { bakeMeshMaps, rebakeRegion, releaseTileBake, spaceOfBox, type BakeSettings, type PositionSpace, type TileBake } from '../../../texturing/bake/meshBaker';
 import { textureGpu, type TextureGpu } from '../../../texturing/gpu/textureGpu';
 import type { GraphEntry, GraphResolver } from '../../../texturing/graph/registry';
 import { readStoredGraph } from '../../../texturing/graph/stored';
@@ -321,12 +321,31 @@ export class PaintSession {
 
     /** A step already made (a brush stroke) goes into the history. */
     record(entry: HistoryEntry): void {
+        // Undone bakes go for good: the maps they would put back are let go of.
+        for (const undone of this.future) this.letGoOfBake(undone.bakeMaps?.after ?? null);
+        if (entry.bakeMaps) {
+            // One bake can be undone at a time: older bakes keep their place in the list but put nothing back.
+            for (const older of this.past) {
+                if (!older.bakeMaps) continue;
+                this.letGoOfBake(older.bakeMaps.before);
+                delete older.bakeMaps;
+                delete older.document;
+            }
+        }
         this.past.push(entry);
         this.future = [];
+        const kept = new Set(this.past);
         this.trimHistory();
+        for (const dropped of kept) if (!this.past.includes(dropped)) this.letGoOfBake(dropped.bakeMaps?.before ?? null);
         this.dropUnusedPictures();
         if (entry.pixels) this.dirty();
         this.emit();
+    }
+
+    /** Lets go of maps a bake step held for undo (never the ones in use). */
+    private letGoOfBake(maps: Map<number, TileBake> | null): void {
+        if (!maps || maps === this.stack.bake) return;
+        for (const result of maps.values()) releaseTileBake(this.gpu, result);
     }
 
     /** Keeps the history within its step count and its memory (oldest first, never the newest step). */
@@ -358,6 +377,7 @@ export class PaintSession {
         this.coalesceKey = null;
         if (entry.pixels) applyPixelHistory(this.stack, entry.pixels, 'undo');
         if (entry.document) this.stack.setDocument(entry.document.before);
+        if (entry.bakeMaps) this.stack.takeBake(entry.bakeMaps.before);
         this.future.push(entry);
         // Undoing a stroke keeps the pixels it undid, for redo: the history may now hold too much.
         if (entry.pixels) {
@@ -375,6 +395,7 @@ export class PaintSession {
         this.coalesceKey = null;
         if (entry.pixels) applyPixelHistory(this.stack, entry.pixels, 'redo');
         if (entry.document) this.stack.setDocument(entry.document.after);
+        if (entry.bakeMaps) this.stack.takeBake(entry.bakeMaps.after);
         this.past.push(entry);
         this.dirty();
         this.emit();
@@ -456,6 +477,62 @@ export class PaintSession {
      * Bakes the mesh maps at the bake's own size (supersampled as it says), kept at the set's size. A cage
      * model, for a cage from a mesh, must be the low-poly model pushed out: the same vertices in the same order.
      */
+    /** Puts a new bake in place, keeps it in the project, and records it as a step that undo can take back. */
+    private async keepNewBake(result: Map<number, TileBake>, label: string, keep: () => Promise<PaintDocument>): Promise<void> {
+        const documentBefore = this.stack.document;
+        const before = this.stack.takeBake(result);
+        this.busy = 'Keeping the maps';
+        this.emit();
+        const document = await keep();
+        this.stack.setDocument(document);
+        this.record({ label, document: { before: documentBefore, after: document }, bakeMaps: { before, after: result } });
+        await this.save();
+    }
+
+    /**
+     * Bakes the detail maps again only where skew or cage fixes were painted since the last bake (it needs
+     * the high-poly model); occlusion, curvature and the rest stay as they were.
+     */
+    async rebakeRegion(settings: BakeSettings, highPoly: THREE.Object3D | null, signal?: AbortSignal): Promise<void> {
+        if (this.busy || !this.usable) return;
+        const current = this.stack.bake;
+        if (!current || !this.stack.bakeFixChanged.size) return;
+        if (!highPoly) { this.status = 'Rebaking a region carries detail over from the high-poly model: pick it under "Detail from".'; this.emit(); return; }
+        this.busy = 'Baking the changed region again';
+        this.progress = 0;
+        this.emit();
+        const fixes = { skew: this.stack.bakeFixImages('skew'), cage: this.stack.bakeFixImages('cage') };
+        try {
+            const space = this.stack.space();
+            const result = await rebakeRegion(this.gpu, {
+                part: this.part,
+                space: { centre: space.centre, extent: space.extent },
+                occluder: this.occluder,
+                highPoly: buildHighPoly(highPoly),
+                fixes,
+            }, settings, current, new Map(this.stack.bakeFixChanged), this.stack.document.size, (fraction, step) => {
+                this.progress = fraction;
+                this.busy = step;
+                this.emit();
+            }, signal);
+            if (!this.usable) throw new GpuResetError();
+            await this.keepNewBake(result, 'Bake the changed region again', () => this.stack.keepBake(settings, { centre: space.centre, extent: space.extent }));
+            this.stack.bakeFixChanged.clear();
+            this.status = 'The changed region was baked again.';
+        } catch (error) {
+            if (error instanceof GpuResetError) this.status = error.message;
+            else if ((error as Error)?.name !== 'AbortError') {
+                frontendDiagnostics.failure('paint_bake_failed', error);
+                this.status = error instanceof Error ? error.message : 'The region could not be baked again.';
+            }
+        } finally {
+            for (const image of [...fixes.skew.values(), ...fixes.cage.values()]) this.gpu.release(image);
+            this.busy = null;
+            this.progress = 0;
+            this.emit();
+        }
+    }
+
     async bake(settings: BakeSettings, highPoly: THREE.Object3D | null, signal?: AbortSignal, cageModel: THREE.Object3D | null = null): Promise<void> {
         if (this.busy || !this.usable) return;
         this.busy = 'Baking mesh maps';
@@ -481,26 +558,30 @@ export class PaintSession {
                 cage = meshCage(this.part.positions, cagePart.positions);
                 if (!cage) throw new Error('The cage model must be this model pushed out, with the same vertices: it has a different number of them.');
             }
-            const result = await bakeMeshMaps(this.gpu, {
-                part: this.part,
-                space: { centre: space.centre, extent: space.extent },
-                occluder: this.occluder,
-                highPoly: highPoly ? buildHighPoly(highPoly) : undefined,
-                normalMap: material ? ownMaps(material).normalMap : null,
-                cage,
-            }, settings, (fraction, step) => {
-                this.progress = fraction;
-                this.busy = step;
-                this.emit();
-            }, signal, this.stack.document.size);
+            // Fixes painted onto the model are read by the bake.
+            const fixes = { skew: this.stack.bakeFixImages('skew'), cage: this.stack.bakeFixImages('cage') };
+            let result: Map<number, TileBake>;
+            try {
+                result = await bakeMeshMaps(this.gpu, {
+                    part: this.part,
+                    space: { centre: space.centre, extent: space.extent },
+                    occluder: this.occluder,
+                    highPoly: highPoly ? buildHighPoly(highPoly) : undefined,
+                    normalMap: material ? ownMaps(material).normalMap : null,
+                    cage,
+                    fixes,
+                }, settings, (fraction, step) => {
+                    this.progress = fraction;
+                    this.busy = step;
+                    this.emit();
+                }, signal, this.stack.document.size);
+            } finally {
+                for (const image of [...fixes.skew.values(), ...fixes.cage.values()]) this.gpu.release(image);
+            }
             // Maps baked across a GPU reset are blank: they are neither used nor kept.
             if (!this.usable) throw new GpuResetError();
-            this.stack.setBake(result);
-            this.busy = 'Keeping the maps';
-            this.emit();
-            const document = await this.stack.keepBake(settings, { centre: space.centre, extent: space.extent }, adopt);
-            this.stack.setDocument(document);
-            await this.save();
+            await this.keepNewBake(result, 'Bake mesh maps', () => this.stack.keepBake(settings, { centre: space.centre, extent: space.extent }, adopt));
+            this.stack.bakeFixChanged.clear();
             this.status = 'Mesh maps baked. Smart masks and materials now follow this surface.';
         } catch (error) {
             if (error instanceof GpuResetError) this.status = error.message;
@@ -614,6 +695,8 @@ export class PaintSession {
 
     dispose(): void {
         this.stopListening();
+        // Maps bake steps held for undo go with the set.
+        for (const entry of [...this.past, ...this.future]) { this.letGoOfBake(entry.bakeMaps?.before ?? null); this.letGoOfBake(entry.bakeMaps?.after ?? null); }
         this.restoredListeners.clear();
         // Saved on closing (save itself refuses to keep anything from a lost GPU context).
         if (this.saveTimer) {

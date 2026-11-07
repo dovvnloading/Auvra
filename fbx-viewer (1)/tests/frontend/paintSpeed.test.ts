@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { DirtyRegion, alignRect, clampRect, expandRect, rect, rectArea, rectOfUvBox, rectsOverlap, unionRect } from '../../texturing/paint/regions';
 import { PAGE_SIZE, SparsePicture, pageSizeFor, pagesIn, type PageGpu } from '../../texturing/paint/sparsePicture';
 import { channelsReadAnywhere, dependentChannels, stackReach } from '../../texturing/paint/paintStack';
-import { mirrorsOf } from '../../texturing/paint/strokes';
+import { mirrorsOf, uvFootprint } from '../../texturing/paint/strokes';
 import { createPaintDocument, newFillLayer, newFilterLayer, newFolder, type PaintLayer } from '../../texturing/paint/paintTypes';
 import type { GpuImage } from '../../texturing/gpu/textureGpu';
 
@@ -187,5 +187,19 @@ describe('what an area must be put together with', () => {
         expect(stackReach([blur], 1024)).toBe(Math.ceil(0.01 * 1024) + 2);
         expect(stackReach([blur, hidden, softMask], 1024)).toBe(Math.ceil(0.01 * 1024) + 2 + Math.ceil(0.005 * 1024) + 2);
         expect(stackReach([newFilterLayer(document, 'invert')], 1024)).toBe(0);
+    });
+});
+
+describe('painting on the UV layout', () => {
+    it('changes only the texels round each dab, on the tile shown', () => {
+        const view = { tile: 1002, toUv: (x: number, y: number): [number, number] => [x / 100, 1 - y / 100], pixelsPerUv: 100 };
+        const reach = uvFootprint(1024, view, [{ x: 50, y: 50, radius: 10, angle: 0, flow: 1 }], 'round');
+        expect([...reach.keys()]).toEqual([1002]);
+        const [area] = reach.get(1002)!;
+        // A radius of a tenth of the tile round its middle, with a small margin.
+        expect(area.x0).toBeLessThanOrEqual(512 - 102);
+        expect(area.x1).toBeGreaterThanOrEqual(512 + 102);
+        expect(area.x1 - area.x0).toBeLessThan(260);
+        expect(uvFootprint(1024, view, [], 'round').size).toBe(0);
     });
 });

@@ -4,7 +4,7 @@ import * as THREE from 'three';
 import { buildPartMesh } from '../../texturing/mesh/partMesh';
 import { SurfacePicker } from '../../texturing/mesh/picker';
 import { allLayers, castsFromThreeSides, createPaintDocument, insertLayer, locateLayer, mapLayer, moveLayer, newFillLayer, newFolder, newPaintLayer, readPaintDocument } from '../../texturing/paint/paintTypes';
-import { BEFORE, halfFloatTexture, pictureKey, pictureOwner, pictureOwners, picturePrecision } from '../../texturing/paint/paintStack';
+import { BAKE_FIX_KEYS, BEFORE, halfFloatTexture, pictureKey, pictureOwner, pictureOwners, picturePrecision } from '../../texturing/paint/paintStack';
 import { encodePng16, readPng16, readPng16Half } from '../../texturing/png';
 import { historyBytes, trimmedHistory, type HistoryEntry } from '../../texturing/paint/strokes';
 import { BUILTIN_GRAPHS, SMART_MASKS, SMART_MATERIALS } from '../../texturing/paint/smartLibrary';
@@ -184,5 +184,17 @@ describe('kept pictures', () => {
         } finally {
             globalThis.Blob = pageBlob;
         }
+    });
+});
+
+describe('bake fixes', () => {
+    it('are kept with the set whatever its layers, and read back from it', () => {
+        const document = createPaintDocument('model', ['Surface']);
+        const owners = pictureOwners([document]);
+        expect(owners.has(BAKE_FIX_KEYS.skew)).toBe(true);
+        expect(owners.has(BAKE_FIX_KEYS.cage)).toBe(true);
+        const kept = readPaintDocument({ ...document, bakeFixes: { skew: { '1001': { assetId: 'skew-picture' } } } });
+        expect(kept?.bakeFixes?.skew?.['1001'].assetId).toBe('skew-picture');
+        expect(readPaintDocument(document)?.bakeFixes).toBeUndefined();
     });
 });

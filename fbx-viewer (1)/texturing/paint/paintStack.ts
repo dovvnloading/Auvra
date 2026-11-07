@@ -22,12 +22,13 @@ import {
     type MaskEffect,
     type PaintChannel,
     type PaintDocument,
+    type BakeFix,
     type PaintLayer,
     type TilePictures,
 } from './paintTypes';
 import { SELECTION_WIDTH, selectionBytes } from './selection';
 import { AXIS_INDEX } from './projections';
-import { DirtyRegion, alignRect, clampRect, expandRect, scissorOf, type Rect } from './regions';
+import { DirtyRegion, alignRect, clampRect, expandRect, scissorOf, unionRect, type Rect } from './regions';
 import { SparsePicture } from './sparsePicture';
 
 /**
@@ -443,6 +444,10 @@ export const picturePrecision = (key: string): 8 | 16 => (key.endsWith(':height'
 /** The owner of the pictures of what the surface wore before painting began, carried onto a new layout. */
 export const BEFORE = 'before';
 
+/** Picture keys of the fixes painted for the next bake (kept like painted masks, owned by the set itself). */
+export const BAKE_FIX_KEYS: Record<BakeFix, string> = { skew: 'bake:skew', cage: 'bake:cage' };
+const isBakeFix = (key: string): boolean => key === BAKE_FIX_KEYS.skew || key === BAKE_FIX_KEYS.cage;
+
 /** What a painted layer's picture holds where nothing is painted: no coverage. */
 export const NOTHING: readonly [number, number, number, number] = [0, 0, 0, 0];
 
@@ -454,7 +459,7 @@ export const pictureOwner = (key: string): string => {
 
 /** Owners of pictures the documents use: their layers, their mask effects, and what the surface wore before. */
 export const pictureOwners = (documents: Iterable<PaintDocument>): Set<string> => {
-    const owners = new Set<string>([BEFORE]);
+    const owners = new Set<string>([BEFORE, BAKE_FIX_KEYS.skew, BAKE_FIX_KEYS.cage]);
     for (const document of documents) {
         for (const layer of allLayers(document.layers)) {
             owners.add(layer.id);
@@ -712,6 +717,9 @@ export class PaintStack {
 
     /** What a mask effect's painted picture holds where nothing is painted: black for a black mask, else white. */
     maskFill(effectId: string): readonly [number, number, number, number] {
+        // Bake fixes: no skew, and the cage as it is.
+        if (effectId === BAKE_FIX_KEYS.skew) return [0, 0, 0, 1];
+        if (effectId === BAKE_FIX_KEYS.cage) return [0.5, 0.5, 0.5, 1];
         for (const layer of allLayers(this.document.layers)) {
             const effect = layer.mask?.find((candidate) => candidate.id === effectId);
             if (effect) return effect.value === 0 ? [0, 0, 0, 1] : [1, 1, 1, 1];
@@ -721,6 +729,8 @@ export class PaintStack {
 
     /** The channels a mask effect's layer changes. */
     channelsOfEffect(effectId: string): PaintChannel[] {
+        // Bake fixes change no channel: only the next bake reads them.
+        if (isBakeFix(effectId)) return [];
         const layer = allLayers(this.document.layers).find((candidate) => candidate.mask?.some((effect) => effect.id === effectId));
         return layer ? channelsTouched(layer) : [...PAINT_CHANNELS];
     }
@@ -792,6 +802,7 @@ export class PaintStack {
             for (const effect of layer.mask ?? []) if (effect.kind === 'paint') await load(pictureKey(effect.id), effect.pictures);
         }
         for (const [channel, pictures] of Object.entries(this.document.before ?? {})) await load(pictureKey(BEFORE, channel as PaintChannel), pictures);
+        for (const [fix, pictures] of Object.entries(this.document.bakeFixes ?? {})) await load(BAKE_FIX_KEYS[fix as BakeFix], pictures);
         if (this.document.bake?.maps) {
             const bake = new Map<number, TileBake>();
             for (const tile of this.tiles) {
@@ -1022,7 +1033,14 @@ export class PaintStack {
                 if (assetId) before = { ...before, [channel]: { ...before?.[channel], [String(tile)]: { assetId } } };
             }
         }
-        this.document = { ...this.document, layers: update(this.document.layers), ...(before ? { before } : {}) };
+        let bakeFixes = this.document.bakeFixes;
+        for (const fix of Object.keys(BAKE_FIX_KEYS) as BakeFix[]) {
+            for (const tile of tiles) {
+                const assetId = name(BAKE_FIX_KEYS[fix], tile);
+                if (assetId) bakeFixes = { ...bakeFixes, [fix]: { ...bakeFixes?.[fix], [String(tile)]: { assetId } } };
+            }
+        }
+        this.document = { ...this.document, layers: update(this.document.layers), ...(before ? { before } : {}), ...(bakeFixes ? { bakeFixes } : {}) };
         return this.document;
     }
 
@@ -1100,6 +1118,49 @@ export class PaintStack {
     /** The mesh maps of a tile, for graphs and the 2D view. */
     meshMaps(tile: number): Partial<Record<MeshMapName, GpuImage>> {
         return this.bake?.get(tile)?.maps ?? {};
+    }
+
+    /** Where bake fixes were painted since the last bake, by tile: the region a rebake does again. */
+    readonly bakeFixChanged = new Map<number, Rect>();
+
+    /** Notes painted bake fixes, for the next region rebake. */
+    noteBakeFix(tile: number, rects: readonly Rect[]): void {
+        for (const rect of rects) this.bakeFixChanged.set(tile, this.bakeFixChanged.has(tile) ? unionRect(this.bakeFixChanged.get(tile)!, rect) : rect);
+        this.emit();
+    }
+
+    /** Puts `bake` in place and hands back the one it replaces, still held (for undo), or null. */
+    takeBake(bake: Map<number, TileBake> | null): Map<number, TileBake> | null {
+        const before = this.bake;
+        this.bake = bake;
+        this.bakeSize = null;
+        this.sourcesVersion++;
+        this.invalidate();
+        return before;
+    }
+
+    private fixPreviews = new Map<string, { version: number; image: GpuImage }>();
+
+    /** A bake fix's picture on a tile, whole, for the view (kept until the set changes). */
+    bakeFixPreview(fix: BakeFix, tile: number): GpuImage | null {
+        const key = `${fix}|${tile}`;
+        const cached = this.fixPreviews.get(key);
+        if (cached && cached.version === this.version) return cached.image;
+        if (cached) this.gpu.release(cached.image);
+        const image = this.existing(BAKE_FIX_KEYS[fix], tile) ? this.denseCopy(BAKE_FIX_KEYS[fix], tile) : null;
+        if (image) this.fixPreviews.set(key, { version: this.version, image });
+        else this.fixPreviews.delete(key);
+        return image;
+    }
+
+    /** A bake fix's picture on each tile, whole (let go of each after use), or none where nothing was painted. */
+    bakeFixImages(fix: BakeFix): Map<number, GpuImage> {
+        const images = new Map<number, GpuImage>();
+        for (const tile of this.tiles) {
+            const image = this.existing(BAKE_FIX_KEYS[fix], tile) ? this.denseCopy(BAKE_FIX_KEYS[fix], tile) : null;
+            if (image) images.set(tile, image);
+        }
+        return images;
     }
 
     /** Cavity, bent normals and what was carried over from a high-poly model, for a tile. */
