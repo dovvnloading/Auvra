@@ -225,3 +225,30 @@ export const bakeGroups = (low: readonly NamedBox[], high: readonly NamedBox[], 
     const near = all.filter((i) => overlaps(mesh, high[i], margin));
     return near.length ? near : all;
 });
+
+/** A strip of a large bake: its own rows (y0..y1), the rows baked with it for neighbours (from..to), and the rows of the kept result it makes (keep0..keep1). */
+export interface BakeStrip { y0: number; y1: number; from: number; to: number; keep0: number; keep1: number }
+
+/**
+ * A bake `size` texels square, kept `factor` times smaller, cut into strips of whole blocks of rows,
+ * each baked with `margin` rows either side (for maps that read neighbours) and holding no more than
+ * `budget` bytes at `bytesPerTexel`. One strip when the whole bake fits.
+ */
+export const planStrips = (size: number, factor: number, bytesPerTexel: number, budget: number, margin: number): BakeStrip[] => {
+    const step = Math.max(1, Math.round(factor));
+    const fits = Math.floor(budget / Math.max(1, bytesPerTexel * size));
+    const whole = fits >= size;
+    const rows = whole ? size : Math.max(step, Math.floor(Math.max(step, fits - 2 * margin) / step) * step);
+    const strips: BakeStrip[] = [];
+    for (let y0 = 0; y0 < size; y0 += rows) {
+        const y1 = Math.min(size, y0 + rows);
+        strips.push({ y0, y1, from: whole ? 0 : Math.max(0, y0 - margin), to: whole ? size : Math.min(size, y1 + margin), keep0: y0 / step, keep1: y1 / step });
+    }
+    return strips;
+};
+
+/**
+ * Where a strip's texels are read from when its blocks are averaged into the kept result: kept row r
+ * reads the strip's rows from (r - targetRow) * factor + sourceRow.
+ */
+export const stripOffsets = (strip: BakeStrip): { sourceRow: number; targetRow: number } => ({ sourceRow: strip.y0 - strip.from, targetRow: strip.keep0 });

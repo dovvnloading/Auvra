@@ -1,8 +1,8 @@
 import React, { useRef, useState } from 'react';
 import { CheckCircleIcon, DownloadIcon, FlameIcon, RefreshIcon } from '../../UI/Icons';
 import type * as THREE from 'three';
-import { BAKE_VERSION, DEFAULT_BAKE_SETTINGS, EXTRA_MAPS, EXTRA_MAP_LABELS, type BakeSettings } from '../../../texturing/bake/meshBaker';
-import { SUPERSAMPLE, bakeBytesPerTexel, supersampled, type CageMode, type Supersample } from '../../../texturing/bake/bakeSetup';
+import { BAKE_VERSION, DEFAULT_BAKE_SETTINGS, EXTRA_MAPS, EXTRA_MAP_LABELS, bakeStrips, type BakeSettings } from '../../../texturing/bake/meshBaker';
+import { SUPERSAMPLE, type CageMode, type Supersample } from '../../../texturing/bake/bakeSetup';
 import { MESH_MAP_LABELS, MESH_MAPS, type MeshMapName } from '../../../texturing/graph/nodes/io';
 import { CHANNEL_LABELS, PAINT_CHANNELS, type PaintChannel } from '../../../texturing/paint/paintTypes';
 import type { PictureLayout } from '../../../texturing/materialOutput';
@@ -83,8 +83,8 @@ export const SetPanel: React.FC<{
                     <Segmented value={String(settings.supersample ?? 1)} options={SUPERSAMPLE.map((factor) => ({ value: String(factor), label: factor === 1 ? 'Off' : `${factor}×${factor}` }))} onChange={(factor) => setSettings({ ...settings, supersample: Number(factor) as Supersample })} label="Supersampling" />
                 </div>
                 {(() => {
-                    const plan = supersampled(settings.size, settings.supersample ?? 1, session.gpu.maxSize, bakeBytesPerTexel(settings.maps, settings.extras ?? [], Boolean(highPoly)));
-                    return plan.size !== document.size || plan.limited ? <p className="text-2xs leading-snug text-zinc-500">Baked at {2 ** plan.size} × {2 ** plan.size}{plan.limited ? ' (as large as the graphics card safely takes for these maps: fewer maps, or a smaller set, leave room for more)' : ''}{plan.size !== document.size ? `, then averaged to the set's ${2 ** document.size} × ${2 ** document.size}` : ''}.</p> : null;
+                    const plan = bakeStrips(settings, Boolean(highPoly), session.gpu.maxSize, document.size);
+                    return plan.size !== document.size || plan.strips > 1 ? <p className="text-2xs leading-snug text-zinc-500">Baked at {2 ** plan.size} × {2 ** plan.size}{plan.strips > 1 ? ` in ${plan.strips} strips, to stay within the graphics memory` : ''}{plan.size !== document.size ? `, then averaged to the set's ${2 ** document.size} × ${2 ** document.size}` : ''}.</p> : null;
                 })()}
                 <Row label="Rays per texel" value={settings.samples} min={16} max={512} step={16} onChange={(samples) => setSettings({ ...settings, samples })} />
                 <Row label="Occlusion reach" value={settings.occlusionDistance} min={0.01} max={0.5} step={0.005} onChange={(occlusionDistance) => setSettings({ ...settings, occlusionDistance })} />
