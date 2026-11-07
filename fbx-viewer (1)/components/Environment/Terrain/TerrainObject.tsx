@@ -119,7 +119,8 @@ export const TerrainObject = forwardRef<THREE.Group, TerrainObjectProps>(({
     const { textures, models } = useGameContent();
     const hasGrass = layers.some(layer => layer.grass?.length);
     const layerSources = useMemo<TerrainLayerSources[]>(() => {
-        const urlOf = (id: string | undefined) => (id ? textures.find(texture => texture.id === id)?.url : undefined);
+        // A deep picture is read from its file, at its own depth, not its 8-bit preview.
+        const urlOf = (id: string | undefined) => { const texture = id ? textures.find(candidate => candidate.id === id) : undefined; return texture ? texture.sourceUrl ?? texture.url : undefined; };
         return layers.map(layer => ({
             albedo: urlOf(layer.textureId),
             normal: urlOf(layer.normalTextureId),
