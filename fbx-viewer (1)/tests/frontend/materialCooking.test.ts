@@ -221,4 +221,31 @@ describe('texture graphs cooked by the game', () => {
         // Three crates, three values: nine cooks for both rounds.
         expect(cooks).toHaveLength(9);
     });
+
+    it('move a shown set to pictures compressed for the GPU once they are loaded, never drawing it bare', async () => {
+        const settings = new Map<string, unknown>();
+        const library = { addTextureUrl: vi.fn(), releaseTexture: vi.fn(), rebindAsset: vi.fn(), preloadTexture: vi.fn(async () => undefined) };
+        const planner = new MaterialCookPlanner(library, { cook: async () => ({ baseColor: new Blob(['c']), normal: new Blob(['n']) }) }, null,
+            { nextFrame: (task) => setTimeout(task, 0), urlOf: () => 'blob:x', compress: true, setSettings: (id, value) => settings.set(id, value) });
+        const asset = crate();
+        const material = new THREE.MeshStandardMaterial();
+        planner.pictures(asset, { parameters: {} }, material);
+        await planner.settled();
+        const whole = planner.pictures(asset, { parameters: {} }, material);
+        expect(whole?.baseColor).not.toContain('#c');
+        await planner.settled();
+        const compressed = planner.pictures(asset, { parameters: {} }, material);
+        expect(compressed?.baseColor).toContain('#c');
+        expect(settings.get(compressed!.baseColor)).toMatchObject({ compression: 'auto', colorSpace: 'colour' });
+        expect(settings.get(compressed!.normal)).toMatchObject({ compression: 'auto', normalMap: true });
+        expect(settings.get(whole!.baseColor)).toMatchObject({ compression: 'none' });
+        // Without compression on, it stays whole.
+        const plain = plannerWith();
+        plain.planner.pictures(asset, { parameters: {} }, material);
+        await plain.planner.settled();
+        plain.planner.pictures(asset, { parameters: {} }, material);
+        await plain.planner.settled();
+        expect(plain.planner.pictures(asset, { parameters: {} }, material)?.baseColor).not.toContain('#c');
+    });
 });
+

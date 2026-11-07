@@ -135,15 +135,18 @@ const ROLE_SLOTS: Record<CookedRole, 'map' | 'normal' | 'data'> = {
     baseColor: 'map', emissive: 'map', normal: 'normal', orm: 'data', opacity: 'data', height: 'data', roughness: 'data', metallic: 'data', ambientOcclusion: 'data',
 };
 
-/** The settings a cooked picture is read with: its role, kept whole (it is made at the size it shows at), no larger than `sizeLog2`. */
-export const cookedPictureSettings = (role: CookedRole, sizeLog2: number | undefined): TextureSettings => ({
+/**
+ * The settings a cooked picture is read with: its role, no larger than `sizeLog2`, and kept whole (quick to show) or
+ * compressed by role for the GPU (what it moves to once shown).
+ */
+export const cookedPictureSettings = (role: CookedRole, sizeLog2: number | undefined, compressed = false): TextureSettings => ({
     ...(ROLE_SLOTS[role] === 'normal' ? { normalMap: true } : { colorSpace: ROLE_SLOTS[role] === 'map' ? 'colour' as const : 'data' as const }),
-    compression: 'none',
+    compression: compressed ? 'auto' : 'none',
     ...(sizeLog2 !== undefined ? { maxSize: 2 ** Math.max(8, sizeLog2) } : {}),
 });
 
-/** The texture id a cooked picture is read by, at a size (the whole cook's when undefined). */
-export const cookedTextureId = (key: string, role: CookedRole, sizeLog2?: number): string => `cooked:${key}@${sizeLog2 ?? 'full'}:${role}`;
+/** The texture id a cooked picture is read by, at a size (the whole cook's when undefined), whole or compressed. */
+export const cookedTextureId = (key: string, role: CookedRole, sizeLog2?: number, compressed = false): string => `cooked:${key}@${sizeLog2 ?? 'full'}${compressed ? '#c' : ''}:${role}`;
 
 /** A cooked set's pictures (its files), one for each look of its values and seed. */
 interface CookedSet {
@@ -157,6 +160,7 @@ interface CookedSet {
 interface Variant {
     key: string;
     sizeLog2: number | undefined;
+    compressed: boolean;
     ids: Partial<Record<CookedRole, string>>;
     ready: boolean;
     users: Set<THREE.Material>;
@@ -196,6 +200,8 @@ export class MaterialCookPlanner {
             onFailure?: (error: unknown) => void;
             /** Records how a texture id is read (texturing/textureSettings.ts in the game). */
             setSettings?: (textureId: string, settings: TextureSettings) => void;
+            /** Once a set shows, moves it to pictures compressed for the GPU (the game's Texture compression). */
+            compress?: boolean;
         } = {},
     ) {}
 
@@ -215,9 +221,17 @@ export class MaterialCookPlanner {
         const variantKey = `${key}@${request.sizeLog2 ?? 'full'}`;
         this.wanted.set(material, variantKey);
         this.flips.set(material, binding.flipY !== false);
+        // Compressed for the GPU once made (loaded behind the whole one, so the move never draws it bare).
+        const compressedKey = `${variantKey}#c`;
+        const compressed = this.variants.get(compressedKey);
+        if (compressed?.ready) {
+            this.show(material, compressedKey);
+            return this.withCooked(asset, compressed);
+        }
         const variant = this.variants.get(variantKey);
         if (variant?.ready) {
             this.show(material, variantKey);
+            if (this.options.compress) this.prepare(compressedKey, key, request.sizeLog2, true);
             return this.withCooked(asset, variant);
         }
         if (this.sets.has(key)) this.prepare(variantKey, key, request.sizeLog2);
@@ -295,19 +309,20 @@ export class MaterialCookPlanner {
     }
 
     /** A cooked set read at a size: its texture ids, loaded before anything draws with them. */
-    private prepare(variantKey: string, key: string, sizeLog2: number | undefined): void {
+    private prepare(variantKey: string, key: string, sizeLog2: number | undefined, compressed = false): void {
         if (this.variants.has(variantKey) || this.preparing.has(variantKey)) return;
         const set = this.sets.get(key);
         if (!set) return;
-        const variant: Variant = { key, sizeLog2, ids: {}, ready: false, users: new Set() };
+        const variant: Variant = { key, sizeLog2, compressed, ids: {}, ready: false, users: new Set() };
         this.variants.set(variantKey, variant);
         set.variants.add(variantKey);
         this.preparing.add(variantKey);
         const loads: Array<Promise<void>> = [];
-        const flips = new Set([...this.wanted].filter(([, wanted]) => wanted === variantKey).map(([material]) => this.flips.get(material) ?? true));
+        const base = compressed ? variantKey.slice(0, -2) : variantKey;
+        const flips = new Set([...this.wanted].filter(([, wanted]) => wanted === base).map(([material]) => this.flips.get(material) ?? true));
         for (const [role, url] of Object.entries(set.urls) as Array<[CookedRole, string]>) {
-            const id = cookedTextureId(key, role, sizeLog2);
-            this.options.setSettings?.(id, cookedPictureSettings(role, sizeLog2));
+            const id = cookedTextureId(key, role, sizeLog2, compressed);
+            this.options.setSettings?.(id, cookedPictureSettings(role, sizeLog2, compressed));
             this.host.addTextureUrl(id, url);
             variant.ids[role] = id;
             for (const flipY of flips.size ? flips : [true]) if (this.host.preloadTexture) loads.push(this.host.preloadTexture(id, ROLE_SLOTS[role], flipY));
@@ -317,7 +332,7 @@ export class MaterialCookPlanner {
             if (this.variants.get(variantKey) !== variant) return;
             variant.ready = true;
             // Nobody asks for it any more: kept spare.
-            if (![...this.wanted.values()].includes(variantKey) && !variant.users.size) this.keepSpare(variantKey);
+            if (![...this.wanted.values()].includes(base) && !variant.users.size) this.keepSpare(variantKey);
             this.host.rebindAsset(set.assetId);
         });
     }

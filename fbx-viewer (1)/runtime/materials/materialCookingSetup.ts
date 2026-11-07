@@ -83,7 +83,7 @@ const graphContent = (asset: MaterialAsset): string => {
 let planner: MaterialCookPlanner | null = null;
 
 /** Turns cooking on or off for the open project or game, by its setting; returns whether it is on. */
-export const setUpMaterialCooking = (mode: CookMode): boolean => {
+export const setUpMaterialCooking = (mode: CookMode, compress = true): boolean => {
     const on = mode === 'always' || (mode === 'capable' && deviceCanCook());
     if (!on) {
         planner = null;
@@ -94,7 +94,7 @@ export const setUpMaterialCooking = (mode: CookMode): boolean => {
         materialLibrary,
         createGraphCooker({ material: (id) => materialLibrary.get(id), textureUrl: (id) => materialLibrary.textureUrl(id) }),
         indexedDbCookCache(),
-        { content: graphContent, setSettings: setTextureSettings, onFailure: (error) => frontendDiagnostics.failure('material_cook_failed', error) },
+        { content: graphContent, setSettings: setTextureSettings, compress, onFailure: (error) => frontendDiagnostics.failure('material_cook_failed', error) },
     );
     materialLibrary.setPictureSource(planner);
     return true;
