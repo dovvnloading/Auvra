@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { UvSurfaceLookup } from './uvSurface';
+import { DEFAULT_PARTICLES, throwParticles, type ParticleSettings } from './particles';
 import type { GpuImage, TextureGpu } from '../gpu/textureGpu';
 import type { TileBake } from '../bake/meshBaker';
 import { NO_MIRROR, type Mirror } from '../mesh/picker';
@@ -91,6 +92,8 @@ export interface BrushSettings {
     channels: PaintChannel[];
     /** For masks: the grey painted. */
     maskValue: number;
+    /** Particles each dab throws (drips, leaks, dust, splashes); left out by brushes saved before them. */
+    particles?: ParticleSettings;
 }
 
 /** The largest brush radius, in screen pixels: the size sliders and the ] key stop here. */
@@ -143,6 +146,7 @@ export const DEFAULT_BRUSH: BrushSettings = {
     },
     channels: ['baseColor', 'roughness', 'metallic'],
     maskValue: 1,
+    particles: DEFAULT_PARTICLES,
 };
 
 /**
@@ -223,6 +227,8 @@ export interface StrokeView {
 }
 
 const MAX_DABS = 16;
+/** The most dabs the particles of one pointer move leave. */
+const MAX_PARTICLE_DABS = 1500;
 
 /** The most copies a brush paints with: mirrored and turned, the brush itself included. */
 export const MAX_COPIES = 16;
@@ -740,6 +746,8 @@ export class Stroke {
      * covered), so the batch is drawn here keeping the largest value, then laid over the stroke once.
      */
     private readonly batch: GpuImage;
+    /** Dabs that have thrown particles in this stroke (each throw its own seed). */
+    private particleCount = 0;
     /** The 2D view's tile, looked up by UV (for its dabs' copies on the model). */
     private uvSurface: UvSurfaceLookup | null = null;
     /**
@@ -863,7 +871,43 @@ export class Stroke {
             this.travelled = length - (along - step);
         }
         this.last = { x, y };
+        const particles = brush.particles;
+        if (particles?.enabled && !this.view.uvView && dabs.length) {
+            const thrown = this.particleDabs(dabs, particles, hit);
+            if (particles.paintAtBrush) this.draw(dabs);
+            if (thrown.length) this.draw(thrown, null, 'surface');
+            return;
+        }
         if (dabs.length) this.draw(dabs);
+    }
+
+    /**
+     * The dabs the particles thrown by `dabs` leave along their paths, as surface dabs (each the size its
+     * particle has then, in the same pixels to the model unit as the dab that threw it).
+     */
+    private particleDabs(dabs: readonly Dab[], settings: ParticleSettings, hit: SurfaceProbe): Dab[] {
+        const part = this.stack.part;
+        const modelSize = Math.max(1e-6, part.bounds.getSize(new THREE.Vector3()).length());
+        const picker = this.stack.picker;
+        const surface = { cast: (origin: THREE.Vector3, direction: THREE.Vector3) => picker.cast(origin, direction), nearest: (point: THREE.Vector3, reach: number) => picker.nearest(point, reach) };
+        const out: Dab[] = [];
+        for (const dab of dabs) {
+            let { point, normal, worldRadius } = dab;
+            if (!point || !normal || !worldRadius) {
+                const found = hit(dab.x, dab.y);
+                if (!found) continue;
+                point = found.point;
+                normal = found.normal;
+                worldRadius = (dab.radius * found.distance) / this.view.perspective;
+            }
+            const pixelsPerUnit = dab.radius / Math.max(1e-9, worldRadius);
+            const seed = this.seed + (this.particleCount += 1) * 7919;
+            for (const left of throwParticles({ point, normal, worldRadius, flow: dab.flow }, settings, surface, modelSize, seed, Math.max(0, MAX_PARTICLE_DABS - out.length))) {
+                out.push({ x: dab.x, y: dab.y, radius: Math.max(0.5, left.worldRadius * pixelsPerUnit), angle: random(seed + out.length) * Math.PI * 2, flow: left.flow, point: left.point, normal: left.normal, worldRadius: left.worldRadius });
+            }
+            if (out.length >= MAX_PARTICLE_DABS) break;
+        }
+        return out;
     }
 
     /** Lays dabs placed by the caller (along a path), with their own alpha if one is given. */
@@ -915,7 +959,9 @@ export class Stroke {
         return { dabs, uv };
     }
 
-    private draw(dabs: Dab[], picked: readonly number[] | null = null): void {
+    private draw(dabs: Dab[], picked: readonly number[] | null = null, projection: BrushProjection = this.brush.projection): void {
+        // Particle dabs are laid on the surface whatever the brush's own projection.
+        const brush = projection === this.brush.projection ? this.brush : { ...this.brush, projection };
         const stack = this.stack;
         const gpu = stack.host.gpu;
         const view = this.view;
@@ -1020,7 +1066,7 @@ export class Stroke {
         };
         for (const batch of batches) {
             // Only the texels these dabs can reach are drawn.
-            const reach = view.uvView && !picked ? uvFootprint(stack.size, view.uvView, batch, this.brush.shape) : footprint(stack, batch, view, this.brush, picked);
+            const reach = view.uvView && !picked ? uvFootprint(stack.size, view.uvView, batch, this.brush.shape) : footprint(stack, batch, view, brush, picked);
             const d1 = Array.from({ length: MAX_DABS }, () => new THREE.Vector4());
             const d2 = Array.from({ length: MAX_DABS }, () => new THREE.Vector4());
             const d3 = Array.from({ length: MAX_DABS }, () => new THREE.Vector4());
@@ -1033,13 +1079,13 @@ export class Stroke {
                 });
             } else {
                 batch.forEach((dab, i) => {
-                    if (this.brush.projection === 'screen' || !dab.point) {
+                    if (projection === 'screen' || !dab.point) {
                         d1[i].set(dab.x, dab.y, dab.radius, dab.angle);
                         d2[i].set(dab.flow, 0, 0, 0);
-                    } else surfaceDab(dab, i, d1, d2, d3, this.brush.projection);
+                    } else surfaceDab(dab, i, d1, d2, d3, projection);
                 });
             }
-            if (reach.size) drawReach(reach, { d1, d2, d3, count: batch.length }, view.uvView ? 4 : { screen: 0, surface: 1, planar: 2, triplanar: 3 }[this.brush.projection] ?? 0, view.uvView ? 1 : copies.length, false);
+            if (reach.size) drawReach(reach, { d1, d2, d3, count: batch.length }, view.uvView ? 4 : { screen: 0, surface: 1, planar: 2, triplanar: 3 }[projection] ?? 0, view.uvView ? 1 : copies.length, false);
             // The 2D view's mirrored and turned copies: each dab sent to where it lies on the model and drawn
             // there as a surface dab through the copies, as the 3D view would (the brush itself is drawn above).
             if (view.uvView && !picked && copies.length > 1) {

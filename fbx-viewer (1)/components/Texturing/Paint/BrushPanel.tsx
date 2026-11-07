@@ -9,6 +9,7 @@ import { Select } from '../../UI/Select';
 import { ColourFieldRgb } from '../../UI/ColourPicker';
 import { MaterialPicker, type MaterialChoice, type MaterialSection } from './MaterialPicker';
 import { SliderRow } from './PaintFields';
+import { DEFAULT_PARTICLES, PARTICLE_PRESETS, type ParticleMotion, type ParticleSettings } from '../../../texturing/paint/particles';
 
 /** The brush: its size and feel, how it is cast onto the model, and what it lays down on each channel. */
 
@@ -46,6 +47,13 @@ export const BrushPanel: React.FC<{
         else onMessage?.('The brush could not be kept: this browser is not keeping settings.');
     };
     const offset = brush.symmetry.offset ?? [0, 0, 0];
+    const particles = brush.particles ?? DEFAULT_PARTICLES;
+    const setParticles = (patch: Partial<ParticleSettings>) => set({ particles: { ...particles, ...patch } });
+    const particleHints: Record<ParticleMotion, string> = {
+        flow: 'They run down over the surface from under the brush, slowing as they go: drips and leaks.',
+        fall: 'They are thrown off the surface and fall back, leaving a speck where each lands: dust and grit.',
+        bounce: 'They are thrown off and bounce where they land, leaving a mark at each bounce: splashes.',
+    };
     const curve = PRESSURE_CURVES.find((each) => each.curve.every((value, i) => Math.abs(value - (brush.pressureCurve?.[i] ?? 0)) < 1e-6))?.id ?? 'custom';
     const modeHints: Record<BrushMode, string> = {
         paint: 'Lays the brush\'s values on.',
@@ -199,6 +207,34 @@ export const BrushPanel: React.FC<{
                     </div>
                 )}
                 <p className="text-2xs leading-snug text-zinc-500">Mirrors sit at the model's middle, moved by a share of its size; turned copies go round the axis through the same point. Up to 16 copies in all.</p>
+            </section>
+            <section className="space-y-2">
+                <div className="flex items-center justify-between">
+                    <span className="text-2xs font-semibold text-zinc-300">Particles</span>
+                    <Toggle label="Use" checked={particles.enabled} onChange={(enabled) => setParticles({ enabled })} />
+                </div>
+                {particles.enabled && (
+                    <>
+                        <div className="flex flex-wrap gap-1">
+                            {PARTICLE_PRESETS.map((preset) => (
+                                <Button key={preset.id} size="sm" variant="ghost" onClick={() => set({ particles: structuredClone(preset.settings) })}>{preset.name}</Button>
+                            ))}
+                        </div>
+                        <Segmented value={particles.motion} options={[{ value: 'flow', label: 'Run down' }, { value: 'fall', label: 'Fall' }, { value: 'bounce', label: 'Bounce' }]} onChange={(motion) => setParticles({ motion })} label="How particles move" />
+                        <p className="text-2xs leading-snug text-zinc-500">{particleHints[particles.motion]}</p>
+                        <Row label="Per dab" value={particles.count} min={1} max={40} step={1} onChange={(count) => setParticles({ count })} />
+                        <Row label="Spread" value={particles.spread} min={0} max={1} onChange={(spread) => setParticles({ spread })} />
+                        <Row label="Speed" value={particles.speed} min={0} max={2} step={0.01} onChange={(speed) => setParticles({ speed })} />
+                        <Row label="Gravity" value={particles.gravity} min={0} max={5} step={0.05} onChange={(gravity) => setParticles({ gravity })} />
+                        <Row label="Life" value={particles.life} min={0.1} max={6} step={0.1} suffix="s" onChange={(life) => setParticles({ life })} />
+                        <Row label="Size at start" value={particles.sizeStart} min={0.01} max={1} onChange={(sizeStart) => setParticles({ sizeStart })} />
+                        <Row label="Size at end" value={particles.sizeEnd} min={0.01} max={1} onChange={(sizeEnd) => setParticles({ sizeEnd })} />
+                        <Row label="Wander" value={particles.wander} min={0} max={1} onChange={(wander) => setParticles({ wander })} />
+                        {particles.motion === 'bounce' && <Row label="Bounce" value={particles.bounce} min={0} max={1} onChange={(bounce) => setParticles({ bounce })} />}
+                        <Toggle label="Paint where the brush is too" checked={particles.paintAtBrush} onChange={(paintAtBrush) => setParticles({ paintAtBrush })} />
+                        <p className="text-2xs leading-snug text-zinc-500">Speed and gravity are in shares of the set's size a second; gravity pulls down the model's Y axis. Sizes are shares of the brush. Particles move over this texture set only, in the 3D view.</p>
+                    </>
+                )}
             </section>
             <section className="space-y-2">
                 <div className="flex items-center justify-between">
