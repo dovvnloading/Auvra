@@ -15,7 +15,7 @@ import { wireFits } from '../../texturing/graph/material';
 import { NAMED_RECEIVE_TYPE, NAMED_SEND_TYPE, linkName, namedLinks } from '../../texturing/graph/namedLinks';
 import { ALL_MESH_MAPS, ANY_MESH_MAP_LABELS, EXTRA_MESH_MAPS, INPUT_NODE_TYPE, ITERATE_NODE_TYPE, MATERIAL_INPUT_NODE_TYPE, MATERIAL_OUTPUT_NODE_TYPE, MESH_MAP_NODE_TYPE, OUTPUT_NODE_TYPE, REROUTE_NODE_TYPE, SUBGRAPH_NODE_TYPE } from '../../texturing/graph/nodes/io';
 import { feedbackPairs } from '../../texturing/graph/iterate';
-import { NODE_CATEGORY_ORDER, TEXTURE_NODE_DEFINITIONS, placeholderDefinition, textureNodeDefinition, type GraphResolver } from '../../texturing/graph/registry';
+import { NODE_CATEGORY_ORDER, TEXTURE_NODE_DEFINITIONS, placeholderDefinition, textureNodeDefinition, textureNodeDefinitionByType, type GraphResolver } from '../../texturing/graph/registry';
 import { OUTPUT_CHANNELS, OUTPUT_CHANNEL_LABELS, type OutputChannel, type PinKind, type TexGraphComment, type TexGraphLink, type TexGraphNode, type TexNodeDef, type TexPortDef, type TextureGraph } from '../../texturing/graph/types';
 import { copyNodes, outputKinds, readClipboard, unusedNodes, type Point } from './graphEditing';
 import { NODE_PICTURE_SIZE, requestNodePictures, useNodePicture, type PictureRequest } from './nodePictures';
@@ -148,6 +148,10 @@ const NODE_ENTRIES: readonly FinderEntry[] = (() => {
     for (const definition of TEXTURE_NODE_DEFINITIONS) {
         if (definition.type === OUTPUT_NODE_TYPE || definition.type === MESH_MAP_NODE_TYPE || definition.type === SUBGRAPH_NODE_TYPE) continue;
         entries.push(typeEntry(definition));
+        // Ready-set versions (each grunge look) as entries of their own, found by their names.
+        for (const variant of definition.variants ?? []) {
+            entries.push({ ...typeEntry(definition), id: `variant:${definition.type}:${variant.key}`, label: variant.label, description: variant.description, keywords: [...(definition.keywords ?? []), variant.key] });
+        }
     }
     // One entry per output channel and per mesh map, so they come ready set.
     for (const channel of OUTPUT_CHANNELS) {
@@ -182,6 +186,11 @@ const NODE_ENTRIES: readonly FinderEntry[] = (() => {
 /** Pictures the finder draws: every node that makes an image on its own (not outputs, inputs, pictures or reroute points). */
 const PICTURE_REQUESTS: readonly PictureRequest[] = NODE_ENTRIES.flatMap((entry): PictureRequest[] => {
     if (entry.id.startsWith('mesh:')) return [{ key: entry.id, type: MESH_MAP_NODE_TYPE, params: { map: entry.id.slice(5) } }];
+    if (entry.id.startsWith('variant:')) {
+        const [, type, key] = entry.id.split(':');
+        const variant = textureNodeDefinitionByType(type)?.variants?.find((candidate) => candidate.key === key);
+        return variant ? [{ key: entry.id, type, params: variant.params }] : [];
+    }
     if (entry.id.includes(':') || [INPUT_NODE_TYPE, REROUTE_NODE_TYPE, NAMED_SEND_TYPE, NAMED_RECEIVE_TYPE, MATERIAL_INPUT_NODE_TYPE, MATERIAL_OUTPUT_NODE_TYPE, ITERATE_NODE_TYPE, VALUE_PROCESSOR_TYPE, 'bitmap'].includes(entry.id)) return [];
     return [{ key: entry.id, type: entry.id }];
 });
@@ -374,6 +383,11 @@ export const TextureGraphCanvas: React.FC<TextureGraphCanvasProps> = (props) => 
             if (entryId.startsWith('output:')) return toNode(createNode(OUTPUT_NODE_TYPE, x, y, { channel: entryId.slice(7), name: '' }));
             if (entryId.startsWith('mesh:')) return toNode(createNode(MESH_MAP_NODE_TYPE, x, y, { map: entryId.slice(5) }));
             if (entryId.startsWith('iterate:')) return toNode(createNode(ITERATE_NODE_TYPE, x, y, { graph: entryId.slice(8) }));
+            if (entryId.startsWith('variant:')) {
+                const [, type, key] = entryId.split(':');
+                const variant = textureNodeDefinitionByType(type)?.variants?.find((candidate) => candidate.key === key);
+                return toNode(createNode(type, x, y, variant ? structuredClone(variant.params) : {}));
+            }
             return toNode(createNode(entryId, x, y));
         };
         const menuItems = (nodeId: string): MenuItem[] => [

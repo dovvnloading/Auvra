@@ -8,7 +8,7 @@ import { AbortedError, unknownNodeMessage, type ExternalImage, type TextureGraph
 import { MAX_SIZE_LOG2, MIN_SIZE_LOG2, coerceParameter, formulaScope, parameterValues, readTextureGraph, resolveNodeParams, subgraphRunSeed, unknownNodeTypes } from '../../texturing/graph/document';
 import { ITERATE_NODE_TYPE, OUTPUT_NODE_TYPE, SUBGRAPH_NODE_TYPE, SUBGRAPH_SEED_KEY, SUBGRAPH_VARY_KEY } from '../../texturing/graph/nodes/io';
 import { feedbackPairs } from '../../texturing/graph/iterate';
-import { describeMatrix, tileSafeMatrix, transformMatrix } from '../../texturing/graph/safeTransform';
+import { describeMatrix, tileSafeDirection, tileSafeMatrix, transformMatrix } from '../../texturing/graph/safeTransform';
 import { PROCESSOR_PICTURES, PROCESSOR_TYPES, defaultFunctionFor, processorUse, readNamedSettings, settingDefault } from '../../texturing/graph/nodes/processors';
 import { compileFunction, readFunctionGraph, type FunctionGraph, type NamedSetting } from '../../texturing/graph/functionGraph';
 import { PARAMETER_KINDS, PARAMETER_KIND_LABELS, applyPreset, presetFrom, putPreset, removePreset, renamePreset } from '../../texturing/graph/parameters';
@@ -59,6 +59,9 @@ const RELATIVE_SIZES = [-6, -5, -4, -3, -2, -1, 0, 1, 2, 3, 4].map((offset) => (
 /** Sizes of the material's pictures (their longest side). */
 const PICTURE_SIZES = [8, 9, 10, 11, 12, 13].map((log2) => ({ value: log2, label: `${2 ** log2}` }));
 type InspectorTab = 'node' | 'graph' | 'material';
+
+/** Nodes running one way, whose direction is snapped so they still tile (the inspector says to what). */
+const RUNS_ONE_WAY: ReadonlySet<string> = new Set(['directionalNoise', 'directionalScratches', 'stripes']);
 
 /** What an undo step brings back: everything about the material's graph but the pictures last made from it. */
 interface GraphSnapshot {
@@ -857,6 +860,11 @@ const Workspace: React.FC<{
                         </p>
                     );
                 })()}
+                {RUNS_ONE_WAY.has(single.type) && typeof single.params.angle === 'number' && (
+                    <p className="rounded border border-line bg-well px-1.5 py-1 text-2xs leading-snug text-ink-2">
+                        Runs at {tileSafeDirection(single.params.angle as number).degrees}°, the nearest direction it stays seamless along.
+                    </p>
+                )}
                 {!isOutput && (
                     <div className="space-y-1.5 border-t border-line pt-2">
                         <div className="text-2xs font-semibold text-ink-2">Size, bit depth, tiling and seed</div>
