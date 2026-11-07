@@ -134,8 +134,8 @@ const typeEntry = (definition: TexNodeDef): FinderEntry => ({
     category: definition.category,
     description: definition.description,
     keywords: definition.keywords,
-    inputs: definition.inputs.map(pinKind),
-    outputs: definition.outputs.map((port) => port.kind),
+    inputs: definition.inputs.filter((port) => !port.hidden).map(pinKind),
+    outputs: definition.outputs.filter((port) => !port.hidden).map((port) => port.kind),
 });
 
 const NODE_ENTRIES: readonly FinderEntry[] = (() => {

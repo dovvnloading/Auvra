@@ -22,7 +22,7 @@ import {
 } from '../../runtime/materials/materialGraph';
 import { NODE_PREVIEW_SIZE, nodePreviewImages } from '../../runtime/materials/materialPreviews';
 import { copyNodes, createNode, newId, readClipboard } from './materialGraphEditing';
-import { MATERIAL_CATEGORY_TINTS, MATERIAL_KINDS, MATERIAL_LOOKS_KEPT, materialMatch, materialNodeView } from './materialNodeViews';
+import { MATERIAL_CATEGORY_TINTS, MATERIAL_KINDS, MATERIAL_LOOKS_KEPT, idleInput, materialMatch, materialNodeView } from './materialNodeViews';
 
 /**
  * The material graph's canvas: the shared node graph canvas (components/NodeGraph) given shader
@@ -133,7 +133,7 @@ const ENTRIES: readonly FinderEntry[] = (() => {
             category: definition.category,
             description: definition.description,
             keywords: definition.keywords,
-            inputs: definition.inputs.map((input) => input.type),
+            inputs: definition.inputs.filter((input) => !idleInput(definition.type, input.key)).map((input) => input.type),
             outputs: definition.outputs.map((output) => output.type),
         }));
 })();
@@ -172,7 +172,7 @@ const renderBody = (nodeId: string, view: NodeView): React.ReactNode => (view.bo
 const pins = (node: EditableNode<MaterialGraphNode>): PinSet => {
     const definition = getMaterialNodeDefinition(node.type);
     return {
-        inputs: (definition?.inputs ?? []).map((input) => ({ key: input.key, kind: input.type })),
+        inputs: (definition?.inputs ?? []).filter((input) => !idleInput(node.type, input.key)).map((input) => ({ key: input.key, kind: input.type })),
         outputs: (definition?.outputs ?? []).map((output) => ({ key: output.key, kind: output.type })),
     };
 };
@@ -193,9 +193,10 @@ export const MaterialGraphCanvas: React.FC<MaterialGraphCanvasProps> = (props) =
     const viewCache = useRef(new Map<string, { key: string; view: NodeView }>());
     const views = useMemo(() => {
         const result = new Map<string, NodeView>();
+        const wiredIdle = new Set(graph.links.filter((link) => idleInput(graph.nodes.find((node) => node.id === link.toNode)?.type ?? '', link.toInput)).map((link) => link.toNode));
         for (const node of graph.nodes) {
             const error = nodeErrors?.[node.id];
-            const shown = materialNodeView(node, { autoTypes, previews, unused: unused.has(node.id) });
+            const shown = materialNodeView(node, { autoTypes, previews, unused: unused.has(node.id), wiredIdle: wiredIdle.has(node.id) });
             const view = error ? { ...shown, error } : shown;
             const key = JSON.stringify(view);
             const cached = viewCache.current.get(node.id);
@@ -203,7 +204,7 @@ export const MaterialGraphCanvas: React.FC<MaterialGraphCanvasProps> = (props) =
             else { viewCache.current.set(node.id, { key, view }); result.set(node.id, view); }
         }
         return result;
-    }, [autoTypes, graph.nodes, nodeErrors, previews, unused]);
+    }, [autoTypes, graph.links, graph.nodes, nodeErrors, previews, unused]);
 
     const adapter = useMemo<NodeGraphAdapter<MaterialGraphNode>>(() => ({
         kind: 'material',
