@@ -32,8 +32,9 @@ import { reportGpu } from "../report";
  *
  * Around the graph, a graph-shaded material is drawn as the WebGL path's shader stages draw it
  * (runtime/materials/shaderStages.ts):
- * - the coat, sheen and transmission a graph works out, and its specular, index of refraction and thin film, as
- *   physicalLayers.ts carries them (anisotropy is not drawn);
+ * - the coat (with its colour), sheen and transmission a graph works out, and its specular, index of refraction and
+ *   thin film, as physicalLayers.ts carries them (anisotropy is not drawn); metal flakes are worked into the colour,
+ *   metalness, roughness and normal by the compiler, as on the WebGL path;
  * - with "Keep the model's own maps", what the graph leaves unwired read from the material's own maps and values (its
  *   colour, roughness, metalness, normal and emission), as three's own code reads them on the WebGL path;
  * - rain and snow on whatever colour and roughness the graph worked out, when the weather patch reached the material;
@@ -212,6 +213,53 @@ fn mgVoronoi(p: vec3f, jitter: f32, nearest: ptr<function, f32>, second: ptr<fun
   }
   *nearest = sqrt(d1);
   *second = sqrt(d2);
+}`,
+  },
+
+  // --- Car paint (materialGlsl.ts mgMetalFlakes, mgFlakeNormal) ---
+  mgMetalFlakes: {
+    needs: ["mgHash33"],
+    returns: "vec4",
+    params: ["vec3", "float", "float"],
+    source: `
+@diagnostic(off, derivative_uniformity)
+fn mgMetalFlakes(p: vec3f, size: f32, density: f32) -> vec4f {
+  let q = p / max(size, 1e-4);
+  let i = floor(q);
+  let f = q - i;
+  var nearest = 8.0;
+  var cell = i;
+  for (var z = -1; z <= 1; z++) {
+    for (var y = -1; y <= 1; y++) {
+      for (var x = -1; x <= 1; x++) {
+        let offset = vec3f(f32(x), f32(y), f32(z));
+        let r = offset + mgHash33(i + offset) - f;
+        let d = dot(r, r);
+        if (d < nearest) { nearest = d; cell = i + offset; }
+      }
+    }
+  }
+  let h = mgHash33(cell + vec3f(59.0, 131.0, 227.0));
+  let share = clamp(density, 0.0, 1.0);
+  let present = select(0.0, 1.0, h.x < share);
+  let turn = h.y * 6.2831853;
+  let lean = 0.7 * sqrt(h.z);
+  let tilt = normalize(vec3f(cos(turn) * lean, sin(turn) * lean, 1.0));
+  let sharp = 1.0 - smoothstep(0.4, 1.2, length(fwidth(q)));
+  return vec4f(normalize(mix(vec3f(0.0, 0.0, 1.0), tilt, sharp)), mix(share, present, sharp));
+}`,
+  },
+  mgFlakeNormal: {
+    returns: "vec3",
+    params: ["vec3", "vec4"],
+    source: `
+fn mgFlakeNormal(normal: vec3f, flake: vec4f) -> vec3f {
+  let n = normalize(normal);
+  let side = select(vec3f(1.0, 0.0, 0.0), vec3f(0.0, 0.0, 1.0), abs(n.z) < 0.999);
+  let t = normalize(cross(side, n));
+  let b = cross(n, t);
+  let leant = normalize(t * flake.x + b * flake.y + n * flake.z);
+  return normalize(mix(n, leant, flake.w));
 }`,
   },
 
@@ -498,10 +546,12 @@ export const GRAPH_WIND_AT = 8;
 /** The parts of a physical surface a graph's kind carries, and the Material Output inputs each reads. */
 const LAYER_OUTPUTS: Partial<Record<PhysicalFeature, readonly string[]>> = {
   specular: ["specularWeight", "specularColor", "ior"],
-  coat: ["coat", "coatRoughness"],
+  coat: ["coat", "coatRoughness", "coatColor"],
   sheen: ["sheenColor", "sheenRoughness"],
   thinFilm: ["thinFilm", "thinFilmThickness"],
   transmission: ["transmission"],
+  // Worked into the colour, metalness, roughness and normal by the graph's compiler (materialGraph.ts flakeSurface).
+  flakes: ["flakeDensity", "flakeSize", "flakeColor"],
 };
 
 /** The parts carried as layers over the surface (the rest change its reflection: PHYSICAL_LOBE_WGSL). */
@@ -815,6 +865,7 @@ export const compileGraphWgsl = (graph: MaterialGraph, options: CompileGraphWgsl
     ${layer("sheen", () => `max(${output("sheenColor", "vec3")}, vec3f(0.0))`, "vec3f(0.0)")},
     ${layer("sheen", () => `clamp(${output("sheenRoughness", "float")}, 0.07, 1.0)`, "1.0")},
     ${layer("transmission", () => `clamp(${output("transmission", "float")}, 0.0, 1.0)`, "0.0")},
+    ${layer("coat", () => `clamp(${output("coatColor", "vec3")}, vec3f(0.0), vec3f(1.0))`, "vec3f(1.0)")},
   ), (material.flags & ${GRAPH_FLAG.blended}u) != 0u);` : "");
 
   // The wind moves a vertex from where the graph's vertex offset left it, as on the WebGL path.

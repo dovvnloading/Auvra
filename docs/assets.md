@@ -179,9 +179,15 @@ Without the editor open (close the project there first), `python -m Auvra.projec
 - `list`: each material, whether a texture graph makes it, its parameters with their values, and its presets (`--json` for JSON).
 - `set-value MATERIAL NAME VALUE`: sets a texture graph's parameter (VALUE is JSON: `0.4`, `[1, 0.5, 0]`), within its limits, and saves.
 - `apply-preset MATERIAL PRESET`: sets every value a preset holds, and saves.
-- `cook`, `ball`, `bake-mesh-maps`: drawn on a graphics card by the editor, so not headless yet; each says where to do it in the editor and exits with 3.
+- `cook MATERIAL`: makes a texture graph's pictures, as **Update material** does.
+- `ball MATERIAL`: draws a material's preview ball as a PNG, as the Materials list shows it. A texture graph whose pictures are missing or older than the graph is drawn with them made from the graph as it is.
+- `bake-mesh-maps MODEL`: bakes a model's mesh maps, one set for each of its surfaces, as the Paint tab's **Bake mesh maps** does with its usual settings. They are kept bottom row first, as the Paint tab keeps them.
 
-MATERIAL is a material's id or name (any case). A command that cannot be done exits with 2 and says why.
+The last three take `--out FOLDER` to write the pictures to a folder, and `--into-project` to keep them in the project as the editor would: the material's pictures (the ones they replace go, unless something else uses them), a texture named after the material in the **Material balls** folder, or the bake of the surface's painted set (made if the surface has none, ready for the Paint tab). Writing only to a folder reads the project, so it can stay open in the editor meanwhile. `--size` is a power of two, given as the power or in pixels (`9` or `512`); a cook takes the material's own size without it, a bake the painted set's (2048 for a new one), and a painted set is 256 to 4096 pixels across. For a ball `--size` is pixels across (160 when not given). `bake-mesh-maps` also takes `--samples`, the rays per texel for occlusion and thickness (128 when not given).
+
+These three run the editor's own code in a headless browser on its software GPU, so they need Node, the editor's packages installed in `fbx-viewer (1)`, and Chrome or Edge (or a browser named by `AUVRA_BROWSER`). The first run after the editor's code changes builds the page they use (a few seconds), kept in the system's temporary folder.
+
+MATERIAL is a material's id or name, and MODEL a model's (any case). A command that cannot be done as asked exits with 2 and says why; 3 means Node, the packages or a browser are missing, and 4 that the headless browser could not do the work.
 
 ### MaterialX
 
@@ -198,10 +204,13 @@ The arrow button beside a material's name exports it as MaterialX: a .zip holdin
 Beyond base colour, metalness and roughness, the Material Output builds a surface up in layers, as glTF's physical materials do:
 
 - **Specular**: **Specular strength** and **Specular colour** weaken and tint the reflection of a surface that is not metal. **Index of refraction** sets how strongly it reflects (1.33 for water, 1.5 for glass and most plastics, 2.4 for diamond). **Anisotropy** stretches highlights along one direction, as on brushed metal, turned by **Anisotropy direction**.
-- **Coat**: a clear layer over the surface (car paint, lacquer, varnish) with its own **Coat roughness** and **Coat normal**.
+- **Coat**: a clear layer over the surface (car paint, lacquer, varnish) with its own **Coat roughness** and **Coat normal**. **Coat colour** tints what is seen through it, as a candy or tinted lacquer does; the coat's own reflection stays white. White is a clear coat.
+- **Flakes**: metal flakes in the paint under the coat, each a tiny mirror leaning its own way, so they glint one by one as the light or the view moves. **Flake density** is how much of the surface is flakes (0 is none), **Flake size** how large they are across, in the model's own units, and **Flake colour** their colour. Flakes stay put on the model as it moves. Smaller than a pixel, they blend into an even metallic sheen rather than shimmer. The starter **Car paint** has silver flakes under a coat tinted red.
 - **Sheen**: the soft light at the edges of cloth such as velvet, in its own colour and roughness. Black is no sheen.
 - **Thin film**: rainbow colours like a soap bubble or oil on water; **Thin film thickness**, in nanometres, picks the colours.
 - **Transmission**: light passes through the surface (glass, water, thin plastic). **Thickness** is how deep the volume behind it is; light crossing it takes on the **Absorption colour** over the **Absorption distance**, and **Dispersion** splits it into colours.
+
+On the WebGPU renderer, which keeps one layer of surface per pixel, the coat is drawn as a glossier surface and its colour tints the reflection under it as well as the colour; flakes are drawn in full.
 
 A material draws with the plainer, cheaper shader until one of these is wired or set away from its default. Only then does it draw as a physical surface, and only the layers it uses cost anything. Changing a value updates the material at once; turning a layer on or off rebuilds its shader. Rain and snow still lie on coated and see-through materials: rain makes a coat glossier, and snow covers glass rather than frosting it.
 

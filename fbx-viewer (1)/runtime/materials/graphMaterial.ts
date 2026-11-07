@@ -27,6 +27,7 @@ import {
 import { helperSource } from './materialGlsl';
 import { hasShaderStage, setShaderStage, type ShaderStage } from './shaderStages';
 import {
+    coatTinted,
     graphCoatNormal,
     graphTransmission,
     isGraphUpgraded,
@@ -435,6 +436,7 @@ const patchShader = (binding: GraphBinding, shader: THREE.WebGLProgramParameters
         if (binding.features.has('coat') && connected.has('coatNormal')) {
             source = replaceOnce(source, '#include <clearcoat_normal_fragment_maps>', `#include <clearcoat_normal_fragment_maps>\n${graphCoatNormal(outputs.coatNormal)}`);
         }
+        if (binding.features.has('coat')) source = coatTinted(source);
     }
     if (connected.has('occlusion')) {
         source = replaceOnce(source, '#include <aomap_fragment>', `{

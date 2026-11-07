@@ -64,6 +64,7 @@ fn applyPhysical(in: SurfaceIn, plain: SurfaceOut) -> SurfaceOut {
     material.extra[1].rgb * texels[1],
     material.extra[0].z,
     material.extra[0].w * texels[2].x,
+    vec3f(1.0),
   );
   return applyPhysicalLayers(in, plain, layers, (material.flags & ${MATERIAL_FLAG.transparent}u) != 0u);
 }

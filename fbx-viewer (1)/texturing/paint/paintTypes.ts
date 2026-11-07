@@ -319,7 +319,29 @@ export const createPaintDocument = (modelId: string, materialNames: string[], si
     bake: null,
 });
 
-const finite = (value: unknown, fallback: number): number => (typeof value === 'number' && Number.isFinite(value) ? value : fallback);
+/** Whether a surface's material glows: it has a glow map, or a glow colour at some strength. */
+export const surfaceGlows = (material: { emissiveMap?: unknown; emissive?: { getHex(): number }; emissiveIntensity?: number } | undefined): boolean =>
+    Boolean(material?.emissiveMap) || Boolean(material?.emissive && material.emissive.getHex() !== 0 && (material.emissiveIntensity ?? 1) > 0);
+
+/**
+ * A new set for one surface of a model, laid out as the surface is (`udim`) and measured in the model's
+ * space. Painting starts from what the surface wears now, never from nothing: its glow too, as the set goes
+ * on the model in place of its material.
+ */
+export const startingPaintDocument = (modelId: string, materialNames: string[], options: { size?: number; udim: boolean; space: PositionSpace; glows: boolean }): PaintDocument => {
+    const document = createPaintDocument(modelId, materialNames, options.size ?? 11);
+    document.udim = options.udim;
+    document.space = options.space;
+    if (options.glows) document.channels = [...document.channels, 'emissive'];
+    const wears: PaintChannel[] = ['baseColor', 'roughness', 'metallic', 'normal', ...(options.glows ? ['emissive' as const] : [])];
+    document.layers = [{ ...newFillLayer(document, 'What it wears now', Object.fromEntries(wears.map((channel) => [channel, { kind: 'current' as const }]))), id: paintId('l') }];
+    return document;
+};
+
+/** The name of the material painting a surface of a model. */
+export const paintedSetName = (modelName: string, partName: string): string => `${modelName.replace(/\.[^.]+$/, '')} ${partName} (painted)`.slice(0, 128);
+
+const finite =(value: unknown, fallback: number): number => (typeof value === 'number' && Number.isFinite(value) ? value : fallback);
 
 /** A stored space, or undefined when it is not one. */
 export const readSpace = (value: unknown): PositionSpace | undefined => {

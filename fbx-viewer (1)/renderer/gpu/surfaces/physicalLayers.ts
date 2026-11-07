@@ -3,7 +3,9 @@
  *
  * As far as one layer of surface can carry it, for every kind that draws one: lit.ts from a physical material's numbers
  * and maps, materialWgsl.ts from what a material graph works out.
- * - a coat: a shinier surface, more so at grazing angles, with the light the coat keeps taken from what is under it;
+ * - a coat: a shinier surface, more so at grazing angles, with the light the coat keeps taken from what is under it,
+ *   and what is under it tinted by the coat's colour (the coat's own reflection is tinted too, as one layer holds one
+ *   colour);
  * - sheen: a soft brightening toward the edges, with the base dimmed by what the sheen takes;
  * - transmission: a blended material gets more see-through; a solid one, which has nothing behind it in the surface
  *   buffer to show, is stippled away by what lets light through, and the temporal resolve smooths that into glass.
@@ -21,6 +23,8 @@ struct PhysicalLayers {
   sheen: vec3f,
   sheenRoughness: f32,
   transmission: f32,
+  // What is seen through the coat is tinted by it (white for a clear coat).
+  coatColor: vec3f,
 }
 
 fn applyPhysicalLayers(in: SurfaceIn, plain: SurfaceOut, layers: PhysicalLayers, blended: bool) -> SurfaceOut {
@@ -30,7 +34,7 @@ fn applyPhysicalLayers(in: SurfaceIn, plain: SurfaceOut, layers: PhysicalLayers,
   let reflected = 0.04 + 0.96 * edge;
 
   out.roughness = mix(out.roughness, layers.coatRoughness, layers.coat * mix(0.5, 1.0, edge));
-  out.albedo *= 1.0 - layers.coat * reflected;
+  out.albedo *= (1.0 - layers.coat * reflected) * mix(vec3f(1.0), layers.coatColor, layers.coat);
 
   let sheen = layers.sheen;
   let rim = pow(1.0 - facing, mix(5.0, 2.0, layers.sheenRoughness));

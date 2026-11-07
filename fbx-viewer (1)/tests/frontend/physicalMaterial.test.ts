@@ -151,6 +151,31 @@ describe('the physical shader', () => {
         expect(fragmentShader).toContain('mat3 mgTangentFrame(vec3 position');
     });
 
+    it('tints what is under a coloured coat, leaving the coat\'s own reflection white', () => {
+        const material = new THREE.MeshStandardMaterial();
+        bindMaterialGraph(material, surface({ coat: 1, coatColor: [1, 0.5, 0.4] }));
+        const { fragmentShader } = compile(material);
+        expect(fragmentShader).toContain('vec3 mgCoatTint = mix(vec3(1.0), clamp(mg_out_coatColor, 0.0, 1.0), material.clearcoat);');
+        expect(fragmentShader).toContain('outgoingLight = outgoingLight * mgCoatTint * ( 1.0 - material.clearcoat * Fcc ) + ( clearcoatSpecularDirect + clearcoatSpecularIndirect ) * material.clearcoat;');
+        // A colour alone makes no coat.
+        expect(materialGraphFeatures(surface({ coatColor: [1, 0.5, 0.4] }))).toEqual([]);
+    });
+
+    it('strews metal flakes through the base, leaning its normal whether or not one is wired', () => {
+        expect(materialGraphFeatures(surface({ flakeDensity: 0.4 }))).toEqual(['flakes']);
+        expect(materialGraphFeatures(surface({ flakeSize: 0.1, flakeColor: [1, 0, 0] }))).toEqual([]);
+        const material = new THREE.MeshStandardMaterial();
+        bindMaterialGraph(material, surface({ flakeDensity: 0.4, flakeSize: 0.05, coat: 1 }));
+        expect(material.normalMap).not.toBeNull();
+        const { fragmentShader, vertexShader } = compile(material);
+        expect(fragmentShader).toContain('vec4 mg_flake = mgMetalFlakes(vMgLocalPosition, mg_out_flakeSize, mg_out_flakeDensity);');
+        expect(fragmentShader).toContain('vec4 mgMetalFlakes(vec3 p, float size, float density)');
+        expect(fragmentShader).toMatch(/diffuseColor\.rgb = mix\(.*, mg_out_flakeColor, mg_flake\.w\);/);
+        expect(fragmentShader).toContain('float metalnessFactor = mix(');
+        expect(fragmentShader).toContain('vec3 mapN = mgFlakeNormal(');
+        expect(vertexShader).not.toContain('mgMetalFlakes');
+    });
+
     it('leaves the standard material\'s shader without physical parts', () => {
         const material = new THREE.MeshStandardMaterial();
         bindMaterialGraph(material, surface());

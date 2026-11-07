@@ -133,19 +133,20 @@ export const STAGE_OUTPUTS: Record<MaterialStage, readonly string[]> = {
  * Parts of the physical surface a graph can use. A graph using none is drawn by the standard material;
  * one using any is drawn by the physical material, with only the parts it uses switched on.
  */
-export type PhysicalFeature = 'specular' | 'anisotropy' | 'coat' | 'sheen' | 'thinFilm' | 'transmission' | 'dispersion';
+export type PhysicalFeature = 'specular' | 'anisotropy' | 'coat' | 'sheen' | 'thinFilm' | 'transmission' | 'dispersion' | 'flakes';
 
-export const PHYSICAL_FEATURES: readonly PhysicalFeature[] = ['specular', 'anisotropy', 'coat', 'sheen', 'thinFilm', 'transmission', 'dispersion'];
+export const PHYSICAL_FEATURES: readonly PhysicalFeature[] = ['specular', 'anisotropy', 'coat', 'sheen', 'thinFilm', 'transmission', 'dispersion', 'flakes'];
 
 /** The Material Output inputs each part reads. */
 export const PHYSICAL_FEATURE_OUTPUTS: Record<PhysicalFeature, readonly string[]> = {
     specular: ['specularWeight', 'specularColor', 'ior'],
     anisotropy: ['anisotropy', 'anisotropyRotation'],
-    coat: ['coat', 'coatRoughness', 'coatNormal'],
+    coat: ['coat', 'coatRoughness', 'coatNormal', 'coatColor'],
     sheen: ['sheenColor', 'sheenRoughness'],
     thinFilm: ['thinFilm', 'thinFilmThickness'],
     transmission: ['transmission', 'thickness', 'attenuationColor', 'attenuationDistance'],
     dispersion: ['dispersion'],
+    flakes: ['flakeDensity', 'flakeSize', 'flakeColor'],
 };
 
 /** The inputs that switch each part on, when wired or set away from their default (a coat's roughness alone makes no coat). */
@@ -157,6 +158,7 @@ const FEATURE_SWITCHES: Record<PhysicalFeature, readonly string[]> = {
     thinFilm: ['thinFilm'],
     transmission: ['transmission'],
     dispersion: ['dispersion'],
+    flakes: ['flakeDensity'],
 };
 
 const sameValue = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
@@ -688,6 +690,25 @@ export const bypassInput = (definition: MaterialNodeDef): MaterialInputDef | nul
 };
 
 /** Compiles the part of a (normalised) graph a stage needs to GLSL for graphMaterial.ts. */
+/** How rough a flake is: a small mirror, its glint a little soft. */
+export const FLAKE_ROUGHNESS = 0.25;
+
+/**
+ * Metal flakes under the coat (car paint), worked into the surface the outputs describe: where a flake covers the
+ * pixel the surface is metal of the flake's colour, as rough as a flake and leaning as it leans (materialGlsl.ts
+ * mgMetalFlakes, in the model's own space, so the flakes stay put on it). Both renderers draw them from the same
+ * outputs: the WebGPU surface buffer holds colour, metalness, roughness and normal, which is all a flake changes.
+ */
+const flakeSurface = (outputs: Record<string, string>, statements: string[], helper: (name: string) => void, position: () => string): void => {
+    helper('mgMetalFlakes');
+    helper('mgFlakeNormal');
+    statements.push(`vec4 mg_flake = mgMetalFlakes(${position()}, ${outputs.flakeSize}, ${outputs.flakeDensity});`);
+    outputs.baseColor = `mix(${outputs.baseColor}, ${outputs.flakeColor}, mg_flake.w)`;
+    outputs.metalness = `mix(${outputs.metalness}, 1.0, mg_flake.w)`;
+    outputs.roughness = `mix(${outputs.roughness}, ${FLAKE_ROUGHNESS.toFixed(2)}, mg_flake.w)`;
+    outputs.normal = `mgFlakeNormal(${outputs.normal}, mg_flake)`;
+};
+
 export const compileMaterialGraph = (stored: MaterialGraph, options: CompileOptions = {}): CompiledMaterialGraph => {
     const graph = withNamedLinks(stored);
     const stage = options.stage ?? 'fragment';
@@ -841,7 +862,13 @@ export const compileMaterialGraph = (stored: MaterialGraph, options: CompileOpti
         if (!wanted.includes(input.key)) continue;
         outputs[input.key] = inputValue(output, input);
     }
-    shape.push(`out:${JSON.stringify(staticParams(output, outputDefinition))}`, `#${[...connected].sort().join(',')}`);
+    if (stage === 'fragment' && wanted.includes('flakeDensity')) {
+        flakeSurface(outputs, statements, (name) => { helpers.add(name); }, () => { builtins.add('localPosition'); return builtinTable.localPosition; });
+        // The flakes lean the normal, wired or not.
+        connected.add('normal');
+    }
+    // The output's values are uniforms named after it: two graphs alike but for its id must not share a program.
+    shape.push(`out:${output.id}:${JSON.stringify(staticParams(output, outputDefinition))}`, `#${[...connected].sort().join(',')}`);
     const unused = graph.nodes.filter(node => node.type !== OUTPUT_NODE_TYPE && !results.has(node.id)).map(node => node.id);
     const previews = (options.previews ?? []).map((nodeId) => {
         const node = nodes.get(nodeId);

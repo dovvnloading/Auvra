@@ -18,7 +18,7 @@ import { GpuResetError, PaintStack, pictureOwners, type StackHost } from '../../
 import { BUILTIN_GRAPHS } from '../../../texturing/paint/smartLibrary';
 import { applyPixelHistory, trimmedHistory, type HistoryEntry } from '../../../texturing/paint/strokes';
 import { BAKE_HISTORY_BYTES, bakeStepsToForget, branchBeforeStep, branchesToDrop, historyKind, travelTo, type HistoryBranch, type HistoryKind, type HistoryLines } from '../../../texturing/paint/history';
-import { PAINT_CHANNELS, castsFromThreeSides, createPaintDocument, newFillLayer, paintId, readPaintDocument, type PaintChannel, type PaintDocument } from '../../../texturing/paint/paintTypes';
+import { PAINT_CHANNELS, castsFromThreeSides, paintedSetName, readPaintDocument, startingPaintDocument, surfaceGlows, type PaintChannel, type PaintDocument } from '../../../texturing/paint/paintTypes';
 import { download, makeZip } from '../../../texturing/zip';
 import { fileName, holdsNormalGreen, planPicture, type ChannelSource, type ExportPicture, type ExportSource, type ExportTemplate } from '../../../texturing/paint/exportTemplates';
 import { colourChannels, extensionOf, linearChannels, writePicture, type PictureData } from '../../../texturing/paint/pictureFiles';
@@ -300,16 +300,8 @@ export class PaintSession {
         const occluder = buildWholeMesh(target.object);
         const modelSpace = spaceOfBox(new THREE.Box3().setFromBufferAttribute(new THREE.BufferAttribute(occluder.positions, 3)));
         if (!asset || !document) {
-            document = createPaintDocument(target.modelId, target.materialNames, 11);
-            document.udim = part.udim;
-            document.space = modelSpace;
-            // Painting starts from what the surface wears now, never from nothing: its glow too, as the set
-            // goes on the model in place of its material.
-            const glows = Boolean(material?.emissiveMap) || Boolean(material?.emissive && material.emissive.getHex() !== 0 && material.emissiveIntensity > 0);
-            if (glows) document.channels = [...document.channels, 'emissive'];
-            const wears: PaintChannel[] = ['baseColor', 'roughness', 'metallic', 'normal', ...(glows ? ['emissive' as const] : [])];
-            document.layers = [{ ...newFillLayer(document, 'What it wears now', Object.fromEntries(wears.map((channel) => [channel, { kind: 'current' as const }]))), id: paintId('l') }];
-            asset = { id: crypto.randomUUID(), name: `${target.modelName.replace(/\.[^.]+$/, '')} ${target.partName} (painted)`.slice(0, 128), graph: createMaterialGraph(), paint: document as unknown as Record<string, unknown> };
+            document = startingPaintDocument(target.modelId, target.materialNames, { size: 11, udim: part.udim, space: modelSpace, glows: surfaceGlows(material) });
+            asset = { id: crypto.randomUUID(), name: paintedSetName(target.modelName, target.partName), graph: createMaterialGraph(), paint: document as unknown as Record<string, unknown> };
             materialLibrary.upsert(asset);
             await projectService.applyChanges([{ domain: MATERIALS_DOMAIN, operation: 'upsert', id: asset.id, value: materialAssetDocument(asset) }]);
         }

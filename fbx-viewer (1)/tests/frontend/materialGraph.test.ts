@@ -105,6 +105,10 @@ describe('material graphs', () => {
     expect(compileMaterialGraph(recoloured).key).toBe(key);
     const rewired = { ...graph, links: graph.links.filter(l => l.toInput !== 'emissive') };
     expect(compileMaterialGraph(rewired).key).not.toBe(key);
+    // The output's values are uniforms named after it: alike but for its id, two graphs need shaders of their own, or
+    // the second would draw with the values the first left in the program.
+    const lone = (id: string) => normalizeMaterialGraph({ nodes: [node(id, 'output', { coat: 1 })], links: [] });
+    expect(compileMaterialGraph(lone('out')).key).not.toBe(compileMaterialGraph(lone('output')).key);
   });
 
   it('refuses links that close a loop, and survives one in stored data', () => {

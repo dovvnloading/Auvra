@@ -127,9 +127,11 @@ export const physicalOverrides = (outputs: Record<string, string>, features: Rea
 #endif`,
     ];
     if (features.has('coat')) {
+        // What is seen through a coloured coat is tinted by it, as far as the coat covers (coatTinted below).
         parts.push(`#ifdef USE_CLEARCOAT
     material.clearcoat = saturate(${outputs.coat});
     material.clearcoatRoughness = min(max(${outputs.coatRoughness}, 0.0525) + geometryRoughness, 1.0);
+    vec3 mgCoatTint = mix(vec3(1.0), clamp(${outputs.coatColor}, 0.0, 1.0), material.clearcoat);
 #endif`);
     }
     if (features.has('dispersion')) {
@@ -179,6 +181,15 @@ export const graphTransmission = (outputs: Record<string, string>): string => {
     chunk = replaceOnce(chunk, 'material.attenuationColor = attenuationColor;', `material.attenuationColor = ${outputs.attenuationColor};`);
     return chunk;
 };
+
+/** Where three lays its coat over what is under it. */
+const COAT_OVER = 'outgoingLight = outgoingLight * ( 1.0 - material.clearcoat * Fcc )';
+
+/**
+ * Three's physical shader with what is under the coat (its diffuse and specular light, and its glow) tinted by the
+ * coat's colour on the way out: a coloured lacquer. The coat's own reflection stays white, as a clear layer's does.
+ */
+export const coatTinted = (source: string): string => replaceOnce(source, COAT_OVER, 'outgoingLight = outgoingLight * mgCoatTint * ( 1.0 - material.clearcoat * Fcc )');
 
 /** The coat's own normal from the graph (tangent space), in place of three's coat normal map. */
 export const graphCoatNormal = (normal: string): string => `#ifdef USE_CLEARCOAT

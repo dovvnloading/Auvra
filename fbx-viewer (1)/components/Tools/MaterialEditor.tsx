@@ -3,11 +3,11 @@ import * as THREE from 'three';
 import { ChevronDownIcon, ChevronRightIcon, MaterialIcon, ResetIcon, SaveIcon, SearchIcon, TrashIcon, UndoIcon, WarningIcon } from '../UI/Icons';
 import type { LoadedModelData, TextureData } from '../../types';
 import { Select } from '../UI/Select';
-import { materialAssetUse, materialLibrary } from '../../runtime/materials/materialLibrary';
+import { MATERIALS_DOMAIN, materialAssetDocument, materialAssetUse, materialLibrary, type MaterialAsset } from '../../runtime/materials/materialLibrary';
 import { isSmartMaterialAsset } from '../../texturing/paint/smartMaterials';
 import { isExportTemplatesAsset } from '../../texturing/paint/exportTemplates';
-import { materialGraphParameters, type MaterialParameter, type MaterialParameterValue } from '../../runtime/materials/materialGraph';
-import { Segmented } from '../UI/kit';
+import { OUTPUT_NODE_TYPE, createMaterialGraph, materialGraphParameters, type MaterialParameter, type MaterialParameterValue } from '../../runtime/materials/materialGraph';
+import { Button, Segmented } from '../UI/kit';
 import { assetShaderVersions, type ObjectMaterialOverrides } from '../../utils/materialInstances';
 import { drawnPaintedCopies, expandPaintedCopies, isPaintedCopy } from '../../utils/paintedCopies';
 import {
@@ -298,8 +298,31 @@ const MaterialAssetField: React.FC<{
   /** Whether this kind of material can be shaded by a graph (standard materials only). */
   takesAsset: boolean;
   materialType: string;
+  /** The material's name, for the one "Convert to a material" makes. */
+  materialName: string;
   onChange: (value: string | undefined) => void;
-}> = ({ value, takesAsset, materialType, onChange }) => {
+}> = ({ value, takesAsset: standard, materialType, materialName, onChange }) => {
+  // A material converted for an asset (its override names one) takes one as a standard material does.
+  const takesAsset = standard || Boolean(value);
+  const [converting, setConverting] = useState(false);
+  /** A material document drawing as this material does (its own colour, maps and emission; unlit when it was), given to it. */
+  const convert = async () => {
+    setConverting(true);
+    try {
+      const graph = createMaterialGraph();
+      const unlit = materialType === 'MeshBasicMaterial';
+      const asset: MaterialAsset = {
+        id: crypto.randomUUID(),
+        name: `${materialName || 'Material'} (converted)`.slice(0, 128),
+        graph: { ...graph, nodes: graph.nodes.map(node => (node.type === OUTPUT_NODE_TYPE ? { ...node, params: { ...node.params, ownMaps: true, ...(unlit ? { shading: 'unlit' } : {}) } } : node)) },
+      };
+      await projectService.applyChanges([{ domain: MATERIALS_DOMAIN, operation: 'upsert', id: asset.id, value: materialAssetDocument(asset) }]);
+      materialLibrary.upsert(asset);
+      onChange(asset.id);
+    } finally {
+      setConverting(false);
+    }
+  };
   const version = useSyncExternalStore((listener) => materialLibrary.subscribe(listener), () => materialLibrary.version);
   // Painted copies are each model's own: shown as its painted base map, never offered as an asset.
   const assets = useMemo(() => materialLibrary.list().filter(asset => !isPaintedCopy(asset)), [version]);
@@ -323,8 +346,11 @@ const MaterialAssetField: React.FC<{
       </FieldRow>
       {!takesAsset && (
         <p className="text-2xs leading-snug text-amber-400/90">
-          A material asset can&apos;t shade this material: it is {unlit ? 'drawn without lighting' : 'an older kind of shaded material'}, and material assets need the standard lit material. Its own colour and maps below still apply.
+          A material asset can&apos;t shade this material yet: it is {unlit ? 'drawn without lighting' : 'an older kind of shaded material'}. Convert it to a material that keeps its colour, map and emission, then it can take any material asset.
         </p>
+      )}
+      {!takesAsset && (
+        <Button size="sm" disabled={converting} onClick={() => void convert()}>{converting ? 'Converting…' : 'Convert to a material'}</Button>
       )}
       {takesAsset && waiting.length > 0 && (
         <p className="text-2xs leading-snug text-gray-500">
@@ -671,7 +697,7 @@ const MaterialEditorSession: React.FC<MaterialEditorProps> = ({ model, textures,
     const { base } = material;
     return (
       <div className="px-3 pb-3 pt-1 space-y-1 border-t border-gray-800/80">
-        <MaterialAssetField value={override.materialId} takesAsset={material.takesAsset} materialType={material.type} onChange={(value) => editField(material.name, 'materialId', value)} />
+        <MaterialAssetField value={override.materialId} takesAsset={material.takesAsset} materialType={material.type} materialName={material.name} onChange={(value) => editField(material.name, 'materialId', value)} />
         {override.materialId && (
           <MaterialParameterFields materialId={override.materialId} values={override.parameters} textures={textures}
             versions={assetShaderVersions(override.materialId, [{ id: model.id, materialOverrides: draft }], placedCopies ?? [])}

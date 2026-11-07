@@ -187,6 +187,54 @@ vec3 mgRamp(vec4 stops[${8}], float t, int mode) {
 }`,
     },
 
+    // --- Car paint ---
+    // Metal flakes: the surface split into cells round points jittered in a grid `size` across, a share `density` of
+    // them flakes, each a small mirror leaning a random way by up to about 35 degrees. Gives the flake's lean as a
+    // tangent-space direction (xyz) and how much of the pixel is flake (w). Where flakes are smaller than a pixel both
+    // fade to their average (no lean, and the share), so they do not shimmer. Fragment stage only (it reads fwidth).
+    mgMetalFlakes: {
+        needs: ['mgHash33'],
+        source: `
+vec4 mgMetalFlakes(vec3 p, float size, float density) {
+    vec3 q = p / max(size, 1e-4);
+    vec3 i = floor(q);
+    vec3 f = q - i;
+    float nearest = 8.0;
+    vec3 cell = i;
+    for (int z = -1; z <= 1; z++) {
+        for (int y = -1; y <= 1; y++) {
+            for (int x = -1; x <= 1; x++) {
+                vec3 offset = vec3(float(x), float(y), float(z));
+                vec3 r = offset + mgHash33(i + offset) - f;
+                float d = dot(r, r);
+                if (d < nearest) { nearest = d; cell = i + offset; }
+            }
+        }
+    }
+    vec3 h = mgHash33(cell + vec3(59.0, 131.0, 227.0));
+    float share = clamp(density, 0.0, 1.0);
+    float present = h.x < share ? 1.0 : 0.0;
+    float turn = h.y * 6.2831853;
+    float lean = 0.7 * sqrt(h.z);
+    vec3 tilt = normalize(vec3(cos(turn) * lean, sin(turn) * lean, 1.0));
+    float sharp = 1.0 - smoothstep(0.4, 1.2, length(fwidth(q)));
+    return vec4(normalize(mix(vec3(0.0, 0.0, 1.0), tilt, sharp)), mix(share, present, sharp));
+}`,
+    },
+    // A normal (tangent or world space) leant by a flake (mgMetalFlakes) where it covers the pixel. The lean is turned
+    // into any frame round the normal: a flake leans a random way, so which frame does not matter.
+    mgFlakeNormal: {
+        source: `
+vec3 mgFlakeNormal(vec3 normal, vec4 flake) {
+    vec3 n = normalize(normal);
+    vec3 side = abs(n.z) < 0.999 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0);
+    vec3 t = normalize(cross(side, n));
+    vec3 b = cross(n, t);
+    vec3 leant = normalize(t * flake.x + b * flake.y + n * flake.z);
+    return normalize(mix(n, leant, flake.w));
+}`,
+    },
+
     // --- Normals and tangent space ---
     // Reoriented normal mapping (Barré-Brisebois and Hill, 2012) on tangent-space normals.
     mgNormalBlend: {
