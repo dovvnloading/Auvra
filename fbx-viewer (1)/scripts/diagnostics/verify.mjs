@@ -246,6 +246,7 @@ const EXEMPT = new Map(Object.entries({
   'runtime/materials/starterMaterials.ts': 'data-model',
   'utils/materialInstances.ts': 'pure-utility',
   'utils/paintedCopies.ts': 'pure-utility',
+  'texturing/materialX.ts': 'pure-utility',
   'utils/userMaterialLibrary.ts': 'data-model',
   'utils/userMaterialLibraryActions.ts': 'pure-utility',
   'components/Materials/materialBalls.ts': 'renderer-child-boundary',
