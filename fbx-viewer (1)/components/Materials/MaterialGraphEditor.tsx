@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { BookIcon, CommentAddIcon, CrossIcon, FlowIcon, GraphIcon, PlusIcon, TrashIcon, WarningIcon } from '../UI/Icons';
+import { BookIcon, CommentAddIcon, CrossIcon, ExternalLinkIcon, FlowIcon, GraphIcon, PlusIcon, TrashIcon, WarningIcon } from '../UI/Icons';
 import { useAssets } from '../../context/AssetContext';
 import { projectService } from '../../utils/projectService';
 import { frontendDiagnostics } from '../../diagnostics/runtime';
@@ -16,6 +16,7 @@ import {
 } from '../../runtime/materials/materialGraph';
 import { MATERIALS_DOMAIN, materialAssetDocument, materialAssetUse, materialLibrary, type MaterialAsset } from '../../runtime/materials/materialLibrary';
 import { LIBRARY_DRAG_TYPE, MyLibraryPanel, useAddToLibrary, useBringIn, useUserLibrary } from './MyLibrary';
+import { MaterialXExportButton, MaterialXImport, type MaterialXImportHandle } from './MaterialXFiles';
 import { MaterialFromDescription } from './MaterialFromDescription';
 import { STARTER_MATERIALS } from '../../runtime/materials/starterMaterials';
 import { MaterialGraphCanvas } from './MaterialGraphCanvas';
@@ -120,11 +121,13 @@ export const MaterialGraphEditor: React.FC = () => {
         await addToMyLibrary(materialLibrary.get(asset.id) ?? asset);
         setAdding(false);
     };
-    const libraryButton = asset && materialAssetUse(asset) !== 'forOtherGraphs' ? (
+    const materialXImport = useRef<MaterialXImportHandle>(null);
+    const libraryButton = asset && materialAssetUse(asset) !== 'forOtherGraphs' ? (<>
+        <MaterialXExportButton asset={asset} />
         <IconButton label={adding ? 'Adding it to your library…' : inMyLibrary ? 'Update in my library: the copy kept for every project' : 'Add to my library: keep a copy for every project'} disabled={adding} onClick={() => void addAsset()}>
             <BookIcon size={14} />
         </IconButton>
-    ) : null;
+    </>) : null;
     // A material another tab asked to open (Paint's "edit a copy"): taken when this tab opens, and while it is open.
     useEffect(() => {
         const takeRequest = () => {
@@ -352,6 +355,7 @@ export const MaterialGraphEditor: React.FC = () => {
                     <button onClick={() => setMemoryOpen(true)} title="What textures take on the graphics card, per level and per material"
                         className="rounded bg-gray-800 px-2 py-1 text-2xs text-gray-200 hover:bg-gray-700">Memory</button>
                     {memoryOpen && <TextureMemoryDialog onClose={() => setMemoryOpen(false)} />}
+                    <MaterialXImport ref={materialXImport} onImported={(imported) => { setSelectedId(imported.id); select([]); setLibraryOpen(false); }} />
                     <button ref={newButton} onClick={() => setNewMenu(true)} aria-label="New material" className="flex items-center gap-1 rounded bg-gray-800 px-2 py-1 text-2xs text-gray-200 hover:bg-gray-700"><PlusIcon size={12} /> New</button>
                     <Popover anchor={newButton} open={newMenu} onClose={() => setNewMenu(false)} width={280} label="New material">
                         <div className="p-1">
@@ -359,6 +363,7 @@ export const MaterialGraphEditor: React.FC = () => {
                                 { key: 'texture', icon: <GraphIcon size={14} />, title: 'Texture graph', text: 'Noises, patterns, blurs and filters drawn into the material\'s pictures: base colour, normal, roughness and the rest.', run: () => createTextureGraph_(false) },
                                 { key: 'shader', icon: <FlowIcon size={14} />, title: 'Shader graph', text: 'Maths worked out for every pixel as the model draws: moving, glowing and view-dependent looks.', run: create },
                                 { key: 'function', icon: <GraphIcon size={14} />, title: 'Graph for other graphs', text: 'A texture graph with an input, made to be used as one node inside others (a smart mask, a filter).', run: () => createTextureGraph_(true) },
+                                { key: 'materialx', icon: <ExternalLinkIcon size={14} />, title: 'From a MaterialX file', text: 'Pick a .mtlx file together with its pictures: its surface becomes a shader graph.', run: () => materialXImport.current?.pick() },
                             ].map((item) => (
                                 <button key={item.key} onClick={() => { setNewMenu(false); item.run(); }} className="flex w-full gap-2 rounded px-2 py-1.5 text-left hover:bg-gray-800">
                                     <span className="mt-0.5 text-gray-400">{item.icon}</span>
