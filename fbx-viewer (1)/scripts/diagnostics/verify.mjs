@@ -184,6 +184,7 @@ const EXEMPT = new Map(Object.entries({
   'texturing/paint/uvSurface.ts': 'pure-utility',
   'texturing/paint/history.ts': 'pure-utility',
   'texturing/paint/particles.ts': 'pure-utility',
+  'texturing/paint/decals.ts': 'pure-utility',
   'components/Texturing/Paint/openMaterial.ts': 'pure-utility',
   'components/Texturing/Paint/graphPictures.ts': 'pure-utility',
   'texturing/uv/uvTopology.ts': 'pure-utility',

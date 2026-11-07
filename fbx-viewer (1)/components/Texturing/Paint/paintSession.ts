@@ -191,14 +191,19 @@ export class PaintSession {
     /** Stops painting, undo and saving (with the reason to show) until unlocked. */
     lock(reason: string): void {
         this.lockReason = reason;
-        if (this.saveTimer) { clearTimeout(this.saveTimer); this.saveTimer = null; }
+        if (this.saveTimer) { clearTimeout(this.saveTimer); this.saveTimer = null; this.saveWaiting = true; }
         this.emit();
     }
 
     unlock(): void {
         this.lockReason = null;
+        // A save the lock held back goes ahead now.
+        if (this.saveWaiting) { this.saveWaiting = false; this.dirty(); }
         this.emit();
     }
+
+    /** A save was due when the set was locked. */
+    private saveWaiting = false;
 
     /** The set has been replaced (its document now names another layout's pictures): it never saves again. */
     retire(): void {

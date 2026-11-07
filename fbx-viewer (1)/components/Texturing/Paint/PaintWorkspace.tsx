@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { BrushIcon, BucketIcon, CompareIcon, EraserIcon, EyedropperIcon, FrameIcon, RedoIcon, ScissorsIcon, SelectBoxIcon, SplineIcon, UndoIcon, WarningIcon } from '../../UI/Icons';
+import { BrushIcon, BucketIcon, CompareIcon, EraserIcon, EyedropperIcon, FrameIcon, ImageIcon, RedoIcon, ScissorsIcon, SelectBoxIcon, SplineIcon, UndoIcon, WarningIcon } from '../../UI/Icons';
+import { DecalPanel } from './DecalPanel';
 import { PaintView2D } from './PaintView2D';
 import { useAssets } from '../../../context/AssetContext';
 import { useScene } from '../../../context/SceneContext';
@@ -30,7 +31,7 @@ import { useMaterialSections, type MaterialChoice } from './MaterialPicker';
 import { SliderRow } from './PaintFields';
 import { HISTORY_BYTES, HISTORY_LIMIT, PaintSession, findPaintAsset, paintGraphResolver, type PaintTarget } from './paintSession';
 import { HistoryPanel } from './HistoryPanel';
-import { PaintViewport, type PaintTool, type PathEdit, type SurfaceHit, type ViewMode, type ViewportCommands } from './PaintViewport';
+import { DECAL_LOCK, PaintViewport, type DecalSettings, type PaintTool, type PathEdit, type SurfaceHit, type ViewMode, type ViewportCommands } from './PaintViewport';
 import { SetPanel } from './SetPanel';
 import { UvPanel } from './UvPanel';
 import { UvSession } from './uvSession';
@@ -155,6 +156,9 @@ export const PaintWorkspace: React.FC = () => {
     void sessionVersion;
 
     const [tool, setTool] = useState<PaintTool>('paint');
+    const [decal, setDecal] = useState<DecalSettings>({ textureId: '', size: 0.15, angle: 0, strength: 1 });
+    const latestTool = useRef(tool);
+    latestTool.current = tool;
     const [pickMode, setPickMode] = useState<PickMode>('quad');
     const [raySettings, setRaySettings] = useState<BakeSettings | null>(null);
     // A bake fix being painted: strokes go into it, and the view shows it.
@@ -303,7 +307,11 @@ export const PaintWorkspace: React.FC = () => {
             if ((event.ctrlKey || event.metaKey) && key === 'y') { event.preventDefault(); steps?.redo(); return; }
             if ((event.ctrlKey || event.metaKey) && key === 's') { event.preventDefault(); void session.save(); return; }
             if (event.ctrlKey || event.metaKey || event.altKey) return;
+            // Placing a decal: Enter keeps it, Escape gives it up.
+            if (latestTool.current === 'decal' && key === 'enter') { event.preventDefault(); viewportCommands.current?.keepDecal(); return; }
+            if (latestTool.current === 'decal' && key === 'escape') { event.preventDefault(); viewportCommands.current?.dropDecal(); return; }
             if (key === 'b') setTool('paint');
+            else if (key === 'd') setTool('decal');
             else if (key === 'e') setTool('erase');
             else if (key === 'g') setTool('island');
             else if (key === 'q') setTool('polygon');
@@ -361,6 +369,7 @@ export const PaintWorkspace: React.FC = () => {
                     <IconButton label="Fill polygons: a triangle, a quad, a mesh part, a UV piece or an edge loop" shortcut="Q" active={tool === 'polygon'} onClick={() => setTool('polygon')}><SelectBoxIcon size={14} /></IconButton>
                     {tool === 'polygon' && !pickingParts && <Select value={pickMode} options={PICK_MODES.map((mode) => ({ value: mode, label: PICK_LABELS[mode] }))} onChange={(mode) => setPickMode(mode as PickMode)} className="w-28" />}
                     <IconButton label="Draw a path on the surface: paint along it, fill it, ribbons, stitches and text" shortcut="L" active={tool === 'path'} onClick={() => { setTool('path'); setPanel('brush'); }}><SplineIcon size={14} /></IconButton>
+                    <IconButton label="Place a decal: a picture wrapped onto the surface, moved by dragging" shortcut="D" active={tool === 'decal'} onClick={() => { setTool('decal'); setPanel('brush'); }}><ImageIcon size={14} /></IconButton>
                     <IconButton label="Pick a colour" shortcut="P" active={tool === 'pick'} onClick={() => setTool('pick')}><EyedropperIcon size={14} /></IconButton>
                     <IconButton label="Mark or clear seams (Shift clears)" shortcut="S" active={tool === 'seam'} onClick={() => setTool('seam')}><ScissorsIcon size={14} /></IconButton>
                     <span className="mx-1 h-4 w-px bg-zinc-800" />
@@ -385,7 +394,7 @@ export const PaintWorkspace: React.FC = () => {
                             onBrushSize={(size) => setBrush({ ...brush, size })}
                             onPick={(color) => { setBrush({ ...brush, values: { ...brush.values, baseColor: color } }); setTool('paint'); }}
                             onMessage={setMessage} frameSignal={frameSignal} uv={uv} pickMode={pickMode} onSurfacePick={onSurfacePick} picking={pickingParts} bakeRays={raySettings}
-                            pathEdit={tool === 'path' ? pathEdit : null} commands={viewportCommands} />}
+                            pathEdit={tool === 'path' ? pathEdit : null} commands={viewportCommands} decal={decal} />}
                         {(view === 'paint2d' || beside) && (
                             <div className={`flex min-h-0 min-w-0 flex-1 ${view !== 'paint2d' ? 'border-l border-zinc-800' : ''}`}>
                                 <PaintView2D session={session} tool={tool} brush={brush} target={target} maskImage={maskImage} onMessage={setMessage}
@@ -422,7 +431,10 @@ export const PaintWorkspace: React.FC = () => {
                 </div>
                 {session ? (
                     panel === 'layers' ? <LayerPanel session={session} selection={selection} onSelect={setSelection} resolve={resolve} graphs={graphs} textures={textures} onPaintWith={paintWith} onMessage={setMessage} />
-                        : panel === 'brush' ? <div className="min-h-0 flex-1 overflow-y-auto">{tool === 'path' && (
+                        : panel === 'brush' ? <div className="min-h-0 flex-1 overflow-y-auto">{tool === 'decal' && (
+                            <DecalPanel decal={decal} onChange={setDecal} textures={textures} placed={session.locked === DECAL_LOCK}
+                                onKeep={() => viewportCommands.current?.keepDecal()} onDrop={() => viewportCommands.current?.dropDecal()} />
+                        )}{tool === 'path' && (
                             <PathPanel paths={paths} path={activePath} point={pathPoint} extent={extent} graphs={graphs} onPick={(id) => { setPathId(id); setPathPoint(null); }}
                                 onNew={() => { setPathId(null); setPathPoint(null); setMessage('Click the model to start the new path.'); }}
                                 onChange={(next, label, coalesce) => changePaths(paths.map((each) => (each.id === next.id ? next : each)), label, coalesce)}
