@@ -46,6 +46,8 @@ export interface NodeView {
     output?: boolean;
     /** A graph used as a node, which can be opened in place. */
     canOpen?: boolean;
+    /** The words of the menu item that opens it (else "Open the graph inside"). */
+    openLabel?: string;
     /** Words "find in graph" matches besides the title: its kind, what it does. */
     searchText?: string;
 }

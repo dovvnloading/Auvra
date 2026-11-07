@@ -1,11 +1,11 @@
 import type * as THREE from 'three';
 import type { GpuImage, ImagePrecision, TextureGpu } from '../gpu/textureGpu';
-import { formulaScope, graphContentKey, hashText, parameterValues, resolveNodeParams, subgraphRunSeed, MAX_SIZE_LOG2 } from './document';
+import { coerceParam, formulaScope, graphContentKey, hashText, mixSeeds, parameterValues, resolveNodeParams, subgraphRunSeed, MAX_SIZE_LOG2 } from './document';
 import { MATERIAL_CHANNELS, materialKey, materialOf, materialResults, type MaterialImages } from './material';
 import { withNamedLinks } from './namedLinks';
 import { resolvePrecision, resolveSeed, resolveSize, resolveTiling, tilingAxes } from './inherit';
-import { nodeBindings } from './nodeKit';
-import { INPUT_NODE_TYPE, MATERIAL_INPUT_NODE_TYPE, MATERIAL_OUTPUT_NODE_TYPE, MESH_MAP_NODE_TYPE, MESH_READING_NODE_TYPES, OUTPUT_NODE_TYPE, SUBGRAPH_NODE_TYPE, SUBGRAPH_SEED_KEY, SUBGRAPH_VARY_KEY } from './nodes/io';
+import { nodeBindings, valuePinKey } from './nodeKit';
+import { GRAPH_USING_TYPES, INPUT_NODE_TYPE, MATERIAL_INPUT_NODE_TYPE, MATERIAL_OUTPUT_NODE_TYPE, MESH_MAP_NODE_TYPE, MESH_READING_NODE_TYPES, OUTPUT_NODE_TYPE, SUBGRAPH_SEED_KEY, SUBGRAPH_VARY_KEY } from './nodes/io';
 import { textureNodeDefinition, type GraphResolver } from './registry';
 import { outputNodeKind, type NodeRunContext, type PortKind, type TexGraphLink, type TexGraphNode, type TexNodeDef, type TextureGraph, type TilingMode } from './types';
 
@@ -37,6 +37,8 @@ export interface EvaluateRequest {
     size?: { w: number; h: number };
     /** Metres the pictures span when the graph has no size in the world of its own (a graph used inside another takes that one's). */
     world?: { w: number; h: number };
+    /** The pass of an Iterate node this run is (shaders see it as uIteration, formulas as $iteration). */
+    iteration?: { index: number; count: number };
     /**
      * The seed the graph runs with, instead of its own: a graph used inside another runs with a seed
      * of its own copy, so copies of it look different.
@@ -94,8 +96,11 @@ interface NodeDetails {
     seed: number;
     /** A sub-graph node's: the seed the graph inside runs with. */
     innerSeed?: number;
+    /** It gives only values (one pixel each). */
+    value?: boolean;
     /** Metres the picture spans across and down. */
     world: [number, number];
+    iteration: { index: number; count: number };
 }
 
 interface Prepared {
@@ -176,7 +181,7 @@ export class TextureGraphEvaluator {
             this.cache.delete(id);
         }
         // A sub-graph node gone, or now running another graph: its inner evaluator goes too.
-        const using = new Set(graph.nodes.filter((node) => node.type === SUBGRAPH_NODE_TYPE).map((node) => `${node.id}:${String(node.params.graph ?? '')}`));
+        const using = new Set(graph.nodes.filter((node) => GRAPH_USING_TYPES.has(node.type)).map((node) => `${node.id}:${String(node.params.graph ?? '')}`));
         for (const [key, inner] of this.nested) {
             if (using.has(key)) continue;
             inner.dispose();
@@ -243,7 +248,8 @@ export class TextureGraphEvaluator {
         const graphSeed = request.seed ?? graph.seed;
         const metres = graph.physicalSize ?? request.world ?? { w: 1, h: 1 };
         const world: [number, number] = [metres.w, metres.h];
-        const scope = formulaScope(graph, values, graphWidth, graphHeight, graphSeed);
+        const iteration = request.iteration ?? { index: 0, count: 1 };
+        const scope = formulaScope(graph, values, graphWidth, graphHeight, graphSeed, iteration);
         const external = request.external ?? {};
         const externalToken = (key: string): string => {
             const value = external[key];
@@ -258,8 +264,10 @@ export class TextureGraphEvaluator {
             const warnings: string[] = [];
             const params = resolveNodeParams(definition, node, values, scope, warnings);
             const links = plan.incoming.get(node.id);
-            // What the node takes after when it takes after its input: the first one wired.
-            const first = definition.inputs.map((port) => info.get(links?.get(port.key)?.from ?? '')).find((details): details is NodeDetails => Boolean(details));
+            // What the node takes after when it takes after its input: the first picture wired (a value a
+            // setting follows is no picture).
+            const pictures = definition.inputs.filter((port) => port.kind !== 'value');
+            const first = pictures.map((port) => info.get(links?.get(port.key)?.from ?? '')).find((details): details is NodeDetails => Boolean(details) && !details.value);
             // Size: from the first wired input or the graph, then the node's own change.
             let { width, height } = resolveSize(node.size?.mode ?? definition.sizeFrom, node.size, first, { width: graphWidth, height: graphHeight });
             // A bypassed node passes its main input through: it takes that input's size and kind.
@@ -269,6 +277,9 @@ export class TextureGraphEvaluator {
             const limit = Math.min(this.gpu.maxSize, 2 ** MAX_SIZE_LOG2);
             width = Math.max(1, Math.min(limit, Math.round(width)));
             height = Math.max(1, Math.min(limit, Math.round(height)));
+            // A node that gives only values gives one pixel each, at full float.
+            const value = definition.outputs.length > 0 && definition.outputs.every((port) => port.kind === 'value');
+            if (value) { width = 1; height = 1; }
             // Kinds of 'any' outputs.
             const kinds: Record<string, PortKind> = {};
             const follows = definition.kindFrom ? (Array.isArray(definition.kindFrom) ? definition.kindFrom : [definition.kindFrom]) as string[] : [];
@@ -277,15 +288,15 @@ export class TextureGraphEvaluator {
                 ? definition.kindOf(params)
                 : wiredKinds.length ? (wiredKinds.includes('color') ? 'color' : 'gray') : definition.anyDefault ?? 'gray';
             // A material output carries a picture per channel, each of its channel's kind: it has no one kind.
-            for (const port of definition.outputs) if (port.kind !== 'material') kinds[port.key] = port.kind === 'any' ? anyKind : port.kind;
+            for (const port of definition.outputs) if (port.kind !== 'material') kinds[port.key] = port.kind === 'any' ? anyKind : port.kind === 'value' ? 'color' : port.kind;
             if (node.type === OUTPUT_NODE_TYPE) kinds.out = outputNodeKind(params);
             if (main) {
                 const passed = outputKind(links?.get(main)) ?? (definition.inputs.find((port) => port.key === main)?.kind === 'gray' ? 'gray' : null);
                 if (passed) for (const port of definition.outputs) if (port.kind !== 'material') kinds[port.key] = passed;
             }
             // Precision: as asked, the graph's, else the widest wired in, else by kind.
-            const wired = definition.inputs.map((port) => info.get(links?.get(port.key)?.from ?? '')?.precision).filter((value): value is ImagePrecision => value !== undefined);
-            const precision = resolvePrecision(node.precision, wired, graph.precision, anyKind);
+            const wired = pictures.map((port) => info.get(links?.get(port.key)?.from ?? '')?.precision).filter((bits): bits is ImagePrecision => bits !== undefined);
+            const precision = value ? 32 : resolvePrecision(node.precision, wired, graph.precision, anyKind);
             const tiling = resolveTiling(node.tiling, first?.tiling, graph.tiling ?? 'both', definition.inputs.length > 0);
             const inputSignatures = definition.inputs.map((port) => {
                 const link = links?.get(port.key);
@@ -301,7 +312,7 @@ export class TextureGraphEvaluator {
             else if (MESH_READING_NODE_TYPES.has(node.type)) {
                 for (const key of ['mesh:position', 'mesh:worldNormal', 'mesh:normal']) extras.push(externalToken(key));
             }
-            if (node.type === SUBGRAPH_NODE_TYPE) {
+            if (GRAPH_USING_TYPES.has(node.type)) {
                 const entry = typeof params.graph === 'string' ? this.resolve(params.graph) : undefined;
                 // The used graph and those it uses in turn, and their pictures loading: any of them changing draws it again.
                 extras.push(entry ? graphContentKey(entry.graph, this.resolve, (id) => Boolean(this.texture(id))) : 'missing');
@@ -318,8 +329,9 @@ export class TextureGraphEvaluator {
             }
             if (main) extras.push(`bypass:${main}`);
             if (world[0] !== 1 || world[1] !== 1) extras.push(`world:${world[0]}x${world[1]}`);
+            if (request.iteration) extras.push(`pass:${iteration.index}/${iteration.count}`);
             const signature = hashText(JSON.stringify([node.type, params, width, height, precision, seed, kinds, inputSignatures, extras, tiling]));
-            info.set(node.id, { signature, width, height, kinds, precision, tiling, params, warnings, seed, innerSeed, world });
+            info.set(node.id, { signature, width, height, kinds, precision, tiling, params, warnings, seed, innerSeed, world, iteration, ...(value ? { value } : {}) });
         }
         return { plan, info, targets, external, graphSeed };
     }
@@ -401,9 +413,12 @@ export class TextureGraphEvaluator {
             };
             try {
                 const main = bypassedInput(node, definition);
+                // Settings following values: read on the GPU by nodes that read settings only in shaders,
+                // read back first by the rest.
+                const runDetails = !main && !definition.settingsInShader ? await this.withValuesRead(definition, details, plan.incoming.get(node.id)) : details;
                 state.outputs = main
                     ? this.passThrough(definition, main, details, plan.incoming.get(node.id), made)
-                    : await definition.run(this.context(node, definition, details, plan, request, external, made));
+                    : await definition.run(this.context(node, definition, runDetails, plan, request, external, made));
             } catch (error) {
                 state.outputs = {};
                 leftovers();
@@ -466,6 +481,24 @@ export class TextureGraphEvaluator {
         return outputs;
     }
 
+    /**
+     * The node's details with each setting that follows a value wired in set to that value, read back
+     * from the GPU (for nodes that read settings outside their shaders). The same details when none do.
+     */
+    private async withValuesRead(definition: TexNodeDef, details: NodeDetails, links: Map<string, TexGraphLink> | undefined): Promise<NodeDetails> {
+        let params: Record<string, unknown> | null = null;
+        for (const param of definition.params) {
+            const link = links?.get(valuePinKey(param.key));
+            const image = link ? this.cache.get(link.from)?.outputs[link.fromOutput] : undefined;
+            if (!image) continue;
+            const read = await this.gpu.readPixelLater(image, 0, 0);
+            if (!read) continue;
+            const value = param.kind === 'color' ? [read[0], read[1], read[2], read[3]] : param.kind === 'vec2' ? [read[0], read[1]] : param.kind === 'bool' ? read[0] > 0.5 : read[0];
+            (params ??= { ...details.params })[param.key] = coerceParam(param, value);
+        }
+        return params ? { ...details, params } : details;
+    }
+
     private context(
         node: TexGraphNode,
         definition: TexNodeDef,
@@ -492,6 +525,7 @@ export class TextureGraphEvaluator {
             precision: details.precision,
             tiling: tilingAxes(details.tiling),
             world: details.world,
+            iteration: details.iteration,
             params: details.params,
             signal: request.signal ?? new AbortController().signal,
             input,
@@ -502,7 +536,7 @@ export class TextureGraphEvaluator {
                 return image;
             },
             pass: async (target, fragment, extra = {}) => {
-                const bound = nodeBindings(definition, { input, params: details.params, seed, texture: this.texture, tiling: tilingAxes(details.tiling), world: details.world }, (name) => gpu.constant(name));
+                const bound = nodeBindings(definition, { input, params: details.params, seed, texture: this.texture, tiling: tilingAxes(details.tiling), world: details.world, iteration: details.iteration }, (name) => gpu.constant(name));
                 await gpu.pass(target, {
                     ...extra,
                     fragment: `${bound.declarations}\n${fragment}`,
@@ -517,7 +551,7 @@ export class TextureGraphEvaluator {
                 const outputs = link ? this.cache.get(link.from)?.outputs : undefined;
                 return outputs && link ? materialOf(outputs, link.fromOutput) : null;
             },
-            subgraph: async (graphId, params, inputs) => {
+            subgraph: async (graphId, params, inputs, options = {}) => {
                 if (this.depth >= MAX_DEPTH || this.visiting.has(graphId)) throw new Error('This graph uses itself, directly or through others.');
                 const entry = this.resolve(graphId);
                 if (!entry) throw new Error('The graph this node used is no longer in the project.');
@@ -528,6 +562,7 @@ export class TextureGraphEvaluator {
                 const given: Record<string, ExternalImage | null> = {};
                 for (const [key, value] of Object.entries(external)) if (key.startsWith('mesh:')) given[key] = value ?? null;
                 for (const [key, value] of Object.entries(inputs)) given[key] = value;
+                const result: Record<string, GpuImage> = {};
                 try {
                     const outputs = entry.graph.nodes.filter((candidate) => candidate.type === OUTPUT_NODE_TYPE || candidate.type === MATERIAL_OUTPUT_NODE_TYPE);
                     const states = await nested.evaluate({
@@ -537,11 +572,11 @@ export class TextureGraphEvaluator {
                         externalVersion: request.externalVersion,
                         targets: outputs.map((candidate) => candidate.id),
                         size: { w: Math.log2(details.width), h: Math.log2(details.height) },
-                        seed: details.innerSeed,
+                        seed: options.seedOffset ? mixSeeds(details.innerSeed ?? request.seed ?? request.graph.seed, options.seedOffset) : details.innerSeed,
                         world: { w: details.world[0], h: details.world[1] },
+                        ...(options.iteration ? { iteration: options.iteration } : {}),
                         signal: request.signal,
                     });
-                    const result: Record<string, GpuImage> = {};
                     for (const output of outputs) {
                         const state = states.get(output.id);
                         if (state?.error) throw new Error(`Inside "${entry.name}": ${state.error}`);
@@ -552,18 +587,20 @@ export class TextureGraphEvaluator {
                                 const image = material?.[channel];
                                 if (!image) continue;
                                 result[materialKey(output.id, channel)] = gpu.retain(image);
-                                made.push(image);
+                                if (!options.owned) made.push(image);
                             }
                             continue;
                         }
                         const image = state?.outputs.out;
                         if (image) {
                             result[output.id] = gpu.retain(image);
-                            made.push(image);
+                            if (!options.owned) made.push(image);
                         }
                     }
                     return result;
                 } catch (error) {
+                    // Results the node would have owned go back; the rest go back with the node's leftovers.
+                    if (options.owned) for (const image of Object.values(result)) gpu.release(image);
                     // A run that failed (or was stopped) may leave inner results half made: start afresh next time.
                     nested.dispose();
                     this.nested.delete(key);

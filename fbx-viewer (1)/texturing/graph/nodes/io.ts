@@ -10,6 +10,10 @@ import { OUTPUT_CHANNELS, OUTPUT_CHANNEL_LABELS, outputNodeKind, type NodeRunCon
 export const INPUT_NODE_TYPE = 'input';
 export const OUTPUT_NODE_TYPE = 'output';
 export const SUBGRAPH_NODE_TYPE = 'subgraph';
+/** Runs a graph of the project a number of times, each pass's results fed into the next. */
+export const ITERATE_NODE_TYPE = 'iterate';
+/** Nodes that run another graph of the project. */
+export const GRAPH_USING_TYPES: ReadonlySet<string> = new Set([SUBGRAPH_NODE_TYPE, ITERATE_NODE_TYPE]);
 export const MESH_MAP_NODE_TYPE = 'meshMap';
 /** A point a wire passes through on the canvas; it changes nothing. */
 export const REROUTE_NODE_TYPE = 'reroute';
@@ -333,33 +337,6 @@ export const IO_NODES: TexNodeDef[] = [
         sizeFrom: 'graph',
         glsl: 'void main() { outColor = vec4(p_value); }',
     }),
-    {
-        ...onePass({
-            type: 'pixelProcessor',
-            label: 'Pixel processor',
-            category: 'Utility',
-            description: 'Your own GLSL for each pixel. Read inputs with c_a(uv) or g_a(uv) (and b, c, d), the settings as p_x, p_y, p_z, p_w and p_tint, and write outColor.',
-            keywords: ['custom', 'code', 'shader', 'glsl', 'expression', 'per pixel'],
-            inputs: [anyIn('a', 'A'), anyIn('b', 'B'), anyIn('c', 'C'), anyIn('d', 'D')],
-            outputs: [out('any')],
-            params: [
-                { key: 'code', label: 'Code', kind: 'code', default: 'vec4 v = c_a(uv);\noutColor = vec4(v.rgb * p_x, v.a);' },
-                select('output', 'Makes', 'color', [['color', 'Colour'], ['gray', 'Grey']]),
-                float('x', 'x', 1, -10, 10), float('y', 'y', 0, -10, 10), float('z', 'z', 0, -10, 10), float('w', 'w', 0, -10, 10),
-                color('tint', 'tint', [1, 1, 1, 1]),
-            ],
-            sizeFrom: 'graph',
-            glsl: '',
-        }),
-        kindOf: (params) => (params.output === 'gray' ? 'gray' : 'color'),
-        async run(context) {
-            const image = context.image(context.outputKind('out'));
-            const code = String(context.params.code ?? '').slice(0, 8000);
-            // #line 1: the compiler counts the typed code's lines from 1, so its errors point at them.
-            await context.pass(image, `void main() {\nvec2 uv = vUv;\n#line 1\n${code}\n}`, { cost: pixelProcessorCost(code) });
-            return { out: image };
-        },
-    },
     {
         type: 'triplanar',
         label: 'Triplanar projection',

@@ -1,12 +1,16 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { ArrowLeftIcon, CheckCircleIcon, ChevronRightIcon, DiceIcon, DownloadIcon, ExternalLinkIcon, InfoIcon, LayersIcon, RefreshIcon, TrashIcon, WarningIcon } from '../UI/Icons';
+import { ArrowLeftIcon, CheckCircleIcon, ChevronRightIcon, DiceIcon, DownloadIcon, ExternalLinkIcon, FlowIcon, InfoIcon, LayersIcon, RefreshIcon, TrashIcon, WarningIcon } from '../UI/Icons';
 import { useAssets } from '../../context/AssetContext';
 import { useScene } from '../../context/SceneContext';
 import { frontendDiagnostics } from '../../diagnostics/runtime';
 import { materialLibrary, type MaterialAsset } from '../../runtime/materials/materialLibrary';
 import { AbortedError, unknownNodeMessage, type ExternalImage, type TextureGraphEvaluator } from '../../texturing/graph/evaluator';
 import { MAX_SIZE_LOG2, MIN_SIZE_LOG2, coerceParameter, formulaScope, parameterValues, readTextureGraph, resolveNodeParams, subgraphRunSeed, unknownNodeTypes } from '../../texturing/graph/document';
-import { OUTPUT_NODE_TYPE, SUBGRAPH_NODE_TYPE, SUBGRAPH_SEED_KEY, SUBGRAPH_VARY_KEY } from '../../texturing/graph/nodes/io';
+import { ITERATE_NODE_TYPE, OUTPUT_NODE_TYPE, SUBGRAPH_NODE_TYPE, SUBGRAPH_SEED_KEY, SUBGRAPH_VARY_KEY } from '../../texturing/graph/nodes/io';
+import { feedbackPairs } from '../../texturing/graph/iterate';
+import { PROCESSOR_PICTURES, PROCESSOR_TYPES, defaultFunctionFor, processorUse, readNamedSettings, settingDefault } from '../../texturing/graph/nodes/processors';
+import { compileFunction, readFunctionGraph, type FunctionGraph, type NamedSetting } from '../../texturing/graph/functionGraph';
+import { VALUE_SETTING_KINDS, valuePinKey } from '../../texturing/graph/nodeKit';
 import { textureNodeDefinition, type GraphEntry, type GraphResolver } from '../../texturing/graph/registry';
 import { bakeSignature, readStoredGraph, type StoredTextureGraph } from '../../texturing/graph/stored';
 import { MATERIAL_CHANNELS, MATERIAL_CHANNEL_LABELS, materialKey, materialOf } from '../../texturing/graph/material';
@@ -17,6 +21,8 @@ import { download, makeZip } from '../../texturing/zip';
 import { Button, IconButton, Segmented, Spinner } from '../UI/kit';
 import { Select } from '../UI/Select';
 import { COMMENT_COLORS, COMMENT_COLOR_NAMES, MAX_COMMENT_TITLE, addSubgraphNode, changeComment, materialHistory, type Point } from './graphEditing';
+import { FunctionGraphCanvas, FunctionNodeInspector, NamedSettingsEditor } from './FunctionGraphEditor';
+import { FunctionPreviews } from './functionPreviews';
 import { usePreviewMeshMaps, type PreviewShape } from './previewMeshMaps';
 import { TextureGraphCanvas } from './TextureGraphCanvas';
 import { DraftNumber, DraftText, ParamControl, TextureParamField, exposedKind } from './TextureParamField';
@@ -288,6 +294,26 @@ const Workspace: React.FC<{
     const history = useMemo(() => materialHistory<GraphSnapshot>(asset.id), [asset.id]);
     const meshMaps = usePreviewMeshMaps(session, graph, resolve, shape, surfaceId, libraryVersion);
 
+    // A processor's function graph, opened in place of the graph's canvas.
+    const [functionOf, setFunctionOf] = useState<string | null>(null);
+    const [functionSelection, setFunctionSelection] = useState<string[]>([]);
+    const functionSelectionSet = useMemo(() => new Set(functionSelection), [functionSelection]);
+    const functionPreviews = useMemo(() => new FunctionPreviews(session, resolve), [resolve, session]);
+    useEffect(() => () => functionPreviews.dispose(), [functionPreviews]);
+    const previewVersion = useSyncExternalStore(functionPreviews.subscribe, functionPreviews.getVersion);
+    const editedProcessor = functionOf ? graph.nodes.find((node) => node.id === functionOf && PROCESSOR_TYPES.has(node.type) && node.params.mode !== 'code') ?? null : null;
+    useEffect(() => { if (functionOf && !editedProcessor) setFunctionOf(null); }, [editedProcessor, functionOf]);
+    const editedType = editedProcessor?.type ?? '';
+    const editedFunctionSource = editedProcessor?.params.function;
+    const editedSettingsSource = editedProcessor?.params.settings;
+    const editedFn = useMemo(() => (editedType ? readFunctionGraph(editedFunctionSource, defaultFunctionFor(editedType)) : null), [editedFunctionSource, editedType]);
+    const editedSettings = useMemo<NamedSetting[]>(() => (editedType ? readNamedSettings(editedSettingsSource) : []), [editedSettingsSource, editedType]);
+    const editedPictures = PROCESSOR_PICTURES[editedType] ?? [];
+    const editedCompiled = useMemo(() => (editedFn ? compileFunction(editedFn, { use: processorUse(editedType), settings: editedSettings, pictures: editedPictures }) : null), [editedFn, editedPictures, editedSettings, editedType]);
+    useEffect(() => {
+        if (editedProcessor) functionPreviews.update(graph, stored.values, editedProcessor.id);
+    }, [editedProcessor, functionPreviews, graph, sessionVersion, stored.values]);
+
     // The first output is in the 2D view to begin with.
     useEffect(() => {
         if (viewed && graph.nodes.some((node) => node.id === viewed)) return;
@@ -378,9 +404,15 @@ const Workspace: React.FC<{
         if (node) update({ ...graph, nodes: graph.nodes.map((candidate) => (candidate.id === nodeId ? { ...node, params: { ...node.params, ...patch } } : candidate)) }, true, `${nodeId}:handle:${key}`);
     }, [graph, update]);
 
-    /** Opens the graph a sub-graph node uses, in place of this one. */
+    /** Opens the graph a sub-graph node uses, or a processor's function graph, in place of this one. */
     const openGraph = useCallback((nodeId: string) => {
         const node = graph.nodes.find((candidate) => candidate.id === nodeId);
+        if (node && PROCESSOR_TYPES.has(node.type)) {
+            setFunctionOf(nodeId);
+            setFunctionSelection([]);
+            setTab('node');
+            return;
+        }
         const graphId = node?.type === SUBGRAPH_NODE_TYPE ? node.params.graph : undefined;
         if (typeof graphId === 'string' && graphId !== asset.id && entries.has(graphId)) onOpenGraph(graphId, nodeId);
     }, [asset.id, entries, graph.nodes, onOpenGraph]);
@@ -531,6 +563,47 @@ const Workspace: React.FC<{
 
     const changeNode = (node: TexGraphNode, coalesce?: string) => update({ ...graph, nodes: graph.nodes.map((candidate) => (candidate.id === node.id ? node : candidate)) }, true, coalesce);
 
+    /** The processor open in the function editor with its function changed. */
+    const changeFunction = (fn: FunctionGraph, coalesce?: string) => {
+        if (editedProcessor) changeNode({ ...editedProcessor, params: { ...editedProcessor.params, function: fn } }, coalesce);
+    };
+
+    /** A node with one of its settings shown as a pin or not (taking away the pin takes away its wire). */
+    const togglePin = (node: TexGraphNode, key: string) => {
+        const pins = node.valuePins ?? [];
+        const shown = pins.includes(key);
+        const { valuePins: _old, ...rest } = node;
+        const nextPins = shown ? pins.filter((pin) => pin !== key) : [...pins, key];
+        const changed: TexGraphNode = nextPins.length ? { ...rest, valuePins: nextPins } : rest;
+        update({
+            ...graph,
+            nodes: graph.nodes.map((candidate) => (candidate.id === node.id ? changed : candidate)),
+            links: shown ? graph.links.filter((link) => !(link.to === node.id && link.toInput === valuePinKey(key))) : graph.links,
+        }, true);
+    };
+
+    /** A processor's named settings changed: its values follow, and a setting taken away takes its pin and wire with it. */
+    const changeSettings = (node: TexGraphNode, settings: NamedSetting[], removed?: string) => {
+        const params: Record<string, unknown> = { ...node.params, settings };
+        for (const setting of settings) {
+            const old = readNamedSettings(node.params.settings).find((candidate) => candidate.key === setting.key);
+            if (!old) params[setting.key] = setting.default;
+            else if (old.kind !== setting.kind) params[setting.key] = settingDefault(setting.kind, node.params[setting.key]);
+        }
+        let changed: TexGraphNode = { ...node, params };
+        if (removed) {
+            delete params[removed];
+            const { valuePins: pins, ...rest } = changed;
+            const kept = (pins ?? []).filter((pin) => pin !== removed);
+            changed = kept.length ? { ...rest, valuePins: kept } : rest;
+        }
+        update({
+            ...graph,
+            nodes: graph.nodes.map((candidate) => (candidate.id === node.id ? changed : candidate)),
+            links: removed ? graph.links.filter((link) => !(link.to === node.id && link.toInput === valuePinKey(removed))) : graph.links,
+        }, true);
+    };
+
     const changeParameter = (index: number, patch: Partial<GraphParameter>, coalesce?: string) =>
         change({ graph: { ...graph, parameters: graph.parameters.map((parameter, at) => (at === index ? { ...parameter, ...patch } : parameter)) } }, coalesce);
 
@@ -581,8 +654,22 @@ const Workspace: React.FC<{
         </div>
     );
 
+    const selectedSingle = single;
     const nodeInspector = () => {
-        if (comment) return commentInspector(comment);
+        if (editedProcessor && editedFn) {
+            void previewVersion;
+            const fnNode = functionSelection.length === 1 ? editedFn.nodes.find((node) => node.id === functionSelection[0]) : undefined;
+            if (fnNode) {
+                return (
+                    <FunctionNodeInspector node={fnNode} use={processorUse(editedProcessor.type)} settings={editedSettings} pictures={editedPictures}
+                        error={editedCompiled?.errors.get(fnNode.id)} preview={functionPreviews.get(fnNode.id)}
+                        onChange={(next, coalesce) => changeFunction({ ...editedFn, nodes: editedFn.nodes.map((node) => (node.id === next.id ? next : node)) }, coalesce)} />
+                );
+            }
+        }
+        // While a function graph is open, its processor (until one of its nodes is selected).
+        const single = editedProcessor ?? selectedSingle;
+        if (comment && !editedProcessor) return commentInspector(comment);
         if (!single) {
             return <p className="text-2xs leading-snug text-ink-3">{selected.length > 1 ? `${selected.length} nodes selected. Delete removes them, C puts a frame round them, and the line-up button on the canvas aligns or spaces them.` : 'Select a node or a frame to change its settings. Double-click a node to look at it in the 2D view; right-click it for more.'}</p>;
         }
@@ -631,6 +718,22 @@ const Workspace: React.FC<{
                         <Button size="sm" variant="ghost" icon={<ExternalLinkIcon size={12} />} onClick={() => onOpenAsset(single.params.graph as string)}>Go to {entries.get(single.params.graph)!.name}</Button>
                     </div>
                 )}
+                {single.type === ITERATE_NODE_TYPE && (() => {
+                    const ran = typeof single.params.graph === 'string' ? entries.get(single.params.graph) : undefined;
+                    const pairs = ran ? feedbackPairs(ran.graph) : [];
+                    const outputName = (id: string) => definition.outputs.find((port) => port.key === id)?.label ?? 'Output';
+                    return (
+                        <div className="space-y-1.5">
+                            <span className="text-2xs text-ink-2">Graph it runs</span>
+                            <Select value={String(single.params.graph ?? '')} placeholder="Choose a graph" options={graphs.map((entry) => ({ value: entry.id, label: entry.name }))}
+                                onChange={(value) => changeNode({ ...single, params: { ...single.params, graph: value } })} className="w-full" />
+                            {ran && (pairs.length
+                                ? <p className="text-2xs leading-snug text-ink-3">Fed back each pass: {pairs.map((pair) => `${outputName(pair.output)} into ${pair.input}`).join(', ')}. Formulas read the pass as $iteration; function graphs with Pass number.</p>
+                                : <div className="flex gap-1.5 rounded border border-warn/40 bg-warn/10 p-1.5 text-2xs text-warn"><WarningIcon size={12} className="mt-px shrink-0" /><span>Nothing feeds back: give one of its Outputs the name of one of its Inputs, and that Output feeds that Input on the next pass.</span></div>)}
+                            {ran && <Button size="sm" variant="ghost" icon={<ExternalLinkIcon size={12} />} onClick={() => onOpenAsset(ran.id)}>Go to {ran.name}</Button>}
+                        </div>
+                    );
+                })()}
                 {isOutput && (
                     <div className="space-y-1">
                         <span className="text-2xs text-ink-2">Channel</span>
@@ -638,19 +741,51 @@ const Workspace: React.FC<{
                             onChange={(value) => changeNode({ ...single, params: { ...single.params, channel: value } })} className="w-full" />
                     </div>
                 )}
-                {definition.params.filter((param) => !(isOutput && param.key === 'channel') && param.kind !== 'graph' && (!param.showIf || param.showIf(single.params))).map((param) => (
-                    <TextureParamField
-                        key={param.key}
-                        param={param}
-                        value={single.params[param.key]}
-                        parameters={graph.parameters}
-                        textures={textures}
-                        problem={state?.warnings?.find((warning) => warning.includes(`"${param.label}"`))}
-                        onChange={(value) => changeNode({ ...single, params: { ...single.params, [param.key]: value } }, `${single.id}:${param.key}`)}
-                        onExpose={() => expose(single, param)}
-                        extras={param.kind === 'code' ? { error: state?.error, names: codeNames(definition) } : param.kind === 'curve' ? { histogram: curveHistogram } : undefined}
-                    />
-                ))}
+                {definition.params.filter((param) => !(isOutput && param.key === 'channel') && param.kind !== 'graph' && (!param.showIf || param.showIf(single.params))).map((param) => {
+                    if (param.kind === 'function') {
+                        const fn = readFunctionGraph(single.params.function, defaultFunctionFor(single.type));
+                        const open = editedProcessor?.id === single.id;
+                        return (
+                            <div key={param.key} className="space-y-1.5 rounded border border-line bg-well p-2">
+                                <div className="flex items-center justify-between gap-2">
+                                    <span className="text-2xs text-ink-2">Function graph: {fn.nodes.length} node{fn.nodes.length === 1 ? '' : 's'}</span>
+                                    {open
+                                        ? <Button size="sm" variant="ghost" icon={<ArrowLeftIcon size={12} />} onClick={() => setFunctionOf(null)}>Back to the graph</Button>
+                                        : <Button size="sm" icon={<FlowIcon size={12} />} onClick={() => openGraph(single.id)}>Edit the function graph</Button>}
+                                </div>
+                                {!open && <p className="text-2xs leading-snug text-ink-3">Opens in place of the canvas: every node in it shows its value as you build it.</p>}
+                            </div>
+                        );
+                    }
+                    if (param.kind === 'settings') {
+                        const settings = readNamedSettings(single.params.settings);
+                        return (
+                            <NamedSettingsEditor key={param.key} settings={settings}
+                                onAdd={(setting) => changeSettings(single, [...settings, setting])}
+                                onChange={(index, setting) => changeSettings(single, settings.map((candidate, at) => (at === index ? setting : candidate)))}
+                                onRemove={(index) => changeSettings(single, settings.filter((_, at) => at !== index), settings[index].key)} />
+                        );
+                    }
+                    const pinnable = VALUE_SETTING_KINDS.has(param.kind) && !isOutput;
+                    return (
+                        <TextureParamField
+                            key={param.key}
+                            param={param}
+                            value={single.params[param.key]}
+                            parameters={graph.parameters}
+                            textures={textures}
+                            problem={state?.warnings?.find((warning) => warning.includes(`"${param.label}"`))}
+                            onChange={(value) => changeNode({ ...single, params: { ...single.params, [param.key]: value } }, `${single.id}:${param.key}`)}
+                            onExpose={() => expose(single, param)}
+                            extras={param.kind === 'code' ? { error: state?.error, names: codeNames(definition) } : param.kind === 'curve' ? { histogram: curveHistogram } : undefined}
+                            pin={pinnable ? {
+                                shown: Boolean(single.valuePins?.includes(param.key)),
+                                wired: graph.links.some((link) => link.to === single.id && link.toInput === valuePinKey(param.key)),
+                                onToggle: () => togglePin(single, param.key),
+                            } : undefined}
+                        />
+                    );
+                })}
                 {!isOutput && (
                     <div className="space-y-1.5 border-t border-line pt-2">
                         <div className="text-2xs font-semibold text-ink-2">Size, bit depth, tiling and seed</div>
@@ -835,8 +970,39 @@ const Workspace: React.FC<{
                         </span>
                     </nav>
                 )}
+                {editedProcessor && editedFn && (
+                    <>
+                        <nav aria-label="Function graph open" className="flex h-8 shrink-0 items-center gap-1 border-b border-line bg-panel px-1.5 text-2xs">
+                            <IconButton label="Back to the graph" onClick={() => setFunctionOf(null)}><ArrowLeftIcon size={13} /></IconButton>
+                            <button type="button" onClick={() => setFunctionOf(null)} className="max-w-[160px] truncate rounded px-1 py-0.5 text-ink-2 hover:bg-white/5 hover:text-ink">{path[depth]}</button>
+                            <ChevronRightIcon size={11} className="shrink-0 text-ink-3" />
+                            <span className="max-w-[240px] truncate px-1 font-semibold text-ink">{editedProcessor.name || textureNodeDefinition(editedProcessor, resolve)?.label}: function graph</span>
+                            <span className="ml-2 min-w-0 truncate text-ink-3">
+                                {processorUse(editedProcessor.type) === 'pixel'
+                                    ? 'Worked out for every pixel: each node shows its value over the picture, with the processor\'s pictures and settings.'
+                                    : 'Worked out once, on the GPU: each node shows its value.'}
+                            </span>
+                        </nav>
+                        <FunctionGraphCanvas
+                            key={editedProcessor.id}
+                            fn={editedFn}
+                            use={processorUse(editedProcessor.type)}
+                            settings={editedSettings}
+                            pictures={editedPictures}
+                            previews={functionPreviews}
+                            selection={functionSelectionSet}
+                            canUndo={history.canUndo}
+                            canRedo={history.canRedo}
+                            onUndo={() => travel('undo')}
+                            onRedo={() => travel('redo')}
+                            onSelect={(ids) => { setFunctionSelection(ids); if (ids.length === 1) setTab('node'); }}
+                            onChange={changeFunction}
+                        />
+                    </>
+                )}
                 <TextureGraphCanvas
                     key={asset.id}
+                    hidden={Boolean(editedProcessor)}
                     graph={graph}
                     session={session}
                     resolve={resolve}

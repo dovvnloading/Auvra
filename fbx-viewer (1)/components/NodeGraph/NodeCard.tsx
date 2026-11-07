@@ -134,7 +134,7 @@ const NodeCardBase: React.FC<NodeCardProps> = ({ node, view, layout, wired, sele
                     : <span className="min-w-0 flex-1 truncate">{view.title}</span>}
                 {node.bypass && <span className="shrink-0 rounded-sm bg-black/40 px-1 text-[9px] font-medium uppercase tracking-wide text-white/80" title="Bypassed: its main input passes straight through">Bypassed</span>}
                 {view.canOpen && (
-                    <button type="button" data-node-action="open" aria-label="Open the graph inside" title="Open the graph inside"
+                    <button type="button" data-node-action="open" aria-label={view.openLabel ?? 'Open the graph inside'} title={view.openLabel ?? 'Open the graph inside'}
                         onClick={() => actions.openGraph(node.id)} className="shrink-0 rounded-sm p-px text-white/70 hover:bg-black/30 hover:text-white">
                         <LayersIcon size={11} />
                     </button>

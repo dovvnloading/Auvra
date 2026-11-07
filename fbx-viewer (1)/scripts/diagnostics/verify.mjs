@@ -55,6 +55,8 @@ const EXEMPT = new Map(Object.entries({
   'texturing/graph/inherit.ts': 'pure-utility',
   'texturing/graph/flood.ts': 'pure-utility',
   'texturing/graph/functionGraph.ts': 'pure-utility',
+  'texturing/graph/iterate.ts': 'pure-utility',
+  'texturing/graph/nodes/processors.ts': 'pure-utility',
   'components/NodeGraph/tidy.ts': 'pure-utility',
   'texturing/graph/nodes/transform.ts': 'pure-utility',
   'texturing/graph/registry.ts': 'data-model',

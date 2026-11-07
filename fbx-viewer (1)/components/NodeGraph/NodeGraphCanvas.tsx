@@ -580,7 +580,7 @@ export function NodeGraphCanvas<S>(props: NodeGraphCanvasProps<S>): React.ReactE
         if (!many && card && own.looks) items.push({ label: 'Rename', icon: <PencilIcon size={12} />, shortcut: 'F2', section: 'look', onSelect: () => setRenaming(nodeId) });
         if (card && own.looks) items.push({ label: node.collapsed ? 'Unfold' : 'Fold to its header', icon: <ChevronDownIcon size={12} />, shortcut: 'H', section: 'look', onSelect: () => toggleCollapsed(ids) });
         if (nodeView.canBypass) items.push({ label: node.bypass ? 'Stop bypassing' : 'Bypass: pass its main input through', icon: <PowerIcon size={12} />, shortcut: 'B', section: 'look', onSelect: () => toggleBypass(ids) });
-        if (!many && nodeView.canOpen && own.onOpenGraph) items.push({ label: 'Open the graph inside', icon: <LayersIcon size={12} />, section: 'open', onSelect: () => own.onOpenGraph?.(nodeId) });
+        if (!many && nodeView.canOpen && own.onOpenGraph) items.push({ label: nodeView.openLabel ?? 'Open the graph inside', icon: <LayersIcon size={12} />, section: 'open', onSelect: () => own.onOpenGraph?.(nodeId) });
         if (!many) for (const item of own.menuItems?.(nodeId) ?? []) items.push({ ...item, section: item.section ?? 'open' });
         const copyable = [...ids].some((id) => shown.get(id)?.canDelete !== false);
         items.push({ label: many ? `Duplicate ${ids.size} nodes` : 'Duplicate', icon: <CopyIcon size={12} />, shortcut: 'Ctrl+D', section: 'edit', disabled: !copyable, hint: 'The output cannot be copied.', onSelect: duplicate });
