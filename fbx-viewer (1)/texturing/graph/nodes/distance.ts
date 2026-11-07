@@ -61,7 +61,7 @@ void main() {
 const seedOf = (invert: boolean, threshold = 0.5): string => (invert ? `m.r < ${threshold.toFixed(4)}` : `m.r >= ${threshold.toFixed(4)}`);
 
 /** Distance in pixels from each pixel to the nearest seed, as a 32-bit grey image. */
-const distanceField = async (gpu: TextureGpu, mask: GpuImage, width: number, height: number, invert: boolean): Promise<GpuImage> => {
+export const distanceField = async (gpu: TextureGpu, mask: GpuImage, width: number, height: number, invert: boolean): Promise<GpuImage> => {
     const nearest = await jumpFlood(gpu, mask, width, height, seedOf(invert));
     const distance = gpu.image(width, height, 'gray', 32);
     await gpu.pass(distance, {
@@ -73,7 +73,7 @@ const distanceField = async (gpu: TextureGpu, mask: GpuImage, width: number, hei
 };
 
 /** A grey input at the node's size (a mask needs its own pixels, not resampled ones). */
-const atSize = async (context: NodeRunContext, key: string): Promise<GpuImage | null> => {
+export const atSize = async (context: NodeRunContext, key: string): Promise<GpuImage | null> => {
     const input = context.input(key);
     if (!input) return null;
     if (input.width === context.width && input.height === context.height && input.kind === 'gray') return context.gpu.retain(input);
