@@ -18,6 +18,8 @@ import type { PaintTool } from './PaintViewport';
  * use the wheel to zoom.
  */
 
+const tileOfTriangle = (part: PaintSession['part'], triangle: number): number => part.triangleTile[triangle];
+
 /** A tile's picture over the view, panned and zoomed (uView: left, top, pixels per UV unit), dark round it. */
 const SHOW = /* glsl */ `
 uniform vec4 uView;
@@ -31,13 +33,21 @@ void main() {
     outColor = vec4(uGray == 1 ? vec3(c.r) : c.rgb, 1.0);
 }`;
 
-/** The edges of islands (and so the seams) on each tile, as line ends in tile UVs: an edge only one triangle has. */
-const islandEdges = (part: PaintSession['part']): Map<number, Float32Array> => {
+/**
+ * Edges on each tile as line ends in tile UVs: island borders (and so the seams) only, an edge no other
+ * triangle shares (the same two places on the layout and on the model), or every edge for the wireframe.
+ * Edges are matched by place, as a surface's corners are often apart in the mesh; matching the model too
+ * keeps the borders of islands stacked on one another (mirrored halves) apart.
+ */
+const layoutEdges = (part: PaintSession['part'], everyEdge: boolean): Map<number, Float32Array> => {
+    const at = (vertex: number, triangle: number) => `${tileOfTriangle(part, triangle)}:${Math.round((part.uvs[vertex * 2] - part.triangleShift[triangle * 2]) * 1e6)},${Math.round((part.uvs[vertex * 2 + 1] - part.triangleShift[triangle * 2 + 1]) * 1e6)}@${Math.round(part.positions[vertex * 3] * 1e5)},${Math.round(part.positions[vertex * 3 + 1] * 1e5)},${Math.round(part.positions[vertex * 3 + 2] * 1e5)}`;
     const uses = new Map<string, { count: number; triangle: number; a: number; b: number }>();
     for (let t = 0; t < part.indices.length / 3; t++) {
         for (let k = 0; k < 3; k++) {
             const a = part.indices[t * 3 + k], b = part.indices[t * 3 + ((k + 1) % 3)];
-            const key = a < b ? `${a},${b}` : `${b},${a}`;
+            const ka = at(a, t), kb = at(b, t);
+            if (ka === kb) continue;
+            const key = ka < kb ? `${ka}|${kb}` : `${kb}|${ka}`;
             const known = uses.get(key);
             if (known) known.count++;
             else uses.set(key, { count: 1, triangle: t, a, b });
@@ -45,7 +55,7 @@ const islandEdges = (part: PaintSession['part']): Map<number, Float32Array> => {
     }
     const lines = new Map<number, number[]>();
     for (const edge of uses.values()) {
-        if (edge.count !== 1) continue;
+        if (!everyEdge && edge.count !== 1) continue;
         const tile = part.triangleTile[edge.triangle];
         const su = part.triangleShift[edge.triangle * 2], sv = part.triangleShift[edge.triangle * 2 + 1];
         let list = lines.get(tile);
@@ -75,7 +85,9 @@ export const PaintView2D: React.FC<{
     const [cursor, setCursor] = useState<{ x: number; y: number } | null>(null);
     const gesture = useRef<{ kind: 'pan'; x: number; y: number } | { kind: 'stroke'; stroke: Stroke } | null>(null);
     const cloneFrom = useRef<{ tile: number; u: number; v: number } | null>(null);
-    const edges = useMemo(() => islandEdges(session.part), [session.part]);
+    const [wireframe, setWireframe] = useState(false);
+    const edges = useMemo(() => layoutEdges(session.part, false), [session.part]);
+    const wires = useMemo(() => (wireframe ? layoutEdges(session.part, true) : null), [session.part, wireframe]);
     const gpu = session.gpu;
 
     useEffect(() => {
@@ -115,6 +127,19 @@ export const PaintView2D: React.FC<{
         g.strokeStyle = '#3f3f46';
         g.lineWidth = 1;
         g.strokeRect(view.x, view.y, scale, scale);
+        // A faint wireframe, when asked for, under the island borders.
+        const wire = wires?.get(tile);
+        if (wire) {
+            g.strokeStyle = 'rgba(228, 228, 231, 0.18)';
+            g.lineWidth = 0.5;
+            g.beginPath();
+            for (let i = 0; i < wire.length; i += 4) {
+                g.moveTo(view.x + wire[i] * scale, view.y + (1 - wire[i + 1]) * scale);
+                g.lineTo(view.x + wire[i + 2] * scale, view.y + (1 - wire[i + 3]) * scale);
+            }
+            g.stroke();
+            g.lineWidth = 1;
+        }
         const list = edges.get(tile);
         if (list) {
             g.strokeStyle = 'rgba(56, 189, 248, 0.85)';
@@ -131,7 +156,7 @@ export const PaintView2D: React.FC<{
             g.arc(cursor.x, cursor.y, Math.max(1, brush.size), 0, Math.PI * 2);
             g.stroke();
         }
-    }, [brush.size, cursor, edges, gpu, maskImage, scale, session, show, size, tile, tool, view]);
+    }, [brush.size, cursor, edges, gpu, maskImage, scale, session, show, size, tile, tool, view, wires]);
 
     useEffect(() => { draw(); }, [draw, version]);
 
@@ -250,11 +275,17 @@ export const PaintView2D: React.FC<{
         >
             <canvas ref={picture} className="absolute inset-0 h-full w-full" />
             <canvas ref={overlay} className="pointer-events-none absolute inset-0 h-full w-full" />
-            {session.part.tiles.length > 1 && (
-                <div className="absolute right-3 top-3 w-28" onPointerDown={(event) => event.stopPropagation()}>
-                    <Select value={tile} options={session.part.tiles.map((each) => ({ value: each, label: `Tile ${each}` }))} onChange={(value) => setTile(Number(value))} className="w-full" />
-                </div>
-            )}
+            <div className="absolute right-3 top-3 flex items-center gap-2" onPointerDown={(event) => event.stopPropagation()}>
+                <label className="flex items-center gap-1.5 rounded bg-zinc-900/90 px-2 py-1 text-2xs text-zinc-300">
+                    <input type="checkbox" className="accent-sky-500" checked={wireframe} onChange={(event) => setWireframe(event.target.checked)} />
+                    Wireframe
+                </label>
+                {session.part.tiles.length > 1 && (
+                    <div className="w-28">
+                        <Select value={tile} options={session.part.tiles.map((each) => ({ value: each, label: `Tile ${each}` }))} onChange={(value) => setTile(Number(value))} className="w-full" />
+                    </div>
+                )}
+            </div>
             <div className="pointer-events-none absolute bottom-3 left-3 rounded bg-zinc-900/90 px-2 py-1 text-2xs text-zinc-400">
                 Painting on the UV layout: strokes stay on the islands (edges in blue). Middle or right drag pans; the wheel zooms.
             </div>
