@@ -5,6 +5,7 @@ import {
 } from '../UI/Icons';
 import type { FinderEntry } from '../NodeGraph/finder';
 import type { EditableFrame, EditableGraph, EditableLink, EditableNode, NodeLook, PinSet } from '../NodeGraph/model';
+import { HEADER, ROW } from '../NodeGraph/layout';
 import { NodeGraphCanvas, type NodeGraphAdapter } from '../NodeGraph/NodeGraphCanvas';
 import type { MenuItem, NodeView, PinKindStyle } from '../NodeGraph/types';
 import { createNode, newNodeId } from '../../texturing/graph/document';
@@ -357,6 +358,12 @@ export const TextureGraphCanvas: React.FC<TextureGraphCanvasProps> = (props) => 
             createNode: create,
             createReroute: (at) => toNode(createNode(REROUTE_NODE_TYPE, Math.round(at.x), Math.round(at.y))),
             pins,
+            sizeOf: (node) => {
+                // As the card lays out: pins down the sides of the thumbnail.
+                const shown = pins(node);
+                const span = Math.max(shown.inputs.length, shown.outputs.length) * ROW;
+                return { width: NODE_WIDTH, height: HEADER + Math.max(THUMBNAIL_SIZE + 8, span + 8) };
+            },
             newId: () => newNodeId(),
             copy: (current, ids) => JSON.stringify(copyNodes(fromEditable(current, latest.current.graph), ids)),
             paste: (text) => {

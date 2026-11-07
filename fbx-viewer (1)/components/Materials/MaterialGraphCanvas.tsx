@@ -6,6 +6,7 @@ import {
 import { IconButton } from '../UI/kit';
 import type { FinderEntry } from '../NodeGraph/finder';
 import type { EditableFrame, EditableGraph, EditableLink, EditableNode, NodeLook, PinSet } from '../NodeGraph/model';
+import { cardLayout } from '../NodeGraph/layout';
 import { NodeGraphCanvas, type NodeGraphAdapter } from '../NodeGraph/NodeGraphCanvas';
 import type { NodeView } from '../NodeGraph/types';
 import {
@@ -213,6 +214,7 @@ export const MaterialGraphCanvas: React.FC<MaterialGraphCanvasProps> = (props) =
         createNode: (type, at) => (getMaterialNodeDefinition(type) ? toNode(createNode(type, at)) : null),
         createReroute: (at) => toNode(createNode(REROUTE_NODE_TYPE, at)),
         pins,
+        sizeOf: (node) => cardLayout(materialNodeView(node.source, { previews: latest.current.previews }), node, new Set()),
         newId,
         copy: (current, ids) => {
             const clipboard = copyNodes(fromEditable(current, latest.current.graph), ids);

@@ -68,7 +68,8 @@ export const scoreEntry = (entry: FinderEntry, query: readonly string[]): number
 /**
  * The entries to show for `query`, best first. With nothing typed: favourites, then recent nodes
  * (newest first), then the rest in the order given (by category). With something typed: the
- * matches, a favourite or recent node a little ahead of an equal match.
+ * matches: a node whose whole name was typed first, then the best matches, a favourite or recent
+ * node a little ahead of an equal match.
  */
 export const rankEntries = (entries: readonly FinderEntry[], query: string, memory: FinderMemory): FinderEntry[] => {
     const typed = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
@@ -83,11 +84,16 @@ export const rankEntries = (entries: readonly FinderEntry[], query: string, memo
         for (const entry of entries) if (!shown.has(entry.id)) result.push(entry);
         return result;
     }
+    const phrase = words(query).join(' ');
     return entries
         .map((entry, index) => {
             const score = scoreEntry(entry, typed);
             if (!score) return null;
-            const bonus = (favourite.has(entry.id) ? 6 : 0) + (recentRank.has(entry.id) ? 4 - recentRank.get(entry.id)! * 0.25 : 0);
+            // The whole name typed comes first, whatever else is a favourite or recent; a name that
+            // starts with all that was typed comes ahead of one that only has the words somewhere.
+            const label = words(entry.label).join(' ');
+            const whole = label === phrase ? 1000 : label.startsWith(phrase) ? 20 : 0;
+            const bonus = whole + (favourite.has(entry.id) ? 6 : 0) + (recentRank.has(entry.id) ? 4 - recentRank.get(entry.id)! * 0.25 : 0);
             return { entry, score: score + bonus, index };
         })
         .filter((item): item is { entry: FinderEntry; score: number; index: number } => item !== null)
