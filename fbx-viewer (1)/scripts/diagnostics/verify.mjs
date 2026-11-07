@@ -245,6 +245,8 @@ const EXEMPT = new Map(Object.entries({
   'runtime/materials/triplanarNormal.ts': 'pure-utility',
   'runtime/materials/shaderErrors.ts': 'pure-utility',
   'texturing/textureDecode.ts': 'pure-utility',
+  'texturing/compressedContainer.ts': 'pure-utility',
+  'components/Materials/materialDeletion.ts': 'pure-utility',
   'texturing/textureSettings.ts': 'pure-utility',
   'texturing/texturePipeline.ts': 'pure-utility',
   'texturing/textureBudget.ts': 'pure-utility',

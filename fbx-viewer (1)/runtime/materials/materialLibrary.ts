@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { getMaterialNodeDefinition, materialGraphLook, normalizeMaterialGraph, textureSlot, withMaterialParameters, type MaterialGraph, type MaterialParameterValues, type TextureSlot } from './materialGraph';
+import { getMaterialNodeDefinition, materialGraphLook, normalizeMaterialGraph, textureSlot, withMaterialParameters, withMaterialPictures, type MaterialGraph, type MaterialParameterValues, type MaterialPictures, type TextureSlot } from './materialGraph';
 import { bindMaterialGraph, canBindMaterialGraph, unbindMaterialGraph, type MaterialTextureLookup } from './graphMaterial';
 
 /**
@@ -19,6 +19,11 @@ export interface MaterialAsset {
     textureGraph?: Record<string, unknown>;
     /** The painted layers its pictures are made from (texturing/paint), when it has them. */
     paint?: Record<string, unknown>;
+    /**
+     * Its pictures by name (base colour, normal, height...): what its texture graph or painting last made,
+     * read by the graph's Material Picture nodes. Making them again changes only these, not the graph.
+     */
+    pictures?: Record<string, string>;
 }
 
 export const MATERIALS_DOMAIN = 'materials';
@@ -32,6 +37,7 @@ export interface MaterialAssetDocument {
     textureIds: string[];
     textureGraph?: Record<string, unknown>;
     paint?: Record<string, unknown>;
+    pictures?: Record<string, string>;
 }
 
 /**
@@ -107,6 +113,7 @@ export const materialAssetDocument = (asset: MaterialAsset): MaterialAssetDocume
     const textureIds = new Set(graphTextures(asset.graph).map(texture => texture.textureId));
     authoringTextureIds(asset.textureGraph, textureIds);
     authoringTextureIds(asset.paint, textureIds);
+    for (const textureId of Object.values(asset.pictures ?? {})) textureIds.add(textureId);
     return {
         id: asset.id,
         name: asset.name,
@@ -114,10 +121,34 @@ export const materialAssetDocument = (asset: MaterialAsset): MaterialAssetDocume
         textureIds: [...textureIds],
         ...(asset.textureGraph ? { textureGraph: asset.textureGraph } : {}),
         ...(asset.paint ? { paint: asset.paint } : {}),
+        ...(asset.pictures ? { pictures: asset.pictures } : {}),
     };
 };
 
 /** A stored asset made safe, or null when it is not one. */
+const PICTURE_NAMES = new Set(['baseColor', 'normal', 'orm', 'roughness', 'metallic', 'ambientOcclusion', 'height', 'emissive', 'opacity']);
+
+/** Pictures by name made safe: known names to texture ids. */
+export const readMaterialPictures = (value: unknown): Record<string, string> | undefined => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+    const pictures = Object.fromEntries(Object.entries(value as Record<string, unknown>)
+        .filter(([name, id]) => PICTURE_NAMES.has(name) && typeof id === 'string' && id.length > 0 && id.length <= 128)) as Record<string, string>;
+    return Object.keys(pictures).length ? pictures : undefined;
+};
+
+const samePictures = (a: MaterialPictures | undefined, b: MaterialPictures | undefined): boolean =>
+    JSON.stringify(Object.entries(a ?? {}).sort()) === JSON.stringify(Object.entries(b ?? {}).sort());
+
+/**
+ * The pictures an older asset kept only inside its texture graph or painting (the pictures last made, or
+ * put on a model), for a material read before materials kept their pictures by name.
+ */
+const lastMadePictures = (asset: Pick<MaterialAsset, 'textureGraph' | 'paint'>): Record<string, string> | undefined => {
+    const baked = (asset.textureGraph as { baked?: { textures?: unknown } } | undefined)?.baked?.textures;
+    const applied = (asset.paint as { applied?: { textures?: unknown } } | undefined)?.applied?.textures;
+    return readMaterialPictures(baked) ?? readMaterialPictures(applied);
+};
+
 export const readMaterialAsset = (value: unknown): MaterialAsset | null => {
     if (!value || typeof value !== 'object') return null;
     const document = value as Partial<MaterialAssetDocument>;
@@ -129,6 +160,9 @@ export const readMaterialAsset = (value: unknown): MaterialAsset | null => {
     };
     if (document.textureGraph && typeof document.textureGraph === 'object' && !Array.isArray(document.textureGraph)) asset.textureGraph = document.textureGraph;
     if (document.paint && typeof document.paint === 'object' && !Array.isArray(document.paint)) asset.paint = document.paint;
+    // Its pictures by name; a material from before keeps the ones its texture graph or painting last made.
+    const pictures = readMaterialPictures(document.pictures) ?? lastMadePictures(asset);
+    if (pictures) asset.pictures = pictures;
     return asset;
 };
 
@@ -225,7 +259,8 @@ class MaterialLibrary {
     upsert(asset: MaterialAsset): void {
         const previous = this.assets.get(asset.id);
         this.assets.set(asset.id, asset);
-        const drawsTheSame = previous !== undefined && (previous.graph === asset.graph || materialGraphLook(previous.graph) === materialGraphLook(asset.graph));
+        const drawsTheSame = previous !== undefined && samePictures(previous.pictures, asset.pictures)
+            && (previous.graph === asset.graph || materialGraphLook(previous.graph) === materialGraphLook(asset.graph));
         if (!drawsTheSame) for (const [material, binding] of this.bound) if (binding.materialId === asset.id) this.bindNow(material, binding);
         this.emit();
     }
@@ -305,7 +340,7 @@ class MaterialLibrary {
             unbindMaterialGraph(material);
             return false;
         }
-        bindMaterialGraph(material, withMaterialParameters(asset.graph, binding.parameters), (textureId, slot) => this.texture(textureId, slot ?? 'map', binding.flipY));
+        bindMaterialGraph(material, withMaterialParameters(withMaterialPictures(asset.graph, asset.pictures), binding.parameters), (textureId, slot) => this.texture(textureId, slot ?? 'map', binding.flipY));
         return true;
     }
 

@@ -30,8 +30,8 @@ import { MATERIALS_DOMAIN, materialLibrary, readMaterialAsset, type MaterialAsse
 import { loadSkinPaint } from './skinPaint/modelSkin';
 import { applyLayout, decodeLayout } from '../texturing/uv/uvLayout';
 import { setLightVolumeSource } from '../runtime/lighting/lightVolumeLoader';
-import { normalizeTextureSettings, setTextureSettings } from '../texturing/textureSettings';
-import { createMaterialTextureLoader } from '../texturing/materialTextureLoader';
+import { normalizeTextureSettings, setTextureSettings, setTextureSourceAsset, textureSettingsOf } from '../texturing/textureSettings';
+import { createMaterialTextureLoader, setProjectTextureLoader, type CompressedTextureCache } from '../texturing/materialTextureLoader';
 
 /** The HUD document in the project 'hud' domain. */
 export const HUD_DOCUMENT_ID = 'hud-main';
@@ -69,6 +69,8 @@ export interface LoadGameContentOptions {
   dropSourceFiles?: boolean;
   /** The asset holding a model's prepared copy, for a game built with them (utils/preparedModels). */
   preparedAssetFor?(assetId: string): string | undefined;
+  /** Keeps a texture's compressed blocks in the project once made (the editor; a built game only reads them). */
+  keepCompressedTexture?(textureId: string, signature: string, packed: Uint8Array): Promise<void>;
 }
 
 /** Which of a project's assets to load or free, by document id. A kind left out means none of it. */
@@ -250,6 +252,7 @@ export function createGameContentLoader(
 
   const textureAssetUrls = new Map<string, string>();
   let materialsReady = false;
+  let projectTextureLoader: ReturnType<typeof createMaterialTextureLoader> | undefined;
   const animationDocuments = documents('animations') as Array<{ assetId?: string; modelId?: string; name?: string; clipNames?: unknown }>;
   // Models and attachments load with GPU-compressed textures unless the game turns that off.
   const compressTextures = normalizeGameSettings(documents('metadata').find((doc) => doc?.id === GAME_SETTINGS_DOCUMENT_ID)?.settings).quality.textureCompression;
@@ -295,6 +298,7 @@ export function createGameContentLoader(
         assertCurrent();
         textureAssetUrls.set(item.id, source);
         setTextureSettings(item.id, settings);
+        setTextureSourceAsset(item.id, item.assetId);
         materialLibrary.releaseTexture(item.id);
         textures.push({
           id: item.id, name: item.name, dimensions: item.dimensions || { width: 0, height: 0 }, url,
@@ -310,7 +314,19 @@ export function createGameContentLoader(
       materialsReady = true;
       // Material assets, before the models whose materials use them.
       // Material textures are decoded at their own depth and compressed by role, unless the game turns compression off.
-      materialLibrary.setTextureSource((textureId) => textureAssetUrls.get(textureId), createMaterialTextureLoader({ compress: compressTextures }));
+      // Compressed blocks made before (in the project, and in built games) load as they are.
+      const cache: CompressedTextureCache = {
+        find: async (textureId, signature) => {
+          const kept = textureSettingsOf(textureId)?.compressed?.find((entry) => entry.signature === signature);
+          if (!kept) return null;
+          const file = await loadProjectAssetFile(kept.assetId, `${textureId}.atex`);
+          return new Uint8Array(await file.arrayBuffer());
+        },
+        keep: options.keepCompressedTexture,
+      };
+      projectTextureLoader = createMaterialTextureLoader({ compress: compressTextures, cache });
+      setProjectTextureLoader(projectTextureLoader);
+      materialLibrary.setTextureSource((textureId) => textureAssetUrls.get(textureId), projectTextureLoader);
       materialLibrary.replaceAll(documents(MATERIALS_DOMAIN).map(readMaterialAsset).filter((asset): asset is MaterialAsset => asset !== null));
       // Levels' baked light volumes are read when a level is shown.
       setLightVolumeSource((assetId) => resolveAssetUrl(assetId), releaseAssetUrl);
@@ -403,6 +419,8 @@ export function createGameContentLoader(
         // way as every other map, so Material Overrides shows them and can clear or replace them.
         loaded.materialOverrides = await hydrateMaterialOverrides(loaded.object, withCurrentMaterialNames(item.materialOverrides), {
           resolveTextureUrl: (textureId) => textureAssetUrls.get(textureId),
+          // Override textures take the material textures' path: decoded at their depth, compressed by role, kept once made.
+          loadTexture: projectTextureLoader,
           assertCurrent,
         }, withCurrentMaterialNames(item.textureOverrides));
         loaded.textureOverrides = {};

@@ -3,6 +3,7 @@ import { useEffect, useCallback } from 'react';
 import * as THREE from 'three';
 import { LoadedModelData, AttachmentData, Blueprint, SocketData, TextureData, LevelObject, LevelData, AudioData, CameraState } from '../types';
 import { dbOperations } from '../utils/db';
+import { setTextureSettings, textureSettingsOf, withKeptCompression } from '../texturing/textureSettings';
 import { importPhaseLabel, loadFBXFile } from '../utils/modelLoader';
 import { stripGeometry } from '../utils/processing/ModelTransforms';
 import { generateThumbnail } from '../utils/thumbnailGenerator';
@@ -224,6 +225,14 @@ async function hydrateSnapshot(
   const loaded = await loadGameContent(domains, {
     resolveAssetUrl: (assetId, assetDiagnostics) => projectService.resolveAsset(assetId, assetDiagnostics),
     fetchAsset: (assetId, init) => projectService.fetchAsset(assetId, init),
+    // A texture compressed once is kept in the project, so opening it again does not compress it again.
+    keepCompressedTexture: async (textureId, signature, packed) => {
+      projectService.assertWritable();
+      const assetId = await projectService.uploadAsset(new File([packed as BlobPart], `${textureId}.atex`, { type: 'application/octet-stream' }));
+      const settings = withKeptCompression(textureSettingsOf(textureId), signature, assetId);
+      await dbOperations.updateTextureSettings(textureId, settings);
+      setTextureSettings(textureId, settings);
+    },
     generateThumbnails: true,
     onProgress: (progress, detail, phase, diagnostic) => onProgress(progress, detail || '', phase, diagnostic),
     signal,

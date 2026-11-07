@@ -6,6 +6,8 @@ import type { TextureData } from '../../types';
 import { frontendDiagnostics } from '../../diagnostics/runtime';
 import { useGameContent } from '../GameContentContext';
 import { materialLibrary } from '../materials/materialLibrary';
+import { loadProjectTexture } from '../../texturing/materialTextureLoader';
+import { rebuildNormalZ } from '../../utils/textureCompression/compressTextures';
 import type { ComponentDefinition, ComponentRenderProps } from './types';
 
 type Vec3 = [number, number, number];
@@ -771,7 +773,9 @@ export class DecalProjector {
 const DecalRender: React.FC<ComponentRenderProps> = ({ object, component, mode }) => {
     const settings = useMemo(() => resolveDecalSettings(component.props), [component.props]);
     const { textures, models } = useGameContent();
-    const url = findDecalTexture(textures, settings.textureId)?.url;
+    const colourTexture = findDecalTexture(textures, settings.textureId);
+    const url = colourTexture ? colourTexture.sourceUrl ?? colourTexture.url : undefined;
+    const colourId = colourTexture?.id ?? '';
     const model = useMemo(
         () => (object.modelId ? models.find(entry => entry.id === object.modelId)?.object ?? null : null),
         [models, object.modelId]
@@ -789,21 +793,24 @@ const DecalRender: React.FC<ComponentRenderProps> = ({ object, component, mode }
         [projector, settings.roughness, settings.metalness, settings.emissive, settings.emissiveIntensity],
     );
     useLayoutEffect(() => projector.setMaterialAsset(settings.materialId || null), [projector, settings.materialId]);
-    const normalUrl = findDecalTexture(textures, settings.normalTextureId)?.url;
+    // Both textures take the project's texture path: decoded at their depth, compressed by role, with their settings.
+    const normalTexture = findDecalTexture(textures, settings.normalTextureId);
+    const normalUrl = normalTexture ? normalTexture.sourceUrl ?? normalTexture.url : undefined;
+    const normalId = normalTexture?.id ?? '';
     useEffect(() => {
         if (!normalUrl) return;
         let current = true;
         let loaded: THREE.Texture | null = null;
-        new THREE.TextureLoader().load(normalUrl, (texture) => {
+        loadProjectTexture(normalUrl, { textureId: normalId, slot: 'normal', flipY: true }).then((texture) => {
             if (!current) {
                 texture.dispose();
                 return;
             }
-            // A normal map's values are directions, not colours.
-            texture.colorSpace = THREE.NoColorSpace;
             loaded = texture;
+            // A normal map compressed to red and green (BC5) has its blue rebuilt in the shader.
+            if (texture.format === THREE.RED_GREEN_RGTC2_Format) rebuildNormalZ(projector.mesh.material);
             projector.setNormalMap(texture);
-        }, undefined, (error) => {
+        }, (error: unknown) => {
             if (current) frontendDiagnostics.failure('decal_texture_load_failed', error);
         });
         return () => {
@@ -812,7 +819,7 @@ const DecalRender: React.FC<ComponentRenderProps> = ({ object, component, mode }
             projector.setNormalMap(null);
             loaded.dispose();
         };
-    }, [projector, normalUrl]);
+    }, [projector, normalUrl, normalId]);
     // No selection reaches component renders, so the editor always shows the (faint) box.
     useLayoutEffect(() => projector.setVolumeVisible(mode === 'editor'), [projector, mode]);
 
@@ -820,15 +827,14 @@ const DecalRender: React.FC<ComponentRenderProps> = ({ object, component, mode }
         if (!url) return;
         let current = true;
         let loaded: THREE.Texture | null = null;
-        new THREE.TextureLoader().load(url, (texture) => {
+        loadProjectTexture(url, { textureId: colourId, slot: 'map', flipY: true }).then((texture) => {
             if (!current) {
                 texture.dispose();
                 return;
             }
-            texture.colorSpace = THREE.SRGBColorSpace;
             loaded = texture;
             projector.setTexture(texture);
-        }, undefined, (error) => {
+        }, (error: unknown) => {
             if (current) frontendDiagnostics.failure('decal_texture_load_failed', error);
         });
         return () => {
@@ -838,7 +844,7 @@ const DecalRender: React.FC<ComponentRenderProps> = ({ object, component, mode }
             projector.setTexture(null);
             loaded.dispose();
         };
-    }, [projector, url]);
+    }, [projector, url, colourId]);
 
     useFrame(() => {
         projector.update(request);

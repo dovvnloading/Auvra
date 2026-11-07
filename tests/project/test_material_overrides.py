@@ -56,8 +56,8 @@ class MaterialOverrideSchemaTests(unittest.TestCase):
                 validate_domain("objects", domain_document("objects", [placed(bad)]))
 
     def test_a_texture_keeps_its_import_settings(self):
-        settings = {"colorSpace": "data", "normalMap": False, "compression": "bc4", "maxSize": 2048, "wrap": "clamp", "filter": "linear", "mips": True,
-                    "source": {"format": "exr", "depth": 32, "channels": 4, "hdr": True}, "preview": {"assetId": "b" * 64}}
+        settings = {"colorSpace": "data", "normalMap": False, "compression": "bc4", "maxSize": 2048, "wrap": "clamp", "filter": "linear", "mips": True, "flipGreen": True,
+                    "source": {"format": "exr", "depth": 32, "channels": 4, "hdr": True}, "preview": {"assetId": "b" * 64}, "compressed": [{"signature": "v1|abc|colour", "assetId": "c" * 64}]}
         document = validate_domain("textures", domain_document("textures", [{"id": "tex-height", "name": "Height.exr", "assetId": "a" * 64, "settings": settings}]))
         self.assertEqual(document["documents"][0]["settings"], settings)
         for bad in ({"compression": "astc"}, {"maxSize": 1000}, {"source": {"format": "gif", "depth": 8, "channels": 4}}, {"preview": {"assetId": "x"}}, {"tint": 1}):
@@ -76,6 +76,19 @@ class MaterialOverrideSchemaTests(unittest.TestCase):
         for bad in ({"coat": 1.5}, {"ior": 0.5}, {"sheenColor": "pink"}, {"anisotropyRotation": 400}, {"attenuationDistance": 0}):
             with self.subTest(bad=bad), self.assertRaises(ValueError):
                 validate_domain("models", _models(_model({"Paint": bad})))
+
+    def test_a_material_keeps_its_pictures_by_name_and_older_shapes_still_load(self):
+        graph = {"nodes": [{"id": "output", "type": "materialOutput", "x": 0, "y": 0, "params": {}}], "links": []}
+        pictures = {"baseColor": "tex-albedo", "normal": "tex-normal", "height": "tex-height"}
+        one = {"id": "mat-rock", "name": "Rock", "graph": graph, "pictures": pictures, "textureIds": ["tex-albedo", "tex-normal", "tex-height"],
+               "textureGraph": {"baked": {"textures": pictures}}}
+        older = {"id": "mat-old", "name": "Old", "graph": graph, "textureIds": ["tex-albedo"], "textureGraph": {"baked": {"textures": {"baseColor": "tex-albedo"}}}}
+        document = validate_domain("materials", domain_document("materials", [one, older]))
+        self.assertEqual(document["documents"][0]["pictures"], pictures)
+        self.assertNotIn("pictures", document["documents"][1])
+        for bad in ({"shine": "tex-albedo"}, {"baseColor": ""}, {"baseColor": 3}):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                validate_domain("materials", domain_document("materials", [{**one, "pictures": bad}]))
 
     def test_material_names_are_not_mistaken_for_nested_records(self):
         # These names are also keys with their own nested-field rules (or free-form blobs).
