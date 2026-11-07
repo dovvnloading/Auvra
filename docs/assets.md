@@ -149,6 +149,10 @@ To use a material asset on a model, open the model's **Material Overrides**, exp
 
 **Material asset** offers only assets that draw. A texture graph is offered once its pictures are made (**Update material**), and a painting once it is put on a model; until then the field names them in a note. A graph for other graphs is never offered. A material drawn without lighting, or an older kind of shaded material, cannot be shaded by a graph: its **Material asset** field is turned off and says so.
 
+A material made from a texture graph or a painting keeps its pictures by name (base colour, normal, height...). Its graph reads them with **Material Picture** nodes (Texture), and Parallax can take **Height from** the material's height picture. Making the pictures again (**Update material**, or putting a painting on a model) changes only the pictures, so changes made by hand to the graph stay.
+
+Deleting a material asks first, naming the models and decals that use it, and **Undo** at the top of the material list brings it back with every model's settings as they were.
+
 Materials made before blend modes keep their look: one whose opacity was set or wired is **Translucent**, any other **Opaque**.
 
 A shader that does not compile marks the nodes whose code failed on the canvas, and on a Custom GLSL node's code, with what is wrong in plain words; the panel under the preview says the same, with the compiler's own lines behind **Details**.
@@ -194,6 +198,10 @@ Textures can be PNG, JPEG or WebP, and also 16-bit PNG, TIFF (8, 16 or 32-bit fl
 - **Read as**: **By use** (colour where a material reads colour, data where it reads data), **Colour**, or **Data** (masks, roughness, metalness, height: values kept as stored). **Normal map** marks it as one wherever it is read.
 - **Compression**: **By what it is** compresses colour to BC7, normal maps to BC5 and one channel of data to BC4, for about a quarter (or an eighth) of the memory; or pick one, or **None**. Pictures with light beyond white stay 16-bit floating point. A graphics card that cannot take a compression gets the texture whole. The game's **Texture compression** setting turns compression off altogether.
 - **Size limit** draws it no larger than that; **Mip levels** keeps smaller copies for far away (made with a sharp filter, normals kept unit length); **Edges** repeat, stretch or mirror; **Filter** is smooth or pixelated.
+
+A texture whose name ends _n, _nrm, _normal, _nor or _nor_gl (a size such as _4k after it is fine) is imported as a normal map, and one ending _nor_dx as a DirectX normal map, whose green is turned over as it loads (**Green points** in its settings). Roughness, metallic, occlusion, height and packed maps are read as data. Texture Settings can change any of it.
+
+A texture is compressed once: the result is kept in the project and in built games, so reopening the project or playing the game loads it as it is. Textures named by material overrides and decals take the same path as material textures.
 
 Its preview shows the picture as imported and as kept, side by side, with the memory each takes. Compressed sides must be a multiple of 4 pixels. **Memory** in the Materials tab shows what a level's textures take against the game's asset memory, its largest textures and what each material asset's textures take, with plain warnings where it is a lot.
 
