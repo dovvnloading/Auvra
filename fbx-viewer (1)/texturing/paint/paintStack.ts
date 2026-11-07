@@ -54,6 +54,8 @@ export interface StackHost {
     resolveGraph: GraphResolver;
     /** A project texture (fills and stencils), or null while it loads. */
     texture: (textureId: string) => THREE.Texture | null;
+    /** The pictures fill graphs read (16-bit and float ones at their depth); `texture` when not given. */
+    graphTexture?: (textureId: string) => THREE.Texture | null;
     /** What the surface wore before painting: a picture or a value per channel. */
     current: Partial<Record<PaintChannel, THREE.Texture | [number, number, number]>>;
     fetchPicture: (assetId: string) => Promise<Blob>;
@@ -1623,7 +1625,7 @@ void main() {
         const node = outputs.find((candidate) => candidate.id === output) ?? outputs.find((candidate) => candidate.params.channel === output) ?? outputs.find((candidate) => String(candidate.params.name ?? '').toLowerCase() === output.toLowerCase());
         if (!node) return null;
         let evaluator = this.evaluators.get(`${evaluatorKey}:${tile}`);
-        if (!evaluator) this.evaluators.set(`${evaluatorKey}:${tile}`, evaluator = new TextureGraphEvaluator(this.gpu, this.host.resolveGraph, this.host.texture));
+        if (!evaluator) this.evaluators.set(`${evaluatorKey}:${tile}`, evaluator = new TextureGraphEvaluator(this.gpu, this.host.resolveGraph, this.host.graphTexture ?? this.host.texture));
         const states = await evaluator.evaluate({
             graph: entry.graph,
             parameters: values,

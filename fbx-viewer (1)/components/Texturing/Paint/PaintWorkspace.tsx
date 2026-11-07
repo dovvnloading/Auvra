@@ -23,6 +23,7 @@ import { meshTexelDensity } from '../../../texturing/uv/relax';
 import { IconButton, PanelEdge, Segmented, Spinner, usePanelWidth } from '../../UI/kit';
 import { Select } from '../../UI/Select';
 import { useTextureStore } from '../useTextureStore';
+import { deepPictures } from '../deepPictures';
 import { BrushPanel } from './BrushPanel';
 import { LayerPanel, type LayerSelection } from './LayerPanel';
 import { useMaterialSections, type MaterialChoice } from './MaterialPicker';
@@ -145,7 +146,9 @@ export const PaintWorkspace: React.FC = () => {
     }, [model?.id, model?.object, partKey, partFound, reopen]); // eslint-disable-line react-hooks/exhaustive-deps
 
     // A picture finishing loading reaches fills that use it.
-    useEffect(() => { session?.stack.invalidate(); }, [libraryVersion, session]);
+    // A picture read at its own depth redraws the fills reading it.
+    const deepVersion = useSyncExternalStore(deepPictures.subscribe, deepPictures.getVersion);
+    useEffect(() => { session?.stack.invalidate(); }, [libraryVersion, deepVersion, session]);
 
     const sessionVersion = useSyncExternalStore(session?.subscribe ?? (() => () => undefined), session?.getVersion ?? (() => 0));
     void sessionVersion;
@@ -197,7 +200,7 @@ export const PaintWorkspace: React.FC = () => {
 
     // Painting with a whole material: a fill layer of it under a black painted mask, which strokes paint white.
     const brushSections = useMaterialSections({ resolve, graphs, textures, brush });
-    const previewHost: PreviewHost | null = useMemo(() => (session ? { resolveGraph: resolve, texture: (id: string) => session.stack.host.texture(id) } : null), [resolve, session]);
+    const previewHost: PreviewHost | null = useMemo(() => (session ? { resolveGraph: resolve, texture: (id: string) => (session.stack.host.graphTexture ?? session.stack.host.texture)(id) } : null), [resolve, session]);
     const paintWith = useCallback((choice: MaterialChoice) => {
         if (!session) return;
         if (session.locked) { setMessage(session.locked); return; }

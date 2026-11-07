@@ -162,7 +162,7 @@ const SINGLE_VIEW = new THREE.ShaderMaterial({
 SINGLE_VIEW.toneMapped = false;
 
 /** The stencil drawn faintly over the view where it lies, so it can be seen and placed while painting. */
-const StencilOverlay: React.FC<{ texture: THREE.Texture; place: ReturnType<typeof stencilPlace> }> = ({ texture, place }) => {
+export const StencilOverlay: React.FC<{ texture: THREE.Texture; place: ReturnType<typeof stencilPlace> }> = ({ texture, place }) => {
     const ref = useRef<HTMLCanvasElement>(null);
     const version = texture.version;
     useEffect(() => {

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { ArrowLeftIcon, CheckCircleIcon, ChevronRightIcon, DiceIcon, DownloadIcon, ExternalLinkIcon, FlowIcon, InfoIcon, LayersIcon, RefreshIcon, WarningIcon } from '../UI/Icons';
+import { ArrowLeftIcon, CheckCircleIcon, ChevronRightIcon, DiceIcon, ExternalLinkIcon, FlowIcon, InfoIcon, LayersIcon, RefreshIcon, WarningIcon } from '../UI/Icons';
 import { useAssets } from '../../context/AssetContext';
 import { useScene } from '../../context/SceneContext';
 import { frontendDiagnostics } from '../../diagnostics/runtime';
@@ -18,8 +18,10 @@ import { bakeSignature, readStoredGraph, withParameterPictures, type StoredTextu
 import { MATERIAL_CHANNELS, MATERIAL_CHANNEL_LABELS, materialKey, materialOf } from '../../texturing/graph/material';
 import { TILING_MODES } from '../../texturing/graph/inherit';
 import { OUTPUT_CHANNELS, OUTPUT_CHANNEL_LABELS, isParamLink, type GraphParameter, type GraphParameterKind, type GraphPreset, type OutputChannel, type TexGraphNode, type TexNodeDef, type TexParamDef, type TextureGraph, type TilingMode } from '../../texturing/graph/types';
-import { DEEP_EXPORT, ROLE_LABELS, encodeChannels, rewriteMaterialPictures, type ChannelImages, type ChannelTextureIds, type MaterialChannel, type PictureLayout, materialReadsPicture } from '../../texturing/materialOutput';
-import { download, makeZip } from '../../texturing/zip';
+import { ROLE_LABELS, encodeChannels, rewriteMaterialPictures, type ChannelImages, type ChannelTextureIds, type MaterialChannel, type PictureLayout, materialReadsPicture } from '../../texturing/materialOutput';
+import { downloadChannelPictures } from '../../texturing/paint/channelDownload';
+import type { PictureFormat } from '../../texturing/paint/pictureFiles';
+import { DownloadPicturesButton } from './Paint/DownloadPicturesButton';
 import { Button, IconButton, Segmented, Spinner } from '../UI/kit';
 import { Select } from '../UI/Select';
 import { COMMENT_COLORS, COMMENT_COLOR_NAMES, MAX_COMMENT_TITLE, addSubgraphNode, changeComment, materialHistory, type Point } from './graphEditing';
@@ -529,7 +531,7 @@ const Workspace: React.FC<{
         }
     };
 
-    const downloadPictures = async () => {
+    const downloadPictures = async (format: PictureFormat = 'png8') => {
         if (baking) return;
         setBaking('Drawing pictures to download…');
         let done = () => undefined as void;
@@ -539,10 +541,8 @@ const Workspace: React.FC<{
         try {
             const rendered = await renderChannels(size);
             done = rendered.done;
-            const pictures = await encodeChannels(session.gpu, rendered.images, width, height, 'separate', true, DEEP_EXPORT);
             const base = asset.name.replace(/[^\w-]+/g, '_') || 'material';
-            const zip = await makeZip(pictures.map((picture) => ({ name: `${base}_${picture.role}.png`, data: picture.blob })));
-            download(zip, `${base}_${width === height ? width : `${width}x${height}`}.zip`);
+            await downloadChannelPictures(session.gpu, rendered.images, width, height, base, format);
         } catch (error) {
             if (!(error instanceof AbortedError)) setMessage({ text: error instanceof Error ? error.message : 'The pictures could not be made.', tone: 'error' });
         } finally {
@@ -1010,7 +1010,7 @@ const Workspace: React.FC<{
                     <span>This graph reads mesh maps. The material's pictures are made with stand-ins for them, since the material can go on any model; the maps in the 3D view are for looking only. To draw it with a model's own maps, use the graph as a fill or a smart mask in the Paint tab.</span>
                 </div>
             )}
-            <Button size="sm" className="w-full justify-center" disabled={Boolean(baking) || !hasOutputs} onClick={() => void downloadPictures()} icon={<DownloadIcon size={12} />}>Download pictures</Button>
+            <DownloadPicturesButton disabled={Boolean(baking) || !hasOutputs} onDownload={(format) => void downloadPictures(format)} />
             {stored.baked && (
                 <div className="space-y-1 border-t border-line pt-2">
                     <div className="text-2xs font-semibold text-ink-2">Pictures the material draws with</div>

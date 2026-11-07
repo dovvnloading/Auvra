@@ -1,14 +1,14 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { CheckCircleIcon, DownloadIcon, FlameIcon, RefreshIcon } from '../../UI/Icons';
+import { CheckCircleIcon, FlameIcon, RefreshIcon } from '../../UI/Icons';
 import type * as THREE from 'three';
 import { BAKE_VERSION, DEFAULT_BAKE_SETTINGS, EXTRA_MAPS, EXTRA_MAP_LABELS, bakeStrips, type BakeSettings } from '../../../texturing/bake/meshBaker';
 import { SUPERSAMPLE, type CageMode, type Supersample } from '../../../texturing/bake/bakeSetup';
 import { MESH_MAP_LABELS, MESH_MAPS, type MeshMapName } from '../../../texturing/graph/nodes/io';
 import { CHANNEL_LABELS, PAINT_CHANNELS, type BakeFix, type PaintChannel } from '../../../texturing/paint/paintTypes';
-import type { PictureLayout } from '../../../texturing/materialOutput';
 import { Button, Segmented, Spinner } from '../../UI/kit';
 import { Select } from '../../UI/Select';
 import type { PaintSession } from './paintSession';
+import { ExportPanel } from './ExportPanel';
 import { SliderRow } from './PaintFields';
 
 /** The texture set itself: its size and channels, baking its mesh maps, and handing over its pictures. */
@@ -37,8 +37,6 @@ export const SetPanel: React.FC<{
     // The rays shown follow the settings as they change.
     useEffect(() => { if (showingRays) onShowRays?.(settings); }, [settings]); // eslint-disable-line react-hooks/exhaustive-deps
     const [highPoly, setHighPoly] = useState('');
-    const [layout, setLayout] = useState<PictureLayout>('separate');
-    const [convention, setConvention] = useState<'bottom' | 'top'>('bottom');
     const controller = useRef<AbortController | null>(null);
     const busy = Boolean(session.busy);
     const changeDocument = (patch: Partial<typeof document>, label: string, coalesce?: string) => session.change({ ...document, ...patch }, label, coalesce);
@@ -193,19 +191,7 @@ export const SetPanel: React.FC<{
                 <Button variant="primary" className="w-full justify-center" disabled={busy} icon={busy ? <Spinner /> : <RefreshIcon size={13} />} onClick={() => void session.apply()}>{busy && !session.progress ? session.busy : 'Put on the model'}</Button>
             </section>
 
-            <section className="space-y-2">
-                <div className="text-2xs font-semibold text-zinc-300">Export pictures</div>
-                <div className="flex items-center gap-2">
-                    <span className="w-28 text-2xs text-zinc-400">Pictures</span>
-                    <Segmented value={layout} options={[{ value: 'separate', label: 'One per channel' }, { value: 'engine', label: 'Packed (ORM)' }]} onChange={setLayout} label="Pictures" />
-                </div>
-                <div className="flex items-center gap-2">
-                    <span className="w-28 text-2xs text-zinc-400">UV origin</span>
-                    <Segmented value={convention} options={[{ value: 'bottom', label: 'Bottom left' }, { value: 'top', label: 'Top left' }]} onChange={setConvention} label="UV origin" />
-                </div>
-                <p className="text-2xs leading-snug text-zinc-500">Bottom left suits FBX and OBJ tools; top left suits glTF. Normals are green-up. UDIM tiles are numbered in the file names.</p>
-                <Button className="w-full justify-center" disabled={busy} icon={<DownloadIcon size={13} />} onClick={() => void session.exportPictures(layout, convention === 'bottom')}>Download pictures</Button>
-            </section>
+            <ExportPanel session={session} busy={busy} />
         </div>
     );
 };
