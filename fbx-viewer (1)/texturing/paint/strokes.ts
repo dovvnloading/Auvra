@@ -284,7 +284,7 @@ float shapeAt(vec2 local, float radiusPixels) {
     return a;
 }
 
-// A dab cast flat along `axis`: its shape on the plane square to the axis (turned by `angle`), within reach along it.
+// A dab cast flat along an axis: its shape on the plane square to the axis (turned by the angle), within reach along it.
 float planarAt(vec3 d, vec3 axis, float radius, float angle, float radiusPixels) {
     float depth = dot(d, axis);
     if (abs(depth) > radius * ${PLANAR_DEPTH.toFixed(1)}) return 0.0;
