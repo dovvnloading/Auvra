@@ -160,7 +160,7 @@ A shader that does not compile marks the nodes whose code failed on the canvas, 
 
 ### My library
 
-**My library** (the book button at the top of the Materials list) keeps your own materials for every project, on this computer, each shown as a ball drawn the way the engine draws it. **Add to my library** (the book button beside a material's name) keeps a copy of the material with its pictures; adding it again updates that copy. In the library, search by name, tag or folder, or pick a folder or tag above the balls. The chosen material's page renames it, moves it into a folder (type a path such as Metals/Painted), tags it, says which projects it went into, and has **Use in this project** (or drag its ball onto the project's materials, or double-click it), **Duplicate** and **Delete**, which can be undone. A material brought in is the project's own copy, its pictures added to the project's textures under Materials/its name.
+**My library** (the book button at the top of the Materials list) keeps your own materials for every project, on this computer, each shown as a ball drawn the way the engine draws it. **Add to my library** (the book button beside a material's name) keeps a copy of the material with its pictures, and for a texture graph the graphs it uses as nodes (they come into a project with it, each with an id of its own); adding it again updates that copy. In the library, search by name, tag or folder, or pick a folder or tag above the balls. The chosen material's page renames it, moves it into a folder (type a path such as Metals/Painted), tags it, says which projects it went into, and has **Use in this project** (or drag its ball onto the project's materials, or double-click it), **Duplicate** and **Delete**, which can be undone. A material brought in is the project's own copy, its pictures added to the project's textures under Materials/its name. The project's own materials show their balls in the Materials list too, drawn again a moment after each edit. The buttons above the list are icons: My library, Describe, Texture memory and New; each says what it does when you point at it.
 
 ### MaterialX
 
@@ -212,7 +212,7 @@ A texture whose name ends _n, _nrm, _normal, _nor or _nor_gl (a size such as _4k
 
 A texture is compressed once: the result is kept in the project and in built games, so reopening the project or playing the game loads it as it is. The editor keeps its phone versions (ASTC and ETC2) as well, so a built game carries the format each device needs. Terrain layers compress the same way, by what they hold: colour, normals, and height with roughness. Textures named by material overrides and decals take the same path as material textures.
 
-Its preview shows the picture as imported and as kept, side by side, with the memory each takes. Compressed sides must be a multiple of 4 pixels. **Memory** in the Materials tab shows what a level's textures take against the game's asset memory, its largest textures and what each material asset's textures take, with plain warnings where it is a lot.
+Its preview shows the picture as imported and as kept, side by side, with the memory each takes. Compressed sides must be a multiple of 4 pixels. **Texture memory** (the chip button above the Materials list) shows what a level's textures take against the game's asset memory, its largest textures and what each material asset's textures take, with plain warnings where it is a lot.
 
 ## Folders
 
