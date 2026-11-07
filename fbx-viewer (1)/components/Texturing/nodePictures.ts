@@ -68,10 +68,30 @@ const draw = async (gpu: TextureGpu, evaluator: TextureGraphEvaluator, request: 
     const nodes = [node];
     const links: TexGraphLink[] = [];
     const main = mainInput(definition) ?? (definition.type === 'makeMaterial' ? 'baseColor' : null);
-    if (main) {
+    if (definition.category === 'Weathering') {
+        // Weathering is shown on stand-in model maps made from the cells as a height: its curvature (also
+        // as the cavity), occlusion, normals (as the way each place faces) and the height as thickness.
+        nodes.unshift(
+            { ...createNode('cells', -260, 0), id: 'sample' },
+            { ...createNode('normalFromHeight', -200, 0), id: 'normals' },
+            { ...createNode('curvature', -150, 0, { intensity: 4 }), id: 'curvature' },
+            { ...createNode('aoFromHeight', -150, 80), id: 'occlusion' },
+        );
+        links.push(
+            { from: 'sample', fromOutput: 'out', to: 'normals', toInput: 'in' },
+            { from: 'normals', fromOutput: 'out', to: 'curvature', toInput: 'in' },
+            { from: 'sample', fromOutput: 'out', to: 'occlusion', toInput: 'in' },
+        );
+        const standIns: Record<string, string> = { curvature: 'curvature', cavity: 'curvature', occlusion: 'occlusion', worldNormal: 'normals', thickness: 'sample' };
+        for (const port of definition.inputs) if (standIns[port.key]) links.push({ from: standIns[port.key], fromOutput: 'out', to: 'picture', toInput: port.key });
+    } else if (main) {
         const sample = ID_SAMPLED.has(definition.type) ? 'tiles' : sampleFor(definition);
         nodes.unshift({ ...createNode(sample, -200, 0), id: 'sample' });
-        if (COLOUR_SAMPLED.has(definition.type) || ID_SAMPLED.has(definition.type)) {
+        if (definition.inputs.find((port) => port.key === main)?.fallback === 'normal') {
+            // A node changing normals is shown changing a normal map (of the cells).
+            nodes.unshift({ ...createNode('normalFromHeight', -150, 0), id: 'normals' });
+            links.push({ from: 'sample', fromOutput: 'out', to: 'normals', toInput: 'in' }, { from: 'normals', fromOutput: 'out', to: 'picture', toInput: main });
+        } else if (COLOUR_SAMPLED.has(definition.type) || ID_SAMPLED.has(definition.type)) {
             // A colourful sample: the noise through a colourful gradient, or islands each a random colour.
             const colourful = ID_SAMPLED.has(definition.type) ? { ...createNode('floodFill', -150, 0), id: 'islands' } : { ...createNode('gradientMap', -150, 0, { ramp: COLOURFUL_RAMP }), id: 'colourful' };
             nodes.unshift(colourful);

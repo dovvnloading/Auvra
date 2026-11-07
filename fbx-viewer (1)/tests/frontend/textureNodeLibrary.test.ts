@@ -116,6 +116,28 @@ describe('patterns', () => {
         }
     });
 
+    it('shows only arcs between rows of fans, never a straight cut where rows meet', () => {
+        // How often the stone changes crossing a horizontal line: on the lines where rows meet it is no
+        // more than on lines between them (arcs and the stones' own joints cross both), never all along.
+        const params = withDefaults('arcPavement', { gap: 0, rows: 8, columns: 4 });
+        const rate = (offset: number) => {
+            let changed = 0;
+            let total = 0;
+            for (let row = 1; row < 8; row++) {
+                for (let i = 0; i < 300; i++) {
+                    const u = (i + 0.5) / 300;
+                    const y = (row + offset) / 8;
+                    total++;
+                    if (Math.abs(PATTERN_REFERENCES.arcPavement(u, y - 1e-4, params, SEED) - PATTERN_REFERENCES.arcPavement(u, y + 1e-4, params, SEED)) > 1e-6) changed++;
+                }
+            }
+            return changed / total;
+        };
+        const between = (rate(0.25) + rate(0.5) + rate(0.75)) / 3;
+        expect(rate(0)).toBeLessThan(0.35);
+        expect(rate(0)).toBeLessThan(between * 1.5);
+    });
+
     it('covers the ground with fans, leaving only the gaps between stones', () => {
         let empty = 0;
         let total = 0;

@@ -5,7 +5,7 @@ import { MATERIAL_CHANNELS, materialKey, materialOf, materialResults, type Mater
 import { withNamedLinks } from './namedLinks';
 import { resolvePrecision, resolveSeed, resolveSize, resolveTiling, tilingAxes } from './inherit';
 import { nodeBindings, valuePinKey } from './nodeKit';
-import { GRAPH_USING_TYPES, INPUT_NODE_TYPE, MATERIAL_INPUT_NODE_TYPE, MATERIAL_OUTPUT_NODE_TYPE, MESH_MAP_NODE_TYPE, MESH_READING_NODE_TYPES, OUTPUT_NODE_TYPE, SUBGRAPH_SEED_KEY, SUBGRAPH_VARY_KEY } from './nodes/io';
+import { ALL_MESH_MAPS, GRAPH_USING_TYPES, INPUT_NODE_TYPE, MATERIAL_INPUT_NODE_TYPE, MATERIAL_OUTPUT_NODE_TYPE, MESH_MAP_NODE_TYPE, MESH_READING_NODE_TYPES, OUTPUT_NODE_TYPE, SUBGRAPH_SEED_KEY, SUBGRAPH_VARY_KEY, meshMapKey } from './nodes/io';
 import { textureNodeDefinition, type GraphResolver } from './registry';
 import { outputNodeKind, type NodeRunContext, type PortKind, type TexGraphLink, type TexGraphNode, type TexNodeDef, type TextureGraph, type TilingMode } from './types';
 
@@ -313,7 +313,7 @@ export class TextureGraphEvaluator {
             if (node.type === MATERIAL_INPUT_NODE_TYPE) for (const channel of MATERIAL_CHANNELS) extras.push(externalToken(materialKey(String(params.name || 'material'), channel)));
             if (node.type === MESH_MAP_NODE_TYPE) extras.push(externalToken(`mesh:${String(params.map)}`));
             else if (MESH_READING_NODE_TYPES.has(node.type)) {
-                for (const key of ['mesh:position', 'mesh:worldNormal', 'mesh:normal']) extras.push(externalToken(key));
+                for (const name of ALL_MESH_MAPS) extras.push(externalToken(meshMapKey(name)));
             }
             if (GRAPH_USING_TYPES.has(node.type)) {
                 const entry = typeof params.graph === 'string' ? this.resolve(params.graph) : undefined;

@@ -77,6 +77,9 @@ float scratchField(vec2 q, ivec2 period, float density, float span, float thickn
     }
     return value;
 }
+float fineNoise(vec2 uv, int scale, float seed) {
+    return valueNoise(uv * float(scale), tilePeriod(ivec2(scale)), seed);
+}
 vec2 alongFrame(vec2 uv, ivec2 direction, int along, int across) {
     vec2 d = vec2(direction);
     return vec2(dot(uv, d) * float(along), dot(uv, vec2(-d.y, d.x)) * float(across));
@@ -118,14 +121,14 @@ const direction = () => float('angle', 'Direction (degrees)', 0, -180, 180, { st
 
 /** The grunge maps, in the order of the look setting. */
 export const GRUNGE_LOOKS: ReadonlyArray<{ key: string; label: string; description: string }> = [
-    { key: 'splatter', label: 'Splatter', description: 'Dirt flicked on: drops of every size, thicker in patches.' },
-    { key: 'rust', label: 'Rust', description: 'Rusty blotches with fine grain inside them.' },
-    { key: 'concrete', label: 'Concrete', description: 'Fine cement grain with small pits.' },
-    { key: 'leaks', label: 'Leaks', description: 'Streaks running down from patches above.' },
+    { key: 'splatter', label: 'Splatter', description: 'Dirt flicked on: ragged drops of every size with droplets round them, thicker in patches.' },
+    { key: 'rust', label: 'Rust', description: 'Rust: crisp patches with speckled edges, pitted inside, with small blooms scattered round them.' },
+    { key: 'concrete', label: 'Concrete', description: 'Cement grain with bright specks of aggregate and crisp dark pits.' },
+    { key: 'leaks', label: 'Leaks', description: 'Thin streaks running down from patches above, fading as they go.' },
     { key: 'speckles', label: 'Speckles', description: 'Fine dots of every brightness.' },
     { key: 'blotches', label: 'Blotches', description: 'Soft broad patches.' },
-    { key: 'peeling', label: 'Peeling', description: 'Hard-edged patches with raised rims, like peeling paint.' },
-    { key: 'cracks', label: 'Cracks', description: 'A network of thin wandering cracks.' },
+    { key: 'peeling', label: 'Peeling', description: 'Flakes with ragged hard edges and raised rims, like peeling paint.' },
+    { key: 'cracks', label: 'Cracks', description: 'Wandering cracks with finer ones branching off near them.' },
     { key: 'smudges', label: 'Smudges', description: 'Wiped, swirling smears.' },
     { key: 'dust', label: 'Dust', description: 'A fine haze with specks.' },
     { key: 'stains', label: 'Water stains', description: 'Patches ringed with tide lines.' },
@@ -141,29 +144,53 @@ const GRUNGE_GLSL = `void main() {
     float base = fbmNoise(uv, s, 6, 0.6, uSeed) * 0.5 + 0.5;
     float v = 0.0;
     if (p_look == 0) {
-        float big = spotField(uv * float(s * 4), tilePeriod(ivec2(s * 4)), p_amount, 0.6, 1.0, 0.2, uSeed + 1.0, false);
-        float small = spotField(uv * float(s * 12), tilePeriod(ivec2(s * 12)), p_amount, 0.45, 1.0, 0.3, uSeed + 2.0, false);
-        v = max(big, small * 0.8) * smoothstep(0.3, 0.6, base);
+        // Drops of every size and their droplets, with ragged crisp outlines, thicker in patches.
+        float drops = spotField(uv * float(s * 4), tilePeriod(ivec2(s * 4)), p_amount, 0.7, 1.0, 0.7, uSeed + 1.0, false);
+        float droplets = spotField(uv * float(s * 14), tilePeriod(ivec2(s * 14)), p_amount * 0.8, 0.5, 1.0, 0.7, uSeed + 2.0, false);
+        float rag = (fineNoise(uv, s * 48, uSeed + 26.0) - 0.5) * 0.35;
+        v = smoothstep(0.42, 0.48, max(drops, droplets * 0.9) + rag) * smoothstep(0.25, 0.5, base);
     } else if (p_look == 1) {
-        v = smoothstep(t - 0.1, t + 0.1, base) * (0.6 + 0.4 * (fbmNoise(uv, s * 8, 3, 0.5, uSeed + 2.0) * 0.5 + 0.5));
+        // Rust: crisp patches with speckled ragged edges, pitted inside, and small blooms scattered round.
+        float m = base + (fineNoise(uv, s * 32, uSeed + 21.0) - 0.5) * 0.22;
+        float cover = smoothstep(t - 0.008, t + 0.008, m);
+        float grain = fbmNoise(uv, s * 8, 3, 0.5, uSeed + 2.0) * 0.5 + 0.5;
+        float pits = spotField(uv * float(s * 20), tilePeriod(ivec2(s * 20)), 0.55, 0.35, 1.0, 0.15, uSeed + 22.0, false);
+        float body = cover * (0.65 + 0.35 * grain) * (1.0 - 0.45 * pits);
+        float blooms = spotField(disorderAt(uv, 0.4) * float(s * 6), tilePeriod(ivec2(s * 6)), p_amount * 0.7, 0.55, 1.0, 0.5, uSeed + 23.0, true);
+        float bloom = smoothstep(0.35, 0.45, blooms + (fineNoise(uv, s * 40, uSeed + 24.0) - 0.5) * 0.3) * (1.0 - cover);
+        float specks = step(0.72, fineNoise(uv, s * 64, uSeed + 25.0)) * smoothstep(t - 0.12, t, m) * (1.0 - cover);
+        v = max(body, max(bloom * 0.8, specks * 0.9));
     } else if (p_look == 2) {
+        // Cement grain, bright specks of aggregate, and crisp dark pits.
         float grain = fbmNoise(uv, s * 4, 6, 0.65, uSeed) * 0.5 + 0.5;
-        float pits = spotField(uv * float(s * 16), tilePeriod(ivec2(s * 16)), p_amount * 0.5, 0.3, 1.0, 0.3, uSeed + 3.0, false);
-        v = grain * (1.0 - 0.5 * pits);
+        float aggregate = step(0.78, fineNoise(uv, s * 96, uSeed + 27.0)) * 0.25;
+        float pits = spotField(uv * float(s * 16), tilePeriod(ivec2(s * 16)), p_amount * 0.6, 0.3, 1.0, 0.05, uSeed + 3.0, false);
+        v = (0.35 + 0.4 * grain + aggregate) * (1.0 - 0.8 * step(0.5, pits));
     } else if (p_look == 3) {
-        float streak = valueNoise(vec2(uv.x * float(s * 16), uv.y * float(s)), tilePeriod(ivec2(s * 16, s)), uSeed + 4.0);
-        v = streak * smoothstep(t - 0.15, t + 0.15, base);
+        // Thin streaks running down from patches above them, fading as they go.
+        float streak = valueNoise(vec2(uv.x * float(s * 24), uv.y * float(s * 2)), tilePeriod(ivec2(s * 24, s * 2)), uSeed + 4.0);
+        float source = 0.0;
+        for (int k = 0; k < 8; k++) {
+            float m = fbmNoise(vec2(uv.x, uv.y + float(k) * 0.03), s, 4, 0.55, uSeed + 28.0) * 0.5 + 0.5;
+            source = max(source, smoothstep(t - 0.05, t + 0.05, m) * (1.0 - float(k) / 8.0));
+        }
+        v = source * saturate(streak * streak * 1.6);
     } else if (p_look == 4) {
         v = spotField(uv * float(s * 24), tilePeriod(ivec2(s * 24)), p_amount, 0.5, 1.0, 0.2, uSeed + 5.0, true);
     } else if (p_look == 5) {
         v = smoothstep(t - 0.25, t + 0.25, fbmNoise(uv, s, 3, 0.5, uSeed) * 0.5 + 0.5);
     } else if (p_look == 6) {
-        float e = fbmNoise(uv, s * 2, 5, 0.55, uSeed) * 0.5 + 0.5;
-        float rim = 1.0 - smoothstep(0.0, 0.03, abs(e - t));
+        // Flakes with ragged hard edges and a raised rim round them.
+        float e = fbmNoise(uv, s * 2, 5, 0.55, uSeed) * 0.5 + 0.5 + (fineNoise(uv, s * 40, uSeed + 29.0) - 0.5) * 0.12;
+        float rim = 1.0 - smoothstep(0.0, 0.025, abs(e - t));
         v = step(t, e) * 0.7 + rim * 0.3;
     } else if (p_look == 7) {
+        // Wandering main cracks with finer cracks branching off near them.
         vec3 w = worley(disorderAt(uv, 0.6) * float(s * 2), tilePeriod(ivec2(s * 2)), 1.0, 0, uSeed + 6.0);
-        v = (1.0 - smoothstep(0.0, 0.06, w.y - w.x)) * smoothstep(t - 0.3, t + 0.3, base);
+        vec3 w2 = worley(disorderAt(uv, 0.8) * float(s * 6), tilePeriod(ivec2(s * 6)), 1.0, 0, uSeed + 30.0);
+        float major = 1.0 - smoothstep(0.0, 0.05, w.y - w.x);
+        float minor = (1.0 - smoothstep(0.0, 0.03, w2.y - w2.x)) * 0.6 * (1.0 - smoothstep(0.0, 0.25, w.y - w.x));
+        v = max(major, minor) * smoothstep(t - 0.3, t + 0.3, base);
     } else if (p_look == 8) {
         v = 0.5 + (fbmNoise(disorderAt(uv, 1.0), s, 4, 0.4, uSeed + 7.0) * 0.5) * 0.8;
     } else if (p_look == 9) {
@@ -196,23 +223,54 @@ const grungeReference = (u0: number, v0: number, params: Params, seedValue: numb
     const look = Math.max(0, GRUNGE_LOOKS.findIndex((item) => item.key === params.look));
     const base = fbm(u, v, s, 6, 0.6, seedValue) * 0.5 + 0.5;
     const spots = (n: number, density: number, size: number, softness: number, salt: number, random = false) => spotField(u * n, v * n, n, n, density, size, 1, softness, seedValue + salt, random);
+    const fine = (n: number, salt: number) => valueNoise(u * n, v * n, n, n, Math.fround(seedValue + salt));
     let value: number;
     switch (look) {
-        case 0: value = Math.max(spots(s * 4, amount, 0.6, 0.2, 1), spots(s * 12, amount, 0.45, 0.3, 2) * 0.8) * smoothstep(0.3, 0.6, base); break;
-        case 1: value = smoothstep(t - 0.1, t + 0.1, base) * (0.6 + 0.4 * (fbm(u, v, s * 8, 3, 0.5, seedValue + 2) * 0.5 + 0.5)); break;
-        case 2: value = (fbm(u, v, s * 4, 6, 0.65, seedValue) * 0.5 + 0.5) * (1 - 0.5 * spots(s * 16, amount * 0.5, 0.3, 0.3, 3)); break;
-        case 3: value = valueNoise(u * s * 16, v * s, s * 16, s, seedValue + 4) * smoothstep(t - 0.15, t + 0.15, base); break;
+        case 0: {
+            const rag = (fine(s * 48, 26) - 0.5) * 0.35;
+            value = smoothstep(0.42, 0.48, Math.max(spots(s * 4, amount, 0.7, 0.7, 1), spots(s * 14, amount * 0.8, 0.5, 0.7, 2) * 0.9) + rag) * smoothstep(0.25, 0.5, base);
+            break;
+        }
+        case 1: {
+            const m = base + (fine(s * 32, 21) - 0.5) * 0.22;
+            const patch = smoothstep(t - 0.008, t + 0.008, m);
+            const grain = fbm(u, v, s * 8, 3, 0.5, seedValue + 2) * 0.5 + 0.5;
+            const body = patch * (0.65 + 0.35 * grain) * (1 - 0.45 * spotField(u * s * 20, v * s * 20, s * 20, s * 20, 0.55, 0.35, 1, 0.15, seedValue + 22, false));
+            const [bu, bv] = disorderAt(u, v, 0.4, seedValue);
+            const blooms = spotField(bu * s * 6, bv * s * 6, s * 6, s * 6, amount * 0.7, 0.55, 1, 0.5, seedValue + 23, true);
+            const bloom = smoothstep(0.35, 0.45, blooms + (fine(s * 40, 24) - 0.5) * 0.3) * (1 - patch);
+            const specks = step(0.72, fine(s * 64, 25)) * smoothstep(t - 0.12, t, m) * (1 - patch);
+            value = Math.max(body, bloom * 0.8, specks * 0.9);
+            break;
+        }
+        case 2: {
+            const grain = fbm(u, v, s * 4, 6, 0.65, seedValue) * 0.5 + 0.5;
+            const aggregate = step(0.78, fine(s * 96, 27)) * 0.25;
+            value = (0.35 + 0.4 * grain + aggregate) * (1 - 0.8 * step(0.5, spots(s * 16, amount * 0.6, 0.3, 0.05, 3)));
+            break;
+        }
+        case 3: {
+            const streak = valueNoise(u * s * 24, v * s * 2, s * 24, s * 2, Math.fround(seedValue + 4));
+            let source = 0;
+            for (let k = 0; k < 8; k++) source = Math.max(source, smoothstep(t - 0.05, t + 0.05, fbm(u, v + k * 0.03, s, 4, 0.55, seedValue + 28) * 0.5 + 0.5) * (1 - k / 8));
+            value = source * saturate(streak * streak * 1.6);
+            break;
+        }
         case 4: value = spots(s * 24, amount, 0.5, 0.2, 5, true); break;
         case 5: value = smoothstep(t - 0.25, t + 0.25, fbm(u, v, s, 3, 0.5, seedValue) * 0.5 + 0.5); break;
         case 6: {
-            const e = fbm(u, v, s * 2, 5, 0.55, seedValue) * 0.5 + 0.5;
-            value = step(t, e) * 0.7 + (1 - smoothstep(0, 0.03, Math.abs(e - t))) * 0.3;
+            const e = fbm(u, v, s * 2, 5, 0.55, seedValue) * 0.5 + 0.5 + (fine(s * 40, 29) - 0.5) * 0.12;
+            value = step(t, e) * 0.7 + (1 - smoothstep(0, 0.025, Math.abs(e - t))) * 0.3;
             break;
         }
         case 7: {
             const [wu, wv] = disorderAt(u, v, 0.6, seedValue);
             const w = worley(wu * s * 2, wv * s * 2, s * 2, s * 2, 1, 0, seedValue + 6);
-            value = (1 - smoothstep(0, 0.06, w[1] - w[0])) * smoothstep(t - 0.3, t + 0.3, base);
+            const [xu, xv] = disorderAt(u, v, 0.8, seedValue);
+            const w2 = worley(xu * s * 6, xv * s * 6, s * 6, s * 6, 1, 0, seedValue + 30);
+            const major = 1 - smoothstep(0, 0.05, w[1] - w[0]);
+            const minor = (1 - smoothstep(0, 0.03, w2[1] - w2[0])) * 0.6 * (1 - smoothstep(0, 0.25, w[1] - w[0]));
+            value = Math.max(major, minor) * smoothstep(t - 0.3, t + 0.3, base);
             break;
         }
         case 8: {

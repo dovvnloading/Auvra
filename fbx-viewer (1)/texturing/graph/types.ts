@@ -274,6 +274,7 @@ export type NodeCategory =
     | 'Edges and distance'
     | 'Height and normals'
     | 'Mesh maps'
+    | 'Weathering'
     | 'Materials'
     | 'Utility';
 
