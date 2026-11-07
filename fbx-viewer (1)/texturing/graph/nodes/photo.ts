@@ -438,6 +438,7 @@ void main() {
         outputs: [out('color')],
         params: [
             float('occlusionAmount', 'Occlusion taken out', 1, 0, 1),
+            float('floor', 'Darkest occlusion trusted', 0.35, 0.05, 1, { hint: 'Occlusion darker than this lifts the colour no further, and towards black it is trusted less and less, so speckled or noisy occlusion cannot blow the colour out.' }),
             float('shadingAmount', 'Shading taken out', 1, 0, 1),
             float('depth', 'Height depth', 0.05, 0.001, 0.5, { hint: 'How deep the height\'s full range is, as a share of the picture: sets how steep its slopes are.' }),
         ],
@@ -446,10 +447,20 @@ void main() {
             const input = context.input('in');
             const result = context.image('color');
             if (!input) { context.gpu.clear(result, [0, 0, 0, 1]); return { out: result }; }
-            const { height } = lightingRemovalNeeds(context);
+            const { height, occlusion } = lightingRemovalNeeds(context);
             const gpu = context.gpu;
-            // Colour with its occlusion divided out, and the slopes of the height (wrapping).
-            const SLOPES = `vec2 slopeAt(vec2 p) {
+            // The input's own range, each channel: what comes out stays within it (or a little above).
+            const range = await inputRange(context, input);
+            // Speckled occlusion lifts specks into white flecks: say so.
+            if (occlusion) {
+                const speckle = await occlusionSpeckleOf(context, occlusion);
+                if (speckle !== null && speckle > SPECKLED) context.note?.('Speckled occlusion: its occlusion is very speckled, so this lifts the colour only where it is sure. Smooth the occlusion first (a blur, or a cleaner bake) for a flatter colour.');
+            }
+            // Colour with its occlusion divided out (lifting at most to the trusted floor, less as occlusion nears
+            // black), the result kept in the input's range, and the slopes of the height (wrapping).
+            const SLOPES = `uniform sampler2D lowest;
+uniform sampler2D highest;
+vec2 slopeAt(vec2 p) {
     vec2 t = 1.0 / vec2(textureSize(t_height, 0));
     float dx = (g_height(p + vec2(t.x, 0.0)) - g_height(p - vec2(t.x, 0.0))) * 0.5 / t.x;
     float dy = (g_height(p + vec2(0.0, t.y)) - g_height(p - vec2(0.0, t.y))) * 0.5 / t.y;
@@ -457,40 +468,129 @@ void main() {
 }
 vec3 unoccluded(vec2 p) {
     vec3 c = c_in(p).rgb;
-    float ao = w_occlusion == 1 ? g_occlusion(p) : 1.0;
-    return c / max(mix(1.0, ao, p_occlusionAmount), 0.05);
+    float ao = w_occlusion == 1 ? mix(1.0, g_occlusion(p), p_occlusionAmount) : 1.0;
+    float trust = smoothstep(0.0, p_floor, ao);
+    return c * mix(1.0, 1.0 / max(ao, p_floor), trust);
+}
+vec3 inRange(vec3 c) {
+    vec3 low = texelFetch(lowest, ivec2(0), 0).rgb;
+    vec3 high = texelFetch(highest, ivec2(0), 0).rgb;
+    return clamp(c, low, high + (high - low) * ${RANGE_HEADROOM.toFixed(2)} + ${RANGE_MARGIN.toFixed(2)});
 }
 vec3 normalAt(vec2 p) { vec2 s = slopeAt(p); return normalize(vec3(-s, 1.0)); }`;
-            if (!height || num(context.params, 'shadingAmount', 1) <= 0) {
-                await context.pass(result, `${SLOPES}\nvoid main() { outColor = vec4(unoccluded(vUv), c_in(vUv).a); }`, { cost: 2 });
-                return { out: result };
+            const bounds = { lowest: range.low, highest: range.high };
+            try {
+                if (!height || num(context.params, 'shadingAmount', 1) <= 0) {
+                    await context.pass(result, `${SLOPES}\nvoid main() { outColor = vec4(inRange(unoccluded(vUv)), c_in(vUv).a); }`, { inputs: bounds, cost: 2 });
+                    return { out: result };
+                }
+                await shadingRemoved(context, input, result, SLOPES, bounds);
+            } finally {
+                gpu.release(range.low);
+                gpu.release(range.high);
             }
-            // The light's direction: brightness = mean + a * nx + b * ny fitted over the picture by least squares.
-            const first = context.image('color', input.width, input.height, 32);
-            const second = context.image('color', input.width, input.height, 32);
-            await context.pass(first, `${SLOPES}\nvoid main() { vec3 n = normalAt(vUv); float l = luma(unoccluded(vUv)); outColor = vec4(n.x, n.y, l, n.x * n.x); }`, { cost: 6 });
-            await context.pass(second, `${SLOPES}\nvoid main() { vec3 n = normalAt(vUv); float l = luma(unoccluded(vUv)); outColor = vec4(n.y * n.y, n.x * n.y, l * n.x, l * n.y); }`, { cost: 6 });
-            const sumsA = await averageOf(context, first);
-            const sumsB = await averageOf(context, second);
-            gpu.release(first);
-            gpu.release(second);
-            const [a, b] = await Promise.all([gpu.readPixelLater(sumsA, 0, 0), gpu.readPixelLater(sumsB, 0, 0)]);
-            gpu.release(sumsA);
-            gpu.release(sumsB);
-            const fit = a && b ? shadingFit({ nx: a[0], ny: a[1], l: a[2], nxx: a[3], nyy: b[0], nxy: b[1], lnx: b[2], lny: b[3] }) : { a: 0, b: 0, mean: 1, nx: 0, ny: 0 };
-            await context.pass(result, `${SLOPES}
+            return { out: result };
+        },
+    },
+];
+
+/** How speckled (the average distance from its 3 x 3 neighbourhood's mean) occlusion must be for Lighting removal to say so. */
+export const SPECKLED = 0.12;
+/** How far above the input's brightest Lighting removal may go: a share of the input's range, and a little more. */
+const RANGE_HEADROOM = 0.1;
+const RANGE_MARGIN = 0.02;
+
+/** The input's darkest and brightest value in each channel (one pixel each, full float), by halving two by two. */
+const inputRange = async (context: NodeRunContext, input: GpuImage): Promise<{ low: GpuImage; high: GpuImage }> => {
+    const gpu = context.gpu;
+    const reduce = async (pick: 'min' | 'max'): Promise<GpuImage> => {
+        let level = context.gpu.image(input.width, input.height, 'color', 32);
+        await context.pass(level, 'void main() { outColor = c_in(vUv); }');
+        while (level.width > 1 || level.height > 1) {
+            const next = gpu.image(Math.max(1, level.width >> 1), Math.max(1, level.height >> 1), 'color', 32);
+            await gpu.pass(next, {
+                fragment: `void main() { ivec2 size = textureSize(source, 0); ivec2 base = ivec2(gl_FragCoord.xy) * 2; vec4 v = texelFetch(source, min(base, size - 1), 0);
+    for (int y = 0; y < 2; y++) for (int x = 0; x < 2; x++) v = ${pick}(v, texelFetch(source, min(base + ivec2(x, y), size - 1), 0));
+    outColor = v; }`,
+                inputs: { source: level },
+            });
+            gpu.release(level);
+            level = next;
+        }
+        return level;
+    };
+    return { low: await reduce('min'), high: await reduce('max') };
+};
+
+/** How speckled occlusion is: the average distance of each pixel from its 3 x 3 neighbourhood's mean (wrapping). */
+const occlusionSpeckleOf = async (context: NodeRunContext, occlusion: GpuImage): Promise<number | null> => {
+    const differences = context.gpu.image(occlusion.width, occlusion.height, 'color', 32);
+    await context.pass(differences, `void main() {
+    vec2 t = 1.0 / vec2(textureSize(t_occlusion, 0));
+    float sum = 0.0;
+    for (int y = -1; y <= 1; y++) for (int x = -1; x <= 1; x++) sum += g_occlusion(vUv + vec2(float(x), float(y)) * t);
+    float d = abs(g_occlusion(vUv) - sum / 9.0);
+    outColor = vec4(d, d, d, 1.0);
+}`, { cost: 9 });
+    const mean = await averageOf(context, differences);
+    context.gpu.release(differences);
+    const value = await context.gpu.readPixelLater(mean, 0, 0);
+    context.gpu.release(mean);
+    return value ? value[0] : null;
+};
+
+/** The CPU twin of the speckle measure, on grey values (bottom row first). */
+export const occlusionSpeckle = (values: ArrayLike<number>, width: number, height: number): number => {
+    let total = 0;
+    for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+            let sum = 0;
+            for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) sum += values[((y + dy + height) % height) * width + ((x + dx + width) % width)];
+            total += Math.abs(values[y * width + x] - sum / 9);
+        }
+    }
+    return total / (width * height);
+};
+
+/**
+ * The CPU twin of Lighting removal without shading: the colour lifted by its occlusion (at most to the
+ * trusted floor, less as occlusion nears black), kept within the input's range in each channel.
+ */
+export const occlusionLifted = (colour: readonly number[], occlusion: number, params: Readonly<Record<string, unknown>>, range: { low: readonly number[]; high: readonly number[] }): number[] => {
+    const floor = num(params, 'floor', 0.35);
+    const ao = 1 + (occlusion - 1) * num(params, 'occlusionAmount', 1);
+    const t = Math.min(1, Math.max(0, ao / floor));
+    const trust = t * t * (3 - 2 * t);
+    const gain = 1 + (1 / Math.max(ao, floor) - 1) * trust;
+    return colour.map((c, i) => Math.min(range.high[i] + (range.high[i] - range.low[i]) * RANGE_HEADROOM + RANGE_MARGIN, Math.max(range.low[i], c * gain)));
+};
+
+/** Lighting removal's shading step: the light's direction fitted from the photo, its shading divided out, kept in range. */
+const shadingRemoved = async (context: NodeRunContext, input: GpuImage, result: GpuImage, SLOPES: string, bounds: { lowest: GpuImage; highest: GpuImage }): Promise<void> => {
+    const gpu = context.gpu;
+    // The light's direction: brightness = mean + a * nx + b * ny fitted over the picture by least squares.
+    const first = context.image('color', input.width, input.height, 32);
+    const second = context.image('color', input.width, input.height, 32);
+    await context.pass(first, `${SLOPES}\nvoid main() { vec3 n = normalAt(vUv); float l = luma(unoccluded(vUv)); outColor = vec4(n.x, n.y, l, n.x * n.x); }`, { inputs: bounds, cost: 6 });
+    await context.pass(second, `${SLOPES}\nvoid main() { vec3 n = normalAt(vUv); float l = luma(unoccluded(vUv)); outColor = vec4(n.y * n.y, n.x * n.y, l * n.x, l * n.y); }`, { inputs: bounds, cost: 6 });
+    const sumsA = await averageOf(context, first);
+    const sumsB = await averageOf(context, second);
+    gpu.release(first);
+    gpu.release(second);
+    const [a, b] = await Promise.all([gpu.readPixelLater(sumsA, 0, 0), gpu.readPixelLater(sumsB, 0, 0)]);
+    gpu.release(sumsA);
+    gpu.release(sumsB);
+    const fit = a && b ? shadingFit({ nx: a[0], ny: a[1], l: a[2], nxx: a[3], nyy: b[0], nxy: b[1], lnx: b[2], lny: b[3] }) : { a: 0, b: 0, mean: 1, nx: 0, ny: 0 };
+    await context.pass(result, `${SLOPES}
 uniform vec4 uFit;
 uniform float uMean;
 void main() {
     vec3 n = normalAt(vUv);
     float shade = 1.0 + (uFit.x * (n.x - uFit.z) + uFit.y * (n.y - uFit.w)) / max(uMean, 1e-3);
     vec3 c = unoccluded(vUv) / max(mix(1.0, shade, p_shadingAmount), 0.2);
-    outColor = vec4(c, c_in(vUv).a);
-}`, { uniforms: { uFit: new THREE.Vector4(fit.a, fit.b, fit.nx, fit.ny), uMean: fit.mean }, cost: 6 });
-            return { out: result };
-        },
-    },
-];
+    outColor = vec4(inRange(c), c_in(vUv).a);
+}`, { inputs: bounds, uniforms: { uFit: new THREE.Vector4(fit.a, fit.b, fit.nx, fit.ny), uMean: fit.mean }, cost: 6 });
+};
 
 /** Averages over the picture of the normal's slopes and brightness, and their products. */
 export interface ShadingSums { nx: number; ny: number; l: number; nxx: number; nyy: number; nxy: number; lnx: number; lny: number }

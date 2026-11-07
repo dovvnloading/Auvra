@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { readdirSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { PHOTO_NODES, atlasPlace, pickBand, shadingFit } from '../../texturing/graph/nodes/photo';
+import { PHOTO_NODES, SPECKLED, atlasPlace, occlusionLifted, occlusionSpeckle, pickBand, shadingFit } from '../../texturing/graph/nodes/photo';
 import { growFromExample, grownPicture, grownSource } from '../../texturing/graph/quilting';
 import { closedCut, seamMasks, seamTile, type Picture } from '../../texturing/graph/seamCut';
 import { textureNodeDefinitionByType } from '../../texturing/graph/registry';
@@ -102,6 +102,29 @@ describe('photo and scan processing', () => {
         expect(fit.mean).toBeCloseTo(0.5, 2);
         // Flat (no slopes at all): nothing to fit, nothing taken out.
         expect(shadingFit({ nx: 0, ny: 0, l: 0.4, nxx: 0, nyy: 0, nxy: 0, lnx: 0, lny: 0 })).toMatchObject({ a: 0, b: 0 });
+    });
+
+    it('never blows a colour out when its occlusion is noise, and says the occlusion is speckled', () => {
+        let state = 99;
+        const random = () => { state = (state * 16807) % 2147483647; return state / 2147483647; };
+        const params = { occlusionAmount: 1, floor: 0.35 };
+        const range = { low: [0.5, 0.5, 0.5], high: [0.5, 0.5, 0.5] };
+        for (const noise of [() => (random() < 0.5 ? 0 : 1), random]) {
+            const out: number[] = [];
+            for (let i = 0; i < 4000; i++) out.push(...occlusionLifted([0.5, 0.5, 0.5], noise(), params, range));
+            expect(Math.max(...out)).toBeLessThanOrEqual(0.9);
+            expect(out.reduce((sum, v) => sum + v, 0) / out.length).toBeCloseTo(0.5, 1);
+        }
+        // Real occlusion still lifts what it darkened, never past the trusted floor or the input's range.
+        const lifted = occlusionLifted([0.2, 0.3, 0.1], 0.5, params, { low: [0.05, 0.05, 0.05], high: [0.8, 0.8, 0.8] });
+        expect(lifted[0]).toBeCloseTo(0.4, 6);
+        expect(occlusionLifted([0.2, 0.2, 0.2], 0.1, params, { low: [0, 0, 0], high: [1, 1, 1] })[0]).toBeLessThan(0.2 / 0.35);
+        // Speckle: pure noise is far past the line, a smooth bake far below it.
+        const n = 32;
+        const noisy = Array.from({ length: n * n }, () => (random() < 0.5 ? 0 : 1));
+        const smooth = Array.from({ length: n * n }, (_, i) => 0.5 + 0.4 * Math.sin((2 * Math.PI * (i % n)) / n));
+        expect(occlusionSpeckle(noisy, n, n)).toBeGreaterThan(SPECKLED * 2);
+        expect(occlusionSpeckle(smooth, n, n)).toBeLessThan(SPECKLED / 4);
     });
 
     it('takes atlas pieces counted from the top left', () => {
