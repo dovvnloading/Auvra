@@ -3,7 +3,8 @@ import type { GpuImage } from '../../gpu/textureGpu';
 import { MATERIAL_CHANNELS, MATERIAL_DEFAULTS, materialKey, materialResults, outputChannelOf, type MaterialImages } from '../material';
 import { NAMED_RECEIVE_TYPE, NAMED_SEND_TYPE } from '../namedLinks';
 import { anyIn, color, colorIn, float, onePass, out, select, vec2 } from '../nodeKit';
-import { OUTPUT_CHANNELS, OUTPUT_CHANNEL_LABELS, outputNodeKind, type NodeRunContext, type OutputChannel, type PortKind, type TexNodeDef, type TexParamDef } from '../types';
+import { OUTPUT_CHANNELS, OUTPUT_CHANNEL_LABELS, outputNodeKind, type GraphParameter, type NodeRunContext, type OutputChannel, type PortKind, type TexNodeDef, type TexParamDef } from '../types';
+import { parameterSetting } from '../parameters';
 
 /** Where a graph starts and ends, the model's baked maps, project pictures and hand-written pixels. */
 
@@ -103,6 +104,28 @@ const imageFrom = async (context: NodeRunContext, source: GpuImage | THREE.Textu
     return image;
 };
 
+/** A Bitmap's crop as corner and size (parts of the picture), kept inside the picture. */
+export const bitmapCrop = (from: unknown, size: unknown): [number, number, number, number] => {
+    const corner = Array.isArray(from) ? from.map(Number) : [0, 0];
+    const extent = Array.isArray(size) ? size.map(Number) : [1, 1];
+    const x = Math.min(0.999, Math.max(0, corner[0] || 0));
+    const y = Math.min(0.999, Math.max(0, corner[1] || 0));
+    return [x, y, Math.min(1 - x, Math.max(0.001, extent[0] || 1)), Math.min(1 - y, Math.max(0.001, extent[1] || 1))];
+};
+
+/**
+ * How much of the cropped picture a step across the node spans, each way: 1 each for stretching; for
+ * fitting inside, the picture's long side fills the node and the rest is see-through; for filling,
+ * its short side fills the node and the rest is cut. `aspect` is the cropped picture's width over its
+ * height, `nodeAspect` the node's.
+ */
+export const bitmapScale = (fit: string, aspect: number, nodeAspect: number): [number, number] => {
+    if (fit !== 'fit' && fit !== 'fill' || !(aspect > 0) || !(nodeAspect > 0)) return [1, 1];
+    const wider = aspect > nodeAspect;
+    if (fit === 'fit') return wider ? [1, aspect / nodeAspect] : [nodeAspect / aspect, 1];
+    return wider ? [nodeAspect / aspect, 1] : [1, aspect / nodeAspect];
+};
+
 /** A world space normal or position: wired in, else the model's own map, else a stand-in. */
 const meshInput = (context: NodeRunContext, key: string, map: MeshMapName): GpuImage | THREE.Texture | null => context.input(key) ?? context.external(meshMapKey(map));
 
@@ -161,6 +184,7 @@ export const IO_NODES: TexNodeDef[] = [
             { key: 'name', label: 'Name', kind: 'string', default: 'input' },
             select('kind', 'Kind', 'color', [['color', 'Colour'], ['gray', 'Grey']]),
             select('fallback', 'Without one', 'black', DEFAULT_LOOKS),
+            { key: 'visibleIf', label: 'Shown when', kind: 'string', default: '', hint: 'On a node using this graph, its pin shows only while this formula of the graph\'s parameters holds ("mode == 1"); empty: always.' },
         ],
         sizeFrom: 'graph',
         kindOf: (params) => (params.kind === 'gray' ? 'gray' : 'color'),
@@ -190,6 +214,7 @@ export const IO_NODES: TexNodeDef[] = [
                 showIf: (params) => params.channel === 'custom',
                 hint: 'What the image is: grey for masks and heights, so graphs using this one get a grey pin.',
             }),
+            { key: 'visibleIf', label: 'Shown when', kind: 'string', default: '', hint: 'On a node using this graph, its pin shows only while this formula of the graph\'s parameters holds ("mode == 1"); empty: always.' },
         ],
         sizeFrom: 'input',
         async run(context) {
@@ -238,15 +263,47 @@ export const IO_NODES: TexNodeDef[] = [
         type: 'bitmap',
         label: 'Bitmap',
         category: 'Inputs and outputs',
-        description: 'A picture from the project\'s texture library.',
-        keywords: ['image', 'texture', 'photo', 'picture', 'file'],
+        description: 'A picture from the project\'s texture library, cropped and fitted to the node. 16-bit and floating-point pictures are read at their depth, and the node keeps it.',
+        keywords: ['image', 'texture', 'photo', 'picture', 'file', 'exr', 'height map', 'crop'],
         inputs: [],
         outputs: [out('color')],
-        params: [{ key: 'texture', label: 'Picture', kind: 'texture', default: '' }],
+        params: [
+            { key: 'texture', label: 'Picture', kind: 'texture', default: '' },
+            select('colour', 'Colours', 'stored', [['stored', 'As the file holds them'], ['toLinear', 'sRGB file, read linear'], ['toSrgb', 'Linear file, read as sRGB']], {
+                hint: 'Most colour pictures hold sRGB, which graphs work in as it is. Turn it linear for maths that needs light values, or turn a linear file (an EXR colour) to sRGB.',
+            }),
+            vec2('cropFrom', 'Crop corner (from the top left)', [0, 0], 0, 1),
+            vec2('cropSize', 'Crop size', [1, 1], 0.001, 1),
+            select('fit', 'Fitting', 'stretch', [['stretch', 'Stretch to the node'], ['fit', 'Fit inside (see-through around)'], ['fill', 'Fill (cut to fit)']]),
+        ],
         sizeFrom: 'graph',
+        precisionOf: (params, texture) => {
+            const picture = typeof params.texture === 'string' && params.texture ? texture(params.texture) : null;
+            const depth = Number(picture?.userData?.auvraDepth) || 8;
+            return depth >= 32 ? 32 : depth >= 16 ? 16 : undefined;
+        },
         async run(context) {
             const image = context.image('color');
-            await context.pass(image, 'void main() { vec4 c = p_texture_ok == 1 ? texture(p_texture, vUv) : vec4(0.0, 0.0, 0.0, 1.0); if (p_texture_srgb == 1) c.rgb = linearToSrgb(c.rgb); outColor = c; }');
+            const id = typeof context.params.texture === 'string' ? context.params.texture : '';
+            const picture = id ? context.texture(id) : null;
+            const source = picture?.image as { width?: number; height?: number } | undefined;
+            const crop = bitmapCrop(context.params.cropFrom, context.params.cropSize);
+            const aspect = source?.width && source.height ? (source.width * crop[2]) / (source.height * crop[3]) : 1;
+            const scale = bitmapScale(String(context.params.fit), aspect, context.width / context.height);
+            const colour = context.params.colour === 'toLinear' ? 1 : context.params.colour === 'toSrgb' ? 2 : 0;
+            await context.pass(image, `uniform vec2 uScale;
+uniform vec4 uCrop;
+uniform int uColour;
+void main() {
+    if (p_texture_ok == 0) { outColor = vec4(0.0, 0.0, 0.0, 1.0); return; }
+    // Where on the cropped picture this pixel is, as it is fitted to the node.
+    vec2 q = (vUv - 0.5) * uScale + 0.5;
+    if (q.x < 0.0 || q.y < 0.0 || q.x > 1.0 || q.y > 1.0) { outColor = vec4(0.0); return; }
+    vec4 c = texture(p_texture, uCrop.xy + q * uCrop.zw);
+    if (p_texture_srgb == 1) c.rgb = linearToSrgb(c.rgb);
+    if (uColour == 1) c.rgb = srgbToLinear(c.rgb); else if (uColour == 2) c.rgb = linearToSrgb(c.rgb);
+    outColor = c;
+}`, { uniforms: { uScale: new THREE.Vector2(scale[0], scale[1]), uCrop: new THREE.Vector4(...crop), uColour: colour } });
             return { out: image };
         },
     },
@@ -258,7 +315,7 @@ export const IO_NODES: TexNodeDef[] = [
         keywords: ['input', 'material input', 'socket', 'sub-graph'],
         inputs: [],
         outputs: [{ key: 'out', label: 'Material', kind: 'material' }],
-        params: [{ key: 'name', label: 'Name', kind: 'string', default: 'material' }],
+        params: [{ key: 'name', label: 'Name', kind: 'string', default: 'material' }, { key: 'visibleIf', label: 'Shown when', kind: 'string', default: '', hint: 'On a node using this graph, its pin shows only while this formula of the graph\'s parameters holds ("mode == 1"); empty: always.' }],
         sizeFrom: 'graph',
         async run(context) {
             const name = String(context.params.name || 'material');
@@ -278,7 +335,7 @@ export const IO_NODES: TexNodeDef[] = [
         keywords: ['output', 'material output', 'sub-graph', 'result'],
         inputs: [{ key: 'in', label: 'Material', kind: 'material' }],
         outputs: [],
-        params: [{ key: 'name', label: 'Name', kind: 'string', default: '' }],
+        params: [{ key: 'name', label: 'Name', kind: 'string', default: '' }, { key: 'visibleIf', label: 'Shown when', kind: 'string', default: '', hint: 'On a node using this graph, its pin shows only while this formula of the graph\'s parameters holds ("mode == 1"); empty: always.' }],
         sizeFrom: 'input',
         async run(context) {
             const material = context.material('in');
@@ -484,16 +541,9 @@ void main() {
     },
 ];
 
-/** The settings a sub-graph node shows: the graph's own exposed parameters. */
-export const subgraphParamDefs = (parameters: ReadonlyArray<{ name: string; label: string; kind: string; default: unknown; min?: number; max?: number; step?: number; options?: Array<{ value: string; label: string }> }>): TexParamDef[] =>
-    parameters.map((parameter) => ({
-        key: parameter.name,
-        label: parameter.label || parameter.name,
-        kind: parameter.kind === 'select' ? 'select' : parameter.kind as TexParamDef['kind'],
-        default: parameter.default,
-        min: parameter.min,
-        max: parameter.max,
-        step: parameter.step,
-        options: parameter.options,
-    }));
+/**
+ * The settings a sub-graph node shows: the graph's own exposed parameters, under their groups, with
+ * their words, ranges and steps, each shown only while its condition holds for the node's values.
+ */
+export const subgraphParamDefs = (parameters: readonly GraphParameter[]): TexParamDef[] => parameters.map((parameter) => parameterSetting(parameter, parameters));
 
