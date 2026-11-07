@@ -394,6 +394,7 @@ const EXEMPT = new Map(Object.entries({
   'utils/userMaterialLibrary.ts': 'data-model',
   'utils/userMaterialLibraryActions.ts': 'pure-utility',
   'utils/materialPackage.ts': 'pure-utility',
+  'utils/projectPictures.ts': 'pure-utility',
   'components/Materials/projectTarget.ts': 'context-adapter',
   'components/Materials/materialBalls.ts': 'renderer-child-boundary',
   'components/Materials/ballShelf.ts': 'data-model',

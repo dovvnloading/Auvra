@@ -14,25 +14,92 @@ import {
 
 /** Where a project's pictures are read from. */
 export interface ProjectPictures {
+    /** The pictures the editor has loaded. */
     textures: readonly TextureData[];
     settingsOf(textureId: string): TextureSettings | undefined;
     read(url: string): Promise<Blob>;
+    /**
+     * Pictures the project keeps that the editor has not loaded (it loads what the open level needs): read from the
+     * project itself. Those it does not keep are left out.
+     */
+    unlisted?(textureIds: readonly string[]): Promise<LibraryPicture[]>;
 }
+
+type StoredGraphLike = { graph?: { parameters?: unknown; presets?: unknown; nodes?: unknown }; values?: unknown };
+const pictureParameterNames = (asset: MaterialAsset | undefined): string[] => {
+    const parameters = (asset?.textureGraph as StoredGraphLike | undefined)?.graph?.parameters;
+    return Array.isArray(parameters)
+        ? parameters.filter((parameter) => parameter?.kind === 'texture' && typeof parameter.name === 'string').map((parameter) => parameter.name as string)
+        : [];
+};
+
+/**
+ * Every picture materials name: what their documents list (their pictures by name, the pictures their texture graph
+ * last made, the surface graph's textures, Bitmap nodes, the record of their picture parameters), and besides, read
+ * from their texture graphs, each picture parameter's default, value and presets' values, and the pictures a graph
+ * used as a node is given for its picture parameters.
+ */
+export const materialPictureIds = (assets: readonly MaterialAsset[]): string[] => {
+    const ids = new Set(assets.flatMap((asset) => materialAssetDocument(asset).textureIds));
+    const byId = new Map(assets.map((asset) => [asset.id, asset]));
+    const add = (value: unknown) => { if (typeof value === 'string' && value) ids.add(value); };
+    for (const asset of assets) {
+        const stored = asset.textureGraph as StoredGraphLike | undefined;
+        if (!stored?.graph) continue;
+        const names = pictureParameterNames(asset);
+        const parameters = Array.isArray(stored.graph.parameters) ? stored.graph.parameters as Array<Record<string, unknown> | null> : [];
+        for (const parameter of parameters) if (parameter?.kind === 'texture') add(parameter.default);
+        const values = (stored.values ?? {}) as Record<string, unknown>;
+        for (const name of names) add(values[name]);
+        for (const preset of Array.isArray(stored.graph.presets) ? stored.graph.presets as Array<{ values?: Record<string, unknown> } | null> : []) {
+            for (const name of names) add(preset?.values?.[name]);
+        }
+        for (const node of Array.isArray(stored.graph.nodes) ? stored.graph.nodes as Array<{ params?: Record<string, unknown> } | null> : []) {
+            const used = typeof node?.params?.graph === 'string' ? byId.get(node.params.graph) : undefined;
+            if (used) for (const name of pictureParameterNames(used)) add(node?.params?.[name]);
+        }
+    }
+    return [...ids];
+};
 
 /** The project's pictures materials draw with, as the library keeps them; a texture the project no longer has is left out. */
 export const capturePictures = async (asset: MaterialAsset | readonly MaterialAsset[], project: ProjectPictures): Promise<LibraryPicture[]> => {
     const pictures: LibraryPicture[] = [];
-    const named = new Set((Array.isArray(asset) ? asset : [asset]).flatMap((each: MaterialAsset) => materialAssetDocument(each).textureIds));
+    const named = materialPictureIds(Array.isArray(asset) ? asset as readonly MaterialAsset[] : [asset as MaterialAsset]);
+    const unlisted: string[] = [];
     for (const textureId of named) {
         const texture = project.textures.find(candidate => candidate.id === textureId);
-        if (!texture) continue;
+        if (!texture) { unlisted.push(textureId); continue; }
         // A deep picture keeps its own file, with its 8-bit preview beside it.
         const file = await project.read(texture.sourceUrl ?? texture.url);
         const preview = texture.sourceUrl ? await project.read(texture.url) : undefined;
         const settings = portableSettings(project.settingsOf(textureId) ?? texture.settings);
         pictures.push({ id: textureId, name: texture.name, file, dimensions: texture.dimensions, ...(settings ? { settings } : {}), ...(preview ? { preview } : {}) });
     }
+    // The rest are read from the project (a texture graph's made pictures, say, which no open level needed).
+    if (unlisted.length && project.unlisted) {
+        const wanted = new Set(unlisted);
+        for (const picture of await project.unlisted(unlisted)) if (wanted.has(picture.id)) pictures.push(picture);
+    }
     return pictures;
+};
+
+/**
+ * Every picture id in a material's authoring documents that `ids` renames, wherever it sits (a graph used as a node
+ * given a picture for its parameter, a picture parameter's default): what withRenamedTextures does not reach.
+ */
+const withPictureIdsRenamed = (asset: MaterialAsset, ids: ReadonlyMap<string, string>): MaterialAsset => {
+    const renamed = (value: unknown): unknown => {
+        if (typeof value === 'string') return ids.get(value) ?? value;
+        if (Array.isArray(value)) return value.map(renamed);
+        if (!value || typeof value !== 'object') return value;
+        return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([key, child]) => [key, renamed(child)]));
+    };
+    return {
+        ...asset,
+        ...(asset.textureGraph ? { textureGraph: renamed(asset.textureGraph) as Record<string, unknown> } : {}),
+        ...(asset.paint ? { paint: renamed(asset.paint) as Record<string, unknown> } : {}),
+    };
 };
 
 /** Renders a material's ball from the pictures it is kept with (materialBalls.ts in the editor). */
@@ -103,11 +170,11 @@ export const bringMaterialIn = async (source: MaterialWithParts, project: Projec
         graphIds.set(graph.id, id);
         const name = uniqueName(graph.name, names);
         names.push(name);
-        broughtGraphs.push({ ...withRenamedTextures(graph, (textureId) => textureIds.get(textureId) ?? ''), id, name });
+        broughtGraphs.push({ ...withPictureIdsRenamed(withRenamedTextures(graph, (textureId) => textureIds.get(textureId) ?? ''), textureIds), id, name });
     }
     for (const graph of broughtGraphs) await project.saveMaterial(withRenamedNodeGraphs(graph, graphIds));
     const { owner: _owner, ...shared } = source.material;
-    const made: MaterialAsset = { ...withRenamedTextures(shared, (textureId) => textureIds.get(textureId) ?? ''), id: project.newId(), name: uniqueName(source.name, names) };
+    const made: MaterialAsset = { ...withPictureIdsRenamed(withRenamedTextures(shared, (textureId) => textureIds.get(textureId) ?? ''), textureIds), id: project.newId(), name: uniqueName(source.name, names) };
     const asset = withRenamedNodeGraphs(made, graphIds);
     await project.saveMaterial(asset);
     return asset;

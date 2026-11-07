@@ -7,10 +7,13 @@ import { nodeBindings } from '../../texturing/graph/nodeKit';
 import { TEXTURE_NODE_DEFINITIONS } from '../../texturing/graph/registry';
 import { defaultNodeParams } from '../../texturing/graph/document';
 import type { NodeRunContext, TexNodeDef } from '../../texturing/graph/types';
+import { checkWgsl, findingWords } from './wgslChecks';
+import { FN_RESULT_TYPE, FN_REROUTE_TYPE, FN_SAMPLE_TYPE, FN_SETTING_TYPE, FUNCTION_NODE_DEFINITIONS, createFunctionNode, type FnLink, type FnNode, type FunctionGraph } from '../../texturing/graph/functionGraph';
+import { FLIPBOOK_PACK_GLSL } from '../../texturing/graph/animation';
 
-/** Every pass a node draws with its default settings and nothing wired in: its fragment (kit declarations included) and inputs. */
-const passesOf = async (definition: TexNodeDef): Promise<Array<{ fragment: string; inputs: string[]; wgsl?: { functions: string; result: string } }>> => {
-    const params = defaultNodeParams(definition);
+/** Every pass a node draws with its default settings (or those given) and nothing wired in: its fragment (kit declarations included) and inputs. */
+const passesOf = async (definition: TexNodeDef, given: Record<string, unknown> = {}): Promise<Array<{ fragment: string; inputs: string[]; wgsl?: { functions: string; result: string } }>> => {
+    const params = { ...defaultNodeParams(definition), ...given };
     const image = (width = 64, height = 64) => ({ kind: 'color', width, height, precision: 8, refs: 1, target: {} });
     const captured: Array<{ fragment: string; inputs: string[]; wgsl?: { functions: string; result: string } }> = [];
     const keep = (fragment: string, inputs: string[], wgsl?: { functions: string; result: string }) => {
@@ -224,5 +227,132 @@ describe('the WebGPU texturing GPU', () => {
         expect(dataTextureFormat(THREE.RGBAFormat, THREE.UnsignedByteType, true)?.format).toBe('rgba8unorm-srgb');
         expect(dataTextureFormat(THREE.RGFormat, THREE.FloatType, false)).toEqual({ format: 'rg32float', bytes: 8 });
         expect(dataTextureFormat(THREE.RedFormat, THREE.HalfFloatType, false)).toEqual({ format: 'r16float', bytes: 2 });
+    });
+});
+
+/** A function graph from nodes (id, type, settings) and wires (from[.output] -> to.input). */
+const functionGraphOf = (nodes: Array<[string, string, Record<string, unknown>?]>, wires: string[]): FunctionGraph => {
+    const made: FnNode[] = nodes.map(([id, type, params]) => ({ ...createFunctionNode(type, 0, 0, params ?? {}), id }));
+    const links: FnLink[] = wires.map((wire) => {
+        const [from, to] = wire.split('->').map((part) => part.trim());
+        const [fromNode, fromOutput = 'out'] = from.split('.');
+        const [toNode, toInput] = to.split('.');
+        return { from: fromNode, fromOutput, to: toNode, toInput };
+    });
+    return { nodes: made, links };
+};
+
+describe('WGSL a device takes', () => {
+    it('the check finds each fault it looks for, and passes WGSL that is right', () => {
+        const rules = (code: string) => checkWgsl(code).map((finding) => finding.rule);
+        const wrong = `struct Uniforms { uSegs: i32, uSize: vec2<f32> }
+@group(0) @binding(0) var<storage, read> u: Uniforms;
+@group(0) @binding(1) var T_a: texture_2d<f32>;
+fn gf_f(x: f32, p: ptr<function, f32>, v_in: vec3<f32>) -> f32 {
+    x = 2.0;
+    x += 1.0;
+    (*p) = 1.0;
+    let k = vec3<f32>(1.0);
+    k.x = 1.0;
+    var v = v_in;
+    v.xy = vec2<f32>(1.0);
+    var i: i32 = 2;
+    let b = i * 2.0;
+    let c = x % 2.0;
+    let d = float(i);
+    let e = mod(x, 2.0);
+    let g = atan(x, 1.0);
+    var w: u32 = 1u;
+    let m = w + i;
+    let n = f32(textureDimensions(T_a).x) + textureDimensions(T_a).y * 2.5;
+    let q = u.uSegs < 1.5;
+    let r = mat3(1.0);
+    let s = f32[2](1.0, 2.0);
+    return x;
+}`;
+        expect(rules(wrong)).toEqual([
+            'parameter assigned', 'parameter assigned', 'let reassigned', 'swizzle assigned', 'number types mixed', 'real remainder',
+            // u32 and i32; f32 and u32, then u32 and a real literal; i32 and a real literal.
+            'GLSL constructor', 'GLSL built-in', 'GLSL built-in', 'number types mixed', 'number types mixed', 'number types mixed', 'number types mixed', 'GLSL constructor', 'GLSL constructor',
+        ]);
+        const right = `fn gf_g(x_in: f32, p: ptr<function, f32>) -> f32 {
+    var x = x_in;
+    x = 2.0;
+    (*p) = x;
+    var v = vec3<f32>(0.0);
+    v.x = 1.0;
+    { let held = vec2<f32>(1.0); v.x = held.x; v.y = held.y; }
+    var i: i32 = 2;
+    i++;
+    let b = f32(i) * 2.0 + f32(i + 1) - x / 3.0;
+    let c = x - 2.0 * floor(x / 2.0);
+    let g = atan2(x, 1.0);
+    let h = i % 3 + (i << 1u);
+    let k = vec2<i32>(i, 1) * 2;
+    for (var j: i32 = 0; j < 4; j++) { if (j >= i) { break; } }
+    return select(b, c, g < h);
+}`;
+        expect(checkWgsl(right)).toEqual([]);
+    });
+
+    it('the passes of every node give WGSL with none of the faults translation most often makes', async () => {
+        const found: string[] = [];
+        for (const definition of TEXTURE_NODE_DEFINITIONS) {
+            for (const [index, pass] of (await passesOf(definition)).entries()) {
+                let code: string;
+                try { code = translatePass(pass).code; } catch { continue; }
+                for (const line of findingWords(checkWgsl(code))) found.push(`${definition.type} #${index}: ${line}`);
+            }
+        }
+        expect(found).toEqual([]);
+    });
+
+    it('every function graph node gives WGSL with none of those faults, in a Pixel and a Value processor', async () => {
+        const skip = new Set([FN_RESULT_TYPE, FN_SETTING_TYPE, FN_SAMPLE_TYPE, FN_REROUTE_TYPE]);
+        const processors = ['pixelProcessor', 'valueProcessor'].map((type) => TEXTURE_NODE_DEFINITIONS.find((candidate) => candidate.type === type)!);
+        const found: string[] = [];
+        let checked = 0;
+        for (const definition of FUNCTION_NODE_DEFINITIONS) {
+            if (skip.has(definition.type)) continue;
+            for (const output of definition.outputs) {
+                // Unwired (its own numbers), and with its first number-taking input fed by a worked-out number.
+                const graphs: FunctionGraph[] = [functionGraphOf([['n', definition.type], ['r', FN_RESULT_TYPE]], [`n.${output.key} -> r.value`])];
+                const fed = definition.inputs.find((input) => input.type === 'auto' || input.type === 'vec2' || input.type === 'float');
+                if (fed) {
+                    graphs.push(functionGraphOf([['p', 'fnPosition'], ['k', 'fnNumber', { value: 0.37 }], ['m', 'fnMultiply'], ['n', definition.type], ['r', FN_RESULT_TYPE]],
+                        ['p -> m.a', 'k -> m.b', `m -> n.${fed.key}`, `n.${output.key} -> r.value`]));
+                }
+                for (const processor of processors) {
+                    for (const graph of graphs) {
+                        const [pass] = await passesOf(processor, { mode: 'graph', function: graph });
+                        if (!pass?.wgsl) continue;
+                        for (const line of findingWords(checkWgsl(translatePass(pass).code))) found.push(`${processor.type} ${definition.type}.${output.key}: ${line}`);
+                        checked++;
+                    }
+                }
+            }
+        }
+        expect(checked).toBeGreaterThan(150);
+        expect(found).toEqual([]);
+    });
+
+    it('the pass laying out a flipbook gives such WGSL too', () => {
+        expect(findingWords(checkWgsl(translatePass({ fragment: FLIPBOOK_PACK_GLSL, inputs: ['source'] }).code))).toEqual([]);
+    });
+
+    it('a parameter a function changes is copied into a variable first; an out parameter is written through its pointer', () => {
+        const module = translatePass({
+            fragment: `float bump(float x, inout float total, out float twice) { x = x * 2.0; x += 1.0; total += x; twice = x; return x; }
+vec2 nudge(vec2 p) { p.x += 1.0; p.yx = p.xy; return p; }
+float keep(float x_in) { float x = x_in; x++; return x; }
+void main() { float t = 0.0; float w; outColor = vec4(bump(1.0, t, w), nudge(vUv), keep(t)); }`,
+            inputs: [],
+        });
+        expect(module.code).toContain('fn gf_bump(x_in: f32, total: ptr<function, f32>, twice: ptr<function, f32>) -> f32 {\nvar x = x_in;');
+        expect(module.code).toContain('(*total) = ((*total) + x);');
+        expect(module.code).toContain('fn gf_nudge(p_in: vec2f) -> vec2f {\nvar p = p_in;');
+        // A parameter only read stays as it is (the name x_in is taken by it, so nothing clashes).
+        expect(module.code).toContain('fn gf_keep(x_in: f32) -> f32 {\nvar x: f32 = x_in;');
+        expect(findingWords(checkWgsl(module.code))).toEqual([]);
     });
 });
