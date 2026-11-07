@@ -3,7 +3,6 @@ import { CrossIcon } from '../Icons';
 import type { TextureData } from '../../../types';
 import { Button, IconButton, Section, Segmented, Spinner } from '../kit';
 import { Select } from '../Select';
-import { dbOperations } from '../../../utils/db';
 import { materialLibrary } from '../../../runtime/materials/materialLibrary';
 import { limitPictureSize, pictureToRgba8, type DecodedPicture } from '../../../texturing/textureDecode';
 import { decodePictureOffPage, encodeTextureOffPage } from '../../../texturing/texturePipeline';
@@ -121,6 +120,8 @@ export const TextureSettingsDialog: React.FC<{ texture: TextureData; onClose: ()
         setSaving(true);
         setSaveError(null);
         try {
+            // The project store is reached only on saving, so showing the browser opens no database.
+            const { dbOperations } = await import('../../../utils/db');
             await dbOperations.updateTextureSettings(texture.id, settings);
             setTextureSettings(texture.id, settings);
             materialLibrary.reloadTexture(texture.id);
