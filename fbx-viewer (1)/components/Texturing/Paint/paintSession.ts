@@ -26,7 +26,7 @@ import { atlasMesh, atlasUvs, markPaintedMaterials, surfaceOfGraph, withPaintedM
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js';
 import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { graphPictureLookup } from './graphPictures';
-import { paintStackEntry } from '../../../texturing/paint/stackNode';
+import { paintStackEntry, registerOpenStack } from '../../../texturing/paint/stackNode';
 
 /** A template's picture packed from up to four maps: each channel a component of one (grey maps hold theirs in red), or a value. */
 const PACK_PICTURE = /* glsl */ `
@@ -347,6 +347,8 @@ export class PaintSession {
         }
         const session = new PaintSession(target, host, part, stack, asset, occluder, modelSpace);
         session.releasePictures = graphPictures.dispose;
+        // Graphs using this set's stack draw from it while it is open.
+        session.closeStack = registerOpenStack(asset.id, stack);
         return session;
     }
 
@@ -1141,9 +1143,12 @@ export class PaintSession {
 
     /** Lets go of the copies of pictures the fill graphs read. */
     private releasePictures: () => void = () => undefined;
+    /** Says the set's stack is no longer open to graphs. */
+    private closeStack: () => void = () => undefined;
 
     dispose(): void {
         this.stopComparing();
+        this.closeStack();
         this.stopListening();
         this.releasePictures();
         // Maps bake steps held for undo go with the set.
