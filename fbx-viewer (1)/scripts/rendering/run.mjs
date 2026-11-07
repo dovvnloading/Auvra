@@ -182,8 +182,16 @@ const main = async () => {
     const failures = [];
     const numbers = {};
     const rows = [];
+    // What the page itself said, for a scene that fails without a picture: the renderer reports its own trouble there.
+    const pageSaid = () => client.events
+      .filter((event) => event.method === 'Runtime.consoleAPICalled' && ['error', 'warning'].includes(event.params.type))
+      .map((event) => event.params.args.map((arg) => arg.value ?? arg.description ?? '').join(' '))
+      .slice(-30);
     for (const name of names) {
-      const { png, numbers: cost } = await run(`window.auvraVisual.capture(${JSON.stringify(name)})`);
+      const { png, numbers: cost } = await run(`window.auvraVisual.capture(${JSON.stringify(name)})`).catch((error) => {
+        const said = pageSaid();
+        throw new Error(`${name}: ${error.message}${said.length ? `\nThe page said:\n  ${said.join('\n  ')}` : ''}`);
+      });
       numbers[name] = cost;
       const bytes = Buffer.from(png.split(',')[1], 'base64');
       const referenceFile = path.join(referenceDir, `${name}.png`);
