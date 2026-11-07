@@ -194,6 +194,42 @@ export const pasteNodes = <S>(graph: EditableGraph<S>, nodes: readonly EditableN
 
 export const rectsOverlap = (a: Rect, b: Rect): boolean => a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
 
+/**
+ * Where a box of `size` goes near `want` without touching any of `taken` (kept `gap` apart): `want`
+ * itself when it is free, else the nearest free place on a `step` grid round it. Moving up or down
+ * costs less than moving sideways, so a node added on a wire stays on its side of the wire. Gives
+ * `want` back when nothing within `reach` is free.
+ */
+export const freeSpot = (
+    want: Point,
+    size: { width: number; height: number },
+    taken: readonly Rect[],
+    options: { gap?: number; step?: number; reach?: number } = {},
+): Point => {
+    const gap = options.gap ?? 16;
+    const step = Math.max(1, options.step ?? 20);
+    const reach = options.reach ?? 1200;
+    const near = taken.filter((rect) => rect.x < want.x + size.width + reach + gap && rect.x + rect.width > want.x - reach - gap
+        && rect.y < want.y + size.height + reach + gap && rect.y + rect.height > want.y - reach - gap);
+    const free = (x: number, y: number) => !near.some((rect) => x < rect.x + rect.width + gap && x + size.width + gap > rect.x
+        && y < rect.y + rect.height + gap && y + size.height + gap > rect.y);
+    if (free(want.x, want.y)) return want;
+    const steps = Math.ceil(reach / step);
+    const offsets: Array<{ x: number; y: number; cost: number }> = [];
+    for (let i = -steps; i <= steps; i++) {
+        for (let j = -steps; j <= steps; j++) {
+            if (!i && !j) continue;
+            const x = i * step;
+            const y = j * step;
+            offsets.push({ x, y, cost: Math.hypot(x * 1.5, y) });
+        }
+    }
+    // Nearest first; of two as near, the one moved less sideways, then the one below, then right.
+    offsets.sort((a, b) => a.cost - b.cost || Math.abs(a.x) - Math.abs(b.x) || b.y - a.y || b.x - a.x);
+    for (const offset of offsets) if (free(want.x + offset.x, want.y + offset.y)) return { x: want.x + offset.x, y: want.y + offset.y };
+    return want;
+};
+
 export const rectFrom = (a: Point, b: Point): Rect => ({ x: Math.min(a.x, b.x), y: Math.min(a.y, b.y), width: Math.abs(a.x - b.x), height: Math.abs(a.y - b.y) });
 
 /** The box round `rects`, or null when there are none. */

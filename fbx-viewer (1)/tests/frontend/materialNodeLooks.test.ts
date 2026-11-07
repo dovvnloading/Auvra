@@ -11,7 +11,7 @@ import {
 } from '../../runtime/materials/materialGraph';
 import { bindMaterialGraph, graphColourSource } from '../../runtime/materials/graphMaterial';
 import { materialLibrary } from '../../runtime/materials/materialLibrary';
-import { MATERIAL_BYPASS_KEPT, MATERIAL_LOOKS_KEPT } from '../../components/Materials/materialNodeViews';
+import { MATERIAL_BYPASS_KEPT, MATERIAL_LOOKS_KEPT, materialNodeView } from '../../components/Materials/materialNodeViews';
 
 const node = (id: string, type: string, params: Record<string, unknown> = {}, look: Record<string, unknown> = {}) => ({ id, type, x: 0, y: 0, params: { ...defaultParams(type), ...params }, ...look });
 const link = (fromNode: string, fromOutput: string, toNode: string, toInput: string) => ({ fromNode, fromOutput, toNode, toInput });
@@ -111,5 +111,15 @@ describe('a bypassed shader graph node', () => {
         const material = new THREE.MeshStandardMaterial();
         bindMaterialGraph(material, tinted({ bypass: true }));
         expect(graphColourSource(material)).toEqual({ kind: 'constant', colour: [1, 0, 0] });
+    });
+});
+
+describe('a Receive node on the shader graph canvas', () => {
+    it('hides its own input, which its Send feeds, unless something is wired to it', () => {
+        const receive = node('r', 'namedReceive', { name: 'mask' });
+        expect(materialNodeView(receive, { previews: false }).inputs).toEqual([]);
+        expect(materialNodeView(receive, { previews: false }).outputs.map(pin => pin.key)).toEqual(['out']);
+        expect(materialNodeView(receive, { previews: false, wiredIdle: true }).inputs.map(pin => pin.key)).toEqual(['in']);
+        expect(materialNodeView(node('s', 'namedSend', { name: 'mask' }), { previews: false }).inputs.map(pin => pin.key)).toEqual(['in']);
     });
 });

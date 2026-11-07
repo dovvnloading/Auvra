@@ -10,6 +10,10 @@ import { OUTPUT_CHANNELS, OUTPUT_CHANNEL_LABELS, outputNodeKind, type NodeRunCon
 export const INPUT_NODE_TYPE = 'input';
 export const OUTPUT_NODE_TYPE = 'output';
 export const SUBGRAPH_NODE_TYPE = 'subgraph';
+/** Runs a graph of the project a number of times, each pass's results fed into the next. */
+export const ITERATE_NODE_TYPE = 'iterate';
+/** Nodes that run another graph of the project. */
+export const GRAPH_USING_TYPES: ReadonlySet<string> = new Set([SUBGRAPH_NODE_TYPE, ITERATE_NODE_TYPE]);
 export const MESH_MAP_NODE_TYPE = 'meshMap';
 /** A point a wire passes through on the canvas; it changes nothing. */
 export const REROUTE_NODE_TYPE = 'reroute';
@@ -54,13 +58,34 @@ export const MESH_MAP_LABELS: Record<MeshMapName, string> = {
 export const MESH_MAP_KIND: Record<MeshMapName, PortKind> = {
     ambientOcclusion: 'gray', curvature: 'gray', normal: 'color', worldNormal: 'color', position: 'color', thickness: 'gray', id: 'color', height: 'gray',
 };
-/** What a mesh map reads as when no model is there to bake it from. */
-const MESH_MAP_STAND_IN: Record<MeshMapName, string> = {
+
+/**
+ * Maps a bake can keep besides those, when asked for in its settings (texturing/bake's EXTRA_MAPS, by
+ * the same names): cavity, bent normals, and colour, opacity and materials carried over from a
+ * high-poly model. Mesh map nodes read them the same way, under the same kind of key.
+ */
+export const EXTRA_MESH_MAPS = ['cavity', 'bentNormal', 'color', 'opacity', 'material'] as const;
+export type ExtraMeshMapName = typeof EXTRA_MESH_MAPS[number];
+/** Every map a Mesh map node can read. */
+export const ALL_MESH_MAPS: readonly AnyMeshMapName[] = [...MESH_MAPS, ...EXTRA_MESH_MAPS];
+export type AnyMeshMapName = MeshMapName | ExtraMeshMapName;
+export const ANY_MESH_MAP_LABELS: Record<AnyMeshMapName, string> = {
+    ...MESH_MAP_LABELS,
+    cavity: 'Cavity', bentNormal: 'Bent normal', color: 'Colour from the high-poly model', opacity: 'Opacity from the high-poly model', material: 'Materials from the high-poly model',
+};
+export const ANY_MESH_MAP_KIND: Record<AnyMeshMapName, PortKind> = {
+    ...MESH_MAP_KIND, cavity: 'gray', bentNormal: 'color', color: 'color', opacity: 'gray', material: 'color',
+};
+const isMeshMap = (value: unknown): value is AnyMeshMapName => (ALL_MESH_MAPS as readonly unknown[]).includes(value);
+
+/** What a mesh map reads as when no model is there to bake it from (or the bake did not keep it). */
+const MESH_MAP_STAND_IN: Record<AnyMeshMapName, string> = {
     ambientOcclusion: 'vec4(1.0)', curvature: 'vec4(0.5)', normal: 'vec4(0.5, 0.5, 1.0, 1.0)', worldNormal: 'vec4(0.5, 1.0, 0.5, 1.0)',
     position: 'vec4(vUv, 0.5, 1.0)', thickness: 'vec4(0.5)', id: 'vec4(0.0, 0.0, 0.0, 1.0)', height: 'vec4(0.5)',
+    cavity: 'vec4(0.5)', bentNormal: 'vec4(0.5, 0.5, 1.0, 1.0)', color: 'vec4(0.5, 0.5, 0.5, 1.0)', opacity: 'vec4(1.0)', material: 'vec4(0.0, 0.0, 0.0, 1.0)',
 };
 
-export const meshMapKey = (name: MeshMapName): string => `mesh:${name}`;
+export const meshMapKey = (name: AnyMeshMapName): string => `mesh:${name}`;
 
 /** An image of the node's size and `kind` holding `source` (an image or a project texture). */
 const imageFrom = async (context: NodeRunContext, source: GpuImage | THREE.Texture, kind: PortKind): Promise<GpuImage> => {
@@ -192,16 +217,16 @@ export const IO_NODES: TexNodeDef[] = [
         type: MESH_MAP_NODE_TYPE,
         label: 'Mesh map',
         category: 'Mesh maps',
-        description: 'A map baked from the model being painted: occlusion, curvature, normals, position, thickness or IDs. Smart masks and materials are built on these.',
-        keywords: ['baked', 'ao', 'curvature', 'world normal', 'position', 'thickness', 'id', 'mesh'],
+        description: 'A map baked from the model being painted: occlusion, curvature, normals, position, thickness or IDs, and when the bake kept them, cavity, bent normals, and colour, opacity and materials carried over from a high-poly model. Smart masks and materials are built on these.',
+        keywords: ['baked', 'ao', 'curvature', 'world normal', 'position', 'thickness', 'id', 'mesh', 'cavity', 'bent normal', 'high poly', 'transfer'],
         inputs: [],
         outputs: [out('any')],
-        params: [select('map', 'Map', 'ambientOcclusion', MESH_MAPS.map((name) => [name, MESH_MAP_LABELS[name]] as [string, string]))],
+        params: [select('map', 'Map', 'ambientOcclusion', ALL_MESH_MAPS.map((name) => [name, ANY_MESH_MAP_LABELS[name]] as [string, string]))],
         sizeFrom: 'graph',
-        kindOf: (params) => MESH_MAP_KIND[(MESH_MAPS as readonly string[]).includes(String(params.map)) ? params.map as MeshMapName : 'ambientOcclusion'],
+        kindOf: (params) => ANY_MESH_MAP_KIND[isMeshMap(params.map) ? params.map : 'ambientOcclusion'],
         async run(context) {
-            const name = ((MESH_MAPS as readonly string[]).includes(String(context.params.map)) ? context.params.map : 'ambientOcclusion') as MeshMapName;
-            const kind = MESH_MAP_KIND[name];
+            const name: AnyMeshMapName = isMeshMap(context.params.map) ? context.params.map : 'ambientOcclusion';
+            const kind = ANY_MESH_MAP_KIND[name];
             const baked = context.external(meshMapKey(name));
             if (baked) return { out: await imageFrom(context, baked, kind) };
             const image = context.image(kind);
@@ -333,33 +358,6 @@ export const IO_NODES: TexNodeDef[] = [
         sizeFrom: 'graph',
         glsl: 'void main() { outColor = vec4(p_value); }',
     }),
-    {
-        ...onePass({
-            type: 'pixelProcessor',
-            label: 'Pixel processor',
-            category: 'Utility',
-            description: 'Your own GLSL for each pixel. Read inputs with c_a(uv) or g_a(uv) (and b, c, d), the settings as p_x, p_y, p_z, p_w and p_tint, and write outColor.',
-            keywords: ['custom', 'code', 'shader', 'glsl', 'expression', 'per pixel'],
-            inputs: [anyIn('a', 'A'), anyIn('b', 'B'), anyIn('c', 'C'), anyIn('d', 'D')],
-            outputs: [out('any')],
-            params: [
-                { key: 'code', label: 'Code', kind: 'code', default: 'vec4 v = c_a(uv);\noutColor = vec4(v.rgb * p_x, v.a);' },
-                select('output', 'Makes', 'color', [['color', 'Colour'], ['gray', 'Grey']]),
-                float('x', 'x', 1, -10, 10), float('y', 'y', 0, -10, 10), float('z', 'z', 0, -10, 10), float('w', 'w', 0, -10, 10),
-                color('tint', 'tint', [1, 1, 1, 1]),
-            ],
-            sizeFrom: 'graph',
-            glsl: '',
-        }),
-        kindOf: (params) => (params.output === 'gray' ? 'gray' : 'color'),
-        async run(context) {
-            const image = context.image(context.outputKind('out'));
-            const code = String(context.params.code ?? '').slice(0, 8000);
-            // #line 1: the compiler counts the typed code's lines from 1, so its errors point at them.
-            await context.pass(image, `void main() {\nvec2 uv = vUv;\n#line 1\n${code}\n}`, { cost: pixelProcessorCost(code) });
-            return { out: image };
-        },
-    },
     {
         type: 'triplanar',
         label: 'Triplanar projection',

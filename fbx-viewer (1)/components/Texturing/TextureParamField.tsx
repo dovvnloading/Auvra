@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { LinkIcon, SigmaIcon, UnlinkIcon, UploadIcon } from '../UI/Icons';
+import { LinkIcon, VariableIcon, SigmaIcon, UnlinkIcon, UploadIcon } from '../UI/Icons';
 import { expressionError } from '../../texturing/graph/expressions';
 import { MAX_RAMP_STOPS, readRamp } from '../../texturing/graph/nodeKit';
 import { isParamLink, type GraphParameter, type GraphParameterKind, type RampStop, type TexParamDef } from '../../texturing/graph/types';
@@ -211,7 +211,9 @@ export const TextureParamField: React.FC<{
     onChange: (value: unknown) => void;
     onExpose: () => void;
     extras?: ParamExtras;
-}> = ({ param, value, parameters, textures, problem, onChange, onExpose, extras }) => {
+    /** A setting that can be shown as a pin on its node, to follow a value wired in (a Value processor's). */
+    pin?: { shown: boolean; wired: boolean; onToggle: () => void };
+}> = ({ param, value, parameters, textures, problem, onChange, onExpose, extras, pin }) => {
     const anchor = useRef<HTMLButtonElement>(null);
     const [menu, setMenu] = useState(false);
     const [formula, setFormula] = useState('');
@@ -226,11 +228,12 @@ export const TextureParamField: React.FC<{
         ? <ScrubLabel label={param.label} value={Number(linked ? param.default : value ?? param.default) || 0} step={param.step ?? 0.01} onChange={(next) => !linked && onChange(clampToParam(param, next))} />
         : <span className="text-2xs text-ink-2">{param.label}</span>;
 
+    const following = Boolean(pin?.wired);
     const linkButton = canLink && (
-        <button ref={anchor} aria-label={`Link ${param.label} to a parameter`} title="Follow a parameter or formula, or expose as a parameter"
+        <button ref={anchor} aria-label={`Link ${param.label} to a parameter`} title={pin ? 'Follow a parameter, a formula or a value wired into a pin, or expose as a parameter' : 'Follow a parameter or formula, or expose as a parameter'}
             onClick={() => { setFormula(linked && '$expr' in linked ? linked.$expr : ''); setMenu(true); }}
-            className={`rounded p-0.5 ${linked ? 'text-accent hover:text-accent-hover' : 'text-ink-3 hover:text-ink-2'}`}>
-            {linked && '$expr' in linked ? <SigmaIcon size={12} /> : <LinkIcon size={12} />}
+            className={`rounded p-0.5 ${linked || pin?.shown ? 'text-accent hover:text-accent-hover' : 'text-ink-3 hover:text-ink-2'}`}>
+            {pin?.shown ? <VariableIcon size={12} /> : linked && '$expr' in linked ? <SigmaIcon size={12} /> : <LinkIcon size={12} />}
         </button>
     );
 
@@ -238,10 +241,14 @@ export const TextureParamField: React.FC<{
         <div className="space-y-1" title={param.hint}>
             <div className="flex items-center gap-1.5">
                 <span className="min-w-0 flex-1 truncate">{label}</span>
-                {inline(param) && !linked && <ParamControl param={param} value={value} textures={textures} onChange={onChange} extras={extras} />}
+                {inline(param) && !linked && !following && <ParamControl param={param} value={value} textures={textures} onChange={onChange} extras={extras} />}
                 {linkButton}
             </div>
-            {linked ? (
+            {following ? (
+                <div className="flex items-center gap-1.5 rounded border border-accent/40 bg-accent/10 px-1.5 py-1 text-2xs text-accent">
+                    <span className="flex-1 truncate">Follows the value wired into its pin</span>
+                </div>
+            ) : linked ? (
                 <div className="flex items-center gap-1.5 rounded border border-accent/40 bg-accent/10 px-1.5 py-1 text-2xs text-accent">
                     {'$bind' in linked ? <span className="flex-1 truncate">Follows <b>{parameters.find((p) => p.name === linked.$bind)?.label ?? linked.$bind}</b></span>
                         : <span className="flex-1 truncate font-mono">{linked.$expr}</span>}
@@ -254,6 +261,12 @@ export const TextureParamField: React.FC<{
                     <button onClick={() => { onExpose(); setMenu(false); }} className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-ink hover:bg-white/5">
                         <UploadIcon size={12} /> Expose as a new parameter
                     </button>
+                    {pin && (
+                        <button onClick={() => { pin.onToggle(); setMenu(false); }} className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-ink hover:bg-white/5"
+                            title={pin.shown ? 'Takes the pin off the node, and any wire into it' : 'A pin on the node for a value (a Value processor\'s), which this setting then follows on the GPU'}>
+                            <VariableIcon size={12} /> {pin.shown ? 'Take its pin off the node' : 'Show as a pin, to follow a value'}
+                        </button>
+                    )}
                     {choices.length > 0 && (
                         <div>
                             <div className="px-2 pb-1 text-2xs text-ink-3">Follow a parameter</div>
@@ -264,7 +277,7 @@ export const TextureParamField: React.FC<{
                         </div>
                     )}
                     <div className="space-y-1 border-t border-line pt-2">
-                        <div className="px-2 text-2xs text-ink-3">Or a formula of parameters ({names.length ? names.join(', ') : 'none yet'}, $size, $seed)</div>
+                        <div className="px-2 text-2xs text-ink-3">Or a formula of parameters ({names.length ? names.join(', ') : 'none yet'}, $size, $seed, $iteration)</div>
                         <input aria-label="Formula" value={formula} placeholder="wear * 0.5 + 0.1" onChange={(event) => setFormula(event.target.value)}
                             onKeyDown={(event) => { if (event.key === 'Enter' && formula.trim() && !expressionError(formula, names)) { onChange({ $expr: formula.trim() }); setMenu(false); } }}
                             className={`w-full font-mono ${field}`} />

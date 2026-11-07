@@ -75,6 +75,8 @@ export const materialResults = (port: string, images: MaterialImages): Record<st
  * input (grey reads as grey colour, colour as its brightness), never into a material input.
  */
 export const wireFits = (from: PinKind, to: Pick<TexPortDef, 'kind' | 'material'>): boolean => {
+    // A setting shown as a pin follows a value only; a value into a picture input fills it flat.
+    if (to.kind === 'value') return from === 'value';
     if (from === 'material') return to.kind === 'material' || to.material === true;
     return to.kind !== 'material';
 };

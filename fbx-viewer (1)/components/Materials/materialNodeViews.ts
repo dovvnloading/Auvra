@@ -1,4 +1,5 @@
 import {
+    NAMED_RECEIVE_TYPE,
     OUTPUT_NODE_TYPE,
     REROUTE_NODE_TYPE,
     getMaterialNodeDefinition,
@@ -73,17 +74,23 @@ const groupOf = (input: MaterialInputDef): string | undefined => {
     return typeof group === 'string' && group ? group : undefined;
 };
 
+/**
+ * An input that does nothing, shown only while something is wired to it (so that wire can be taken
+ * away): a Receive's own input, which the Send of its name feeds.
+ */
+export const idleInput = (type: string, key: string): boolean => type === NAMED_RECEIVE_TYPE && key === 'in';
+
 /** How one node shows on the canvas. */
 export const materialNodeView = (
     node: MaterialGraphNode,
-    options: { autoTypes?: ReadonlyMap<string, MaterialValueType>; previews: boolean; unused?: boolean },
+    options: { autoTypes?: ReadonlyMap<string, MaterialValueType>; previews: boolean; unused?: boolean; wiredIdle?: boolean },
 ): NodeView => {
     const definition = getMaterialNodeDefinition(node.type);
     const autoTypes = options.autoTypes ?? new Map<string, MaterialValueType>();
     const look = node as MaterialGraphNode & NodeLook;
     const isOutput = node.type === OUTPUT_NODE_TYPE;
     const label = definition?.label ?? node.type;
-    const inputs: PinView[] = (definition?.inputs ?? []).map((input) => {
+    const inputs: PinView[] = (definition?.inputs ?? []).filter((input) => options.wiredIdle || !idleInput(node.type, input.key)).map((input) => {
         const group = groupOf(input);
         return { key: input.key, label: input.label, kind: resolvedPortType(input.type, node.id, autoTypes), ...(group ? { group } : {}), ...inlineValue(node, input) };
     });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { labelReference, packBoxSize, shortestOffset, unpackBoxSize } from '../../texturing/graph/flood';
+import { islandSpan, labelReference, packBoxSize, seamOffset, shortestOffset, unpackBoxSize } from '../../texturing/graph/flood';
 
 /** A mask from rows of text, the first row at the bottom as the GPU reads it ('#' inside). */
 const maskOf = (rows: string[]) => {
@@ -86,6 +86,24 @@ describe('flood fill boxes', () => {
         expect(shortestOffset(90, 100, true)).toBe(-10);
         expect(shortestOffset(90, 100, false)).toBe(90);
         expect(shortestOffset(-60, 100, true)).toBe(40);
+    });
+
+    it('gives an island more than half the picture across its own box where the picture tiles', () => {
+        // Sixty pixels of a hundred, over the edge: 70 to 99 and 0 to 29, its root at 70.
+        const places = [...Array.from({ length: 30 }, (_, i) => 70 + i), ...Array.from({ length: 30 }, (_, i) => i)];
+        // The short way round alone splits it (offsets past half the picture come round the other way).
+        const shortest = places.map((place) => shortestOffset(place - 70, 100, true));
+        expect(Math.max(...shortest) - Math.min(...shortest) + 1).toBe(100);
+        expect(islandSpan(places, 70, 100, true)).toEqual({ low: 0, size: 60 });
+        // Rooted on its other side, and small islands, as before.
+        expect(islandSpan(places, 0, 100, true)).toEqual({ low: -30, size: 60 });
+        expect(islandSpan([3, 5, 9], 3, 100, true)).toEqual({ low: 0, size: 7 });
+        expect(islandSpan([3, 5, 9], 5, 100, false)).toEqual({ low: -2, size: 7 });
+        // Offsets wrap at the seam: from the seam less the size, up to it.
+        expect(seamOffset(60, 100, 0.5, true)).toBe(-40);
+        expect(seamOffset(60, 100, 0.75, true)).toBe(60);
+        expect(seamOffset(-30, 100, 0.25, true)).toBe(-30);
+        expect(seamOffset(-80, 100, 0.25, true)).toBe(20);
     });
 
     it('packs a box\'s size into one float exactly, to a 4095th of the image', () => {

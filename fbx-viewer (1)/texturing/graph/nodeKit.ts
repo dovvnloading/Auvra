@@ -12,8 +12,39 @@ import type { CurvePoint, CurveSet, NodeRunContext, PortKind, RampStop, TexNodeD
  *     (colours), vec2; a ramp as `p_key_colors`, `p_key_positions`, `p_key_count` (pass them to
  *     sampleRamp); a curve as the lookup `curveValue(p_key, value, channel)`; a bitmap as sampler
  *     `p_key` with `p_key_ok`;
- *   - `uSeed`, the node's random seed, and `uSize`, its size in pixels.
+ *   - `uSeed`, the node's random seed, and `uSize`, its size in pixels; `uWorld`, the metres its
+ *     picture spans; `uIteration` and `uIterations`, the pass of an Iterate node it runs in.
+ *
+ * A setting shown as a pin (TexGraphNode.valuePins) with a value wired in reads that value on the
+ * GPU: its `p_key` is a read of the one-pixel picture `v_key`, so nothing comes back to the CPU.
  */
+
+/** The kinds of setting that can follow a value wired in. */
+export const VALUE_SETTING_KINDS: ReadonlySet<TexParamDef['kind']> = new Set(['float', 'int', 'bool', 'color', 'vec2']);
+
+/** The input a setting shown as a pin takes its value through. */
+export const valuePinKey = (paramKey: string): string => `@${paramKey}`;
+export const isValuePin = (inputKey: string): boolean => inputKey.startsWith('@');
+
+/** GLSL reading a setting's value from the one-pixel picture `v_key`, kept inside the setting's limits. */
+const valueRead = (param: TexParamDef, sampler: string): string => {
+    const texel = `texelFetch(${sampler}, ivec2(0), 0)`;
+    const limit = (expression: string, whole: boolean) => {
+        const low = Number.isFinite(param.min) ? param.min! : null;
+        const high = Number.isFinite(param.max) ? param.max! : null;
+        if (low === null && high === null) return expression;
+        const literal = (value: number) => (whole ? String(Math.round(value)) : (Number.isInteger(value) ? `${value}.0` : String(value)));
+        if (low !== null && high !== null) return `clamp(${expression}, ${literal(low)}, ${literal(high)})`;
+        return low !== null ? `max(${expression}, ${literal(low)})` : `min(${expression}, ${literal(high!)})`;
+    };
+    switch (param.kind) {
+        case 'int': return limit(`int(floor(${texel}.x + 0.5))`, true);
+        case 'bool': return `(${texel}.x > 0.5 ? 1 : 0)`;
+        case 'color': return texel;
+        case 'vec2': return limit(`${texel}.xy`, false);
+        default: return limit(`${texel}.x`, false);
+    }
+};
 
 export const float = (key: string, label: string, value: number, min: number, max: number, extra: Partial<TexParamDef> = {}): TexParamDef =>
     ({ key, label, kind: 'float', default: value, min, max, step: extra.step ?? (max - min > 20 ? 0.1 : 0.01), ...extra });
@@ -159,7 +190,7 @@ float curveValue(sampler2D lut, float value, int channel) {
 /** The GLSL declarations a node's pass gets, and the values they take. */
 export const nodeBindings = (
     definition: TexNodeDef,
-    context: Pick<NodeRunContext, 'input' | 'params' | 'seed' | 'texture' | 'tiling'>,
+    context: Pick<NodeRunContext, 'input' | 'params' | 'seed' | 'texture' | 'tiling'> & Partial<Pick<NodeRunContext, 'world' | 'iteration'>>,
     gpuConstant: (name: NonNullable<TexPortDef['fallback']>) => THREE.Texture,
 ): { declarations: string; inputs: Record<string, GpuImage | THREE.Texture>; uniforms: Record<string, unknown> } => {
     // The node's tiling: inputs read past an edge come round where it repeats and stop at the edge where
@@ -167,14 +198,23 @@ export const nodeBindings = (
     const lines: string[] = [
         'uniform float uSeed;',
         'uniform ivec2 uTiles;',
+        // Metres the picture spans: slopes per metre are slopes per unit of the picture over this.
+        'uniform vec2 uWorld;',
+        'uniform int uIteration;',
+        'uniform int uIterations;',
         'vec2 tileUv(vec2 uv) { return vec2(uTiles.x == 1 ? fract(uv.x) : clamp(uv.x, 0.0, 1.0), uTiles.y == 1 ? fract(uv.y) : clamp(uv.y, 0.0, 1.0)); }',
         'ivec2 tilePeriod(ivec2 cells) { return ivec2(uTiles.x == 1 ? cells.x : 1048576, uTiles.y == 1 ? cells.y : 1048576); }',
     ];
     const inputs: Record<string, GpuImage | THREE.Texture> = {};
-    const uniforms: Record<string, unknown> = { uSeed: context.seed, uTiles: [context.tiling[0] ? 1 : 0, context.tiling[1] ? 1 : 0] };
+    const world = context.world ?? [1, 1];
+    const uniforms: Record<string, unknown> = {
+        uSeed: context.seed, uTiles: [context.tiling[0] ? 1 : 0, context.tiling[1] ? 1 : 0], uWorld: new THREE.Vector2(world[0], world[1]),
+        uIteration: context.iteration?.index ?? 0, uIterations: context.iteration?.count ?? 1,
+    };
     for (const port of definition.inputs) {
-        // A material input carries a picture per channel: the node binds the ones it reads itself.
-        if (port.kind === 'material') continue;
+        // A material input carries a picture per channel: the node binds the ones it reads itself. A
+        // value goes to the setting it is wired to.
+        if (port.kind === 'material' || port.kind === 'value') continue;
         const image = context.input(port.key);
         const gray = image ? image.kind === 'gray' : false;
         inputs[`t_${port.key}`] = image ?? gpuConstant(port.fallback ?? 'black');
@@ -188,6 +228,12 @@ export const nodeBindings = (
     for (const param of definition.params) {
         const value = context.params[param.key];
         const name = `p_${param.key}`;
+        const following = VALUE_SETTING_KINDS.has(param.kind) ? context.input(valuePinKey(param.key)) : null;
+        if (following) {
+            lines.push(`uniform sampler2D v_${param.key};\n#define ${name} (${valueRead(param, `v_${param.key}`)})`);
+            inputs[`v_${param.key}`] = following;
+            continue;
+        }
         switch (param.kind) {
             case 'float':
                 lines.push(`uniform float ${name};`);
@@ -256,6 +302,7 @@ export const onePass = (definition: Omit<TexNodeDef, 'run'> & { glsl: string; co
     const { glsl, cost, ...rest } = definition;
     return {
         ...rest,
+        settingsInShader: true,
         async run(context) {
             const port = rest.outputs[0];
             const image = context.image(context.outputKind(port.key));
