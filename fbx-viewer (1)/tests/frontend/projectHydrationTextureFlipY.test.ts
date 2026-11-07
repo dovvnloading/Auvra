@@ -3,9 +3,24 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LoadedModelData } from '../../types';
 import { UV_ORIGIN_TOP_LEFT_KEY } from '../../utils/materialOverrides';
 
-const mocks = vi.hoisted(() => ({ loadFBXFile: vi.fn(), textures: [] as unknown[] }));
+const mocks = vi.hoisted(() => ({ loadFBXFile: vi.fn(), textures: [] as unknown[], requests: [] as unknown[] }));
 
 vi.mock('../../utils/modelLoader', () => ({ loadFBXFile: mocks.loadFBXFile, importPhaseLabel: () => 'Loading' }));
+// Override textures load through the project's texture loader (decoded at their depth, compressed by
+// role); here it hands back a plain texture and records how it was asked to lay the picture out.
+vi.mock('../../texturing/materialTextureLoader', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../texturing/materialTextureLoader')>();
+  const { Texture } = await import('three');
+  return {
+    ...actual,
+    createMaterialTextureLoader: () => async (_url: string, request?: unknown) => {
+      const texture = new Texture();
+      mocks.textures.push(texture);
+      mocks.requests.push(request);
+      return texture;
+    },
+  };
+});
 vi.mock('../../utils/processing/ModelTransforms', () => ({
   applyModelImportSettings: () => undefined,
   convertOptionsFor: () => ({}),
@@ -34,11 +49,7 @@ beforeEach(() => {
     ok: true, status: 200, headers: new Headers({ 'Content-Type': 'image/png' }), blob: async () => new Blob(['bytes']),
   })));
   mocks.textures.length = 0;
-  vi.spyOn(THREE.TextureLoader.prototype, 'loadAsync').mockImplementation(async () => {
-    const texture = new THREE.Texture<HTMLImageElement>();
-    mocks.textures.push(texture);
-    return texture;
-  });
+  mocks.requests.length = 0;
 });
 
 afterEach(() => {
@@ -61,6 +72,7 @@ describe('loadGameContent texture overrides', () => {
     expect(loaded.content.models).toHaveLength(1);
     expect(loaded.content.models[0].object).toBe(model.object);
     expect(mocks.textures).toHaveLength(1);
+    expect(mocks.requests[0]).toMatchObject({ textureId: 'tex-1', slot: 'map', flipY });
     expect(body.map).toBe(mocks.textures[0]);
     expect(body.map!.flipY).toBe(flipY);
     expect(body.map!.colorSpace).toBe(THREE.SRGBColorSpace);
