@@ -505,7 +505,9 @@ export class UvSession {
     get texelDensity(): number {
         if (!this.proposal) return 0;
         const total = this.targetIslands().map((i) => islandAreas(this.islandShape(i))).reduce((sum, each) => ({ uv: sum.uv + each.uv, model: sum.model + each.model }), { uv: 0, model: 0 });
-        return texelDensity(total, this.paint.stack.size);
+        const density = texelDensity(total, this.paint.stack.size);
+        // Before a new layout's figures exist its islands can measure as nothing (or not at all).
+        return Number.isFinite(density) ? density : 0;
     }
 
     transformSelected(angle: number, scale: number): void {

@@ -151,7 +151,7 @@ export const islandAreas = (shape: IslandShape): { uv: number; model: number } =
 };
 
 /** Texels per model unit for an island on a picture `size` texels across. */
-export const texelDensity = (areas: { uv: number; model: number }, size: number): number => (areas.model > 0 ? Math.sqrt(areas.uv / areas.model) * size : 0);
+export const texelDensity = (areas: { uv: number; model: number }, size: number): number => (areas.model > 0 && Number.isFinite(areas.uv) && areas.uv >= 0 ? Math.sqrt(areas.uv / areas.model) * size : 0);
 
 /**
  * The scale for each island that brings it to `target` texels per unit (by default, the density of all of
