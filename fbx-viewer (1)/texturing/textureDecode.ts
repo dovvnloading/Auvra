@@ -26,7 +26,11 @@ export interface DecodedPicture {
     depth: 8 | 16 | 32;
     /** Channels the file holds: 1 grey, 2 grey and alpha, 3 colour, 4 colour and alpha. */
     channels: 1 | 2 | 3 | 4;
-    /** Floating point, with light beyond 1 (EXR, HDR, float TIFF and PSD). */
+    /**
+     * Holds light beyond white: a Radiance HDR file, or a floating-point picture with values above 1 or
+     * below 0. Floating-point pictures that stay within 0 to 1, as most EXR normal, roughness and height
+     * maps do, are not: they are compressed like any other map.
+     */
     hdr: boolean;
     /** Red, green, blue and alpha for each pixel, rows from the top. */
     rgba: Float32Array;
@@ -35,6 +39,19 @@ export interface DecodedPicture {
 /** File name endings imported as textures, for the file picker. */
 export const TEXTURE_FILE_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.webp', '.tif', '.tiff', '.exr', '.hdr', '.tga', '.psd'] as const;
 export const TEXTURE_FILE_ACCEPT = ['image/png', 'image/jpeg', 'image/webp', ...TEXTURE_FILE_EXTENSIONS].join(',');
+
+/** How far past white or below black a map may stray and still not hold light (normal maps often overshoot a little). */
+const BEYOND_WHITE_SLACK = 0.05;
+
+/** Whether any colour value lies beyond white or below black (alpha aside), past a little slack. */
+export const holdsLightBeyondWhite = (rgba: Float32Array): boolean => {
+    for (let i = 0; i < rgba.length; i++) {
+        if (i % 4 === 3) continue;
+        const value = rgba[i];
+        if (value > 1 + BEYOND_WHITE_SLACK || value < -BEYOND_WHITE_SLACK) return true;
+    }
+    return false;
+};
 
 const extensionOf = (name: string): string => name.toLowerCase().slice(name.lastIndexOf('.'));
 
@@ -125,9 +142,10 @@ const decodeTiff = (bytes: Uint8Array): DecodedPicture => {
         else if (bits === 16) values[i] = view.getUint16(i * 2, little) / 65535;
         else values[i] = view.getFloat32(i * 4, little);
     }
+    const rgba = toRgba(values, image.width, image.height, samples);
     return {
         width: image.width, height: image.height, depth: bits as 8 | 16 | 32, channels: samples as 1 | 2 | 3 | 4,
-        hdr: float, rgba: toRgba(values, image.width, image.height, samples),
+        hdr: float && holdsLightBeyondWhite(rgba), rgba,
     };
 };
 
@@ -210,7 +228,7 @@ export const decodePsd = (bytes: Uint8Array): DecodedPicture => {
         rgba[o + 2] = colour === 3 ? read(2, pixel) : first;
         rgba[o + 3] = kept > colour ? read(colour, pixel) : 1;
     }
-    return { width, height, depth: depth as 8 | 16 | 32, channels: (kept > colour ? colour + 1 : colour) as 1 | 2 | 3 | 4, hdr: depth === 32, rgba };
+    return { width, height, depth: depth as 8 | 16 | 32, channels: (kept > colour ? colour + 1 : colour) as 1 | 2 | 3 | 4, hdr: depth === 32 && holdsLightBeyondWhite(rgba), rgba };
 };
 
 // --- EXR, HDR and TGA (three's loaders, which need no page) -------------------------------------
@@ -222,7 +240,7 @@ const decodeExr = (bytes: Uint8Array): DecodedPicture => {
     const channels = result.data.length === result.width * result.height ? 1 : 4;
     // three's EXR rows come from the bottom.
     const rgba = flipRows(toRgba(result.data, result.width, result.height, channels), result.width, result.height);
-    return { width: result.width, height: result.height, depth: 32, channels: channels === 1 ? 1 : 4, hdr: true, rgba };
+    return { width: result.width, height: result.height, depth: 32, channels: channels === 1 ? 1 : 4, hdr: holdsLightBeyondWhite(rgba), rgba };
 };
 
 const decodeHdr = (bytes: Uint8Array): DecodedPicture => {
@@ -271,13 +289,18 @@ export const decodePicture = async (bytes: Uint8Array, name = ''): Promise<Decod
 
 // --- What is made from a decoded picture --------------------------------------------------------
 
-/** Each channel as a byte, for an 8-bit preview: floating-point light tone-mapped so its bright parts show. */
-export const pictureToRgba8 = (picture: DecodedPicture): Uint8Array => {
+/**
+ * Each channel as a byte. Light beyond white is tone-mapped so its bright parts show; `linearColour`
+ * (a floating-point picture read as colour, which holds light rather than sRGB values) is encoded to sRGB
+ * for showing. Other pictures, normal and data maps among them, keep their values.
+ */
+export const pictureToRgba8 = (picture: DecodedPicture, linearColour = false): Uint8Array => {
     const out = new Uint8Array(picture.width * picture.height * 4);
     const { rgba, hdr } = picture;
     for (let i = 0; i < rgba.length; i++) {
         let value = rgba[i];
         if (hdr && i % 4 !== 3) value = Math.pow(value / (1 + value), 1 / 2.2);
+        else if (linearColour && i % 4 !== 3) value = Math.pow(Math.max(0, value), 1 / 2.2);
         out[i] = Math.round(Math.min(1, Math.max(0, value)) * 255);
     }
     return out;

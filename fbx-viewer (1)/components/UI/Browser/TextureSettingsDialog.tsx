@@ -11,6 +11,7 @@ import {
     MAX_SIZE_CHOICES,
     keptFormat,
     limitedSize,
+    wholeFormat,
     setTextureSettings,
     textureRole,
     textureSettingsOf,
@@ -85,13 +86,15 @@ export const TextureSettingsDialog: React.FC<{ texture: TextureData; onClose: ()
     const support = useMemo(() => compressionSupport(), []);
     const drawn = limitedSize(texture.dimensions.width || 1, texture.dimensions.height || 1, settings.maxSize);
     const source = settings.source;
-    const hdr = source?.hdr === true || picture?.hdr === true;
+    // Once read, the picture says whether it holds light beyond white (older imports marked every EXR so).
+    const hdr = picture ? picture.hdr : source?.hdr === true;
+    const depth = picture?.depth ?? source?.depth ?? 8;
     const format: KeptFormat = keptFormat(role, settings, { bptc: true, rgtc: true }, {
-        channels: picture?.channels ?? source?.channels ?? 4, depth: picture?.depth ?? source?.depth ?? 8, hdr, ...drawn,
+        channels: picture?.channels ?? source?.channels ?? 4, depth, hdr, ...drawn,
     });
-    const onThisDevice = keptFormat(role, settings, support, { channels: picture?.channels ?? 4, depth: picture?.depth ?? 8, hdr, ...drawn });
+    const onThisDevice = keptFormat(role, settings, support, { channels: picture?.channels ?? source?.channels ?? 4, depth, hdr, ...drawn });
     const mips = settings.mips !== false;
-    const wholeBytes = textureMemoryBytes(texture.dimensions.width || 1, texture.dimensions.height || 1, hdr ? 'half' : 'rgba8', mips);
+    const wholeBytes = textureMemoryBytes(texture.dimensions.width || 1, texture.dimensions.height || 1, wholeFormat({ depth, hdr }), mips);
     const keptBytes = textureMemoryBytes(drawn.width, drawn.height, format, mips);
 
     // Before and after compression, side by side, at a size the preview compresses quickly.
@@ -99,7 +102,7 @@ export const TextureSettingsDialog: React.FC<{ texture: TextureData; onClose: ()
         if (!picture) return;
         let current = true;
         const shown = limitPictureSize(picture, Math.min(settings.maxSize ?? PREVIEW_SIDE, PREVIEW_SIDE));
-        const rgba = pictureToRgba8(shown);
+        const rgba = pictureToRgba8(shown, shown.depth === 32 && role === 'colour');
         paint(before.current, rgba, shown.width, shown.height);
         if (format === 'rgba8' || format === 'half' || shown.width % 4 || shown.height % 4) {
             paint(after.current, rgba, shown.width, shown.height);
@@ -122,8 +125,12 @@ export const TextureSettingsDialog: React.FC<{ texture: TextureData; onClose: ()
         try {
             // The project store is reached only on saving, so showing the browser opens no database.
             const { dbOperations } = await import('../../../utils/db');
-            await dbOperations.updateTextureSettings(texture.id, settings);
-            setTextureSettings(texture.id, settings);
+            // What the picture holds, as read now, so the memory view counts it the same way.
+            const saved: TextureSettings = picture && settings.source
+                ? { ...settings, source: { format: settings.source.format, depth: settings.source.depth, channels: settings.source.channels, ...(picture.hdr ? { hdr: true } : {}) } }
+                : settings;
+            await dbOperations.updateTextureSettings(texture.id, saved);
+            setTextureSettings(texture.id, saved);
             materialLibrary.reloadTexture(texture.id);
             onClose();
         } catch (error) {
@@ -217,6 +224,9 @@ export const TextureSettingsDialog: React.FC<{ texture: TextureData; onClose: ()
                             <p className="mt-1 text-2xs leading-snug text-ink-3">This computer's graphics card cannot take that compression, so here it is kept whole; a computer that can takes it compressed.</p>
                         )}
                         {hdr && <p className="mt-1 text-2xs leading-snug text-ink-3">Light beyond white is kept as 16-bit floating point: no compression keeps it yet.</p>}
+                        {!hdr && depth === 32 && role === 'colour' && format === 'half' && (
+                            <p className="mt-1 text-2xs leading-snug text-ink-3">Floating-point colour is kept as 16-bit floating point, as it holds light rather than screen colours. Pick a compression above to compress it.</p>
+                        )}
                     </Section>
                 </div>
                 <div className="flex shrink-0 items-center justify-end gap-2 border-t border-line px-3 py-2">

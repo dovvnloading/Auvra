@@ -29,6 +29,11 @@ const TextureRows: React.FC<{ textures: readonly TextureCost[]; limit?: number }
                 <span className="shrink-0 text-ink-3">{texture.width}×{texture.height} · {memoryWords(texture.bytes)}</span>
             </li>
         ))}
+        {textures.length > limit && (
+            <li className="text-2xs text-ink-3">
+                and {textures.length - limit} more, {memoryWords(textures.slice(limit).reduce((sum, texture) => sum + texture.bytes, 0))}
+            </li>
+        )}
     </ul>
 );
 

@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { limitPictureSize, pictureToHalf, pictureToRgba8, type DecodedPicture } from './textureDecode';
 import { decodePictureOffPage, encodeTextureOffPage } from './texturePipeline';
-import { keptFormat, textureRole, textureSettingsOf, type CompressionSupport, type KeptFormat } from './textureSettings';
+import { keptFormat, textureRole, wholeFormat, textureSettingsOf, type CompressionSupport, type KeptFormat } from './textureSettings';
 import { gpuExtensions } from '../utils/textureCompression/compressTextures';
 import type { MaterialTextureFormat } from '../utils/textureCompression/materialTextureEncoder';
 
@@ -57,7 +57,7 @@ export const textureFromPicture = async (picture: DecodedPicture, request: Mater
     const sized = limitPictureSize(picture, settings?.maxSize);
     const { width, height } = sized;
     const role = textureRole(request.slot, settings);
-    const format = compress ? keptFormat(role, settings, compressionSupport(), sized) : sized.hdr ? 'half' : 'rgba8';
+    const format = compress ? keptFormat(role, settings, compressionSupport(), sized) : wholeFormat(sized);
     const mips = settings?.mips !== false;
     let texture: THREE.Texture;
     if (format === 'half') {
@@ -67,7 +67,8 @@ export const textureFromPicture = async (picture: DecodedPicture, request: Mater
         texture.generateMipmaps = false;
         texture.minFilter = THREE.LinearFilter;
     } else {
-        const bytes = pictureToRgba8(sized);
+        // Floating-point colour is encoded to sRGB, as the colour formats read it.
+        const bytes = pictureToRgba8(sized, sized.depth === 32 && role === 'colour');
         const rgba = request.flipY ? flipped(bytes, width, height) : bytes;
         if (format === 'rgba8') {
             texture = new THREE.DataTexture(rgba, width, height, THREE.RGBAFormat, THREE.UnsignedByteType);

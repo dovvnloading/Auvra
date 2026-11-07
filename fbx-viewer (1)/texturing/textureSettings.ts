@@ -115,8 +115,9 @@ export type KeptFormat = MaterialTextureFormat | 'rgba8' | 'half';
 
 /**
  * The format a texture is kept in on the GPU: BC7 for colour, BC5 for normal maps and BC4 for one channel
- * of data, unless its settings pick one, or it is floating point (kept as half floats: no compressed format
- * for light beyond 1 is written here), or the GPU cannot take it (kept whole, as 8-bit or half floats).
+ * of data, unless its settings pick one, or it holds light beyond white, or it is floating-point colour
+ * (both kept as half floats: no compressed format for either is written here), or the GPU cannot take it.
+ * Kept whole, a floating-point picture stays in half floats and any other in 8 bits.
  */
 export const keptFormat = (
     role: TextureRole,
@@ -124,15 +125,20 @@ export const keptFormat = (
     support: CompressionSupport,
     picture: { channels: number; depth: number; hdr: boolean; width: number; height: number },
 ): KeptFormat => {
-    const whole: KeptFormat = picture.hdr ? 'half' : 'rgba8';
+    const whole = wholeFormat(picture);
     const choice = settings?.compression ?? 'auto';
-    if (choice === 'none' || picture.hdr) return whole;
+    // Floating-point colour holds light, not sRGB values, so the sRGB colour formats do not fit it.
+    const linearColour = picture.depth === 32 && role === 'colour' && choice === 'auto';
+    if (choice === 'none' || picture.hdr || linearColour) return whole;
     // Compressed blocks are 4 pixels a side.
     if (picture.width % 4 !== 0 || picture.height % 4 !== 0) return whole;
     const wanted: MaterialTextureFormat = choice !== 'auto' ? choice : role === 'normal' ? 'bc5' : role === 'data' && picture.channels === 1 ? 'bc4' : 'bc7';
     const supported = wanted === 'bc7' ? support.bptc : support.rgtc;
     return supported ? wanted : whole;
 };
+
+/** The format a texture is kept in uncompressed: half floats for floating-point pictures, 8 bits for the rest. */
+export const wholeFormat = (picture: { depth: number; hdr: boolean }): KeptFormat => (picture.hdr || picture.depth === 32 ? 'half' : 'rgba8');
 
 /** The size a texture is drawn at, after its size limit (halving until it fits). */
 export const limitedSize = (width: number, height: number, maxSize: number | undefined): { width: number; height: number } => {

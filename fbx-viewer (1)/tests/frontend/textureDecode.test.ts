@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { decodePicture, limitPictureSize, pictureToRgba8, sniffPictureFormat, browserReadsWholly } from '../../texturing/textureDecode';
+import { decodePicture, holdsLightBeyondWhite, limitPictureSize, pictureToRgba8, sniffPictureFormat, browserReadsWholly } from '../../texturing/textureDecode';
 import { encodePng16 } from '../../texturing/png';
 
 // The test page's Blob cannot stream; the PNG reader and writer stream theirs (a worker's can).
@@ -130,6 +130,22 @@ describe('texture pictures', () => {
         // Its 8-bit preview is tone-mapped rather than clipped flat.
         const preview = pictureToRgba8(picture);
         expect(preview[0]).toBeGreaterThan(preview[1]);
+    });
+
+    it('say a floating-point picture holds light beyond white only when its values do', () => {
+        expect(holdsLightBeyondWhite(new Float32Array([0.5, 0.5, 1, 1, 0, 0.2, 0.9, 1]))).toBe(false);
+        // A map overshooting white a little (as normal maps often do) is not light beyond it; alpha is not light.
+        expect(holdsLightBeyondWhite(new Float32Array([0.5, 0.5, 1.024, 5]))).toBe(false);
+        expect(holdsLightBeyondWhite(new Float32Array([0.5, 0.5, 1, 1, 1.5, 0.2, 0.9, 1]))).toBe(true);
+        expect(holdsLightBeyondWhite(new Float32Array([-0.5, 0.5, 1, 1]))).toBe(true);
+    });
+
+    it('show floating-point colour in sRGB and other floating-point pictures as stored', () => {
+        const picture = { width: 1, height: 1, depth: 32 as const, channels: 4 as const, hdr: false, rgba: new Float32Array([0.2, 0.5, 1, 1]) };
+        expect(Array.from(pictureToRgba8(picture))).toEqual([51, 128, 255, 255]);
+        const shown = pictureToRgba8(picture, true);
+        expect(shown[0]).toBe(Math.round(Math.pow(0.2, 1 / 2.2) * 255));
+        expect(shown[3]).toBe(255);
     });
 
     it('read an 8-bit TGA', async () => {

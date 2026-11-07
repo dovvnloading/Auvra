@@ -331,7 +331,17 @@ export const encodeLevel = (rgba: Uint8Array, width: number, height: number, for
 
 /** One level's blocks back to RGBA (the compression preview). */
 export const decodeLevel = (data: Uint8Array, width: number, height: number, format: MaterialTextureFormat): Uint8Array => {
-    if (format === 'bc5') return decodeBlocks(data, width, height, 'bc5');
+    if (format === 'bc5') {
+        // BC5 keeps a normal's X and Y; its Z is rebuilt from them, as the shader does, and it is opaque.
+        const rg = decodeBlocks(data, width, height, 'bc5');
+        for (let i = 0; i < rg.length; i += 4) {
+            const x = rg[i] / 127.5 - 1;
+            const y = rg[i + 1] / 127.5 - 1;
+            rg[i + 2] = Math.round((Math.sqrt(Math.max(0, 1 - x * x - y * y)) * 0.5 + 0.5) * 255);
+            rg[i + 3] = 255;
+        }
+        return rg;
+    }
     const columns = Math.ceil(width / 4);
     const out = new Uint8Array(width * height * 4);
     const block = new Uint8Array(64);

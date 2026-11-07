@@ -58,7 +58,11 @@ describe('material texture compression', () => {
     it('keeps a normal map\'s directions in BC5', () => {
         const rgba = new Uint8Array(8 * 8 * 4);
         for (let i = 0; i < 64; i++) rgba.set([128 + (i % 8) * 8, 128 - (i % 8) * 4, 230, 255], i * 4);
-        expect(worstError(rgba, decodeLevel(encodeLevel(rgba, 8, 8, 'bc5'), 8, 8, 'bc5'), [0, 1])).toBeLessThanOrEqual(6);
+        const back = decodeLevel(encodeLevel(rgba, 8, 8, 'bc5'), 8, 8, 'bc5');
+        expect(worstError(rgba, back, [0, 1])).toBeLessThanOrEqual(6);
+        // Decoded, a normal's Z is rebuilt from X and Y and it is opaque.
+        expect(back[2]).toBeGreaterThan(127);
+        expect(back[3]).toBe(255);
     });
 
     it('makes mip levels down to one pixel, normals unit length at each', () => {
@@ -110,6 +114,18 @@ describe('the format a texture is kept in', () => {
         expect(keptFormat('colour', undefined, { bptc: false, rgtc: true }, picture)).toBe('rgba8');
         expect(keptFormat('normal', undefined, { bptc: true, rgtc: false }, picture)).toBe('rgba8');
         expect(limitedSize(4096, 2048, 1024)).toEqual({ width: 1024, height: 512 });
+    });
+
+    it('compresses floating-point normal and data maps that stay within white, and keeps floating-point colour whole', () => {
+        const float = { ...picture, depth: 32 };
+        expect(keptFormat('normal', undefined, ALL, float)).toBe('bc5');
+        expect(keptFormat('data', undefined, ALL, { ...float, channels: 1 })).toBe('bc4');
+        expect(keptFormat('colour', undefined, ALL, float)).toBe('half');
+        // Asked for, floating-point colour is compressed.
+        expect(keptFormat('colour', { compression: 'bc7' }, ALL, float)).toBe('bc7');
+        // Kept whole, a floating-point picture stays in half floats.
+        expect(keptFormat('normal', { compression: 'none' }, ALL, float)).toBe('half');
+        expect(keptFormat('normal', undefined, { bptc: true, rgtc: false }, float)).toBe('half');
     });
 
     it('stores settings made safe', () => {
