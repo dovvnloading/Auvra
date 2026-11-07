@@ -8,7 +8,6 @@ import type { BakeSettings, ExtraBakeMap } from '../../../texturing/bake/meshBak
 import { MAX_BRUSH_SIZE, lazyFollow, pictureAspect, renderDepth, stencilPlace, Stroke, type BrushSettings, type HistoryEntry, type StrokeTarget } from '../../../texturing/paint/strokes';
 import { decalCoordinates, type DecalStart } from '../../../texturing/paint/decals';
 import { strokeLabel } from '../../../texturing/paint/history';
-import { builtInAlphaTexture } from '../../../texturing/paint/brushLibrary';
 import { pathLength, samplePath, type SurfacePath, type Vec3 } from '../../../texturing/paint/paths';
 
 import type { PaintChannel } from '../../../texturing/paint/paintTypes';
@@ -16,6 +15,7 @@ import { PICK_LABELS, type PickMode } from '../../../texturing/paint/selection';
 import type { PaintSession } from './paintSession';
 import type { UvSession } from './uvSession';
 import { layPathAlong } from './pathLaying';
+import { brushAlpha } from './brushAlpha';
 
 /**
  * The painting view: the model in its rest pose, the texture set being painted drawn with its live
@@ -574,7 +574,8 @@ export const PaintViewport: React.FC<{
         placeCamera();
         const depth = renderDepth(gpu, world.root, world.camera, size.width, size.height);
         const perspective = (size.height / 2) / Math.tan(THREE.MathUtils.degToRad(world.camera.fov / 2));
-        const alpha = brush.shape === 'picture' && brush.alphaTexture ? builtInAlphaTexture(brush.alphaTexture) ?? session.host.texture(brush.alphaTexture) : null;
+        const { alpha, waiting } = brushAlpha(brush, session);
+        if (waiting) { onMessage(waiting); gpu.release(depth); return; }
         const stencil = brush.stencil.enabled && brush.stencil.textureId ? session.host.texture(brush.stencil.textureId) : null;
         const stroke = new Stroke(stack, target, tool === 'erase' ? 'erase' : 'paint', brush, {
             viewProjection: new THREE.Matrix4().multiplyMatrices(world.camera.projectionMatrix, world.camera.matrixWorldInverse),

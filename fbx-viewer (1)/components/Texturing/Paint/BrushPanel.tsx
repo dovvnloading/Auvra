@@ -9,6 +9,9 @@ import { Select } from '../../UI/Select';
 import { ColourFieldRgb } from '../../UI/ColourPicker';
 import { MaterialPicker, type MaterialChoice, type MaterialSection } from './MaterialPicker';
 import { SliderRow } from './PaintFields';
+import { GraphParameterPanel } from '../GraphParameterPanel';
+import { stampOutputs } from '../../../texturing/paint/graphStamps';
+import type { GraphResolver } from '../../../texturing/graph/registry';
 import { DEFAULT_PARTICLES, PARTICLE_PRESETS, type ParticleMotion, type ParticleSettings } from '../../../texturing/paint/particles';
 
 /** The brush: its size and feel, how it is cast onto the model, and what it lays down on each channel. */
@@ -33,7 +36,9 @@ export const BrushPanel: React.FC<{
     /** Materials to paint on whole, and what picking one does. */
     paintWith?: { sections: readonly MaterialSection[]; host: PreviewHost; onPick: (choice: MaterialChoice) => void; onMessage: (message: string) => void };
     onMessage?: (message: string) => void;
-}> = ({ brush, onChange, channels, paintingMask, textures, onPick, paintWith, onMessage }) => {
+    /** Texture graphs a brush can stamp, and how the stamp stands (drawing, or why it cannot be). */
+    stamp?: { graphs: ReadonlyArray<{ id: string; name: string }>; resolve: GraphResolver; status: string | null };
+}> = ({ brush, onChange, channels, paintingMask, textures, onPick, paintWith, onMessage, stamp }) => {
     const set = (patch: Partial<BrushSettings>) => onChange({ ...brush, ...patch });
     const pickButton = useRef<HTMLButtonElement>(null);
     const [picking, setPicking] = useState(false);
@@ -148,8 +153,27 @@ export const BrushPanel: React.FC<{
                 <Row label="Angle" value={brush.angle} min={-180} max={180} step={1} suffix="°" onChange={(angle) => set({ angle })} />
                 <div className="flex items-center gap-2">
                     <span className="w-24 text-2xs text-zinc-400">Shape</span>
-                    <Segmented value={brush.shape} options={[{ value: 'round', label: 'Round' }, { value: 'square', label: 'Square' }, { value: 'picture', label: 'Picture' }]} onChange={(shape) => set({ shape })} label="Brush shape" />
+                    <Segmented value={brush.shape} options={[{ value: 'round', label: 'Round' }, { value: 'square', label: 'Square' }, { value: 'picture', label: 'Picture' }, { value: 'graph', label: 'Graph', hint: 'Each dab stamps a texture graph\'s output' }]} onChange={(shape) => set({ shape })} label="Brush shape" />
                 </div>
+                {brush.shape === 'graph' && stamp && (
+                    <div className="space-y-1.5">
+                        <Select value={brush.graphStamp?.graphId ?? ''} placeholder="Pick a texture graph to stamp" options={stamp.graphs.map((graph) => ({ value: graph.id, label: graph.name }))}
+                            onChange={(graphId) => set({ graphStamp: { graphId: String(graphId), output: '', values: {} } })} className="w-full" />
+                        {brush.graphStamp && (() => {
+                            const entry = stamp.resolve(brush.graphStamp.graphId);
+                            const outputs = stampOutputs(stamp.resolve, brush.graphStamp.graphId);
+                            const current = brush.graphStamp;
+                            return (
+                                <>
+                                    {outputs.length > 1 && <Select value={current.output || outputs[0].id} options={outputs.map((output) => ({ value: output.id, label: output.label }))} onChange={(output) => set({ graphStamp: { ...current, output: String(output) } })} className="w-full" />}
+                                    {entry && <GraphParameterPanel parameters={entry.graph.parameters} groups={entry.graph.groups} values={current.values} textures={textures} onChange={(values) => set({ graphStamp: { ...current, values } })} />}
+                                    {stamp.status && <p className="text-2xs leading-snug text-zinc-500">{stamp.status}</p>}
+                                </>
+                            );
+                        })()}
+                        <p className="text-2xs leading-snug text-zinc-500">Each dab stamps the graph's output (its brightness), turned and sized as the brush is; the brush's values are what it lays on.</p>
+                    </div>
+                )}
                 {brush.shape === 'picture' && <Select value={brush.alphaTexture} placeholder="Pick an alpha (its brightness)" options={[...BUILT_IN_ALPHAS.map((alpha) => ({ value: alpha.id, label: alpha.name })), ...textures.map((texture) => ({ value: texture.id, label: texture.name }))]} onChange={(alphaTexture) => set({ alphaTexture: String(alphaTexture) })} className="w-full" />}
                 <div className="flex flex-wrap gap-x-3 gap-y-1">
                     <Toggle label="Pressure sets size" checked={brush.pressureSize} onChange={(pressureSize) => set({ pressureSize })} />

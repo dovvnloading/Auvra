@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { UvSurfaceLookup } from './uvSurface';
 import { DEFAULT_PARTICLES, throwParticles, type ParticleSettings } from './particles';
 import { DECAL_TABLE_WIDTH, decalTable, decalTriangles } from './decals';
+import type { GraphStamp } from './graphStamps';
 import type { GpuImage, TextureGpu } from '../gpu/textureGpu';
 import type { TileBake } from '../bake/meshBaker';
 import { NO_MIRROR, type Mirror } from '../mesh/picker';
@@ -28,7 +29,7 @@ import { SELECTION_WIDTH, encodeTriangles, selectionBytes } from './selection';
  * Undo keeps only the 32×32 blocks of each picture the stroke touched, before and after.
  */
 
-export type BrushShape = 'round' | 'square' | 'picture';
+export type BrushShape = 'round' | 'square' | 'picture' | 'graph';
 /**
  * How a dab is laid on: cast from the screen, as a disc lying on the surface, flat along one axis through
  * whatever lies under it (a decal cast straight through), or from three sides blended by how the surface faces.
@@ -73,6 +74,8 @@ export interface BrushSettings {
     /** Dabs build up on one another within a stroke, as an airbrush does, instead of stopping at the opacity. */
     buildUp: boolean;
     shape: BrushShape;
+    /** The texture graph the 'graph' shape stamps (its output's brightness), with its parameters' values. */
+    graphStamp?: GraphStamp;
     /** A picture from the library for the 'picture' shape (its brightness). */
     alphaTexture: string;
     projection: BrushProjection;
@@ -1077,7 +1080,7 @@ export class Stroke {
         // A flat brush's axis: the view's (from the camera into the scene), or one of the model's.
         const planarAxis = this.brush.planarAxis === 'x' ? new THREE.Vector3(1, 0, 0) : this.brush.planarAxis === 'y' ? new THREE.Vector3(0, 1, 0) : this.brush.planarAxis === 'z' ? new THREE.Vector3(0, 0, 1)
             : new THREE.Vector3().crossVectors(view.cameraRight ?? new THREE.Vector3(1, 0, 0), view.cameraUp ?? new THREE.Vector3(0, 1, 0)).negate().normalize();
-        const alpha = this.stampAlpha !== undefined ? this.stampAlpha : this.brush.shape === 'picture' ? this.alpha : null;
+        const alpha = this.stampAlpha !== undefined ? this.stampAlpha : this.brush.shape === 'picture' || this.brush.shape === 'graph' ? this.alpha : null;
         const copyMatrices = Array.from({ length: MAX_COPIES }, (_, i) => (copies[i]?.matrix ? new THREE.Matrix4().fromArray(copies[i].matrix!) : new THREE.Matrix4()));
         const batches: Dab[][] = [];
         for (let i = 0; i < dabs.length; i += MAX_DABS) batches.push(dabs.slice(i, i + MAX_DABS));
