@@ -98,7 +98,8 @@ const handlesFor = (node: TexGraphNode | null | undefined, seed: number | undefi
     const p = node.params;
     const locked = (key: string) => isParamLink(p[key]);
     switch (node.type) {
-        case 'transform': {
+        case 'transform':
+        case 'safeTransform': {
             const settings = { offset: pair(p.offset, [0, 0]), rotation: num(p.rotation, 0), scale: pair(p.scale, [1, 1]) };
             return { frame: transformFrame(settings), drag: (key, to, uniform) => ({ ...dragTransform(settings, key, to, uniform) }), locked };
         }

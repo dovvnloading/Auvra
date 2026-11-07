@@ -8,6 +8,7 @@ import { AbortedError, unknownNodeMessage, type ExternalImage, type TextureGraph
 import { MAX_SIZE_LOG2, MIN_SIZE_LOG2, coerceParameter, formulaScope, parameterValues, readTextureGraph, resolveNodeParams, subgraphRunSeed, unknownNodeTypes } from '../../texturing/graph/document';
 import { ITERATE_NODE_TYPE, OUTPUT_NODE_TYPE, SUBGRAPH_NODE_TYPE, SUBGRAPH_SEED_KEY, SUBGRAPH_VARY_KEY } from '../../texturing/graph/nodes/io';
 import { feedbackPairs } from '../../texturing/graph/iterate';
+import { describeMatrix, tileSafeMatrix, transformMatrix } from '../../texturing/graph/safeTransform';
 import { PROCESSOR_PICTURES, PROCESSOR_TYPES, defaultFunctionFor, processorUse, readNamedSettings, settingDefault } from '../../texturing/graph/nodes/processors';
 import { compileFunction, readFunctionGraph, type FunctionGraph, type NamedSetting } from '../../texturing/graph/functionGraph';
 import { PARAMETER_KINDS, PARAMETER_KIND_LABELS, applyPreset, presetFrom, putPreset, removePreset, renamePreset } from '../../texturing/graph/parameters';
@@ -842,6 +843,16 @@ const Workspace: React.FC<{
                         </React.Fragment>
                     );
                 })}
+                {((single.type === 'transform' && single.params.safe === true) || (single.type === 'safeTransform' && single.params.mode !== 'blend'))
+                    && typeof single.params.rotation === 'number' && Array.isArray(single.params.scale) && (() => {
+                    const seamless = describeMatrix(tileSafeMatrix(transformMatrix(single.params.rotation as number, single.params.scale as number[])));
+                    const size = (value: number) => String(Number(value.toFixed(3)));
+                    return (
+                        <p className="rounded border border-line bg-well px-1.5 py-1 text-2xs leading-snug text-ink-2">
+                            Seamless as: turned {seamless.rotation}°, scaled {size(seamless.scale[0])} × {size(seamless.scale[1])}{seamless.slant ? ', slanted a little' : ''}.
+                        </p>
+                    );
+                })()}
                 {!isOutput && (
                     <div className="space-y-1.5 border-t border-line pt-2">
                         <div className="text-2xs font-semibold text-ink-2">Size, bit depth, tiling and seed</div>
