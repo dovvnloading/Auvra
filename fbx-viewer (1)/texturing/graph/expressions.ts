@@ -3,7 +3,7 @@
  *
  * A node setting can follow the graph's exposed parameters through a small formula, such as
  * `wear * 0.8 + 0.1` or `clamp(scale * 2, 1, 32)`. Formulas are parsed here, never run as script:
- * numbers, parameter names, `$size`, `$seed`, + - * / % ^, comparisons, `cond ? a : b`, and a fixed
+ * numbers, parameter names, `$size`, `$seed`, `$iteration` and `$iterations` (an Iterate node's pass), + - * / % ^, comparisons, `cond ? a : b`, and a fixed
  * set of functions. Vectors are written `vec2(a, b)`, `vec3(...)` or `vec4(...)` and work component
  * by component.
  */
@@ -208,7 +208,7 @@ const cache = new Map<string, Node | Error>();
 /** Checks a formula; null when it reads, else what is wrong with it in words. */
 export const expressionError = (source: string, names: readonly string[]): string | null => {
     try {
-        const scope = Object.fromEntries([...names, '$size', '$seed', '$width', '$height'].map((name) => [name, 1]));
+        const scope = Object.fromEntries([...names, '$size', '$seed', '$width', '$height', '$iteration', '$iterations'].map((name) => [name, 1]));
         evaluateExpression(source, scope);
         return null;
     } catch (error) {

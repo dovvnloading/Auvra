@@ -34,13 +34,43 @@ export interface TextureSettings {
     filter?: TextureFilter;
     /** Mip levels (smaller copies for far away); absent means yes. */
     mips?: boolean;
+    /** A normal map made for DirectX (green pointing down): its green is turned over as it loads. */
+    flipGreen?: boolean;
     /** What the imported file was, for deep or non-browser pictures. */
     source?: TextureSource;
     /** An 8-bit picture of it, for the places that show one (the Content Browser, terrain, decals). */
     preview?: { assetId: string };
+    /** Its compressed blocks, kept by signature (texturing/compressedContainer.ts), so they are made once. */
+    compressed?: Array<{ signature: string; assetId: string }>;
 }
 
+/** How many compressed versions a texture keeps (one per way it has been drawn), newest last. */
+export const MAX_KEPT_COMPRESSIONS = 4;
+
 export const MAX_SIZE_CHOICES = [256, 512, 1024, 2048, 4096, 8192] as const;
+
+/** A file name's last word, without its extension or a size such as "_4k" or "_2048px": "rock_nor_gl_4k.exr" ends "nor_gl". */
+const nameEnding = (name: string): string => name.toLowerCase()
+    .replace(/\.[a-z0-9]+$/, '')
+    .replace(/[_\-. ](?:\d+k|\d+px|\d+)$/, '');
+
+const DIRECTX_NORMAL = /(?:^|[_\-. ])(?:nor_dx|nrm_dx|normal_dx|normaldx|n_dx)$/;
+const NORMAL = /(?:^|[_\-. ])(?:n|nrm|nor|normal|nor_gl|nrm_gl|normal_gl|normalgl|n_gl)$/;
+const DATA = /(?:^|[_\-. ])(?:rough|roughness|rgh|gloss|metal|metallic|metalness|mtl|ao|occ|occlusion|ambientocclusion|arm|orm|height|disp|displacement|bump|mask)$/;
+
+/**
+ * What a texture's file name says it is: a normal map ("_n", "_nrm", "_normal", "_nor", "_nor_gl", and
+ * "_nor_dx" for DirectX ones, whose green is turned over), or data read as stored (roughness, metallic,
+ * occlusion, height and packed maps). Nothing for the rest, which are read by use. Texture Settings can
+ * change any of it.
+ */
+export const settingsFromName = (name: string): TextureSettings | undefined => {
+    const ending = nameEnding(name);
+    if (DIRECTX_NORMAL.test(ending)) return { normalMap: true, flipGreen: true };
+    if (NORMAL.test(ending)) return { normalMap: true };
+    if (DATA.test(ending)) return { colorSpace: 'data' };
+    return undefined;
+};
 const COMPRESSIONS: readonly TextureCompressionChoice[] = ['auto', 'none', 'bc7', 'bc5', 'bc4'];
 const FORMATS: readonly PictureFormat[] = ['png', 'jpeg', 'webp', 'tiff', 'exr', 'hdr', 'tga', 'psd'];
 const ASSET_ID = /^[0-9a-f]{64}$/;
@@ -57,12 +87,20 @@ export const normalizeTextureSettings = (value: unknown): TextureSettings | unde
     if (source.wrap === 'repeat' || source.wrap === 'clamp' || source.wrap === 'mirror') result.wrap = source.wrap;
     if (source.filter === 'linear' || source.filter === 'nearest') result.filter = source.filter;
     if (typeof source.mips === 'boolean') result.mips = source.mips;
+    if (typeof source.flipGreen === 'boolean') result.flipGreen = source.flipGreen;
     const file = source.source as Record<string, unknown> | undefined;
     if (file && FORMATS.includes(file.format as PictureFormat) && [8, 16, 32].includes(file.depth as number) && [1, 2, 3, 4].includes(file.channels as number)) {
         result.source = { format: file.format as PictureFormat, depth: file.depth as 8 | 16 | 32, channels: file.channels as 1 | 2 | 3 | 4, ...(file.hdr === true ? { hdr: true } : {}) };
     }
     const preview = source.preview as Record<string, unknown> | undefined;
     if (preview && typeof preview.assetId === 'string' && ASSET_ID.test(preview.assetId)) result.preview = { assetId: preview.assetId };
+    if (Array.isArray(source.compressed)) {
+        const kept = source.compressed.filter((entry): entry is { signature: string; assetId: string } => !!entry && typeof entry === 'object'
+            && typeof (entry as { signature?: unknown }).signature === 'string' && (entry as { signature: string }).signature.length <= 512
+            && ASSET_ID.test(String((entry as { assetId?: unknown }).assetId))).slice(-MAX_KEPT_COMPRESSIONS)
+            .map(entry => ({ signature: entry.signature, assetId: entry.assetId }));
+        if (kept.length) result.compressed = kept;
+    }
     return Object.keys(result).length ? result : undefined;
 };
 
@@ -83,9 +121,21 @@ export const setTextureSettings = (textureId: string, settings: TextureSettings 
     for (const listener of listeners) listener();
 };
 
+/** The asset holding each texture's file (its hash), which compressed blocks are kept against. */
+const sourceAssets = new Map<string, string>();
+export const textureSourceAssetOf = (textureId: string): string | undefined => sourceAssets.get(textureId);
+export const setTextureSourceAsset = (textureId: string, assetId: string): void => { sourceAssets.set(textureId, assetId); };
+
+/** The settings with `assetId` kept as the compressed blocks for `signature` (replacing older ones of it, keeping the newest few). */
+export const withKeptCompression = (settings: TextureSettings | undefined, signature: string, assetId: string): TextureSettings => ({
+    ...(settings ?? {}),
+    compressed: [...(settings?.compressed ?? []).filter(entry => entry.signature !== signature), { signature, assetId }].slice(-MAX_KEPT_COMPRESSIONS),
+});
+
 /** Forgets every texture's settings (another project opens). */
 export const clearTextureSettings = (): void => {
     registry.clear();
+    sourceAssets.clear();
     version += 1;
 };
 

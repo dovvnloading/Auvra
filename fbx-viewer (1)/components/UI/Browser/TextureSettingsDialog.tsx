@@ -172,8 +172,15 @@ export const TextureSettingsDialog: React.FC<{ texture: TextureData; onClose: ()
                         <Row label="Normal map">
                             <Segmented label="Normal map" value={settings.normalMap ? 'yes' : 'no'}
                                 options={[{ value: 'no', label: 'No' }, { value: 'yes', label: 'Yes' }]}
-                                onChange={(value) => change({ normalMap: value === 'yes' ? true : undefined })} />
+                                onChange={(value) => change({ normalMap: value === 'yes' ? true : undefined, ...(value === 'no' ? { flipGreen: undefined } : {}) })} />
                         </Row>
+                        {settings.normalMap && (
+                            <Row label="Green points">
+                                <Segmented label="Green points" value={settings.flipGreen ? 'down' : 'up'}
+                                    options={[{ value: 'up', label: 'Up (OpenGL)' }, { value: 'down', label: 'Down (DirectX)', hint: 'Turned over as it loads, so it reads like the others' }]}
+                                    onChange={(value) => change({ flipGreen: value === 'down' ? true : undefined })} />
+                            </Row>
+                        )}
                     </Section>
                     <Section title="How it is kept">
                         <Row label="Compression">

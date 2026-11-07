@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { densityScales, islandAreas, islandLinks, relaxIsland, straighteningTurn, texelDensity, turnIsland, type IslandShape } from '../../texturing/uv/relax';
+import { densityScales, islandAreas, islandLinks, meshTexelDensity, nearestVertex, relaxIsland, straighteningTurn, texelDensity, turnIsland, type IslandShape } from '../../texturing/uv/relax';
 
 /** A 3 × 3 grid of vertices (two triangles a cell) on the model, laid flat on the picture as given. */
 const grid = (place: (x: number, y: number) => [number, number]): IslandShape => {
@@ -70,5 +70,32 @@ describe('texel density', () => {
         // Scaled, both islands have the same density.
         expect(texelDensity(areas[0], 1024) * scales[0]).toBeCloseTo(texelDensity(areas[1], 1024) * scales[1], 6);
         expect(densityScales(areas, 1024, 102.4)).toEqual([2, 0.5]);
+        // A layout not measured yet reads as no density, never NaN.
+        expect(texelDensity({ uv: Number.NaN, model: 4 }, 1024)).toBe(0);
+    });
+});
+
+describe('pins and matching sets', () => {
+    it('picks the vertex nearest a click for a pin, and Relax keeps every pinned one', () => {
+        const shape = grid((x, y) => (x === 1 && y === 1 ? [0.18, 0.18] : [x * 0.1, y * 0.1]));
+        expect(nearestVertex(shape, 0.175, 0.185, 0.02)).toBe(4);
+        expect(nearestVertex(shape, 0.05, 0.05, 0.01)).toBeNull();
+        expect(nearestVertex(shape, 0.21, 0.0, 0.02)).toBe(2);
+        const pinned = relaxIsland(shape, { pinned: new Set([4]), freeEdge: true, iterations: 60 });
+        expect(vertexUv(shape, pinned, 4)).toEqual([0.18, 0.18]);
+        // Unpinned, the free edge moves too.
+        const free = relaxIsland(shape, { freeEdge: true, iterations: 10 });
+        expect(vertexUv(shape, free, 1)).not.toEqual(vertexUv(shape, shape.uv, 1));
+    });
+
+    it('measures the texel density of another set, and scales islands to match it', () => {
+        // A 2 x 2 square laid on a quarter of the picture.
+        const positions = [0, 0, 0, 2, 0, 0, 2, 2, 0, 0, 2, 0];
+        const uvs = [0, 0, 0.5, 0, 0.5, 0.5, 0, 0.5];
+        const other = meshTexelDensity(positions, uvs, [0, 1, 2, 0, 2, 3], 1024);
+        expect(other).toBeCloseTo(256, 6);
+        const mine = islandAreas(grid((x, y) => [x * 0.1, y * 0.1]));
+        const [scale] = densityScales([mine], 1024, other);
+        expect(texelDensity(mine, 1024) * scale).toBeCloseTo(other, 6);
     });
 });

@@ -12,6 +12,10 @@ import { AssetRail } from './Retexture/AssetRail';
 import { RetextureStage, type StageLighting } from './Retexture/RetextureStage';
 import { capabilityOfMode, retextureSessions, startingLookName, useRetextureSessions, type RetextureMode, type SessionPart, type SurfaceRole, type Take } from './Retexture/retextureSession';
 import { STATE_WORDS, TakesStrip } from './Retexture/TakesStrip';
+import { expandPaintedCopies } from '../../utils/paintedCopies';
+
+/** A model's overrides with its painted copies shown as the painted base maps Retexture edits. */
+const editable = (overrides: Parameters<typeof expandPaintedCopies>[0]) => expandPaintedCopies(overrides, (id) => materialLibrary.get(id));
 
 const SURFACE_WORDS: Record<SurfaceRole, string> = { normal: 'Normal', roughness: 'Roughness', metalness: 'Metal' };
 
@@ -56,7 +60,7 @@ export const RetextureEditor: React.FC = () => {
   const model = paintable.find((item) => item.id === modelId) ?? paintable[0] ?? null;
   useEffect(() => { lastModelId = model?.id ?? null; }, [model?.id]);
 
-  const session = useMemo(() => (model ? sessions.open(model.id, model.name, model.object, model.textureOverrides, model.materialOverrides) : null),
+  const session = useMemo(() => (model ? sessions.open(model.id, model.name, model.object, model.textureOverrides, editable(model.materialOverrides)) : null),
     // Only a different model or a newly loaded one starts a session; saving changes the overrides and is not that.
     [model?.id, model?.object, sessions]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
@@ -160,7 +164,7 @@ export const RetextureEditor: React.FC = () => {
   const saveOnModel = (take: Take | null) => {
     if (!session || !part || !model) return;
     void act(async () => {
-      await sessions.saveOnModel(session, part, take, { overrides: model.textureOverrides, materials: model.materialOverrides }, (overrides) => setModelTextureOverrides(model.id, overrides), (overrides) => updateModelMaterialOverrides(model.id, overrides));
+      await sessions.saveOnModel(session, part, take, { overrides: model.textureOverrides, materials: editable(model.materialOverrides) }, (overrides) => setModelTextureOverrides(model.id, overrides), (overrides) => updateModelMaterialOverrides(model.id, overrides));
       addNotification({ message: take ? `${part.name} now wears result ${take.number}.` : `${part.name} is back to what it wore.`, type: 'info' });
     }, 'This could not be saved on the model.');
   };

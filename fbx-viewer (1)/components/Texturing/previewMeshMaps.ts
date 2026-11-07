@@ -8,7 +8,7 @@ import { DEFAULT_BAKE_SETTINGS, bakeMeshMaps, releaseTileBake } from '../../text
 import type { GpuImage, TextureGpu } from '../../texturing/gpu/textureGpu';
 import { graphReadsMeshMaps } from '../../texturing/graph/document';
 import type { ExternalImage } from '../../texturing/graph/evaluator';
-import { MESH_MAPS, meshMapKey, type MeshMapName } from '../../texturing/graph/nodes/io';
+import { ALL_MESH_MAPS, ANY_MESH_MAP_KIND, meshMapKey, type AnyMeshMapName, type ExtraMeshMapName, type MeshMapName } from '../../texturing/graph/nodes/io';
 import type { GraphResolver } from '../../texturing/graph/registry';
 import type { TextureGraph } from '../../texturing/graph/types';
 import { buildPartMesh, buildWholeMesh } from '../../texturing/mesh/partMesh';
@@ -104,7 +104,7 @@ export const sharesFaces = (shape: PreviewShape): boolean => SHARED_FACES.has(sh
 // Kept maps
 // ---------------------------------------------------------------------------
 
-type Maps = Partial<Record<MeshMapName, GpuImage>>;
+type Maps = Partial<Record<AnyMeshMapName, GpuImage>>;
 
 interface Entry {
     refs: number;
@@ -195,7 +195,8 @@ const shapeMaps = (gpu: TextureGpu, shape: BaseShape, unique: boolean) => async 
         // What the baker kept for padding painted pictures is not needed here.
         gpu.release(tile.coverage);
         gpu.release(tile.nearest);
-        const maps = tile.maps;
+        // The extra maps it kept (cavity) are read like the others.
+        const maps: Maps = { ...tile.extras, ...tile.maps };
         return { maps, release: () => { for (const image of Object.values(maps)) gpu.release(image); } };
     } finally {
         geometry.dispose();
@@ -204,12 +205,12 @@ const shapeMaps = (gpu: TextureGpu, shape: BaseShape, unique: boolean) => async 
 };
 
 /** One baked picture of a texture set read whole (16-bit ones too) into an image of its own. */
-const readMap = async (gpu: TextureGpu, name: MeshMapName, assetId: string, signal: AbortSignal): Promise<GpuImage> => {
+const readMap = async (gpu: TextureGpu, name: AnyMeshMapName, assetId: string, signal: AbortSignal): Promise<GpuImage> => {
     const response = await projectService.fetchAsset(assetId, { signal });
     if (!response.ok) throw new Error('A baked map could not be read.');
     const blob = await response.blob();
-    const gray = name === 'ambientOcclusion' || name === 'curvature' || name === 'thickness' || name === 'height';
-    const precision = gray || name === 'position' ? 16 : 8;
+    const gray = ANY_MESH_MAP_KIND[name] === 'gray';
+    const precision = gray || name === 'position' || name === 'bentNormal' ? 16 : 8;
     // Kept bottom row first, as the Paint tab drew them: read as they are, not turned over.
     if (await pngBitDepth(blob) === 16) {
         // Read into half floats, as the image keeps them: half the memory of full floats.
@@ -238,12 +239,12 @@ const readMap = async (gpu: TextureGpu, name: MeshMapName, assetId: string, sign
     return image;
 };
 
-/** A texture set's baked maps for one tile, read from the project. */
-const bakedMaps = (gpu: TextureGpu, maps: Partial<Record<MeshMapName, TilePictures>>, tile: number) => async (signal: AbortSignal) => {
+/** A texture set's baked maps for one tile (its extra maps too), read from the project. */
+const bakedMaps = (gpu: TextureGpu, maps: Partial<Record<AnyMeshMapName, TilePictures>>, tile: number) => async (signal: AbortSignal) => {
     const read: Maps = {};
     const release = () => { for (const image of Object.values(read)) gpu.release(image); };
     try {
-        for (const name of MESH_MAPS) {
+        for (const name of ALL_MESH_MAPS) {
             const assetId = maps[name]?.[String(tile)]?.assetId;
             if (!assetId) continue;
             if (signal.aborted) throw Object.assign(new Error('Cancelled'), { name: 'AbortError' });
@@ -271,6 +272,8 @@ export interface BakedSurface {
     tiles: number[];
     at: number;
     maps: Partial<Record<MeshMapName, TilePictures>>;
+    /** The extra maps the bake kept (cavity, bent normals, what came over from a high-poly model). */
+    extras: Partial<Record<ExtraMeshMapName, TilePictures>>;
 }
 
 /** The texture sets of `modelId` that the Paint tab baked mesh maps for. */
@@ -281,7 +284,7 @@ export const bakedSurfaces = (modelId: string): BakedSurface[] => materialLibrar
     const tiles = [...new Set(Object.values(bake.maps).flatMap((pictures) => Object.keys(pictures ?? {}).map(Number)))].filter(Number.isFinite).sort((a, b) => a - b);
     if (!tiles.length) return [];
     const name = asset.name.replace(/\s*\(painted\)$/, '') || document.materialNames.join(', ');
-    return [{ id: asset.id, name, materialNames: document.materialNames, tiles, at: Number(bake.at) || 0, maps: bake.maps }];
+    return [{ id: asset.id, name, materialNames: document.materialNames, tiles, at: Number(bake.at) || 0, maps: bake.maps, extras: bake.extras ?? {} }];
 });
 
 // ---------------------------------------------------------------------------
@@ -332,12 +335,12 @@ export const usePreviewMeshMaps = (session: TextureGraphSession, graph: TextureG
             return undefined;
         }
         const gpu = session.gpu;
-        const entry = acquire(key, gpu, modelId ? bakedMaps(gpu, surface!.maps, tile) : shapeMaps(gpu, shape as BaseShape, unique));
+        const entry = acquire(key, gpu, modelId ? bakedMaps(gpu, { ...surface!.extras, ...surface!.maps }, tile) : shapeMaps(gpu, shape as BaseShape, unique));
         let current = true;
         setState({ key, status: entry.maps ? 'ready' : 'working' });
         const give = (maps: Maps) => {
             const external: Record<string, ExternalImage | null> = {};
-            for (const name of MESH_MAPS) external[meshMapKey(name)] = maps[name] ?? null;
+            for (const name of ALL_MESH_MAPS) external[meshMapKey(name)] = maps[name] ?? null;
             latest.current.setExternal(external, key);
         };
         if (entry.maps) give(entry.maps);

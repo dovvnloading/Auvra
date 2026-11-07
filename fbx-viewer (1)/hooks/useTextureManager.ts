@@ -11,7 +11,7 @@ import { importFailureMessage } from '../utils/modelLoader';
 import { browserReadsWholly, pictureToRgba8, pngDepthOf, sniffPictureFormat } from '../texturing/textureDecode';
 import { decodePictureOffPage } from '../texturing/texturePipeline';
 import { encodePng } from '../texturing/png';
-import { setTextureSettings, type TextureSettings } from '../texturing/textureSettings';
+import { setTextureSettings, settingsFromName, type TextureSettings } from '../texturing/textureSettings';
 
 /**
  * A deep picture (16-bit, floating point, TIFF, TGA, PSD) read whole off the page: its size, what the file
@@ -26,7 +26,7 @@ const readDeepPicture = async (file: File): Promise<{ dimensions: { width: numbe
   const preview = await encodePng(pictureToRgba8(picture), picture.width, picture.height, 4);
   return {
     dimensions: { width: picture.width, height: picture.height },
-    settings: { source: { format, depth: picture.depth, channels: picture.channels, ...(picture.hdr ? { hdr: true } : {}) } },
+    settings: { ...settingsFromName(file.name), source: { format, depth: picture.depth, channels: picture.channels, ...(picture.hdr ? { hdr: true } : {}) } },
     preview,
   };
 };
@@ -106,11 +106,14 @@ export const useTextureManager = (setIsLoading: (loading: boolean) => void) => {
         });
         const dimensions = { width: img.naturalWidth || 0, height: img.naturalHeight || 0 };
 
+        // What its name says it is (a normal map, data): Texture Settings can change it.
+        const named = settingsFromName(file.name);
         const newTexture: TextureData = {
             id: crypto.randomUUID(),
             name: file.name,
             url,
-            dimensions
+            dimensions,
+            ...(named ? { settings: named } : {}),
         };
 
         operation.update({ phase: 'project_upload', progress: 0.2, detail: 'Saving texture source', diagnostic });
@@ -119,6 +122,7 @@ export const useTextureManager = (setIsLoading: (loading: boolean) => void) => {
             name: newTexture.name,
             file: file,
             dimensions: newTexture.dimensions,
+            ...(named ? { settings: named } : {}),
         }, {
             signal: operation.signal,
             diagnostics: { operationId: operation.id, traceId: operation.traceId, spanId: operation.spanId, assetAlias },
@@ -133,6 +137,7 @@ export const useTextureManager = (setIsLoading: (loading: boolean) => void) => {
         operation.update({ phase: 'library_publication', progress: 0.98, detail: 'Publishing texture', diagnostic });
         setTextures(prev => [...prev, newTexture]);
         // Material assets can draw with it before the project is opened again.
+        if (named) setTextureSettings(newTexture.id, named);
         materialLibrary.addTextureUrl(newTexture.id, newTexture.url);
         url = null;
         addNotification({ message: `Texture "${newTexture.name}" saved to library.`, type: 'success' });

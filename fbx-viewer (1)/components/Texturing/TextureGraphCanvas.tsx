@@ -5,13 +5,16 @@ import {
 } from '../UI/Icons';
 import type { FinderEntry } from '../NodeGraph/finder';
 import type { EditableFrame, EditableGraph, EditableLink, EditableNode, NodeLook, PinSet } from '../NodeGraph/model';
+import { HEADER, ROW } from '../NodeGraph/layout';
+import { PROCESSOR_TYPES, VALUE_PROCESSOR_TYPE } from '../../texturing/graph/nodes/processors';
 import { NodeGraphCanvas, type NodeGraphAdapter } from '../NodeGraph/NodeGraphCanvas';
 import type { MenuItem, NodeView, PinKindStyle } from '../NodeGraph/types';
 import { createNode, newNodeId } from '../../texturing/graph/document';
 import { mainInput, unknownNodeMessage } from '../../texturing/graph/evaluator';
 import { wireFits } from '../../texturing/graph/material';
 import { NAMED_RECEIVE_TYPE, NAMED_SEND_TYPE, linkName, namedLinks } from '../../texturing/graph/namedLinks';
-import { INPUT_NODE_TYPE, MATERIAL_INPUT_NODE_TYPE, MATERIAL_OUTPUT_NODE_TYPE, MESH_MAPS, MESH_MAP_LABELS, MESH_MAP_NODE_TYPE, OUTPUT_NODE_TYPE, REROUTE_NODE_TYPE, SUBGRAPH_NODE_TYPE } from '../../texturing/graph/nodes/io';
+import { ALL_MESH_MAPS, ANY_MESH_MAP_LABELS, EXTRA_MESH_MAPS, INPUT_NODE_TYPE, ITERATE_NODE_TYPE, MATERIAL_INPUT_NODE_TYPE, MATERIAL_OUTPUT_NODE_TYPE, MESH_MAP_NODE_TYPE, OUTPUT_NODE_TYPE, REROUTE_NODE_TYPE, SUBGRAPH_NODE_TYPE } from '../../texturing/graph/nodes/io';
+import { feedbackPairs } from '../../texturing/graph/iterate';
 import { NODE_CATEGORY_ORDER, TEXTURE_NODE_DEFINITIONS, placeholderDefinition, textureNodeDefinition, type GraphResolver } from '../../texturing/graph/registry';
 import { OUTPUT_CHANNELS, OUTPUT_CHANNEL_LABELS, type OutputChannel, type PinKind, type TexGraphComment, type TexGraphLink, type TexGraphNode, type TexNodeDef, type TexPortDef, type TextureGraph } from '../../texturing/graph/types';
 import { copyNodes, outputKinds, readClipboard, unusedNodes, type Point } from './graphEditing';
@@ -31,6 +34,7 @@ const KINDS: Readonly<Record<string, PinKindStyle>> = {
     any: { colour: '#f5f5f5', words: 'colour or grey' },
     material: { colour: '#5eead4', words: 'a whole material', wide: true },
     anyMaterial: { colour: '#f5f5f5', words: 'colour, grey or a whole material' },
+    value: { colour: '#b794f6', words: 'a value (a number or vector worked out on the GPU)' },
 };
 /** The kind a pin shows on the canvas: an input that also takes a material wire (an Output's) is a kind of its own. */
 const pinKind = (port: TexPortDef): string => (port.material ? 'anyMaterial' : port.kind);
@@ -43,9 +47,11 @@ const match = (from: string, to: string): number => {
     if (!wireFits(from as PinKind, asPort(to))) return 0;
     return from === to || from === 'any' || to === 'any' || to === 'anyMaterial' ? 2 : 1;
 };
-const refusal = (from: string, to: string): string => (from === 'material'
-    ? 'A material wire goes only into a material input or an Output. Split material gives its channels as images.'
-    : to === 'material' ? 'A material input takes a material wire. Make material puts images on one.' : 'These two pins do not fit together.');
+const refusal = (from: string, to: string): string => (to === 'value'
+    ? 'A setting shown as a pin follows a value. A Value processor works one out of pictures, on the GPU.'
+    : from === 'material'
+        ? 'A material wire goes only into a material input or an Output. Split material gives its channels as images.'
+        : to === 'material' ? 'A material input takes a material wire. Make material puts images on one.' : 'These two pins do not fit together.');
 
 const CATEGORY_TINTS: Record<string, string> = {
     'Inputs and outputs': '#3f4a5c', 'Mesh maps': '#2f5560', Noises: '#4b3f6b', Patterns: '#523d66', Shapes: '#5a4170',
@@ -133,8 +139,8 @@ const typeEntry = (definition: TexNodeDef): FinderEntry => ({
     category: definition.category,
     description: definition.description,
     keywords: definition.keywords,
-    inputs: definition.inputs.map(pinKind),
-    outputs: definition.outputs.map((port) => port.kind),
+    inputs: definition.inputs.filter((port) => !port.hidden).map(pinKind),
+    outputs: definition.outputs.filter((port) => !port.hidden).map((port) => port.kind),
 });
 
 const NODE_ENTRIES: readonly FinderEntry[] = (() => {
@@ -155,13 +161,16 @@ const NODE_ENTRIES: readonly FinderEntry[] = (() => {
             outputs: [],
         });
     }
-    for (const map of MESH_MAPS) {
+    for (const map of ALL_MESH_MAPS) {
+        const extra = (EXTRA_MESH_MAPS as readonly string[]).includes(map);
         entries.push({
             id: `mesh:${map}`,
-            label: `Mesh map: ${MESH_MAP_LABELS[map]}`,
+            label: `Mesh map: ${ANY_MESH_MAP_LABELS[map]}`,
             category: 'Mesh maps',
-            description: `The ${MESH_MAP_LABELS[map].toLowerCase()} map baked from the model the graph is used on.`,
-            keywords: ['mesh map', 'baked', map],
+            description: extra
+                ? `The ${ANY_MESH_MAP_LABELS[map].toLowerCase()} map, when the bake of the model the graph is used on kept it (chosen among the bake's extra maps).`
+                : `The ${ANY_MESH_MAP_LABELS[map].toLowerCase()} map baked from the model the graph is used on.`,
+            keywords: ['mesh map', 'baked', map, ...(extra ? ['extra', 'high poly'] : [])],
             inputs: [],
             outputs: ['any'],
         });
@@ -173,7 +182,7 @@ const NODE_ENTRIES: readonly FinderEntry[] = (() => {
 /** Pictures the finder draws: every node that makes an image on its own (not outputs, inputs, pictures or reroute points). */
 const PICTURE_REQUESTS: readonly PictureRequest[] = NODE_ENTRIES.flatMap((entry): PictureRequest[] => {
     if (entry.id.startsWith('mesh:')) return [{ key: entry.id, type: MESH_MAP_NODE_TYPE, params: { map: entry.id.slice(5) } }];
-    if (entry.id.includes(':') || [INPUT_NODE_TYPE, REROUTE_NODE_TYPE, NAMED_SEND_TYPE, NAMED_RECEIVE_TYPE, MATERIAL_INPUT_NODE_TYPE, MATERIAL_OUTPUT_NODE_TYPE, 'bitmap'].includes(entry.id)) return [];
+    if (entry.id.includes(':') || [INPUT_NODE_TYPE, REROUTE_NODE_TYPE, NAMED_SEND_TYPE, NAMED_RECEIVE_TYPE, MATERIAL_INPUT_NODE_TYPE, MATERIAL_OUTPUT_NODE_TYPE, ITERATE_NODE_TYPE, VALUE_PROCESSOR_TYPE, 'bitmap'].includes(entry.id)) return [];
     return [{ key: entry.id, type: entry.id }];
 });
 
@@ -242,10 +251,12 @@ export interface TextureGraphCanvasProps {
     onOpenGraph?: (nodeId: string) => void;
     onUndo: () => void;
     onRedo: () => void;
+    /** Kept but not shown (a function graph is open in its place): its keys do nothing. */
+    hidden?: boolean;
 }
 
 export const TextureGraphCanvas: React.FC<TextureGraphCanvasProps> = (props) => {
-    const { graph, session, resolve, graphs, selection, selectedComment, viewed, canUndo, canRedo, notice, onUndo, onRedo } = props;
+    const { graph, session, resolve, graphs, selection, selectedComment, viewed, canUndo, canRedo, notice, onUndo, onRedo, hidden } = props;
     const latest = useRef(props);
     latest.current = props;
     const sessionVersion = useSyncExternalStore(session.subscribe, session.getVersion);
@@ -295,6 +306,7 @@ export const TextureGraphCanvas: React.FC<TextureGraphCanvasProps> = (props) => 
                 canDelete: true,
                 ...(isOutput ? { output: true } : {}),
                 ...(opens && node.type === SUBGRAPH_NODE_TYPE && typeof node.params.graph === 'string' && resolve(node.params.graph) ? { canOpen: true } : {}),
+                ...(opens && PROCESSOR_TYPES.has(node.type) && node.params.mode !== 'code' ? { canOpen: true, openLabel: 'Edit its function graph' } : {}),
                 searchText: `${kindTitle} ${def?.category ?? ''}`,
             };
             const key = JSON.stringify(view);
@@ -315,6 +327,22 @@ export const TextureGraphCanvas: React.FC<TextureGraphCanvasProps> = (props) => 
                 category: GRAPHS_CATEGORY,
                 description: 'This graph used as one node: its exposed parameters are its settings.',
                 keywords: ['graph', 'sub-graph', 'subgraph', 'group'],
+                inputs: (used?.nodes ?? []).filter((node) => node.type === INPUT_NODE_TYPE).map((node) => (node.params.kind === 'gray' ? 'gray' : 'color')),
+                outputs: (used?.nodes ?? []).filter((node) => node.type === OUTPUT_NODE_TYPE).map(() => 'any'),
+            };
+        }),
+        // Each graph run pass after pass, where an Output of it feeds an Input of the same name.
+        ...graphs.filter((entry) => {
+            const used = resolve(entry.id)?.graph;
+            return used ? feedbackPairs(used).length > 0 : false;
+        }).map((entry) => {
+            const used = resolve(entry.id)?.graph;
+            return {
+                id: `iterate:${entry.id}`,
+                label: `Iterate ${entry.name}`,
+                category: GRAPHS_CATEGORY,
+                description: 'Runs this graph pass after pass, each pass taking the last one\'s results: an Output feeds the Input of the same name.',
+                keywords: ['iterate', 'loop', 'repeat', 'feedback', 'passes'],
                 inputs: (used?.nodes ?? []).filter((node) => node.type === INPUT_NODE_TYPE).map((node) => (node.params.kind === 'gray' ? 'gray' : 'color')),
                 outputs: (used?.nodes ?? []).filter((node) => node.type === OUTPUT_NODE_TYPE).map(() => 'any'),
             };
@@ -341,6 +369,7 @@ export const TextureGraphCanvas: React.FC<TextureGraphCanvasProps> = (props) => 
             }
             if (entryId.startsWith('output:')) return toNode(createNode(OUTPUT_NODE_TYPE, x, y, { channel: entryId.slice(7), name: '' }));
             if (entryId.startsWith('mesh:')) return toNode(createNode(MESH_MAP_NODE_TYPE, x, y, { map: entryId.slice(5) }));
+            if (entryId.startsWith('iterate:')) return toNode(createNode(ITERATE_NODE_TYPE, x, y, { graph: entryId.slice(8) }));
             return toNode(createNode(entryId, x, y));
         };
         const menuItems = (nodeId: string): MenuItem[] => [
@@ -357,6 +386,12 @@ export const TextureGraphCanvas: React.FC<TextureGraphCanvasProps> = (props) => 
             createNode: create,
             createReroute: (at) => toNode(createNode(REROUTE_NODE_TYPE, Math.round(at.x), Math.round(at.y))),
             pins,
+            sizeOf: (node) => {
+                // As the card lays out: pins down the sides of the thumbnail.
+                const shown = pins(node);
+                const span = Math.max(shown.inputs.length, shown.outputs.length) * ROW;
+                return { width: NODE_WIDTH, height: HEADER + Math.max(THUMBNAIL_SIZE + 8, span + 8) };
+            },
             newId: () => newNodeId(),
             copy: (current, ids) => JSON.stringify(copyNodes(fromEditable(current, latest.current.graph), ids)),
             paste: (text) => {
@@ -386,7 +421,7 @@ export const TextureGraphCanvas: React.FC<TextureGraphCanvasProps> = (props) => 
     }, []);
     const onSelect = useCallback((ids: string[], frame?: string | null) => latest.current.onSelect(ids, frame ?? null), []);
 
-    return (
+    const canvas = (
         <NodeGraphCanvas
             label="Texture graph"
             graph={editable}
@@ -399,11 +434,13 @@ export const TextureGraphCanvas: React.FC<TextureGraphCanvasProps> = (props) => 
             canRedo={canRedo}
             onUndo={onUndo}
             onRedo={onRedo}
-            undoKeys="workspace"
+            undoKeys={hidden ? 'none' : 'workspace'}
             onSelect={onSelect}
             onEdit={onEdit}
             notice={notice}
             status={session.busy ? 'Drawing…' : `${graph.nodes.length} nodes · drew ${session.lastRun.nodes} in ${Math.round(session.lastRun.milliseconds)} ms`}
         />
     );
+    // Hidden, it keeps where it was looking for when it shows again (the same element either way, so it is kept).
+    return <div className={hidden ? 'hidden' : 'contents'}>{canvas}</div>;
 };

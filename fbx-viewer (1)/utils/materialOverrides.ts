@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { materialLibrary } from '../runtime/materials/materialLibrary';
 import { canBindMaterialGraph } from '../runtime/materials/graphMaterial';
 import { isGraphUpgraded } from '../runtime/materials/physicalSurface';
+import { rebuildNormalZ } from './textureCompression/compressTextures';
 import { CARD_FRINGE_KEY } from './processing/ModelMaterials';
 import { MAX_PARAMETER_NAME_LENGTH, type MaterialParameterValue, type MaterialParameterValues } from '../runtime/materials/materialGraph';
 
@@ -321,10 +322,13 @@ export const overrideTextureFlipY = (root: THREE.Object3D): boolean => root.user
  * maps have). Call it before the texture is first uploaded.
  */
 export const tagOverrideTexture = (texture: THREE.Texture, textureId: string, slot: MaterialTextureSlot, flipY = true): THREE.Texture => {
-  texture.colorSpace = slot === 'map' ? THREE.SRGBColorSpace : THREE.NoColorSpace;
-  texture.flipY = flipY;
-  texture.wrapS = THREE.RepeatWrapping;
-  texture.wrapT = THREE.RepeatWrapping;
+  // One set up from its texture settings (texturing/materialTextureLoader.ts) is laid out already.
+  if (texture.userData?.auvraTextureSettings !== true) {
+    texture.colorSpace = slot === 'map' ? THREE.SRGBColorSpace : THREE.NoColorSpace;
+    texture.flipY = flipY;
+    texture.wrapS = THREE.RepeatWrapping;
+    texture.wrapT = THREE.RepeatWrapping;
+  }
   texture.userData[TEXTURE_ID_KEY] = textureId;
   texture.userData[TEXTURE_SLOT_KEY] = slot;
   return texture;
@@ -660,7 +664,11 @@ export const applyMaterialOverrides = (
       }
       if (baseline.hasNormalMap) {
         const normalMap = bindTexture(override.normalTextureId, 'normal');
-        if (normalMap) material.normalMap = normalMap;
+        if (normalMap) {
+          material.normalMap = normalMap;
+          // A normal map compressed to red and green (BC5) has its blue rebuilt in the shader.
+          if (normalMap.format === THREE.RED_GREEN_RGTC2_Format) rebuildNormalZ(material);
+        }
       }
       // A map is multiplied by the value, so with a map the value steps aside unless the override sets it too.
       if (baseline.hasRoughnessMap) {
@@ -803,7 +811,8 @@ export interface HydrateMaterialOverridesOptions {
   /** URL of a logical texture id, or nothing when the project has no such texture. */
   resolveTextureUrl(textureId: string): string | undefined;
   /** Defaults to THREE.TextureLoader. */
-  loadTexture?(url: string): Promise<THREE.Texture>;
+  /** Loads a texture for the way it is read (the project's texture loader: decoded at its depth, compressed by role). */
+  loadTexture?(url: string, request: { textureId: string; slot: 'map' | 'normal' | 'data'; flipY: boolean }): Promise<THREE.Texture>;
   /** Throws when the caller no longer wants the result (checked after every load). */
   assertCurrent?(): void;
 }
@@ -824,6 +833,8 @@ export const hydrateMaterialOverrides = async (
   const overrides = withLegacyBaseMaps(normalizeMaterialOverrides(value), legacyBaseMaps);
   if (Object.keys(overrides).length === 0) return overrides;
   const load = options.loadTexture ?? ((url: string) => new THREE.TextureLoader().loadAsync(url));
+  // Read as a material reads them: colour, a normal, or data (roughness, metalness).
+  const readAs = (slot: MaterialTextureSlot): 'map' | 'normal' | 'data' => (slot === 'map' ? 'map' : slot === 'normal' ? 'normal' : 'data');
   const loaded = new Map<string, THREE.Texture>();
   const flipY = overrideTextureFlipY(root);
   let bound = new Set<string>();
@@ -831,7 +842,7 @@ export const hydrateMaterialOverrides = async (
     for (const { textureId, slot } of materialOverrideTextureIds(overrides)) {
       const url = options.resolveTextureUrl(textureId);
       if (!url) continue;
-      const texture = await load(url);
+      const texture = await load(url, { textureId, slot: readAs(slot), flipY });
       loaded.set(overrideTextureCacheKey(textureId, slot), tagOverrideTexture(texture, textureId, slot, flipY));
       options.assertCurrent?.();
     }

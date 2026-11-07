@@ -1,6 +1,9 @@
 import * as THREE from 'three';
 import { render } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { loadProjectTexture } from '../../texturing/materialTextureLoader';
+
+vi.mock('../../texturing/materialTextureLoader', () => ({ loadProjectTexture: vi.fn() }));
 import {
   DECAL_COMPONENT,
   DECAL_DEFAULTS,
@@ -456,17 +459,20 @@ describe('decal component render', () => {
     for (const spy of disposals) expect(spy).toHaveBeenCalledTimes(1);
   });
 
-  it('applies the texture asset it names (by id or name) and frees it when it goes', () => {
+  it('applies the texture asset it names (by id or name) and frees it when it goes', async () => {
     const loaded: THREE.Texture[] = [];
-    vi.spyOn(THREE.TextureLoader.prototype, 'load').mockImplementation((_url, onLoad) => {
+    // The project's texture path, as the open project sets it up (a colour texture, read from sRGB).
+    vi.mocked(loadProjectTexture).mockImplementation(async (url, request) => {
       const texture = new THREE.Texture(document.createElement('img'));
+      texture.colorSpace = request.slot === 'map' ? THREE.SRGBColorSpace : THREE.NoColorSpace;
+      texture.userData.loadedFrom = [url, request.textureId];
       loaded.push(texture);
-      onLoad?.(texture);
       return texture;
     });
     const textures = [{ id: 'tex-brick', name: 'Brick', url: 'blob:brick', dimensions: { width: 4, height: 4 } }];
     const { view, projector } = renderDecal(decal({ textureId: 'Brick' }), 'runtime', textures);
-    expect(loaded).toHaveLength(1);
+    await vi.waitFor(() => expect(loaded).toHaveLength(1));
+    expect(loaded[0].userData.loadedFrom).toEqual(['blob:brick', 'tex-brick']);
     expect(projector.mesh.material.map).toBe(loaded[0]);
     expect(loaded[0].colorSpace).toBe(THREE.SRGBColorSpace);
 

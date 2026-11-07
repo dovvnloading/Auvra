@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { UvSession } from './uvSession';
+import { Segmented } from '../../UI/kit';
 
 /**
  * The layout in 2D: islands of the proposed layout (or the current one), filled by their stretch,
@@ -34,6 +35,7 @@ export const UvView2D: React.FC<{ uv: UvSession }> = ({ uv }) => {
     // after the painting changes.
     const paintVersion = useSyncExternalStore(uv.paint.subscribe, uv.paint.getVersion);
     const [backgroundVersion, setBackgroundVersion] = useState(0);
+    const [colourBy, setColourBy] = useState<'stretch' | 'density'>('stretch');
     const refresh = useRef<{ timer: ReturnType<typeof setTimeout> | null; reading: boolean; again: boolean; alive: boolean }>({ timer: null, reading: false, again: false, alive: true });
     const latestUv = useRef(uv);
     latestUv.current = uv;
@@ -137,6 +139,21 @@ export const UvView2D: React.FC<{ uv: UvSession }> = ({ uv }) => {
             return [part.uvs[v * 2], part.uvs[v * 2 + 1]];
         };
         const selectedFaces = new Set<number>();
+        // Texel density of each triangle against the layout's own (texture area over model area, square-rooted).
+        let density: Float32Array | null = null;
+        if (colourBy === 'density' && proposal) {
+            density = new Float32Array(triangles);
+            let uvTotal = 0, modelTotal = 0;
+            for (let t = 0; t < triangles; t++) {
+                const [a, b, c] = [corner(t, 0), corner(t, 1), corner(t, 2)];
+                const uvArea = Math.abs((b[0] - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (b[1] - a[1])) / 2;
+                const modelArea = uv.topology.areas[t] ?? 0;
+                uvTotal += uvArea; modelTotal += modelArea;
+                density[t] = modelArea > 0 ? Math.sqrt(uvArea / modelArea) : 0;
+            }
+            const mean = modelTotal > 0 ? Math.sqrt(uvTotal / modelTotal) : 1;
+            for (let t = 0; t < triangles; t++) density[t] = mean > 0 ? density[t] / mean : 1;
+        }
         const lockedFaces = new Set<number>();
         if (proposal) {
             for (const i of uv.selected) for (const f of proposal.charts[i].faces) selectedFaces.add(f);
@@ -165,7 +182,10 @@ export const UvView2D: React.FC<{ uv: UvSession }> = ({ uv }) => {
             g.closePath();
             if (proposal) {
                 const stretch = proposal.triangleStretch[t];
-                g.fillStyle = selectedFaces.has(t) ? 'rgba(56,189,248,0.55)' : stretch < 0 ? 'rgba(220,40,160,0.6)' : `rgba(${Math.round(60 + 190 * stretch)},${Math.round(200 - 140 * stretch)},90,0.35)`;
+                const heat = density ? density[t] : 0;
+                // Texel density: blue below the set's own, green at it, red above (twice as dense or half fully coloured).
+                const shade = density ? (heat >= 1 ? `rgba(${Math.round(80 + 175 * Math.min(1, heat - 1))},${Math.round(200 - 140 * Math.min(1, heat - 1))},80,0.45)` : `rgba(70,${Math.round(200 - 100 * Math.min(1, (1 - heat) * 2))},${Math.round(90 + 165 * Math.min(1, (1 - heat) * 2))},0.45)`) : null;
+                g.fillStyle = selectedFaces.has(t) ? 'rgba(56,189,248,0.55)' : shade ?? (stretch < 0 ? 'rgba(220,40,160,0.6)' : `rgba(${Math.round(60 + 190 * stretch)},${Math.round(200 - 140 * stretch)},90,0.35)`);
                 g.fill();
                 if (lockedFaces.has(t) && hatch.current) {
                     g.fillStyle = hatch.current;
@@ -175,7 +195,18 @@ export const UvView2D: React.FC<{ uv: UvSession }> = ({ uv }) => {
             g.strokeStyle = selectedFaces.has(t) ? 'rgba(186,230,253,0.9)' : 'rgba(228,228,231,0.35)';
             g.stroke();
         }
-    }, [size, uv, version, view, backgroundVersion]); // eslint-disable-line react-hooks/exhaustive-deps
+        // Pins, for Relax.
+        for (const [u, v] of uv.pinPlaces()) {
+            const [x, y] = toScreen(u, v);
+            g.beginPath();
+            g.arc(x, y, 4, 0, Math.PI * 2);
+            g.fillStyle = '#f4f4f5';
+            g.fill();
+            g.lineWidth = 1.5;
+            g.strokeStyle = '#09090b';
+            g.stroke();
+        }
+    }, [size, uv, version, view, backgroundVersion, colourBy]); // eslint-disable-line react-hooks/exhaustive-deps
 
     useEffect(() => {
         const element = host.current;
@@ -218,6 +249,8 @@ export const UvView2D: React.FC<{ uv: UvSession }> = ({ uv }) => {
                 const box = host.current!.getBoundingClientRect();
                 const [u, v] = toUv(event.clientX - box.left, event.clientY - box.top);
                 if (event.button === 1 || event.button === 2) { drag.current = { kind: 'pan', x: event.clientX, y: event.clientY, moved: false }; return; }
+                // Alt-click pins (or unpins) the point nearest the pointer, for Relax.
+                if (event.altKey && uv.proposal) { uv.togglePinAt(u, v, 10 / scale); return; }
                 const island = uv.islandAt(u, v);
                 if (island >= 0) {
                     if (!event.shiftKey && !uv.selected.has(island)) uv.selected.clear();
@@ -245,6 +278,11 @@ export const UvView2D: React.FC<{ uv: UvSession }> = ({ uv }) => {
             onContextMenu={(event) => event.preventDefault()}
         >
             <canvas ref={canvas} className="absolute inset-0 h-full w-full" />
+            {uv.proposal && (
+                <div className="absolute right-3 top-3" onPointerDown={(event) => event.stopPropagation()}>
+                    <Segmented value={colourBy} options={[{ value: 'stretch', label: 'Stretch' }, { value: 'density', label: 'Texel density' }]} onChange={setColourBy} label="Colour islands by" />
+                </div>
+            )}
             {!uv.proposal && <div className="pointer-events-none absolute bottom-3 left-3 rounded bg-zinc-900/90 px-2 py-1 text-2xs text-zinc-400">The current layout. Unwrap or pack in the UVs panel to edit a new one.</div>}
             {uv.proposal && (
                 <div className="pointer-events-none absolute bottom-3 left-3 rounded bg-zinc-900/90 px-2 py-1 text-2xs text-zinc-400">

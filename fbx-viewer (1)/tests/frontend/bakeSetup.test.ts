@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BAKE_MEMORY_BUDGET, TABLE_WIDTH, autoCage, averagedNormals, bakeBytesPerTexel, baseName, bakeGroups, bandRanges, bandRows, blockAverage, materialColour, meshCage, supersampled, traceSteps, transferTables } from '../../texturing/bake/bakeSetup';
+import { BAKE_MEMORY_BUDGET, TABLE_WIDTH, autoCage, averagedNormals, bakeBytesPerTexel, baseName, bakeGroups, bandRanges, bandRows, blockAverage, planStrips, stripOffsets, materialColour, meshCage, supersampled, traceSteps, transferTables } from '../../texturing/bake/bakeSetup';
 
 describe('cages', () => {
     it('averages normals across a hard edge, so both sides look the same way there', () => {
@@ -114,5 +114,59 @@ describe('banding heavy bake passes', () => {
         // Fewer maps leave room for more.
         expect(bakeBytesPerTexel(['normal'], [], false)).toBeLessThan(all);
         expect(supersampled(10, 2, 16384, bakeBytesPerTexel(['normal'], [], false))).toEqual({ size: 11, factor: 2, limited: false });
+    });
+});
+
+describe('bakes in strips', () => {
+    it('cuts a bake into strips of whole blocks that fit the memory, covering every row once', () => {
+        const strips = planStrips(4096, 2, 100, 400 * 1024 * 1024, 68);
+        expect(strips.length).toBeGreaterThan(1);
+        expect(strips[0].y0).toBe(0);
+        expect(strips[strips.length - 1].y1).toBe(4096);
+        strips.forEach((strip, i) => {
+            if (i) expect(strip.y0).toBe(strips[i - 1].y1);
+            expect((strip.y1 - strip.y0) % 2).toBe(0);
+            expect(strip.keep0).toBe(strip.y0 / 2);
+            expect(strip.from).toBe(Math.max(0, strip.y0 - 68));
+            expect((strip.to - strip.from) * 4096 * 100).toBeLessThanOrEqual(400 * 1024 * 1024);
+        });
+        // A bake that fits is one strip, with no margins.
+        expect(planStrips(1024, 2, 100, 400 * 1024 * 1024, 68)).toEqual([{ y0: 0, y1: 1024, from: 0, to: 1024, keep0: 0, keep1: 512 }]);
+    });
+
+    it('averages strips down to exactly what one pass would make', () => {
+        const size = 64, factor = 4, kept = size / factor;
+        const value = (x: number, y: number) => Math.sin(x * 0.37) + Math.cos(y * 0.21) + x * y * 0.001;
+        const covered = (x: number, y: number) => ((x * 7 + y * 13) % 5 === 0 ? 0 : 1);
+        const average = (read: (x: number, y: number) => [number, number], fx: number, fy: number, sourceRow: number, targetRow: number) => {
+            const values: number[][] = [];
+            const coverage: number[] = [];
+            for (let y = 0; y < factor; y++) for (let x = 0; x < factor; x++) {
+                const [v, c] = read(fx * factor + x, (fy - targetRow) * factor + sourceRow + y);
+                values.push([v]);
+                coverage.push(c);
+            }
+            return blockAverage(values, coverage).value[0];
+        };
+        const single = (fx: number, fy: number) => average((x, y) => [value(x, y), covered(x, y)], fx, fy, 0, 0);
+        // Strips small enough that there are several, with margins either side.
+        const strips = planStrips(size, factor, 1, size * 24, 3);
+        expect(strips.length).toBeGreaterThan(2);
+        let checked = 0;
+        for (const strip of strips) {
+            // What the strip's bake holds: its rows and margins, from its first baked row.
+            const read = (x: number, y: number): [number, number] => {
+                const row = strip.from + y;
+                expect(row).toBeGreaterThanOrEqual(strip.from);
+                expect(row).toBeLessThan(strip.to);
+                return [value(x, row), covered(x, row)];
+            };
+            const { sourceRow, targetRow } = stripOffsets(strip);
+            for (let fy = strip.keep0; fy < strip.keep1; fy++) for (let fx = 0; fx < kept; fx++) {
+                expect(average(read, fx, fy, sourceRow, targetRow)).toBeCloseTo(single(fx, fy), 12);
+                checked++;
+            }
+        }
+        expect(checked).toBe(kept * kept);
     });
 });

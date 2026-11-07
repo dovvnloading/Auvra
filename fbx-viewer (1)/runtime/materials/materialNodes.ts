@@ -19,6 +19,13 @@ import type {
 
 export const OUTPUT_NODE_TYPE = 'output';
 export const REROUTE_NODE_TYPE = 'reroute';
+/** Reads one of the material's own pictures by name (MaterialAsset.pictures): see withMaterialPictures. */
+export const MATERIAL_PICTURE_NODE_TYPE = 'materialPicture';
+/** The pictures a material keeps by name, as its texture graph or painting makes them. */
+export const MATERIAL_PICTURE_NAMES: ReadonlyArray<[string, string]> = [
+    ['baseColor', 'Base colour'], ['normal', 'Normal'], ['orm', 'Occlusion, roughness, metallic'], ['roughness', 'Roughness'],
+    ['metallic', 'Metallic'], ['ambientOcclusion', 'Occlusion'], ['height', 'Height'], ['emissive', 'Emission'], ['opacity', 'Opacity'],
+];
 /** Named links: a Send and the Receives of its name stand for wires between them (namedMaterialLinks). */
 export const NAMED_SEND_TYPE = 'namedSend';
 export const NAMED_RECEIVE_TYPE = 'namedReceive';
@@ -182,6 +189,7 @@ export const MATERIAL_NODE_DEFINITIONS: MaterialNodeDef[] = [
             float('opacity', 'Opacity', 1, { min: 0, max: 1, step: 0.01, group: 'Opacity' }),
             select('blendMode', 'Alpha mode', [['opaque', 'Opaque'], ['masked', 'Masked (cut-out)'], ['translucent', 'Translucent'], ['additive', 'Additive']]),
             select('normalSpace', 'Normal input', [['tangent', 'Like a normal map'], ['world', 'In world space']]),
+            { key: 'ownMaps', label: 'Keep the model\'s own maps', kind: 'boolean', default: false },
             float('alphaClip', 'Alpha clip', 0.5, { min: 0, max: 1, step: 0.01 }),
             { key: 'twoSided', label: 'Two-sided', kind: 'boolean', default: false },
             select('shading', 'Shading', [['lit', 'Lit'], ['unlit', 'Unlit']]),
@@ -542,6 +550,39 @@ export const MATERIAL_NODE_DEFINITIONS: MaterialNodeDef[] = [
         },
     },
     {
+        type: MATERIAL_PICTURE_NODE_TYPE,
+        label: 'Material Picture',
+        category: 'Texture',
+        description: 'Reads one of the material\'s own pictures by name (its base colour, normal, roughness...) as its texture graph or painting last made them. Updating the material changes the pictures, never this graph. Normal gives the picture as a normal, ready for the Normal input.',
+        keywords: ['picture', 'output', 'baked', 'painted', 'texture graph'],
+        inputs: [{ key: 'uv', label: 'UV', type: 'vec2', fallback: builtin('uv') }],
+        outputs: [
+            { key: 'rgb', label: 'RGB', type: 'vec3' },
+            { key: 'a', label: 'A', type: 'float' },
+            { key: 'r', label: 'R', type: 'float' },
+            { key: 'g', label: 'G', type: 'float' },
+            { key: 'b', label: 'B', type: 'float' },
+            { key: 'normal', label: 'Normal', type: 'vec3' },
+        ],
+        params: [
+            select('output', 'Picture', MATERIAL_PICTURE_NAMES),
+            // Filled from the material's pictures when it is drawn (withMaterialPictures), never set by hand.
+            { key: 'texture', label: 'Texture', kind: 'texture', default: '' },
+        ],
+        emit: (inputs, context) => {
+            const sample = context.local('sample');
+            const normal = context.local('normal');
+            return {
+                statements: [
+                    `vec4 ${sample} = texture(${context.param('texture')}, ${inputs.uv});`,
+                    `vec3 ${normal} = vec3(${sample}.xy * 2.0 - 1.0, 0.0);`,
+                    `${normal}.z = sqrt(max(1.0 - dot(${normal}.xy, ${normal}.xy), 0.0));`,
+                ],
+                outputs: { rgb: `${sample}.rgb`, a: `${sample}.a`, r: `${sample}.r`, g: `${sample}.g`, b: `${sample}.b`, normal: `normalize(${normal})` },
+            };
+        },
+    },
+    {
         type: 'parallax',
         label: 'Parallax',
         category: 'Texture',
@@ -557,6 +598,7 @@ export const MATERIAL_NODE_DEFINITIONS: MaterialNodeDef[] = [
         ],
         params: [
             { key: 'texture', label: 'Height map', kind: 'texture', default: '' },
+            select('heightFrom', 'Height from', [['texture', 'Its own height map'], ['height', 'The material\'s height picture']]),
             float('depth', 'Depth', 0.03, { min: 0, max: 0.3, step: 0.005 }),
             select('quality', 'Quality', [['low', 'Low (8 steps)'], ['medium', 'Medium (16 steps)'], ['high', 'High (32 steps)']], 'medium'),
             { key: 'selfShadow', label: 'Self-shadow', kind: 'boolean', default: true },

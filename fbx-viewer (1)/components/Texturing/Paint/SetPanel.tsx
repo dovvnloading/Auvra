@@ -1,10 +1,10 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { CheckCircleIcon, DownloadIcon, FlameIcon, RefreshIcon } from '../../UI/Icons';
 import type * as THREE from 'three';
-import { BAKE_VERSION, DEFAULT_BAKE_SETTINGS, EXTRA_MAPS, EXTRA_MAP_LABELS, type BakeSettings } from '../../../texturing/bake/meshBaker';
-import { SUPERSAMPLE, bakeBytesPerTexel, supersampled, type CageMode, type Supersample } from '../../../texturing/bake/bakeSetup';
+import { BAKE_VERSION, DEFAULT_BAKE_SETTINGS, EXTRA_MAPS, EXTRA_MAP_LABELS, bakeStrips, type BakeSettings } from '../../../texturing/bake/meshBaker';
+import { SUPERSAMPLE, type CageMode, type Supersample } from '../../../texturing/bake/bakeSetup';
 import { MESH_MAP_LABELS, MESH_MAPS, type MeshMapName } from '../../../texturing/graph/nodes/io';
-import { CHANNEL_LABELS, PAINT_CHANNELS, type PaintChannel } from '../../../texturing/paint/paintTypes';
+import { CHANNEL_LABELS, PAINT_CHANNELS, type BakeFix, type PaintChannel } from '../../../texturing/paint/paintTypes';
 import type { PictureLayout } from '../../../texturing/materialOutput';
 import { Button, Segmented, Spinner } from '../../UI/kit';
 import { Select } from '../../UI/Select';
@@ -23,11 +23,19 @@ export const SetPanel: React.FC<{
     models: ReadonlyArray<{ id: string; name: string; object: THREE.Object3D }>;
     /** Opens the set again (after its picture size changed). */
     onReopen: () => void;
-}> = ({ session, models, onReopen }) => {
+    /** Shows (or, with null, stops showing) the bake rays at spots clicked on the model, for these settings. */
+    onShowRays?: (settings: BakeSettings | null) => void;
+    showingRays?: boolean;
+    /** The bake fix being painted (strokes go into it), and choosing one, or none. */
+    paintingFix?: BakeFix | null;
+    onPaintFix?: (fix: BakeFix | null) => void;
+}> = ({ session, models, onReopen, onShowRays, showingRays = false, paintingFix = null, onPaintFix }) => {
     const document = session.document;
     // The bake's own size starts at the set's (and can be larger, for detail averaged down).
     const [settings, setSettings] = useState<BakeSettings>(() => ({ ...DEFAULT_BAKE_SETTINGS, size: document.size, ...(document.bake?.settings ?? {}) }));
     const [cageModel, setCageModel] = useState('');
+    // The rays shown follow the settings as they change.
+    useEffect(() => { if (showingRays) onShowRays?.(settings); }, [settings]); // eslint-disable-line react-hooks/exhaustive-deps
     const [highPoly, setHighPoly] = useState('');
     const [layout, setLayout] = useState<PictureLayout>('separate');
     const [convention, setConvention] = useState<'bottom' | 'top'>('bottom');
@@ -83,8 +91,8 @@ export const SetPanel: React.FC<{
                     <Segmented value={String(settings.supersample ?? 1)} options={SUPERSAMPLE.map((factor) => ({ value: String(factor), label: factor === 1 ? 'Off' : `${factor}×${factor}` }))} onChange={(factor) => setSettings({ ...settings, supersample: Number(factor) as Supersample })} label="Supersampling" />
                 </div>
                 {(() => {
-                    const plan = supersampled(settings.size, settings.supersample ?? 1, session.gpu.maxSize, bakeBytesPerTexel(settings.maps, settings.extras ?? [], Boolean(highPoly)));
-                    return plan.size !== document.size || plan.limited ? <p className="text-2xs leading-snug text-zinc-500">Baked at {2 ** plan.size} × {2 ** plan.size}{plan.limited ? ' (as large as the graphics card safely takes for these maps: fewer maps, or a smaller set, leave room for more)' : ''}{plan.size !== document.size ? `, then averaged to the set's ${2 ** document.size} × ${2 ** document.size}` : ''}.</p> : null;
+                    const plan = bakeStrips(settings, Boolean(highPoly), session.gpu.maxSize, document.size);
+                    return plan.size !== document.size || plan.strips > 1 ? <p className="text-2xs leading-snug text-zinc-500">Baked at {2 ** plan.size} × {2 ** plan.size}{plan.strips > 1 ? ` in ${plan.strips} strips, to stay within the graphics memory` : ''}{plan.size !== document.size ? `, then averaged to the set's ${2 ** document.size} × ${2 ** document.size}` : ''}.</p> : null;
                 })()}
                 <Row label="Rays per texel" value={settings.samples} min={16} max={512} step={16} onChange={(samples) => setSettings({ ...settings, samples })} />
                 <Row label="Occlusion reach" value={settings.occlusionDistance} min={0.01} max={0.5} step={0.005} onChange={(occlusionDistance) => setSettings({ ...settings, occlusionDistance })} />
@@ -141,6 +149,12 @@ export const SetPanel: React.FC<{
                         </label>
                     ))}
                 </div>
+                {onShowRays && (
+                    <label className="flex items-center gap-1.5 text-2xs text-zinc-300">
+                        <input type="checkbox" className="accent-sky-500" checked={showingRays} onChange={(event) => onShowRays(event.target.checked ? settings : null)} />
+                        Show the bake rays where I click the model
+                    </label>
+                )}
                 {busy && session.busy && session.progress > 0 ? (
                     <div className="space-y-1">
                         <div className="h-1.5 overflow-hidden rounded bg-zinc-800"><div className="h-full bg-sky-500 transition-all" style={{ width: `${Math.round(session.progress * 100)}%` }} /></div>
@@ -153,6 +167,22 @@ export const SetPanel: React.FC<{
                     }}>{document.bake ? 'Bake again' : 'Bake mesh maps'}</Button>
                 )}
             </section>
+
+            {document.bake && onPaintFix && (
+                <section className="space-y-2">
+                    <div className="text-2xs font-semibold text-zinc-300">Fix the bake in place</div>
+                    <p className="text-2xs leading-snug text-zinc-500">Paint onto the model where the bake went wrong: skew (white) leans rays to the surface's own normals, for slanted detail; cage offset (mid grey leaves it, white pushes the cage out to twice as far, black pulls it in), for missed or doubled detail. The fixes are kept with the set and read by every bake.</p>
+                    <div className="grid grid-cols-2 gap-1.5">
+                        <Button size="sm" variant={paintingFix === 'skew' ? 'primary' : 'default'} onClick={() => onPaintFix(paintingFix === 'skew' ? null : 'skew')}>Paint skew</Button>
+                        <Button size="sm" variant={paintingFix === 'cage' ? 'primary' : 'default'} onClick={() => onPaintFix(paintingFix === 'cage' ? null : 'cage')}>Paint cage offset</Button>
+                    </div>
+                    <Button size="sm" className="w-full justify-center" disabled={busy || !session.stack.bakeFixChanged.size || !highPoly}
+                        onClick={() => { controller.current = new AbortController(); void session.rebakeRegion(settings, models.find((model) => model.id === highPoly)?.object ?? null, controller.current.signal); }}>
+                        Bake the changed region again
+                    </Button>
+                    <p className="text-2xs leading-snug text-zinc-500">{session.stack.bakeFixChanged.size ? (highPoly ? 'Only the detail maps (normal, world normal, height and what is carried over) are baked again, where fixes were painted. Ctrl+Z undoes a bake like any stroke.' : 'Pick the high-poly model under "Detail from" to bake the region again.') : 'Paint a fix first: the region it covers is what is baked again.'}</p>
+                </section>
+            )}
 
             <section className="space-y-2">
                 <div className="text-2xs font-semibold text-zinc-300">On the model</div>

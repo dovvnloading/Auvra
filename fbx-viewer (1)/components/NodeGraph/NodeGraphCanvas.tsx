@@ -4,14 +4,14 @@ import {
     PowerIcon, RedoIcon, RouteIcon, ScissorsIcon, SearchIcon, TrashIcon, UndoIcon, WarningIcon,
 } from '../UI/Icons';
 import { IconButton } from '../UI/kit';
-import { ALIGN_LABELS, alignRects, distributeRects, snapToGrid, type AlignEdge } from './arrange';
+import { ALIGN_LABELS, GRID, alignRects, distributeRects, snapToGrid, type AlignEdge } from './arrange';
 import { FRAME_COLOURS, FRAME_COLOUR_NAMES, FRAME_MIN, fitFrame, frameContents, frameMembers, refitFrames } from './frames';
 import { fitsWire, type FinderEntry } from './finder';
 import { FindBar, type FindTarget } from './FindBar';
-import { cardLayout, groupOpenByDefault, type CardLayout } from './layout';
+import { HEADER, ROW, cardLayout, groupOpenByDefault, type CardLayout } from './layout';
 import { Minimap } from './Minimap';
 import {
-    bestPin, boundsOf, connect, disconnect, insertReroute, linkKey, pasteNodes, placeNodes, rectFrom, rectsOverlap, removeNodes, setLook, spliceNode,
+    bestPin, boundsOf, connect, disconnect, freeSpot, insertReroute, linkKey, pasteNodes, placeNodes, rectFrom, rectsOverlap, removeNodes, setLook, spliceNode,
     type EditableFrame, type EditableGraph, type EditableLink, type EditableNode, type KindMatch, type NodeLook, type PinSet, type Point, type Rect,
 } from './model';
 import { NodeCard, type CardActions } from './NodeCard';
@@ -57,6 +57,8 @@ export interface NodeGraphAdapter<S> {
     onFinderOpen?: () => void;
     createNode: (entryId: string, at: Point) => EditableNode<S> | null;
     createReroute: (at: Point) => EditableNode<S> | null;
+    /** The size of a node's card, one new to the graph included (for finding it free space). */
+    sizeOf?: (node: EditableNode<S>) => { width: number; height: number };
     /** The pins of any node, one new to the graph included. */
     pins: (node: EditableNode<S>) => PinSet;
     newId: () => string;
@@ -536,9 +538,17 @@ export function NodeGraphCanvas<S>(props: NodeGraphCanvasProps<S>): React.ReactE
         root.current?.focus({ preventScroll: true });
         if (!state) return;
         const { graph: current, adapter: own } = latest.current;
-        const place = state.splice ? { x: state.at.x - 70, y: state.at.y - 40 } : state.wire?.side === 'in' ? { x: state.at.x - 180, y: state.at.y - 12 } : { x: state.at.x, y: state.at.y - 12 };
-        const created = own.createNode(entry.id, snap ? { x: snapToGrid(place.x), y: snapToGrid(place.y) } : place);
-        if (!created) return;
+        const asked = state.splice ? { x: state.at.x - 70, y: state.at.y - 40 } : state.wire?.side === 'in' ? { x: state.at.x - 180, y: state.at.y - 12 } : { x: state.at.x, y: state.at.y - 12 };
+        const place = snap ? { x: snapToGrid(asked.x), y: snapToGrid(asked.y) } : asked;
+        const made = own.createNode(entry.id, place);
+        if (!made) return;
+        // Into free space near where it was asked for, never on top of another node.
+        const size = own.sizeOf?.(made) ?? (() => {
+            const pins = own.pins(made);
+            return { width: 180, height: HEADER + Math.max(pins.inputs.length, pins.outputs.length, 1) * ROW + 8 };
+        })();
+        const spot = freeSpot(place, size, [...nodeRects().values()], { step: snap ? GRID : 10 });
+        const created: EditableNode<S> = spot.x === made.x && spot.y === made.y ? made : { ...made, x: Math.round(spot.x), y: Math.round(spot.y) };
         let next: EditableGraph<S> = { ...current, nodes: [...current.nodes, created] };
         const pins = own.pins(created);
         if (state.splice) next = spliceNode(next, state.splice.link, created, pins, { carried: state.splice.carried, taken: state.splice.taken }, own.match);
@@ -554,7 +564,7 @@ export function NodeGraphCanvas<S>(props: NodeGraphCanvasProps<S>): React.ReactE
         }
         commit(next);
         select([created.id]);
-    }, [commit, finder, select, snap]);
+    }, [commit, finder, nodeRects, select, snap]);
 
     // ---- menus ----
     const nodeMenu = useCallback((nodeId: string, x: number, y: number) => {
@@ -570,7 +580,7 @@ export function NodeGraphCanvas<S>(props: NodeGraphCanvasProps<S>): React.ReactE
         if (!many && card && own.looks) items.push({ label: 'Rename', icon: <PencilIcon size={12} />, shortcut: 'F2', section: 'look', onSelect: () => setRenaming(nodeId) });
         if (card && own.looks) items.push({ label: node.collapsed ? 'Unfold' : 'Fold to its header', icon: <ChevronDownIcon size={12} />, shortcut: 'H', section: 'look', onSelect: () => toggleCollapsed(ids) });
         if (nodeView.canBypass) items.push({ label: node.bypass ? 'Stop bypassing' : 'Bypass: pass its main input through', icon: <PowerIcon size={12} />, shortcut: 'B', section: 'look', onSelect: () => toggleBypass(ids) });
-        if (!many && nodeView.canOpen && own.onOpenGraph) items.push({ label: 'Open the graph inside', icon: <LayersIcon size={12} />, section: 'open', onSelect: () => own.onOpenGraph?.(nodeId) });
+        if (!many && nodeView.canOpen && own.onOpenGraph) items.push({ label: nodeView.openLabel ?? 'Open the graph inside', icon: <LayersIcon size={12} />, section: 'open', onSelect: () => own.onOpenGraph?.(nodeId) });
         if (!many) for (const item of own.menuItems?.(nodeId) ?? []) items.push({ ...item, section: item.section ?? 'open' });
         const copyable = [...ids].some((id) => shown.get(id)?.canDelete !== false);
         items.push({ label: many ? `Duplicate ${ids.size} nodes` : 'Duplicate', icon: <CopyIcon size={12} />, shortcut: 'Ctrl+D', section: 'edit', disabled: !copyable, hint: 'The output cannot be copied.', onSelect: duplicate });

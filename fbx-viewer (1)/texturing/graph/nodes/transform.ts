@@ -396,7 +396,8 @@ export const TRANSFORM_NODES: TexNodeDef[] = [
     vec2 inputSize = vec2(textureSize(t_in, 0));
     vec2 texel = 1.0 / inputSize;
     vec2 g = vec2(g_in(vUv + vec2(texel.x, 0.0)) - g_in(vUv - vec2(texel.x, 0.0)), g_in(vUv + vec2(0.0, texel.y)) - g_in(vUv - vec2(0.0, texel.y)));
-    g *= inputSize.x / 512.0;
+    // Per metre of the graph's size in the world (one metre when it has none).
+    g *= inputSize / 512.0 / uWorld;
     float a = radians(p_angle);
     outColor = vec4(saturate(0.5 + dot(g, vec2(cos(a), sin(a))) * p_intensity));
 }`,

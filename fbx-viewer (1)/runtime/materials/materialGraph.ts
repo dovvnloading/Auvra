@@ -35,12 +35,12 @@ import {
     type MaterialValueType,
     type NodeEmitContext,
 } from './materialTypes';
-import { MATERIAL_NODE_DEFINITIONS, NAMED_RECEIVE_TYPE, NAMED_SEND_TYPE, OUTPUT_NODE_TYPE } from './materialNodes';
+import { MATERIAL_NODE_DEFINITIONS, MATERIAL_PICTURE_NODE_TYPE, NAMED_RECEIVE_TYPE, NAMED_SEND_TYPE, OUTPUT_NODE_TYPE } from './materialNodes';
 import { hasHelper } from './materialGlsl';
 import { NODE_CODE_END, nodeCodeMark } from './shaderErrors';
 
 export * from './materialTypes';
-export { MATERIAL_NODE_DEFINITIONS, NAMED_RECEIVE_TYPE, NAMED_SEND_TYPE, OUTPUT_NODE_TYPE, REROUTE_NODE_TYPE, swizzleMask } from './materialNodes';
+export { MATERIAL_NODE_DEFINITIONS, MATERIAL_PICTURE_NAMES, MATERIAL_PICTURE_NODE_TYPE, NAMED_RECEIVE_TYPE, NAMED_SEND_TYPE, OUTPUT_NODE_TYPE, REROUTE_NODE_TYPE, swizzleMask } from './materialNodes';
 
 export interface MaterialGraphNode {
     id: string;
@@ -247,6 +247,10 @@ export type TextureSlot = 'map' | 'normal' | 'data';
 
 /** The way `node` reads the texture its 'texture' param picks. */
 export const textureSlot = (node: MaterialGraphNode): TextureSlot => {
+    if (node.type === MATERIAL_PICTURE_NODE_TYPE) {
+        const name = node.params.output;
+        return name === 'normal' ? 'normal' : name === 'baseColor' || name === 'emissive' || name === undefined ? 'map' : 'data';
+    }
     if (node.type === 'normalMap' || node.type === 'triplanarNormal') return 'normal';
     // A height map's values are heights, not colours.
     if (node.type === 'parallax') return 'data';
@@ -335,6 +339,36 @@ export const materialShaderVersions = (graph: MaterialGraph, uses: Iterable<Mate
     const shapes = new Set<string>();
     for (const values of uses) shapes.add(materialGraphShape(withMaterialParameters(graph, values)));
     return Math.max(1, shapes.size);
+};
+
+// ---------------------------------------------------------------------------
+// The material's own pictures
+// ---------------------------------------------------------------------------
+
+/** A material's pictures by name (base colour, normal, ...): texture ids its texture graph or painting made. */
+export type MaterialPictures = Readonly<Record<string, string>>;
+
+/** Whether a graph reads the material's pictures by name (Material Picture, or Parallax set to its height picture). */
+export const readsMaterialPictures = (graph: MaterialGraph): boolean =>
+    graph.nodes.some(node => node.type === MATERIAL_PICTURE_NODE_TYPE || (node.type === 'parallax' && node.params.heightFrom === 'height'));
+
+/**
+ * The graph with each node reading a picture by name given that picture's texture (none where the material
+ * has no picture of the name); the same graph when nothing changes. Only texture uniforms change.
+ */
+export const withMaterialPictures = (graph: MaterialGraph, pictures: MaterialPictures | null | undefined): MaterialGraph => {
+    if (!readsMaterialPictures(graph)) return graph;
+    let changed = false;
+    const nodes = graph.nodes.map((node) => {
+        const name = node.type === MATERIAL_PICTURE_NODE_TYPE ? String(node.params.output ?? 'baseColor')
+            : node.type === 'parallax' && node.params.heightFrom === 'height' ? 'height' : null;
+        if (!name) return node;
+        const texture = pictures?.[name] ?? '';
+        if (node.params.texture === texture) return node;
+        changed = true;
+        return { ...node, params: { ...node.params, texture } };
+    });
+    return changed ? { ...graph, nodes } : graph;
 };
 
 // ---------------------------------------------------------------------------
@@ -868,6 +902,11 @@ export interface MaterialGraphSettings {
     unlit: boolean;
     /** How the Normal input is read: like a normal map (tangent space), or as a world-space normal (Triplanar Normal Map). */
     normalSpace: 'tangent' | 'world';
+    /**
+     * Unwired, the base colour, roughness, metalness, normal and emission come from the model's own material
+     * (its maps and values) rather than the Material Output's values: a painted copy changes only what was painted.
+     */
+    keepOwnMaps: boolean;
 }
 
 /** How the graph's Material Output says the material blends, clips, faces and lights. */
@@ -883,5 +922,6 @@ export const materialGraphSettings = (graph: MaterialGraph): MaterialGraphSettin
         twoSided: params('twoSided') === true,
         unlit: params('shading') === 'unlit',
         normalSpace: params('normalSpace') === 'world' ? 'world' : 'tangent',
+        keepOwnMaps: params('ownMaps') === true,
     };
 };

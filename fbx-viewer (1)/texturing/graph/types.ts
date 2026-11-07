@@ -21,10 +21,11 @@ export type TilingMode = 'none' | 'horizontal' | 'vertical' | 'both';
 export type InputFallback = 'white' | 'black' | 'mid' | 'normal' | 'clear';
 
 /**
- * What a pin carries: one image (colour or grey; 'any' either), or a whole material, one wire carrying
- * every surface channel (base colour, normal, roughness...).
+ * What a pin carries: one image (colour or grey; 'any' either), a whole material (one wire carrying
+ * every surface channel: base colour, normal, roughness...), or a value: one number or vector worked
+ * out on the GPU (a picture one pixel across), which a setting shown as a pin follows.
  */
-export type PinKind = PortKind | 'any' | 'material';
+export type PinKind = PortKind | 'any' | 'material' | 'value';
 
 export interface TexPortDef {
     key: string;
@@ -40,7 +41,7 @@ export interface TexPortDef {
     group?: string;
 }
 
-export type TexParamKind = 'float' | 'int' | 'bool' | 'color' | 'vec2' | 'select' | 'ramp' | 'curve' | 'texture' | 'string' | 'code' | 'graph';
+export type TexParamKind = 'float' | 'int' | 'bool' | 'color' | 'vec2' | 'select' | 'ramp' | 'curve' | 'texture' | 'string' | 'code' | 'graph' | 'function' | 'settings';
 
 export interface RampStop { position: number; color: [number, number, number, number] }
 export interface CurvePoint { x: number; y: number }
@@ -101,6 +102,8 @@ export interface TexGraphNode {
     collapsed?: boolean;
     /** Passes its main input straight through instead of doing its work. */
     bypass?: boolean;
+    /** Settings shown as pins, which follow a value wired in (a Value processor's) instead of their own. */
+    valuePins?: string[];
 }
 
 /** Fields of a node that change only how the canvas shows it, never what it draws. */
@@ -176,6 +179,14 @@ export const outputNodeKind = (params: Readonly<Record<string, unknown>>): PortK
     return CHANNEL_KIND[channel];
 };
 
+/** How a graph used inside another runs this time (an Iterate node's passes). */
+export interface SubgraphRunOptions {
+    iteration?: { index: number; count: number };
+    /** Mixed into the seed the graph inside runs with (a new seed each pass). */
+    seedOffset?: number;
+    owned?: boolean;
+}
+
 /** Everything a node sees while it draws. */
 export interface NodeRunContext {
     readonly gpu: TextureGpu;
@@ -187,6 +198,13 @@ export interface NodeRunContext {
     readonly precision: ImagePrecision;
     /** Whether the node's image repeats across and down (its tiling). */
     readonly tiling: [boolean, boolean];
+    /** Inside a graph an Iterate node runs: which pass this is (0 first) and how many there are; else 0 of 1. */
+    readonly iteration: { index: number; count: number };
+    /**
+     * Metres the picture spans across and down: the graph's size in the world ([1, 1] when it has
+     * none). Slope-based nodes measure slopes over it, so the same heights make the same bumps.
+     */
+    readonly world: [number, number];
     /** Settings with links to the graph's parameters worked out. */
     readonly params: Readonly<Record<string, unknown>>;
     readonly signal: AbortSignal;
@@ -199,8 +217,12 @@ export interface NodeRunContext {
     pass(target: GpuImage, fragment: string, extra?: Omit<PassOptions, 'fragment'>): Promise<void>;
     /** A texture of the project (Bitmap nodes); null while it loads. */
     texture(textureId: string): THREE.Texture | null;
-    /** Evaluates another graph as part of this one (sub-graph nodes). */
-    subgraph(graphId: string, params: Readonly<Record<string, unknown>>, inputs: Readonly<Record<string, GpuImage | null>>): Promise<Record<string, GpuImage>>;
+    /**
+     * Evaluates another graph as part of this one (sub-graph and Iterate nodes). The results are the
+     * node's to keep or let go of when `owned`; otherwise they go back when the node is done unless it
+     * gives them out.
+     */
+    subgraph(graphId: string, params: Readonly<Record<string, unknown>>, inputs: Readonly<Record<string, GpuImage | null>>, options?: SubgraphRunOptions): Promise<Record<string, GpuImage>>;
     /** An image the caller supplied for one of the graph's Input nodes. */
     external(name: string): GpuImage | THREE.Texture | null;
     /** The channels of the material wired into a material input (null when none is). */
@@ -246,6 +268,11 @@ export interface TexNodeDef {
     bypass?: false;
     /** How the editor shows its images. */
     preview?: 'normal';
+    /**
+     * Its settings are read only by its shaders (through the kit), so a setting following a value
+     * wired in reads it on the GPU; other nodes read such a value back first.
+     */
+    settingsInShader?: boolean;
     /** The node's own drawing. */
     run(context: NodeRunContext): Promise<Record<string, GpuImage>>;
 }

@@ -2,15 +2,18 @@ import { ADJUST_NODES } from './nodes/adjust';
 import { DISTANCE_NODES } from './nodes/distance';
 import { GENERATOR_NODES } from './nodes/generators';
 import { materialKey, MATERIAL_CHANNELS } from './material';
-import { INPUT_NODE_TYPE, IO_NODES, MATERIAL_INPUT_NODE_TYPE, MATERIAL_OUTPUT_NODE_TYPE, OUTPUT_NODE_TYPE, SUBGRAPH_NODE_TYPE, SUBGRAPH_SEED_KEY, SUBGRAPH_VARY_KEY, subgraphParamDefs } from './nodes/io';
+import { INPUT_NODE_TYPE, IO_NODES, ITERATE_NODE_TYPE, MATERIAL_INPUT_NODE_TYPE, MATERIAL_OUTPUT_NODE_TYPE, OUTPUT_NODE_TYPE, SUBGRAPH_NODE_TYPE, SUBGRAPH_SEED_KEY, SUBGRAPH_VARY_KEY, subgraphParamDefs } from './nodes/io';
 import { MATERIAL_NODES } from './nodes/materials';
+import { PROCESSOR_NODES, PROCESSOR_TYPES, processorDefinition } from './nodes/processors';
+import { ITERATE_PLACEHOLDER, iterateDefinition } from './iterate';
+import { VALUE_SETTING_KINDS, valuePinKey } from './nodeKit';
 import { SCATTER_NODES } from './nodes/scatter';
 import { TRANSFORM_NODES } from './nodes/transform';
 import { OUTPUT_CHANNEL_LABELS, outputNodeKind, type NodeCategory, type OutputChannel, type PortKind, type TexGraphLink, type TexGraphNode, type TexNodeDef, type TexParamDef, type TexPortDef, type TextureGraph } from './types';
 
 /** Every node a texture graph can hold, by type; sub-graph nodes are made from the graph they use. */
 
-export const TEXTURE_NODE_DEFINITIONS: readonly TexNodeDef[] = [...IO_NODES, ...GENERATOR_NODES, ...SCATTER_NODES, ...ADJUST_NODES, ...TRANSFORM_NODES, ...DISTANCE_NODES, ...MATERIAL_NODES];
+export const TEXTURE_NODE_DEFINITIONS: readonly TexNodeDef[] = [...IO_NODES, ...PROCESSOR_NODES, ITERATE_PLACEHOLDER, ...GENERATOR_NODES, ...SCATTER_NODES, ...ADJUST_NODES, ...TRANSFORM_NODES, ...DISTANCE_NODES, ...MATERIAL_NODES];
 
 const BY_TYPE = new Map(TEXTURE_NODE_DEFINITIONS.map((definition) => [definition.type, definition]));
 
@@ -79,10 +82,30 @@ const subgraphDefinition = (node: TexGraphNode, resolve: GraphResolver): TexNode
 
 export const SUBGRAPH_PLACEHOLDER: TexNodeDef = subgraphDefinition({ id: '', type: SUBGRAPH_NODE_TYPE, x: 0, y: 0, params: {} }, () => undefined);
 
+/**
+ * A definition with a pin for each of the node's settings shown as one (TexGraphNode.valuePins): a
+ * value wired in is what the setting follows. The same object for the same pins.
+ */
+const withPins = new WeakMap<TexNodeDef, Map<string, TexNodeDef>>();
+const withValuePins = (definition: TexNodeDef, pins: readonly string[]): TexNodeDef => {
+    const shown = definition.params.filter((param) => pins.includes(param.key) && VALUE_SETTING_KINDS.has(param.kind));
+    if (!shown.length) return definition;
+    const key = shown.map((param) => param.key).join('|');
+    let byKey = withPins.get(definition);
+    if (!byKey) withPins.set(definition, byKey = new Map());
+    let found = byKey.get(key);
+    if (!found) {
+        found = { ...definition, inputs: [...definition.inputs, ...shown.map((param): TexPortDef => ({ key: valuePinKey(param.key), label: param.label, kind: 'value', group: 'Settings' }))] };
+        byKey.set(key, found);
+    }
+    return found;
+};
+
 /** The definition a node is drawn and run by; null for a type this build does not know. */
 export const textureNodeDefinition = (node: TexGraphNode, resolve: GraphResolver): TexNodeDef | null => {
-    if (node.type === SUBGRAPH_NODE_TYPE) return subgraphDefinition(node, resolve);
-    return BY_TYPE.get(node.type) ?? null;
+    let definition = node.type === SUBGRAPH_NODE_TYPE ? subgraphDefinition(node, resolve) : node.type === ITERATE_NODE_TYPE ? iterateDefinition(node, resolve) : BY_TYPE.get(node.type) ?? null;
+    if (definition && PROCESSOR_TYPES.has(node.type)) definition = processorDefinition(definition, node);
+    return definition && node.valuePins?.length ? withValuePins(definition, node.valuePins) : definition;
 };
 
 export const textureNodeDefinitionByType = (type: string): TexNodeDef | undefined => BY_TYPE.get(type);

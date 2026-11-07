@@ -3,7 +3,7 @@ import { alignRects, distributeRects, snapPoint, snapToGrid } from '../../compon
 import { FRAME_PAD, FRAME_TITLE, fitFrame, frameContents, frameMembers, refitFrames } from '../../components/NodeGraph/frames';
 import { fitsWire, pushRecent, rankEntries, scoreEntry, toggleFavourite, type FinderEntry } from '../../components/NodeGraph/finder';
 import { HEADER, ROW, cardLayout } from '../../components/NodeGraph/layout';
-import { connect, insertReroute, pasteNodes, setLook, spliceNode, wouldCycle, type EditableFrame, type EditableGraph, type EditableNode, type Rect } from '../../components/NodeGraph/model';
+import { connect, freeSpot, insertReroute, pasteNodes, rectsOverlap, setLook, spliceNode, wouldCycle, type EditableFrame, type EditableGraph, type EditableNode, type Rect } from '../../components/NodeGraph/model';
 import type { NodeView } from '../../components/NodeGraph/types';
 import { nearestWire, wireDistance } from '../../components/NodeGraph/wires';
 
@@ -107,6 +107,22 @@ describe('node graph finder', () => {
         expect(ids(rankEntries(tied, 'warp', { favourites: ['y'], recent: [] }))).toEqual(['y', 'x']);
     });
 
+    it('puts a node whose whole name was typed first, even ahead of a recent or favourite one', () => {
+        const flood: FinderEntry[] = [
+            { id: 'floodColor', label: 'Flood fill to random colour', category: 'Distance' },
+            { id: 'floodGradient', label: 'Flood fill to gradient', category: 'Distance' },
+            { id: 'flood', label: 'Flood fill', category: 'Distance' },
+            { id: 'other', label: 'Fill islands', category: 'Distance', keywords: ['flood'] },
+        ];
+        const memory = { favourites: ['floodGradient'], recent: ['floodColor'] };
+        expect(ids(rankEntries(flood, 'Flood fill', memory))[0]).toBe('flood');
+        expect(ids(rankEntries(flood, '  flood   FILL ', memory))[0]).toBe('flood');
+        // Names that start with all that was typed come ahead of one that only has the words.
+        expect(ids(rankEntries(flood, 'flood fill', memory)).at(-1)).toBe('other');
+        // Part of a name typed: favourites and recent nodes still lead among equal matches.
+        expect(ids(rankEntries(flood, 'flood fill to', memory)).slice(0, 2)).toEqual(['floodGradient', 'floodColor']);
+    });
+
     it('keeps recent nodes newest first, once each, and toggles favourites', () => {
         expect(pushRecent(['a', 'b', 'c'], 'b')).toEqual(['b', 'a', 'c']);
         expect(pushRecent(['a', 'b'], 'c', 2)).toEqual(['c', 'a']);
@@ -195,5 +211,38 @@ describe('node graph cards', () => {
         const folded = cardLayout(card, { collapsed: true }, new Set(['in:a']));
         expect(folded.height).toBe(HEADER);
         expect([...folded.inputs.keys()]).toEqual(['a']);
+    });
+});
+
+describe('node graph free space', () => {
+    const size = { width: 100, height: 60 };
+    const clear = (at: { x: number; y: number }, taken: Rect[], gap = 16) =>
+        !taken.some((other) => rectsOverlap({ x: at.x - gap, y: at.y - gap, width: size.width + gap * 2, height: size.height + gap * 2 }, other));
+
+    it('keeps the place asked for when it is free', () => {
+        expect(freeSpot({ x: 40, y: 40 }, size, [{ x: 400, y: 400, width: 100, height: 60 }])).toEqual({ x: 40, y: 40 });
+        expect(freeSpot({ x: 40, y: 40 }, size, [])).toEqual({ x: 40, y: 40 });
+    });
+
+    it('moves a node off another into the nearest free place, up or down before sideways', () => {
+        const taken: Rect[] = [{ x: 0, y: 0, width: 100, height: 60 }];
+        const spot = freeSpot({ x: 0, y: 0 }, size, taken, { step: 20 });
+        expect(clear(spot, taken)).toBe(true);
+        expect(spot.x).toBe(0);
+        expect(spot.y).toBe(80);
+    });
+
+    it('finds a gap among many nodes, never overlapping any, near where it was asked', () => {
+        const taken: Rect[] = [];
+        for (let column = 0; column < 4; column++) for (let row = 0; row < 4; row++) taken.push({ x: column * 220, y: row * 90, width: 180, height: 70 });
+        const want = { x: 230, y: 100 };
+        const spot = freeSpot(want, size, taken, { step: 10 });
+        expect(clear(spot, taken)).toBe(true);
+        expect(Math.hypot(spot.x - want.x, spot.y - want.y)).toBeLessThan(400);
+        // Snapped steps keep it on the grid.
+        const snapped = freeSpot({ x: 220, y: 80 }, size, taken, { step: 20 });
+        expect(Math.abs(snapped.x % 20)).toBe(0);
+        expect(Math.abs(snapped.y % 20)).toBe(0);
+        expect(clear(snapped, taken)).toBe(true);
     });
 });

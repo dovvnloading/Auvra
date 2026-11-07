@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import type { GpuImage, TextureGpu } from '../../gpu/textureGpu';
 import { anyIn, bool, colorIn, float, grayIn, int, onePass, out, select, seed } from '../nodeKit';
 import type { NodeRunContext, TexNodeDef } from '../types';
-import { FLOOD_ANY, FLOOD_BOX_VERTEX, FLOOD_CHANGED, FLOOD_HOOK, FLOOD_JUMP, FLOOD_RESULT, FLOOD_START } from '../flood';
+import { FLOOD_ANY, FLOOD_BOX_VERTEX, FLOOD_CHANGED, FLOOD_HOOK, FLOOD_JUMP, FLOOD_RESULT, FLOOD_SEAMS, FLOOD_START } from '../flood';
 import { gaussianBlur } from './transform';
 
 /**
@@ -283,12 +283,24 @@ void main() { float d = texture(distanceMap, vUv).r; outColor = vec4(1.0 - smoot
             const labels = await labelIslandsGpu(context, mask, Number(context.params.threshold) || 0.5);
             const wrapAxes = [context.tiling[0] ? 1 : 0, context.tiling[1] ? 1 : 0];
             // Each island's box: every pixel adds its offset from the root into the root, largest each way.
-            const boxes = context.image('color', width, height, 32);
-            await context.gpu.drawInstances(boxes, {
-                count: width * height, points: true, varyings: ['vec4 vBox'], vertex: FLOOD_BOX_VERTEX, fragment: 'void main() { outColor = vBox; }',
-                inputs: { labels }, uniforms: { uWidth: width, uWrapAxes: wrapAxes }, stack: 'max', clear: [-1e9, -1e9, -1e9, -1e9],
+            // Where the image tiles, once for each place offsets can wrap round (the narrowest box wins), so
+            // an island more than half the picture across gets its own box.
+            const seams = wrapAxes[0] || wrapAxes[1] ? FLOOD_SEAMS : [0.5];
+            const boxes: GpuImage[] = [];
+            for (const seam of seams) {
+                const box = context.image('color', width, height, 32);
+                await context.gpu.drawInstances(box, {
+                    count: width * height, points: true, varyings: ['vec4 vBox'], vertex: FLOOD_BOX_VERTEX, fragment: 'void main() { outColor = vBox; }',
+                    inputs: { labels }, uniforms: { uWidth: width, uWrapAxes: wrapAxes, uSeam: new THREE.Vector2(seam, seam) }, stack: 'max', clear: [-1e9, -1e9, -1e9, -1e9],
+                });
+                boxes.push(box);
+            }
+            const seamVector = new THREE.Vector4(...[0, 1, 2, 3].map((index) => seams[Math.min(index, seams.length - 1)]));
+            await context.gpu.pass(result, {
+                fragment: FLOOD_RESULT,
+                inputs: { labels, boxes0: boxes[0], boxes1: boxes[1] ?? boxes[0], boxes2: boxes[2] ?? boxes[0], boxes3: boxes[3] ?? boxes[0] },
+                uniforms: { uWrapAxes: wrapAxes, uSeamCount: seams.length, uSeamsX: seamVector, uSeamsY: seamVector },
             });
-            await context.gpu.pass(result, { fragment: FLOOD_RESULT, inputs: { labels, boxes }, uniforms: { uWrapAxes: wrapAxes } });
             context.gpu.release(labels);
             return { out: result };
         },
@@ -442,7 +454,7 @@ void main() { float d = texture(distanceMap, vUv).r; outColor = vec4(1.0 - smoot
         type: 'normalFromHeight',
         label: 'Normal from height',
         category: 'Height and normals',
-        description: 'A tangent-space normal map from a height map: how a raised surface would catch the light.',
+        description: 'A tangent-space normal map from a height map: how a raised surface would catch the light. With the graph\'s size in the world set, slopes are measured per metre, so the same heights make the same bumps at any picture size.',
         keywords: ['normal', 'height to normal', 'bump'],
         inputs: [grayIn('in', 'Height', 'mid')],
         outputs: [out('color')],
@@ -457,9 +469,10 @@ void main() { float d = texture(distanceMap, vUv).r; outColor = vec4(1.0 - smoot
     float tl = g_in(vUv + vec2(-t.x, t.y)), tc = g_in(vUv + vec2(0.0, t.y)), tr = g_in(vUv + t);
     float ml = g_in(vUv - vec2(t.x, 0.0)), mr = g_in(vUv + vec2(t.x, 0.0));
     float bl = g_in(vUv - t), bc = g_in(vUv - vec2(0.0, t.y)), br = g_in(vUv + vec2(t.x, -t.y));
-    // Sobel, as slope per unit of the image so the strength reads the same at any size.
-    float dx = ((tr + 2.0 * mr + br) - (tl + 2.0 * ml + bl)) / 8.0 * inputSize.x / 64.0;
-    float dy = ((tl + 2.0 * tc + tr) - (bl + 2.0 * bc + br)) / 8.0 * inputSize.y / 64.0;
+    // Sobel, as slope per unit of the image so the strength reads the same at any size, then per metre
+    // of the graph's size in the world (one metre when it has none).
+    float dx = ((tr + 2.0 * mr + br) - (tl + 2.0 * ml + bl)) / 8.0 * inputSize.x / 64.0 / uWorld.x;
+    float dy = ((tl + 2.0 * tc + tr) - (bl + 2.0 * bc + br)) / 8.0 * inputSize.y / 64.0 / uWorld.y;
     vec3 n = normalize(vec3(-dx * p_intensity, -dy * p_intensity, 1.0));
     if (p_format == 1) n.y = -n.y;
     outColor = vec4(n * 0.5 + 0.5, 1.0);
@@ -514,7 +527,7 @@ void main() { float d = texture(distanceMap, vUv).r; outColor = vec4(1.0 - smoot
         type: 'curvature',
         label: 'Curvature',
         category: 'Height and normals',
-        description: 'From a normal map, bright where the surface bulges out (edges) and dark where it dips in (creases). The radius takes in broader shapes.',
+        description: 'From a normal map, bright where the surface bulges out (edges) and dark where it dips in (creases). The radius takes in broader shapes. The same at any picture size; with the graph\'s size in the world set, measured per metre.',
         keywords: ['convex', 'concave', 'edges', 'cavity', 'curvature smooth'],
         inputs: [colorIn('in', 'Normal', 'normal')],
         outputs: [out('gray')],
@@ -531,15 +544,18 @@ void main() { float d = texture(distanceMap, vUv).r; outColor = vec4(1.0 - smoot
             }
             const result = context.image('gray');
             await context.gpu.pass(result, {
-                fragment: `uniform float uIntensity;\nuniform float uScale;
+                fragment: `uniform float uIntensity;\nuniform float uScale;\nuniform vec2 uWorld;
 void main() {
-    vec2 t = 1.0 / vec2(textureSize(source, 0));
-    float dx = texture(source, vUv + vec2(t.x, 0.0)).x - texture(source, vUv - vec2(t.x, 0.0)).x;
-    float dy = texture(source, vUv + vec2(0.0, t.y)).y - texture(source, vUv - vec2(0.0, t.y)).y;
+    vec2 size = vec2(textureSize(source, 0));
+    vec2 t = 1.0 / size;
+    // Change of the normal per unit of the picture (as it reads across two pixels at 1024), per metre.
+    vec2 across = size / 1024.0 / uWorld;
+    float dx = (texture(source, vUv + vec2(t.x, 0.0)).x - texture(source, vUv - vec2(t.x, 0.0)).x) * across.x;
+    float dy = (texture(source, vUv + vec2(0.0, t.y)).y - texture(source, vUv - vec2(0.0, t.y)).y) * across.y;
     outColor = vec4(saturate(0.5 + (dx + dy) * uIntensity * uScale));
 }`,
                 inputs: { source: normal ?? context.gpu.constant('normal') },
-                uniforms: { uIntensity: Number(context.params.intensity), uScale: 1 + radius * 200 },
+                uniforms: { uIntensity: Number(context.params.intensity), uScale: 1 + radius * 200, uWorld: new THREE.Vector2(context.world[0], context.world[1]) },
                 cost: 4,
             });
             context.gpu.release(normal);
@@ -572,7 +588,8 @@ void main() {
             if (s > steps) break;
             float r = p_radius * (float(s) - 0.5 * jitter) / float(steps);
             float h = g_in(vUv + dir * r) * p_depth;
-            float elevation = (h - h0) / r;
+            // Rise over run, the run in metres of the graph's size in the world.
+            float elevation = (h - h0) / (r * length(dir * uWorld));
             horizon = max(horizon, elevation);
         }
         // sin(atan(x)) without the trig.
@@ -600,8 +617,10 @@ void main() {
             const slopes: GpuImage[] = [];
             let level = gpu.image(context.width, context.height, 'color', 32);
             await gpu.pass(level, {
-                fragment: 'void main() { vec3 n = texture(source, vUv).xyz * 2.0 - 1.0; n.z = max(n.z, 0.05); outColor = vec4(-n.xy / n.z / max(uSize.x, uSize.y) * 64.0, 0.0, 1.0); }',
+                // As Normal from height measures them: per metre of the graph's size in the world.
+                fragment: 'uniform vec2 uWorld;\nvoid main() { vec3 n = texture(source, vUv).xyz * 2.0 - 1.0; n.z = max(n.z, 0.05); outColor = vec4(-n.xy / n.z * uWorld / max(uSize.x, uSize.y) * 64.0, 0.0, 1.0); }',
                 inputs: { source: input },
+                uniforms: { uWorld: new THREE.Vector2(context.world[0], context.world[1]) },
             });
             slopes.push(level);
             while (level.width > 16 && level.height > 16) {

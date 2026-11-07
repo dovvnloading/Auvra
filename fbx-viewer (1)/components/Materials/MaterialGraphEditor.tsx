@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { CommentAddIcon, FlowIcon, GraphIcon, PlusIcon, TrashIcon, WarningIcon } from '../UI/Icons';
+import { CommentAddIcon, CrossIcon, FlowIcon, GraphIcon, PlusIcon, TrashIcon, WarningIcon } from '../UI/Icons';
 import { useAssets } from '../../context/AssetContext';
 import { projectService } from '../../utils/projectService';
 import { frontendDiagnostics } from '../../diagnostics/runtime';
@@ -21,6 +21,9 @@ import { MaterialGraphCanvas } from './MaterialGraphCanvas';
 import { MaterialPreview, clearMaterialShaderError, useMaterialNodeErrors, useMaterialShaderError } from './MaterialPreview';
 import { NodeInspector } from './MaterialNodeInspector';
 import { TextureMemoryDialog } from './TextureMemoryDialog';
+import { deleteMaterialQuestion, materialUses, type MaterialUses } from './materialDeletion';
+import { appConfirm } from '../../utils/appDialogs';
+import { useScene } from '../../context/SceneContext';
 import { GraphHistory, createComment, nodeRect, removeNodes, showsPreview, withComments } from './materialGraphEditing';
 import { Popover } from '../UI/kit';
 import { FRAME_COLOURS, FRAME_COLOUR_NAMES } from '../NodeGraph/frames';
@@ -78,8 +81,12 @@ const historyOf = (id: string): GraphHistory => {
 export const MaterialGraphEditor: React.FC = () => {
     const allAssets = useMaterialAssets();
     // Saved smart materials are painting presets, not materials to edit or give to models.
-    const assets = useMemo(() => allAssets.filter((candidate) => !isSmartMaterialAsset(candidate)), [allAssets]);
-    const { textures, removeMaterialAsset } = useAssets();
+    // Painted copies belong to their models (Material Overrides), not to the material list.
+    const assets = useMemo(() => allAssets.filter((candidate) => !isSmartMaterialAsset(candidate) && !candidate.owner), [allAssets]);
+    const { textures, removeMaterialAsset, updateModelMaterialOverrides } = useAssets();
+    const { models, levelObjects } = useScene();
+    // The last material deleted, and what used it, until it is undone or another goes.
+    const [deleted, setDeleted] = useState<{ asset: MaterialAsset; uses: MaterialUses } | null>(null);
     const [selectedId, setSelectedId] = useState<string | null>(null);
     const [selection, setSelection] = useState<string[]>([]);
     const [selectedComment, setSelectedComment] = useState<string | null>(null);
@@ -108,19 +115,22 @@ export const MaterialGraphEditor: React.FC = () => {
 
     const history = useCallback((id: string) => historyOf(id), []);
 
-    const save = useCallback((next: MaterialAsset, immediately = false) => {
+    /** Saves the material, at once or shortly; saved at once, it settles when the project has it (true) or refused it (false). */
+    const save = useCallback((next: MaterialAsset, immediately = false): Promise<boolean> => {
         const timers = pending.current;
         clearTimeout(timers.get(next.id));
         const write = () => {
             timers.delete(next.id);
-            projectService.applyChanges([{ domain: MATERIALS_DOMAIN, operation: 'upsert', id: next.id, value: materialAssetDocument(next) }])
-                .then(() => setError(null), (failure: unknown) => {
+            return projectService.applyChanges([{ domain: MATERIALS_DOMAIN, operation: 'upsert', id: next.id, value: materialAssetDocument(next) }])
+                .then(() => { setError(null); return true; }, (failure: unknown) => {
                     frontendDiagnostics.failure('material_save_failed', failure);
                     setError('The material could not be saved: is a project open?');
+                    return false;
                 });
         };
-        if (immediately) write();
-        else timers.set(next.id, setTimeout(write, SAVE_DELAY_MS));
+        if (immediately) return write();
+        timers.set(next.id, setTimeout(() => { void write(); }, SAVE_DELAY_MS));
+        return Promise.resolve(true);
     }, []);
     useEffect(() => () => {
         // Leaving the tab saves what is waiting.
@@ -213,8 +223,13 @@ export const MaterialGraphEditor: React.FC = () => {
         save(next);
     };
 
-    const remove = () => {
+    const remove = async () => {
         if (!asset) return;
+        // Asked first, naming what uses it: those go back to their own materials.
+        const uses = materialUses(asset.id, models, levelObjects);
+        const question = deleteMaterialQuestion(asset.name, uses);
+        if (!await appConfirm(question.title, { message: question.message, acceptLabel: 'Delete', danger: true })) return;
+        const kept = materialLibrary.get(asset.id) ?? asset;
         // A save still waiting would bring it back.
         clearTimeout(pending.current.get(asset.id));
         pending.current.delete(asset.id);
@@ -223,10 +238,27 @@ export const MaterialGraphEditor: React.FC = () => {
             setError(null);
             setSelectedId(null);
             select([]);
+            setDeleted({ asset: kept, uses });
         }, (failure: unknown) => {
             frontendDiagnostics.failure('material_remove_failed', failure);
             setError('The material could not be deleted.');
         });
+    };
+
+    /** Puts the last deleted material back, with the models' overrides that named it. */
+    const undoDelete = async () => {
+        if (!deleted) return;
+        const { asset: restored, uses } = deleted;
+        setDeleted(null);
+        materialLibrary.upsert(restored);
+        save(restored, true);
+        try {
+            for (const model of uses.models) await updateModelMaterialOverrides(model.id, model.overrides);
+            setSelectedId(restored.id);
+        } catch (failure) {
+            frontendDiagnostics.failure('material_undo_delete_failed', failure);
+            setError('The material is back, but some models could not take it again.');
+        }
     };
 
     const togglePreviews = () => {
@@ -316,6 +348,13 @@ export const MaterialGraphEditor: React.FC = () => {
                         </div>
                     </Popover>
                 </div>
+                {deleted && (
+                    <div className="flex items-center gap-2 border-b border-gray-800 px-3 py-1.5 text-2xs text-gray-300" role="status">
+                        <span className="min-w-0 flex-1 truncate">Deleted "{deleted.asset.name}"</span>
+                        <button onClick={() => void undoDelete()} className="rounded bg-gray-800 px-2 py-0.5 text-gray-100 hover:bg-gray-700">Undo</button>
+                        <button onClick={() => setDeleted(null)} aria-label="Dismiss" className="text-gray-500 hover:text-gray-300"><CrossIcon size={11} /></button>
+                    </div>
+                )}
                 <div className="flex-1 overflow-y-auto p-2">
                     {assets.length === 0 && <p className="px-1 text-2xs text-gray-500">No materials yet. A material is a node graph; give one to a model's material in Properties › Material Overrides.</p>}
                     {assets.map(candidate => (
@@ -338,7 +377,7 @@ export const MaterialGraphEditor: React.FC = () => {
                         <span className="text-2xs text-gray-500">Texture graph</span>
                         <span className="flex-1" />
                         {error && <span className="text-2xs text-amber-400">{error}</span>}
-                        <button onClick={remove} aria-label="Delete material" className="rounded p-1 text-gray-500 hover:bg-gray-800 hover:text-red-400"><TrashIcon size={14} /></button>
+                        <button onClick={() => void remove()} aria-label="Delete material" className="rounded p-1 text-gray-500 hover:bg-gray-800 hover:text-red-400"><TrashIcon size={14} /></button>
                     </div>
                     <TextureGraphWorkspace key={asset.id} asset={asset} assets={assets} onSave={save} onOpenAsset={(id) => { setSelectedId(id); select([]); }} />
                 </div>
@@ -363,7 +402,7 @@ export const MaterialGraphEditor: React.FC = () => {
                     <aside className="flex w-80 shrink-0 flex-col gap-3 overflow-y-auto border-l border-gray-800 p-3">
                         <div className="flex items-center gap-2">
                             <input aria-label="Material name" value={asset.name} onChange={(event) => rename(event.target.value)} className="min-w-0 flex-1 rounded border border-gray-700 bg-gray-950 px-2 py-1 text-xs text-white" />
-                            <button onClick={remove} aria-label="Delete material" className="rounded p-1 text-gray-500 hover:bg-gray-800 hover:text-red-400"><TrashIcon size={14} /></button>
+                            <button onClick={() => void remove()} aria-label="Delete material" className="rounded p-1 text-gray-500 hover:bg-gray-800 hover:text-red-400"><TrashIcon size={14} /></button>
                         </div>
                         <MaterialPreview assetId={asset.id} graph={shadingGraph ?? graph} previewNodeIds={previewNodeIds} />
                         {shaderError && (

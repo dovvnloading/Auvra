@@ -32,6 +32,31 @@ import {
   withoutPaintedBaseMaps,
   type MaterialOverrides,
 } from '../utils/materialOverrides';
+import { contractPaintedCopies, expandPaintedCopies } from '../utils/paintedCopies';
+import { MATERIALS_DOMAIN, materialAssetDocument, materialLibrary as paintedCopyLibrary } from '../runtime/materials/materialLibrary';
+
+/**
+ * Saves a model's overrides with its painted base maps kept as painted copies it owns
+ * (utils/paintedCopies.ts), in an order nothing can race: the copies first, then the overrides naming
+ * them, and only then the model's copies no longer used. Returns the overrides as stored.
+ */
+const persistMaterialOverrides = async (modelId: string, overrides: MaterialOverrides): Promise<MaterialOverrides> => {
+  const { overrides: stored, upserts, removals } = contractPaintedCopies(modelId, overrides, paintedCopyLibrary.list());
+  if (upserts.length) {
+    await projectService.applyChanges(upserts.map((copy) => ({ domain: MATERIALS_DOMAIN, operation: 'upsert' as const, id: copy.id, value: materialAssetDocument(copy) })));
+    for (const copy of upserts) paintedCopyLibrary.upsert(copy);
+  }
+  await dbOperations.updateModelMaterialOverrides(modelId, stored);
+  if (removals.length) {
+    await projectService.applyChanges(removals.map((id) => ({ domain: MATERIALS_DOMAIN, operation: 'remove' as const, id })));
+    for (const id of removals) paintedCopyLibrary.remove(id);
+  }
+  return stored;
+};
+
+/** A model's overrides with its painted copies shown as the painted base maps they carry (what the tools edit). */
+const editableOverrides = (overrides: MaterialOverrides | undefined): MaterialOverrides =>
+  expandPaintedCopies(normalizeMaterialOverrides(overrides), (id) => paintedCopyLibrary.get(id));
 
 const MODEL_MIME_TYPES: Record<string, string> = {
   glb: 'model/gltf-binary', gltf: 'model/gltf+json', obj: 'model/obj', fbx: 'model/fbx',
@@ -621,9 +646,10 @@ export const useModelManager = (
   const updateModelMaterialOverrides = useCallback(async (modelId: string, overrides: MaterialOverrides): Promise<void> => {
     projectService.assertWritable();
     if (!models.some((candidate) => candidate.id === modelId)) throw new Error('The model is no longer loaded.');
-    const next = normalizeMaterialOverrides(overrides);
+    let next = normalizeMaterialOverrides(overrides);
     try {
-      await dbOperations.updateModelMaterialOverrides(modelId, next);
+      // Painted base maps are kept as painted copies the model owns.
+      next = await persistMaterialOverrides(modelId, next);
     } catch (error) {
       frontendDiagnostics.failure('material_override_update_failed', error);
       throw error;
@@ -878,7 +904,9 @@ export const useModelManager = (
       // The picture is each material's painted base map, in its material override like every other map, so
       // Material Overrides shows it and Reset Textures takes it off. The imported maps are kept to go back to.
       const latest = modelsRef.current.find((candidate) => candidate.id === modelId) ?? model;
-      const materialOverrides = withPaintedBaseMap(normalizeMaterialOverrides(latest.materialOverrides), materialNames, textureId);
+      // Kept as a painted copy the model owns: the picture over the material's own maps.
+      paintedCopyLibrary.addTextureUrl(textureId, URL.createObjectURL(blob));
+      const materialOverrides = await persistMaterialOverrides(modelId, withPaintedBaseMap(editableOverrides(latest.materialOverrides), materialNames, textureId));
       const textures = collectOverrideTextures(latest.object);
       textures.set(overrideTextureCacheKey(textureId, 'map'), tagOverrideTexture(newTexture, textureId, 'map', overrideTextureFlipY(latest.object)));
       attachMaterialOverrides(latest.object, materialOverrides, textures);
@@ -967,9 +995,11 @@ export const useModelManager = (
         // (Retexture's results, the mask tool's pictures, older texture overrides taken in) come off, so the
         // model wears its imported maps again.
         const latest = modelsRef.current.find((candidate) => candidate.id === modelId) ?? model;
-        const kept = normalizeMaterialOverrides(latest.materialOverrides);
-        const materialOverrides = withoutPaintedBaseMaps(kept);
-        if (materialOverrides !== kept) await dbOperations.updateModelMaterialOverrides(modelId, materialOverrides);
+        // Painted copies are shown as the painted base maps they carry, so they come off with the rest, and
+        // saving drops the copies themselves.
+        const kept = editableOverrides(latest.materialOverrides);
+        const painted = Object.values(kept).some((entry) => entry.paintedMap);
+        const materialOverrides = painted ? await persistMaterialOverrides(modelId, withoutPaintedBaseMaps(kept)) : normalizeMaterialOverrides(latest.materialOverrides);
         newModelData.materialOverrides = materialOverrides;
         newModelData.boneRoles = latest.boneRoles;
         attachMaterialOverrides(newModelData.object, materialOverrides, detachMaterialOverrides(latest.object));

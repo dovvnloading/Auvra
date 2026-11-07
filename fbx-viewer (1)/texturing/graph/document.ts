@@ -1,5 +1,6 @@
 import { evaluateExpression, type ExprValue } from './expressions';
-import { INPUT_NODE_TYPE, MESH_READING_NODE_TYPES, OUTPUT_NODE_TYPE, SUBGRAPH_NODE_TYPE } from './nodes/io';
+import { GRAPH_USING_TYPES, INPUT_NODE_TYPE, MESH_READING_NODE_TYPES, OUTPUT_NODE_TYPE, SUBGRAPH_NODE_TYPE } from './nodes/io';
+import { migrateProcessorParams } from './nodes/processors';
 import { textureNodeDefinitionByType } from './registry';
 import {
     isParamLink,
@@ -193,7 +194,7 @@ export const readTextureGraph = (value: unknown): { graph: TextureGraph; problem
         ids.add(node.id);
         const definition = textureNodeDefinitionByType(node.type);
         const own = node.params && typeof node.params === 'object' && !Array.isArray(node.params) ? node.params : {};
-        const params = definition ? { ...defaultNodeParams(definition), ...own } : { ...own };
+        const params = definition ? { ...defaultNodeParams(definition), ...(migrateProcessorParams(node.type, own) ?? own) } : { ...own };
         const result: TexGraphNode = { id: node.id, type: node.type, x: finite(node.x, 0), y: finite(node.y, 0), params };
         const size = readSize(node.size);
         if (size) result.size = size;
@@ -204,6 +205,10 @@ export const readTextureGraph = (value: unknown): { graph: TextureGraph; problem
         if (typeof node.color === 'string' && /^#[0-9a-f]{6}$/i.test(node.color)) result.color = node.color.toLowerCase();
         if (node.collapsed === true) result.collapsed = true;
         if (node.bypass === true) result.bypass = true;
+        if (Array.isArray(node.valuePins)) {
+            const pins = [...new Set(node.valuePins.filter((key): key is string => typeof key === 'string' && key.length > 0 && key.length <= 48))].slice(0, 32);
+            if (pins.length) result.valuePins = pins;
+        }
         nodes.push(result);
     }
     if (raw.nodes.length > MAX_NODES) problems.push(`This graph has ${raw.nodes.length} nodes: only the first ${MAX_NODES} could be opened.`);
@@ -341,10 +346,18 @@ export const parameterValues = (graph: TextureGraph, given: Readonly<Record<stri
 
 /**
  * What formulas see: each parameter as a number or vector, the graph's size and seed (inside another
- * graph, the seed this copy of it runs with).
+ * graph, the seed this copy of it runs with), and inside a graph an Iterate node runs, the pass
+ * ($iteration, from 0) and how many there are ($iterations).
  */
-export const formulaScope = (graph: TextureGraph, values: Readonly<Record<string, unknown>>, width: number, height: number, seed: number = graph.seed): Record<string, ExprValue> => {
-    const scope: Record<string, ExprValue> = { $size: width, $width: width, $height: height, $seed: seed };
+export const formulaScope = (
+    graph: TextureGraph,
+    values: Readonly<Record<string, unknown>>,
+    width: number,
+    height: number,
+    seed: number = graph.seed,
+    iteration: { index: number; count: number } = { index: 0, count: 1 },
+): Record<string, ExprValue> => {
+    const scope: Record<string, ExprValue> = { $size: width, $width: width, $height: height, $seed: seed, $iteration: iteration.index, $iterations: iteration.count };
     for (const parameter of graph.parameters) {
         const value = values[parameter.name];
         if (typeof value === 'number') scope[parameter.name] = value;
@@ -384,6 +397,15 @@ export const coerceParam = (param: TexParamDef, value: unknown): unknown => {
         case 'texture':
         case 'graph':
             return typeof value === 'string' ? value : param.default;
+        case 'function': {
+            const graph = value as { nodes?: unknown; links?: unknown } | null;
+            if (!graph || typeof graph !== 'object' || !Array.isArray(graph.nodes)) return structuredClone(param.default);
+            // What it works out: where its nodes sit, their names and looks change nothing.
+            return {
+                nodes: graph.nodes.map((node: { id?: unknown; type?: unknown; params?: unknown } | null) => (node && typeof node === 'object' ? { id: node.id, type: node.type, params: node.params } : node)),
+                links: Array.isArray(graph.links) ? graph.links : [],
+            };
+        }
         default:
             return value ?? structuredClone(param.default);
     }
@@ -456,9 +478,9 @@ export const graphTextureIds = (graph: TextureGraph): string[] => {
     return [...ids];
 };
 
-/** The graphs a graph uses as nodes. */
+/** The graphs a graph uses as nodes (sub-graphs and the graphs Iterate nodes run). */
 export const graphDependencies = (graph: TextureGraph): string[] =>
-    [...new Set(graph.nodes.filter((node) => node.type === SUBGRAPH_NODE_TYPE && typeof node.params.graph === 'string' && node.params.graph).map((node) => node.params.graph as string))];
+    [...new Set(graph.nodes.filter((node) => GRAPH_USING_TYPES.has(node.type) && typeof node.params.graph === 'string' && node.params.graph).map((node) => node.params.graph as string))];
 
 /** True when a graph (or one it uses, at any depth) reads a model's mesh maps: where the surface is, which way it faces, its baked maps. */
 export const graphReadsMeshMaps = (graph: TextureGraph, resolve: (id: string) => { graph: TextureGraph } | undefined): boolean => {

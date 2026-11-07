@@ -8,6 +8,7 @@ import { isSmartMaterialAsset } from '../../texturing/paint/smartMaterials';
 import { materialGraphParameters, type MaterialParameter, type MaterialParameterValue } from '../../runtime/materials/materialGraph';
 import { Segmented } from '../UI/kit';
 import { assetShaderVersions, type ObjectMaterialOverrides } from '../../utils/materialInstances';
+import { expandPaintedCopies, isPaintedCopy } from '../../utils/paintedCopies';
 import {
   MAX_EMISSIVE_INTENSITY,
   applyMaterialOverrides,
@@ -299,7 +300,8 @@ const MaterialAssetField: React.FC<{
   onChange: (value: string | undefined) => void;
 }> = ({ value, takesAsset, materialType, onChange }) => {
   const version = useSyncExternalStore((listener) => materialLibrary.subscribe(listener), () => materialLibrary.version);
-  const assets = useMemo(() => materialLibrary.list(), [version]);
+  // Painted copies are each model's own: shown as its painted base map, never offered as an asset.
+  const assets = useMemo(() => materialLibrary.list().filter(asset => !isPaintedCopy(asset)), [version]);
   const drawing = useMemo(() => assets.filter((asset) => !isSmartMaterialAsset(asset) && materialAssetUse(asset) === 'material'), [assets]);
   const waiting = useMemo(() => assets.filter((asset) => !isSmartMaterialAsset(asset) && materialAssetUse(asset) === 'needsPictures'), [assets]);
   const options = useMemo(() => {
@@ -469,7 +471,8 @@ export const MaterialEditor: React.FC<MaterialEditorProps> = (props) => (
  * or the model changes.
  */
 const MaterialEditorSession: React.FC<MaterialEditorProps> = ({ model, textures, onSave, placedCopies, className = '' }) => {
-  const stored = useMemo(() => normalizeMaterialOverrides(model.materialOverrides), [model.materialOverrides]);
+  // Painted copies the model owns are edited as the painted base maps they carry (utils/paintedCopies.ts).
+  const stored = useMemo(() => expandPaintedCopies(normalizeMaterialOverrides(model.materialOverrides), (id) => materialLibrary.get(id)), [model.materialOverrides]);
   const [saved, setSaved] = useState<MaterialOverrides>(stored);
   const [draft, setDraft] = useState<MaterialOverrides>(stored);
   const [expanded, setExpanded] = useState<string | null>(null);
