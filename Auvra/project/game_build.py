@@ -66,7 +66,7 @@ DEFAULT_GAME_SETTINGS: dict[str, Any] = {
     "startupLevelId": None,
     "playerBlueprintId": None,
     "window": {"fullscreen": False},
-    "quality": {"shadows": True, "postProcessing": True, "maxDpr": 2, "fov": 60, "meshLod": True, "occlusionCulling": True, "textureCompression": True, "antiAliasing": "temporal", "renderScale": 1, "loadLevelsOnDemand": True, "assetMemoryMb": 2048, "renderer": "auto", "shadowPages": False},
+    "quality": {"shadows": True, "postProcessing": True, "maxDpr": 2, "fov": 60, "meshLod": True, "occlusionCulling": True, "textureCompression": True, "antiAliasing": "temporal", "renderScale": 1, "loadLevelsOnDemand": True, "assetMemoryMb": 2048, "renderer": "auto", "shadowPages": False, "textureGraphCooking": "capable"},
     "input": {"mouseSensitivity": 0.002, "invertY": False},
     "audio": {"masterVolume": 1},
     "network": {"enabled": False, "serverUrl": "ws://127.0.0.1:7777", "room": "main", "maxPlayers": 8},
@@ -234,6 +234,8 @@ def build_game(
     template = _read_template(template_root)
     content = _prepare_domains(domains)
     settings, levels = _resolve_settings(content)
+    if settings.get("quality", {}).get("textureGraphCooking") == "always":
+        content = without_baked_pictures(content)
     layout = _target_layout(target, settings["name"])
     warnings: list[str] = []
     if executable is not None and player_notices is None:
@@ -671,6 +673,47 @@ def _prepare_domains(domains: Any) -> dict[str, list[dict[str, Any]]]:
             items.append(item)
         prepared[domain] = items
     return prepared
+
+
+def _texture_mentions(value: Any, into: dict[str, int]) -> None:
+    """Counts every string in a document, so a texture id anything names is seen however deep."""
+
+    if isinstance(value, str):
+        into[value] = into.get(value, 0) + 1
+    elif isinstance(value, Mapping):
+        for child in value.values():
+            _texture_mentions(child, into)
+    elif isinstance(value, (list, tuple)):
+        for child in value:
+            _texture_mentions(child, into)
+
+
+def without_baked_pictures(content: dict[str, list[dict[str, Any]]]) -> dict[str, list[dict[str, Any]]]:
+    """For a game that always cooks its texture graphs (runtime/materials/materialCooking.ts): the content without the
+    pictures those graphs baked, which the game makes itself, so they are not shipped. A picture anything else names (a
+    model, a decal, another material) stays."""
+
+    baked: dict[str, int] = {}
+    for material in content.get("materials", []):
+        stored = material.get("textureGraph")
+        if not isinstance(stored, Mapping) or stored.get("library") is True or not isinstance(stored.get("graph"), Mapping):
+            continue
+        # Its baked pictures are named three times in its own document: as baked, as its pictures and in its texture ids.
+        for texture_id in ((stored.get("baked") or {}).get("textures") or {}).values():
+            if isinstance(texture_id, str) and texture_id:
+                baked[texture_id] = baked.get(texture_id, 0) + 3
+    if not baked:
+        return content
+    mentions: dict[str, int] = {}
+    for domain, documents in content.items():
+        if domain == "textures":
+            continue
+        for document in documents:
+            _texture_mentions(document, mentions)
+    dropped = {texture_id for texture_id, own in baked.items() if mentions.get(texture_id, 0) <= own}
+    if not dropped:
+        return content
+    return {**content, "textures": [item for item in content.get("textures", []) if item.get("id") not in dropped]}
 
 
 def _plain(value: Any, label: str) -> Any:

@@ -102,7 +102,7 @@ class GameBuildTests(unittest.TestCase):
         self.assertEqual((manifest["gameId"], manifest["buildId"], manifest["name"]), ("game-1", "build-1", "Demo"))
         self.assertEqual(manifest["startupLevelId"], "level-1")
         self.assertEqual(manifest["settings"]["startupLevelId"], "level-1")
-        self.assertEqual(manifest["settings"]["quality"], {"shadows": True, "postProcessing": True, "maxDpr": 2, "fov": 75, "meshLod": True, "occlusionCulling": True, "textureCompression": True, "antiAliasing": "temporal", "renderScale": 1, "loadLevelsOnDemand": True, "assetMemoryMb": 2048, "renderer": "auto", "shadowPages": False})
+        self.assertEqual(manifest["settings"]["quality"], {"shadows": True, "postProcessing": True, "maxDpr": 2, "fov": 75, "meshLod": True, "occlusionCulling": True, "textureCompression": True, "antiAliasing": "temporal", "renderScale": 1, "loadLevelsOnDemand": True, "assetMemoryMb": 2048, "renderer": "auto", "shadowPages": False, "textureGraphCooking": "capable"})
         self.assertEqual(manifest["settings"]["navigation"], {"agentRadius": 0.4, "agentHeight": 1.8, "maxSlopeDegrees": 40, "maxStepHeight": 0.35})
         self.assertEqual(manifest["levels"], [{"id": "level-1", "name": "First"}, {"id": "level-2", "name": "Second"}])
         self.assertEqual(manifest["domains"], list(DOMAIN_NAMES))
@@ -281,3 +281,24 @@ class GameBuildTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CookedPicturesBuildTests(unittest.TestCase):
+    def test_a_game_that_always_cooks_ships_its_texture_graphs_without_their_baked_pictures(self) -> None:
+        from Auvra.project.game_build import without_baked_pictures
+
+        graph = {"nodes": [], "links": []}
+        content = {
+            "materials": [
+                {"id": "crate", "name": "Crate", "pictures": {"baseColor": "baked-colour", "orm": "baked-orm"}, "textureIds": ["baked-colour", "baked-orm"],
+                 "textureGraph": {"graph": graph, "baked": {"textures": {"baseColor": "baked-colour", "orm": "baked-orm"}}}},
+                {"id": "mask", "name": "Mask", "textureGraph": {"graph": graph, "library": True, "baked": {"textures": {"baseColor": "library-picture"}}}},
+            ],
+            "models": [{"id": "barrel", "materialOverrides": {"Body": {"mapTextureId": "baked-orm"}}}],
+            "textures": [{"id": "baked-colour"}, {"id": "baked-orm"}, {"id": "library-picture"}, {"id": "other"}],
+        }
+        kept = without_baked_pictures(content)
+        # The colour only the graph makes goes; the packed picture a model also wears, a library graph's and others stay.
+        self.assertEqual([item["id"] for item in kept["textures"]], ["baked-orm", "library-picture", "other"])
+        self.assertIs(without_baked_pictures({"materials": [], "textures": [{"id": "x"}]})["textures"][0]["id"], "x")
+
