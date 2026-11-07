@@ -1,6 +1,7 @@
 import React, { useState, useSyncExternalStore } from 'react';
 import { CheckIcon, CrossIcon, GridIcon, LockIcon, MinusIcon, PackageIcon, PlusIcon, RotateIcon, ScissorsIcon, UnlockIcon, WandIcon } from '../../UI/Icons';
 import { Button, Segmented, Spinner } from '../../UI/kit';
+import { Select } from '../../UI/Select';
 import type { UvSession, UvStats } from './uvSession';
 import { SliderRow } from './PaintFields';
 
@@ -24,7 +25,14 @@ const Figures: React.FC<{ title: string; stats: UvStats; size: number }> = ({ ti
     </div>
 );
 
-export const UvPanel: React.FC<{ uv: UvSession; onSeamTool: () => void; onApplied: () => void }> = ({ uv, onSeamTool, onApplied }) => {
+export const UvPanel: React.FC<{
+    uv: UvSession;
+    onSeamTool: () => void;
+    onApplied: () => void;
+    /** The model's other texture sets, and the texel density of one (texels per model unit, on its own pictures). */
+    otherSets?: ReadonlyArray<{ key: string; name: string }>;
+    densityOf?: (key: string) => number;
+}> = ({ uv, onSeamTool, onApplied, otherSets = [], densityOf }) => {
     useSyncExternalStore(uv.subscribe, uv.getVersion);
     const [relaxEdges, setRelaxEdges] = useState(false);
     const [densityTarget, setDensityTarget] = useState(0);
@@ -102,6 +110,14 @@ export const UvPanel: React.FC<{ uv: UvSession; onSeamTool: () => void; onApplie
                     <div className="grid grid-cols-2 gap-1.5">
                         <Button size="sm" disabled={busy} onClick={() => uv.evenTexelDensity()}>Even out</Button>
                         <Button size="sm" disabled={busy || !densityTarget} onClick={() => uv.evenTexelDensity(densityTarget)}>Set to this</Button>
+                    </div>
+                    {densityOf && otherSets.length > 0 && (
+                        <Select value="" placeholder="Match another texture set..." options={otherSets.map((set) => ({ value: set.key, label: set.name }))}
+                            onChange={(key) => { const density = densityOf(String(key)); if (density > 0) { setDensityTarget(Math.round(density)); uv.evenTexelDensity(density); } }} className="w-full" />
+                    )}
+                    <div className="flex items-center gap-2 text-2xs text-zinc-400">
+                        <span className="flex-1">{uv.pinCount ? `${uv.pinCount} pinned point${uv.pinCount === 1 ? '' : 's'}: Relax leaves them where they are.` : 'Alt-click points in the UV layout (2D) view to pin them for Relax.'}</span>
+                        {uv.pinCount > 0 && <Button size="sm" variant="ghost" onClick={() => uv.clearPins()}>Clear pins</Button>}
                     </div>
                     <p className="text-2xs leading-snug text-zinc-500">Even out gives the islands one density, theirs together; Set to this gives them the density above (type another set's figure to match it). Pack again to fit them.</p>
                 </section>

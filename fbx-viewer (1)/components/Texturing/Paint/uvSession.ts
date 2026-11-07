@@ -7,7 +7,7 @@ import { DEFAULT_PACK, type Island, type PackSettings, type Placement } from '..
 import { newTriangleTiles, transferPicture } from '../../../texturing/uv/transfer';
 import { DEFAULT_UNWRAP, type UnwrapSettings } from '../../../texturing/uv/unwrap';
 import { UvWorkClient, measureLayout, type UvStats } from '../../../texturing/uv/uvWork';
-import { densityScales, islandAreas, relaxIsland, straighteningTurn, texelDensity, turnIsland, type IslandShape } from '../../../texturing/uv/relax';
+import { densityScales, islandAreas, nearestVertex, relaxIsland, straighteningTurn, texelDensity, turnIsland, type IslandShape } from '../../../texturing/uv/relax';
 import { applyLayout, buildLayout, decodeLayout, encodeLayout, restoreLayout, type UvLayoutFile } from '../../../texturing/uv/uvLayout';
 import { buildCharts, buildTopology, chartCoordinates, edgeKey, existingSeams, type Chart, type UvTopology } from '../../../texturing/uv/uvTopology';
 import { BEFORE, GpuResetError, pictureKey, pictureOwner, pictureOwners, picturePrecision } from '../../../texturing/paint/paintStack';
@@ -357,6 +357,8 @@ export class UvSession {
         const proposal: UvProposal = { charts, placements, cornerUv, cornerKey, triangleStretch: measured.triangleStretch, stats: measured.stats };
         this.proposal = proposal;
         if (!edit.keepSelection) this.selected.clear();
+        // Pins belong to islands: new islands start without them.
+        if (this.proposal && this.proposal.charts !== charts) this.pins.clear();
         if (this.settleTimer) clearTimeout(this.settleTimer);
         this.settleTimer = setTimeout(() => {
             this.settleTimer = null;
@@ -399,10 +401,64 @@ export class UvSession {
     }
 
     /** Relaxes the picked islands (or all of them): less stretch, their edges kept unless `freeEdge`. */
+    /** Pinned vertices of the proposal's islands (by island), which Relax leaves where they are. */
+    pins = new Map<number, Set<number>>();
+
+    /** How many vertices are pinned. */
+    get pinCount(): number {
+        let count = 0;
+        for (const set of this.pins.values()) count += set.size;
+        return count;
+    }
+
+    /**
+     * Pins (or unpins) the island vertex nearest a place on the layout, within `reach` (UV units): true
+     * when there was one.
+     */
+    togglePinAt(u: number, v: number, reach: number): boolean {
+        if (!this.proposal) return false;
+        let found: { island: number; vertex: number; distance: number } | null = null;
+        this.proposal.placements.forEach((placement, island) => {
+            const vertex = nearestVertex({ uv: placement.uv, corners: this.proposal!.charts[island].corners }, u, v, found?.distance ?? reach);
+            if (vertex === null) return;
+            const corner = Array.from(this.proposal!.charts[island].corners).indexOf(vertex);
+            found = { island, vertex, distance: Math.hypot(placement.uv[corner * 2] - u, placement.uv[corner * 2 + 1] - v) };
+        });
+        const pick = found as { island: number; vertex: number } | null;
+        if (!pick) return false;
+        let set = this.pins.get(pick.island);
+        if (!set) this.pins.set(pick.island, set = new Set());
+        if (set.has(pick.vertex)) set.delete(pick.vertex);
+        else set.add(pick.vertex);
+        this.emit();
+        return true;
+    }
+
+    clearPins(): void {
+        this.pins.clear();
+        this.emit();
+    }
+
+    /** Where each pin is on the layout now. */
+    pinPlaces(): Array<[number, number]> {
+        if (!this.proposal) return [];
+        const places: Array<[number, number]> = [];
+        for (const [island, set] of this.pins) {
+            const placement = this.proposal.placements[island];
+            const corners = this.proposal.charts[island]?.corners;
+            if (!placement || !corners) continue;
+            for (const vertex of set) {
+                const corner = Array.from(corners).indexOf(vertex);
+                if (corner >= 0) places.push([placement.uv[corner * 2], placement.uv[corner * 2 + 1]]);
+            }
+        }
+        return places;
+    }
+
     relaxIslands(freeEdge = false): void {
         if (!this.proposal) return;
         this.remember('Relax islands');
-        for (const i of this.targetIslands()) this.proposal.placements[i].uv = relaxIsland(this.islandShape(i), { freeEdge });
+        for (const i of this.targetIslands()) this.proposal.placements[i].uv = relaxIsland(this.islandShape(i), { freeEdge, pinned: this.pins.get(i) });
         this.setProposal(this.proposal.charts, this.proposal.placements, { keepSelection: true });
         this.emit();
     }

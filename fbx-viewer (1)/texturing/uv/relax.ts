@@ -165,3 +165,30 @@ export const densityScales = (islands: ReadonlyArray<{ uv: number; model: number
         return density > 0 && goal > 0 ? goal / density : 1;
     });
 };
+
+/**
+ * Texels per model unit of a whole mesh laid out on a picture `size` texels across: positions three per
+ * vertex, texture coordinates two per vertex, triangles by index.
+ */
+export const meshTexelDensity = (positions: ArrayLike<number>, uvs: ArrayLike<number>, indices: ArrayLike<number>, size: number): number => {
+    let uvArea = 0, modelArea = 0;
+    for (let f = 0; f + 2 < indices.length; f += 3) {
+        const [a, b, c] = [indices[f], indices[f + 1], indices[f + 2]];
+        uvArea += Math.abs((uvs[b * 2] - uvs[a * 2]) * (uvs[c * 2 + 1] - uvs[a * 2 + 1]) - (uvs[c * 2] - uvs[a * 2]) * (uvs[b * 2 + 1] - uvs[a * 2 + 1])) / 2;
+        const ux = positions[b * 3] - positions[a * 3], uy = positions[b * 3 + 1] - positions[a * 3 + 1], uz = positions[b * 3 + 2] - positions[a * 3 + 2];
+        const vx = positions[c * 3] - positions[a * 3], vy = positions[c * 3 + 1] - positions[a * 3 + 1], vz = positions[c * 3 + 2] - positions[a * 3 + 2];
+        modelArea += Math.hypot(uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx) / 2;
+    }
+    return texelDensity({ uv: uvArea, model: modelArea }, size);
+};
+
+/** The island vertex nearest a place on the picture within `reach`, as [corner, vertex], or null. */
+export const nearestVertex = (shape: Pick<IslandShape, 'uv' | 'corners'>, u: number, v: number, reach: number): number | null => {
+    let best: number | null = null;
+    let distance = reach;
+    for (let i = 0; i < shape.corners.length; i++) {
+        const d = Math.hypot(shape.uv[i * 2] - u, shape.uv[i * 2 + 1] - v);
+        if (d <= distance) { distance = d; best = shape.corners[i]; }
+    }
+    return best;
+};

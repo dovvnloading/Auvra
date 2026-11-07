@@ -17,6 +17,8 @@ import { DEFAULT_BRUSH, MAX_BRUSH_SIZE, type BrushSettings, type StrokeTarget } 
 import { paintWithMaterial } from '../../../texturing/paint/materialPresets';
 import type { PreviewHost } from '../../../texturing/paint/previews';
 import { listModelParts, type ModelPart } from '../../Tools/Retexture/parts';
+import { buildPartMesh } from '../../../texturing/mesh/partMesh';
+import { meshTexelDensity } from '../../../texturing/uv/relax';
 import { IconButton, PanelEdge, Segmented, Spinner, usePanelWidth } from '../../UI/kit';
 import { Select } from '../../UI/Select';
 import { useTextureStore } from '../useTextureStore';
@@ -150,6 +152,16 @@ export const PaintWorkspace: React.FC = () => {
     const [tool, setTool] = useState<PaintTool>('paint');
     const [pickMode, setPickMode] = useState<PickMode>('quad');
     const [raySettings, setRaySettings] = useState<BakeSettings | null>(null);
+    // The model's other texture sets, and how dense each one's texels are on its own pictures, for matching.
+    const otherSets = useMemo(() => parts.filter((item) => !part || partKeyOf(item) !== partKeyOf(part)).map((item) => ({ key: partKeyOf(item), name: item.name })), [parts, part]);
+    const densityOf = useCallback((key: string): number => {
+        const other = parts.find((item) => partKeyOf(item) === key);
+        if (!model || !other) return 0;
+        const mesh = buildPartMesh(model.object, new Set(other.materials), { udim: 'auto' });
+        const painted = findPaintAsset({ modelId: model.id, materialNames: other.materialNames });
+        const kept = painted?.paint ? readPaintDocument(painted.paint) : null;
+        return meshTexelDensity(mesh.positions, mesh.uvs, mesh.indices, 2 ** (kept?.size ?? session?.document.size ?? 11));
+    }, [model, parts, session]);
     const [brush, setBrushState] = useState<BrushSettings>(rememberedBrush);
     const setBrush = useCallback((next: BrushSettings) => { rememberedBrush = next; setBrushState(next); }, []);
     const [selection, setSelection] = useState<LayerSelection>({ layerId: null, effectId: null });
@@ -399,7 +411,7 @@ export const PaintWorkspace: React.FC = () => {
                                 onPaint={(how) => { if (activePath) void viewportCommands.current?.paintPath(activePath, how); }} />
                         )}<BrushPanel brush={brush} onChange={setBrush} channels={session.document.channels} paintingMask={target?.kind === 'mask'} textures={textures} onPick={() => setTool('pick')}
                             paintWith={previewHost ? { sections: brushSections, host: previewHost, onPick: paintWith, onMessage: setMessage } : undefined} onMessage={setMessage} /></div>
-                            : panel === 'uvs' && uv ? <div className="min-h-0 flex-1 overflow-y-auto"><UvPanel uv={uv} onSeamTool={() => setTool('seam')} onApplied={() => { if (!uv.proposal) { putOnAfterOpen.current = uv.putOnWhenOpen; setReopen((value) => value + 1); } }} /></div>
+                            : panel === 'uvs' && uv ? <div className="min-h-0 flex-1 overflow-y-auto"><UvPanel uv={uv} otherSets={otherSets} densityOf={densityOf} onSeamTool={() => setTool('seam')} onApplied={() => { if (!uv.proposal) { putOnAfterOpen.current = uv.putOnWhenOpen; setReopen((value) => value + 1); } }} /></div>
                                 : <div className="min-h-0 flex-1 overflow-y-auto"><SetPanel session={session} models={paintable} onReopen={() => setReopen((value) => value + 1)} onShowRays={setRaySettings} showingRays={Boolean(raySettings)} /></div>
                 ) : (
                     <p className="p-3 text-2xs text-zinc-500">Pick a texture set to see its layers.</p>
