@@ -13,7 +13,7 @@ import { buildHighPoly, buildPartMesh, buildWholeMesh, type PartMesh } from '../
 import { averagedNormals, meshCage } from '../../../texturing/bake/bakeSetup';
 import type { SurfacePicker } from '../../../texturing/mesh/picker';
 import { SurfaceSelector } from '../../../texturing/paint/selection';
-import { DEEP_EXPORT, ROLE_LABELS, encodeChannels, rewriteMaterialPictures, tileAtlas, type ChannelTextureIds, type PictureLayout } from '../../../texturing/materialOutput';
+import { DEEP_EXPORT, ROLE_LABELS, encodeChannels, rewriteMaterialPictures, tileAtlas, tileAtlasLayout, type ChannelTextureIds, type PictureLayout, type TileLayout } from '../../../texturing/materialOutput';
 import { GpuResetError, PaintStack, pictureOwners, type StackHost } from '../../../texturing/paint/paintStack';
 import { BUILTIN_GRAPHS } from '../../../texturing/paint/smartLibrary';
 import { applyPixelHistory, trimmedHistory, type HistoryEntry } from '../../../texturing/paint/strokes';
@@ -22,7 +22,9 @@ import { castsFromThreeSides, createPaintDocument, newFillLayer, paintId, readPa
 import { download, makeZip } from '../../../texturing/zip';
 import { fileName, holdsNormalGreen, planPicture, type ChannelSource, type ExportPicture, type ExportSource, type ExportTemplate } from '../../../texturing/paint/exportTemplates';
 import { colourChannels, extensionOf, linearChannels, writePicture, type PictureData } from '../../../texturing/paint/pictureFiles';
-import { atlasMesh, surfaceOfGraph, writePaintedGlb, type GltfPictures, type GltfSurface } from '../../../texturing/paint/gltfExport';
+import { atlasMesh, atlasUvs, markPaintedMaterials, surfaceOfGraph, withPaintedMaterials, writePaintedGlb, type GltfPictures, type GltfSurface, type PaintedMaterial } from '../../../texturing/paint/gltfExport';
+import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js';
+import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { graphPictureLookup } from './graphPictures';
 
 /** A template's picture packed from up to four maps: each channel a component of one (grey maps hold theirs in red), or a value. */
@@ -795,6 +797,99 @@ export class PaintSession {
     }
 
     /**
+     * This set's glTF material: the painted maps packed as glTF reads them (base colour and opacity,
+     * occlusion-roughness-metallic, normal, emission) and the factors and extensions its material document
+     * uses. A set over several UDIM tiles is laid on one atlas, given back with it.
+     */
+    private async setGltfParts(name: string): Promise<{ surface: GltfSurface; pictures: GltfPictures; atlas: TileLayout | null }> {
+        await this.stack.compose();
+        if (!this.usable) throw new GpuResetError();
+        const set = this.target.partName;
+        const tiles = this.stack.tiles;
+        const size = this.stack.size;
+        const idleBefore = this.gpu.memory.idle;
+        const atlas = tiles.length > 1 ? tileAtlas(this.gpu, tiles, (tile) => this.stack.channelImages(tile), size) : null;
+        const pictures: GltfPictures = {};
+        let surface: GltfSurface;
+        try {
+            const images = (atlas ? atlas.images : this.stack.channelImages(tiles[0])) as Partial<Record<ExportSource, GpuImage>>;
+            const coverage = atlas ? null : this.stack.coverage(tiles[0]);
+            const width = atlas ? atlas.width : size;
+            const height = atlas ? atlas.height : size;
+            const painted = new Set(Object.keys(images) as ExportSource[]);
+            surface = surfaceOfGraph((materialLibrary.get(this.asset.id) ?? this.asset).graph, `${set} (painted)`, painted);
+            // glTF reads the first row of a picture at the top of the UV square: rows as they are.
+            const png = async (picture: ExportPicture) => new Uint8Array(await (await writePicture(this.packPicture(picture, images, coverage, width, height, { directX: false, padding: true, flipRows: false }), 'png8')).arrayBuffer());
+            const map = (from: ExportSource, component: 0 | 1 | 2 | 3 = 0): ChannelSource => ({ from, component });
+            const colour = painted.has('baseColor');
+            if (colour || painted.has('opacity')) {
+                pictures.baseColor = await png({ name, channels: [colour ? map('baseColor', 0) : { value: 1 }, colour ? map('baseColor', 1) : { value: 1 }, colour ? map('baseColor', 2) : { value: 1 }, ...(painted.has('opacity') ? [map('opacity')] : [])] });
+            }
+            const metallicRoughness = painted.has('roughness') || painted.has('metallic');
+            if (metallicRoughness || painted.has('ambientOcclusion')) {
+                // A map the set does not paint takes the material's own value (its factor then stays at one).
+                pictures.orm = {
+                    png: await png({ name, channels: [painted.has('ambientOcclusion') ? map('ambientOcclusion') : { value: 1 }, painted.has('roughness') ? map('roughness') : { value: surface.roughness }, painted.has('metallic') ? map('metallic') : { value: surface.metalness }] }),
+                    occlusion: painted.has('ambientOcclusion'),
+                    metallicRoughness,
+                };
+                if (metallicRoughness) surface = { ...surface, roughness: 1, metalness: 1 };
+            }
+            if (painted.has('normal')) pictures.normal = await png({ name, channels: [map('normal', 0), map('normal', 1), map('normal', 2)] });
+            if (painted.has('emissive')) pictures.emissive = await png({ name, channels: [map('emissive', 0), map('emissive', 1), map('emissive', 2)] });
+        } finally {
+            if (atlas) {
+                for (const image of Object.values(atlas.images)) this.gpu.release(image);
+                this.gpu.trimPool(idleBefore);
+            }
+        }
+        if (!this.usable) throw new GpuResetError();
+        return { surface, pictures, atlas };
+    }
+
+    /**
+     * The painted pictures another texture set of the model wears (those its painting was last put on
+     * with), as a glTF material; null when it has none or they have not loaded yet.
+     */
+    private async keptGltfParts(asset: MaterialAsset): Promise<{ surface: GltfSurface; pictures: GltfPictures } | null> {
+        const document = asset.paint ? readPaintDocument(asset.paint) : null;
+        const ids = document?.applied?.textures;
+        if (!ids) return null;
+        const textureOf = (role: keyof typeof ids) => (ids[role] ? this.host.texture(ids[role]!) : null);
+        const loaded = (texture: THREE.Texture | null): texture is THREE.Texture => Boolean((texture?.image as { width?: number } | undefined)?.width);
+        const base = textureOf('baseColor'), opacity = textureOf('opacity'), orm = textureOf('orm'), normal = textureOf('normal'), emissive = textureOf('emissive');
+        const painted = new Set<ExportSource>();
+        if (loaded(base)) painted.add('baseColor');
+        if (loaded(opacity)) painted.add('opacity');
+        if (loaded(orm)) { painted.add('roughness'); painted.add('metallic'); painted.add('ambientOcclusion'); }
+        if (loaded(normal)) painted.add('normal');
+        if (loaded(emissive)) painted.add('emissive');
+        if (!painted.size) return null;
+        let surface = surfaceOfGraph(asset.graph, asset.name, painted);
+        // Each picture drawn as it is laid (its rows read as the model reads them) and written for glTF.
+        const write = async (inputs: { a: THREE.Texture; b?: THREE.Texture | null }, channels: 3 | 4): Promise<Uint8Array> => {
+            const image = inputs.a.image as { width: number; height: number };
+            const out = this.gpu.image(image.width, image.height, 'color', 32);
+            this.gpu.passNow(out, {
+                fragment: 'uniform int uHasB;\nvoid main() { vec4 c = texture(a, vUv); outColor = vec4(c.rgb, uHasB == 1 ? texture(b, vUv).r : 1.0); }',
+                inputs: { a: inputs.a, b: inputs.b ?? this.gpu.constant('white') },
+                uniforms: { uHasB: inputs.b ? 1 : 0 },
+            });
+            const floats = this.gpu.readFloat(out);
+            this.gpu.release(out);
+            const data = new Float32Array(image.width * image.height * channels);
+            for (let i = 0; i < image.width * image.height; i++) for (let c = 0; c < channels; c++) data[i * channels + c] = floats[i * 4 + c];
+            return new Uint8Array(await (await writePicture({ width: image.width, height: image.height, channels, data }, 'png8')).arrayBuffer());
+        };
+        const pictures: GltfPictures = {};
+        if (loaded(base)) pictures.baseColor = await write({ a: base, b: loaded(opacity) ? opacity : null }, loaded(opacity) ? 4 : 3);
+        if (loaded(orm)) { pictures.orm = { png: await write({ a: orm }, 3), occlusion: true, metallicRoughness: true }; surface = { ...surface, roughness: 1, metalness: 1 }; }
+        if (loaded(normal)) pictures.normal = await write({ a: normal }, 3);
+        if (loaded(emissive)) pictures.emissive = await write({ a: emissive }, 3);
+        return { surface, pictures };
+    }
+
+    /**
      * The painted set as a binary glTF with its material: the painted maps (base colour and opacity,
      * occlusion-roughness-metallic, normal, emission) inside the file, and the factors and KHR extensions
      * the material document uses. A set over several UDIM tiles goes on one atlas, its UVs moved to match.
@@ -804,53 +899,81 @@ export class PaintSession {
         this.busy = 'Making the glTF model';
         this.emit();
         try {
-            await this.stack.compose();
-            if (!this.usable) throw new GpuResetError();
             const model = this.target.modelName.replace(/\.[^.]+$/, '');
-            const set = this.target.partName;
-            const name = fileName('$model_$set', { set, model, tile: 1001, size: 0 });
-            const tiles = this.stack.tiles;
-            const size = this.stack.size;
-            const idleBefore = this.gpu.memory.idle;
-            const atlas = tiles.length > 1 ? tileAtlas(this.gpu, tiles, (tile) => this.stack.channelImages(tile), size) : null;
-            const pictures: GltfPictures = {};
-            let surface: GltfSurface;
-            try {
-                const images = (atlas ? atlas.images : this.stack.channelImages(tiles[0])) as Partial<Record<ExportSource, GpuImage>>;
-                const coverage = atlas ? null : this.stack.coverage(tiles[0]);
-                const width = atlas ? atlas.width : size;
-                const height = atlas ? atlas.height : size;
-                const painted = new Set(Object.keys(images) as ExportSource[]);
-                surface = surfaceOfGraph((materialLibrary.get(this.asset.id) ?? this.asset).graph, `${set} (painted)`, painted);
-                // glTF reads the first row of a picture at the top of the UV square: rows as they are.
-                const png = async (picture: ExportPicture) => new Uint8Array(await (await writePicture(this.packPicture(picture, images, coverage, width, height, { directX: false, padding: true, flipRows: false }), 'png8')).arrayBuffer());
-                const map = (from: ExportSource, component: 0 | 1 | 2 | 3 = 0): ChannelSource => ({ from, component });
-                const colour = painted.has('baseColor');
-                if (colour || painted.has('opacity')) {
-                    pictures.baseColor = await png({ name, channels: [colour ? map('baseColor', 0) : { value: 1 }, colour ? map('baseColor', 1) : { value: 1 }, colour ? map('baseColor', 2) : { value: 1 }, ...(painted.has('opacity') ? [map('opacity')] : [])] });
-                }
-                const metallicRoughness = painted.has('roughness') || painted.has('metallic');
-                if (metallicRoughness || painted.has('ambientOcclusion')) {
-                    // A map the set does not paint takes the material's own value (its factor then stays at one).
-                    pictures.orm = {
-                        png: await png({ name, channels: [painted.has('ambientOcclusion') ? map('ambientOcclusion') : { value: 1 }, painted.has('roughness') ? map('roughness') : { value: surface.roughness }, painted.has('metallic') ? map('metallic') : { value: surface.metalness }] }),
-                        occlusion: painted.has('ambientOcclusion'),
-                        metallicRoughness,
-                    };
-                    if (metallicRoughness) surface = { ...surface, roughness: 1, metalness: 1 };
-                }
-                if (painted.has('normal')) pictures.normal = await png({ name, channels: [map('normal', 0), map('normal', 1), map('normal', 2)] });
-                if (painted.has('emissive')) pictures.emissive = await png({ name, channels: [map('emissive', 0), map('emissive', 1), map('emissive', 2)] });
-            } finally {
-                if (atlas) {
-                    for (const image of Object.values(atlas.images)) this.gpu.release(image);
-                    this.gpu.trimPool(idleBefore);
-                }
-            }
+            const name = fileName('$model_$set', { set: this.target.partName, model, tile: 1001, size: 0 });
+            const { surface, pictures, atlas } = await this.setGltfParts(name);
             const mesh = atlas ? atlasMesh(this.part, atlas) : this.part;
             const glb = writePaintedGlb({ name, mesh, surface, pictures });
             download(new Blob([glb], { type: 'model/gltf-binary' }), `${name}.glb`);
-            this.status = `Downloaded ${name}.glb${atlas ? ` (its ${tiles.length} UDIM tiles on one picture)` : ''}.`;
+            this.status = `Downloaded ${name}.glb${atlas ? ` (its ${this.stack.tiles.length} UDIM tiles on one picture)` : ''}.`;
+        } catch (error) {
+            if (!(error instanceof GpuResetError)) frontendDiagnostics.failure('paint_gltf_export_failed', error);
+            this.status = error instanceof Error ? error.message : 'The glTF model could not be made.';
+        } finally {
+            this.busy = null;
+            this.emit();
+        }
+    }
+
+    /**
+     * The whole model as a binary glTF: every mesh, its skin and its clips, every material; this set with
+     * its painting as it is now, the model's other painted sets with the pictures their painting was last
+     * put on with, the rest as the model has them. A painted set over several UDIM tiles is laid on one
+     * atlas, its meshes' texture coordinates moved to match (vertex by vertex).
+     */
+    async exportModelGltf(): Promise<void> {
+        if (this.busy || !this.usable) return;
+        this.busy = 'Making the glTF model';
+        this.emit();
+        try {
+            const model = this.target.modelName.replace(/\.[^.]+$/, '');
+            const source = this.target.object;
+            const copy = cloneSkinned(source);
+            copy.animations = source.animations ?? [];
+            // Which painted material each of the model's materials becomes: this set's, or another set's kept one.
+            const mine = new Set(this.target.materialNames);
+            const others = new Map<string, MaterialAsset>();
+            const keyOf = (material: THREE.Material): string | null => {
+                if (mine.has(material.name)) return 'open';
+                const asset = findPaintAsset({ modelId: this.target.modelId, materialNames: [material.name] });
+                if (!asset || asset.id === this.asset.id || !readPaintDocument(asset.paint)?.applied) return null;
+                others.set(`asset:${asset.id}`, asset);
+                return `asset:${asset.id}`;
+            };
+            // Meshes of this set over several tiles read the atlas.
+            const tiles = this.stack.tiles;
+            const atlasLayout = tiles.length > 1 ? tileAtlasLayout(tiles, this.stack.size, this.gpu.maxSize) : null;
+            if (atlasLayout) {
+                copy.traverse((node) => {
+                    const mesh = node as THREE.Mesh;
+                    if (!mesh.isMesh) return;
+                    const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+                    if (!materials.some((material) => mine.has(material.name))) return;
+                    const uv = mesh.geometry.getAttribute('uv');
+                    if (!uv) return;
+                    mesh.geometry = mesh.geometry.clone();
+                    mesh.geometry.setAttribute('uv', new THREE.BufferAttribute(atlasUvs(uv.array, atlasLayout), 2));
+                });
+            }
+            const keys = markPaintedMaterials(copy, keyOf);
+            const painted = new Map<string, PaintedMaterial>();
+            const name = fileName('$model_$set', { set: this.target.partName, model, tile: 1001, size: 0 });
+            if (keys.has('open')) {
+                const parts = await this.setGltfParts(name);
+                painted.set('open', { name, ...parts });
+            }
+            const waiting: string[] = [];
+            for (const [key, asset] of others) {
+                if (!keys.has(key)) continue;
+                const parts = await this.keptGltfParts(asset);
+                if (parts) painted.set(key, { name: fileName(asset.name, { set: '', model, tile: 1001, size: 0 }), ...parts });
+                else waiting.push(asset.name);
+            }
+            const exported = await new GLTFExporter().parseAsync(copy, { binary: true, animations: copy.animations, onlyVisible: false }) as ArrayBuffer;
+            const glb = withPaintedMaterials(exported, painted);
+            const file = `${fileName('$model', { set: '', model, tile: 1001, size: 0 })}.glb`;
+            download(new Blob([glb], { type: 'model/gltf-binary' }), file);
+            this.status = `Downloaded ${file}: ${painted.size} painted set${painted.size === 1 ? '' : 's'}${copy.animations.length ? `, ${copy.animations.length} clip${copy.animations.length === 1 ? '' : 's'}` : ''}${waiting.length ? `; ${waiting.join(', ')} went with ${waiting.length === 1 ? 'its' : 'their'} own material, as ${waiting.length === 1 ? 'its' : 'their'} painted pictures had not loaded` : ''}.`;
         } catch (error) {
             if (!(error instanceof GpuResetError)) frontendDiagnostics.failure('paint_gltf_export_failed', error);
             this.status = error instanceof Error ? error.message : 'The glTF model could not be made.';

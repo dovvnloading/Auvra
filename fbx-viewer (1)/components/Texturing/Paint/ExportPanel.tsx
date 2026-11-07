@@ -137,8 +137,11 @@ export const ExportPanel: React.FC<{ session: PaintSession; busy: boolean }> = (
             {message && <p className="text-2xs text-zinc-400">{message}</p>}
             <Button className="w-full justify-center" disabled={busy || !template.pictures.length} icon={<DownloadIcon size={13} />} onClick={() => void session.exportWithTemplate(template, convention === 'bottom')}>Download pictures</Button>
             <div className="space-y-1 border-t border-zinc-800 pt-2">
-                <Button className="w-full justify-center" disabled={busy} icon={<DownloadIcon size={13} />} onClick={() => void session.exportGltf()}>Download as a glTF model</Button>
-                <p className="text-2xs leading-snug text-zinc-500">This surface and its material in one .glb file: the painted maps inside it, with coat, sheen, transmission, specular and thin film where the material uses them.</p>
+                <div className="flex gap-1.5">
+                    <Button className="flex-1 justify-center" disabled={busy} icon={<DownloadIcon size={13} />} onClick={() => void session.exportModelGltf()}>Whole model (.glb)</Button>
+                    <Button className="flex-1 justify-center" variant="ghost" disabled={busy} icon={<DownloadIcon size={13} />} onClick={() => void session.exportGltf()}>This set only</Button>
+                </div>
+                <p className="text-2xs leading-snug text-zinc-500">A glTF model with its materials and the painted maps inside it, with coat, sheen, transmission, specular and thin film where a material uses them. The whole model keeps its skin and clips; its other painted sets go with the pictures they wear now, the rest with their own materials.</p>
             </div>
         </section>
     );
