@@ -213,6 +213,11 @@ export interface StrokeView {
     depth: GpuImage | null;
     /** Pixels from the camera to where the brush meets the surface, for surface brush sizes. */
     perspective: number;
+    /**
+     * Painting on the UV layout in 2D: the tile shown, where a place on the view lies on it (tile UVs), and
+     * the view's pixels per UV unit. Dabs are then laid in UV space, on the texels the surface covers.
+     */
+    uvView?: { tile: number; toUv: (x: number, y: number) => [number, number]; pixelsPerUv: number };
 }
 
 const MAX_DABS = 16;
@@ -321,6 +326,18 @@ float coverageAt(vec3 p, vec3 n) {
         if (uHasStencil == 1) a *= stencilAt(screen);
         return a * smoothstep(uFacing, uFacing + 0.15, facing);
     }
+    if (uProjection == 4) {
+        // On the UV layout: each dab a shape in the tile's UVs (xy, radius z, turn w), on the texels drawn.
+        float a = 0.0;
+        for (int i = 0; i < ${MAX_DABS}; i++) {
+            if (i >= uCount) break;
+            vec4 d = uDabs[i];
+            vec2 local = rotate2(-d.w) * (vUv - d.xy) / d.z;
+            float s = shapeAt(local, d.z * uDabs3[i].w) * uDabs2[i].x;
+            a = 1.0 - (1.0 - a) * (1.0 - s);
+        }
+        return a;
+    }
     if (uProjection >= 2) {
         float a = 0.0;
         for (int i = 0; i < ${MAX_DABS}; i++) {
@@ -330,7 +347,8 @@ float coverageAt(vec3 p, vec3 n) {
             float s = 0.0;
             if (uProjection == 2) {
                 // Flat along the axis, through everything within reach either side, facing it or not past the limit.
-                if (dot(n, -uPlanarAxis) >= uFacing) s = planarAt(d, uPlanarAxis, radius, uDabs3[i].x, radius * uDabs3[i].w);
+                // Through the model both ways, as a decal is cast: surfaces turned edge on to the axis (past the limit) are left alone.
+                if (abs(dot(n, uPlanarAxis)) >= uFacing) s = planarAt(d, uPlanarAxis, radius, uDabs3[i].x, radius * uDabs3[i].w);
             } else {
                 vec3 w = pow(abs(n), vec3(4.0));
                 w /= max(w.x + w.y + w.z, 1e-5);
@@ -680,6 +698,18 @@ export const footprint = (stack: PaintStack, dabs: readonly Dab[], view: StrokeV
     return new Map([...regions].map(([tile, region]): [number, Rect[]] => [tile, [...region.rects]]));
 };
 
+/** The texels dabs laid on the UV layout can change: each dab's box on its tile, as a few rectangles. */
+export const uvFootprint = (size: number, uvView: NonNullable<StrokeView['uvView']>, dabs: readonly Dab[], shape: BrushShape): Map<number, Rect[]> => {
+    const region = new DirtyRegion(size, 12);
+    for (const dab of dabs) {
+        const [u, v] = uvView.toUv(dab.x, dab.y);
+        // A square (or picture) brush's corners reach a root two of its radius.
+        const r = (dab.radius / uvView.pixelsPerUv) * (shape === 'round' ? 1 : Math.SQRT2);
+        region.add(rectOfUvBox(u - r, v - r, u + r, v + r, size, FOOTPRINT_MARGIN));
+    }
+    return region.rects.length ? new Map([[uvView.tile, [...region.rects]]]) : new Map();
+};
+
 export class Stroke {
     private readonly masks = new Map<number, GpuImage>();
     /**
@@ -744,6 +774,11 @@ export class Stroke {
     }
 
     /** Clone: where on the surface (its triangle and texture coordinates) the stroke copies from. */
+    /** Clone, on the UV layout: the place on a tile (its UVs) the stroke copies from. */
+    cloneSourceAt(tile: number, u: number, v: number): void {
+        this.cloneFrom = { tile, at: [u * this.stack.size, v * this.stack.size] };
+    }
+
     cloneSource(triangle: number, uv: THREE.Vector2): void {
         const part = this.stack.part;
         this.cloneFrom = { tile: part.triangleTile[triangle], at: [(uv.x - part.triangleShift[triangle * 2]) * this.stack.size, (uv.y - part.triangleShift[triangle * 2 + 1]) * this.stack.size] };
@@ -768,7 +803,8 @@ export class Stroke {
             const angle = (brush.angle * Math.PI) / 180 + (brush.followStroke ? direction : 0) + lean + (random(this.seed + n * 7 + 3) - 0.5) * Math.PI * 2 * brush.angleJitter;
             const flow = brush.flow * (brush.pressureFlow ? pushed : 1) * (1 - brush.flowJitter * random(this.seed + n * 7 + 4));
             const dab: Dab = { x: sx, y: sy, radius, angle, flow };
-            if (brush.projection !== 'screen') {
+            // On the UV layout dabs need no place on the model.
+            if (brush.projection !== 'screen' && !this.view.uvView) {
                 const found = hit(sx, sy);
                 if (!found) return;
                 dab.point = found.point;
@@ -776,7 +812,7 @@ export class Stroke {
                 // A screen radius in pixels as a distance on the model where it meets the surface.
                 dab.worldRadius = (radius * found.distance) / this.view.perspective;
             }
-            if (brush.mode === 'smudge' || brush.mode === 'clone') {
+            if ((brush.mode === 'smudge' || brush.mode === 'clone') && !this.view.uvView) {
                 // The texel under the dab: what the push of a smudge and the copy of a clone are measured by.
                 const found = hit(sx, sy);
                 if (found?.uv && found.triangle !== undefined) {
@@ -832,6 +868,14 @@ export class Stroke {
         const stack = this.stack;
         const gpu = stack.host.gpu;
         const view = this.view;
+        // On the UV layout every dab's texel is known straight away.
+        if (view.uvView) {
+            for (const dab of dabs) {
+                const [u, v] = view.uvView.toUv(dab.x, dab.y);
+                dab.tile = view.uvView.tile;
+                dab.texel = [u * stack.size, v * stack.size];
+            }
+        }
         // Smudge pushes by the way the brush last moved on the picture; clone copies from a fixed distance
         // away, set by the stroke's first dab.
         for (const dab of dabs) {
@@ -860,13 +904,18 @@ export class Stroke {
         const areas = new Map<number, Rect[]>();
         for (const batch of batches) {
             // Only the texels these dabs can reach are drawn.
-            const reach = footprint(stack, batch, view, this.brush, picked);
+            const reach = view.uvView && !picked ? uvFootprint(stack.size, view.uvView, batch, this.brush.shape) : footprint(stack, batch, view, this.brush, picked);
             if (!reach.size) continue;
             const d1 = Array.from({ length: MAX_DABS }, () => new THREE.Vector4());
             const d2 = Array.from({ length: MAX_DABS }, () => new THREE.Vector4());
             const d3 = Array.from({ length: MAX_DABS }, () => new THREE.Vector4());
             batch.forEach((dab, i) => {
-                if (this.brush.projection === 'screen' || !dab.point) {
+                if (view.uvView) {
+                    const [u, v] = view.uvView.toUv(dab.x, dab.y);
+                    d1[i].set(u, v, dab.radius / view.uvView.pixelsPerUv, dab.angle);
+                    d2[i].set(dab.flow, 0, 0, 0);
+                    d3[i].set(0, 0, 0, view.uvView.pixelsPerUv);
+                } else if (this.brush.projection === 'screen' || !dab.point) {
                     d1[i].set(dab.x, dab.y, dab.radius, dab.angle);
                     d2[i].set(dab.flow, 0, 0, 0);
                 } else {
@@ -897,7 +946,7 @@ export class Stroke {
                             uDabs2: d2,
                             uDabs3: d3,
                             uCount: batch.length,
-                            uProjection: { screen: 0, surface: 1, planar: 2, triplanar: 3 }[this.brush.projection] ?? 0,
+                            uProjection: view.uvView ? 4 : { screen: 0, surface: 1, planar: 2, triplanar: 3 }[this.brush.projection] ?? 0,
                             uPlanarAxis: planarAxis,
                             uShape: alpha ? 2 : this.brush.shape === 'square' ? 1 : 0,
                             uHardness: this.brush.hardness,
@@ -905,9 +954,9 @@ export class Stroke {
                             uAlphaSrgb: alpha?.colorSpace === THREE.SRGBColorSpace ? 1 : 0,
                             uFacing: Math.cos((Math.min(179, this.brush.facingLimit) * Math.PI) / 180),
                             uCopies: copyMatrices,
-                            uCopyCount: copies.length,
+                            uCopyCount: view.uvView ? 1 : copies.length,
                             uStencil: this.stencil ?? gpu.constant('white'),
-                            uHasStencil: stencil.enabled && this.stencil ? 1 : 0,
+                            uHasStencil: stencil.enabled && this.stencil && !view.uvView ? 1 : 0,
                             uStencilPlace: new THREE.Vector4(place.x, place.y, place.width, place.height),
                             uStencilAngle: (place.angle * Math.PI) / 180,
                             uStencilOpacity: stencil.opacity,
