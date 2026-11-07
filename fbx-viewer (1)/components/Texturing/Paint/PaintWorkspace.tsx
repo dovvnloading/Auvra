@@ -6,6 +6,7 @@ import { frontendDiagnostics } from '../../../diagnostics/runtime';
 import { materialLibrary } from '../../../runtime/materials/materialLibrary';
 import { overrideTextureFlipY } from '../../../utils/materialOverrides';
 import { MESH_MAP_LABELS, MESH_MAPS } from '../../../texturing/graph/nodes/io';
+import { EXTRA_MAPS, EXTRA_MAP_LABELS } from '../../../texturing/bake/meshBaker';
 import { readStoredGraph } from '../../../texturing/graph/stored';
 import { CHANNEL_LABELS, allLayers, mapLayer, paintId, readPaintDocument, type MaskEffect } from '../../../texturing/paint/paintTypes';
 import type { SurfacePath } from '../../../texturing/paint/paths';
@@ -190,7 +191,8 @@ export const PaintWorkspace: React.FC = () => {
         setMessage(`Painting with ${choice.name}: strokes lay it on in every channel it has. Erase (E) takes it off again.`);
     }, [brush, selection.layerId, session, setBrush]);
 
-    // Clicks on the model while a polygon or ID colour mask is selected pick for it (Shift takes away).
+    // Clicks on the model while a part or ID colour mask is selected pick for it (Shift takes away), with its own mode.
+    const pickingParts = effect?.kind === 'polygon' || effect?.kind === 'id';
     const onSurfacePick = useCallback((hit: SurfaceHit, remove: boolean): boolean => {
         if (!session || !layer || !effect || (effect.kind !== 'polygon' && effect.kind !== 'id')) return false;
         if (session.locked) { setMessage(session.locked); return true; }
@@ -295,6 +297,7 @@ export const PaintWorkspace: React.FC = () => {
         ...(document?.channels ?? []).map((channel) => ({ value: channel, label: CHANNEL_LABELS[channel] })),
         { value: 'ambientOcclusion', label: 'Ambient occlusion' },
         ...(document?.bake ? MESH_MAPS.map((name) => ({ value: `mesh:${name}`, label: `Mesh map: ${MESH_MAP_LABELS[name]}` })) : []),
+        ...EXTRA_MAPS.filter((name) => document?.bake?.extras?.[name]).map((name) => ({ value: `extra:${name}`, label: `Baked: ${EXTRA_MAP_LABELS[name]}` })),
         ...(layer?.mask?.length ? [{ value: 'mask', label: 'Selected layer\'s mask' }] : []),
         { value: 'uvChecker', label: 'UV checker' },
         { value: 'uvStretch', label: 'UV stretch' },
@@ -332,7 +335,7 @@ export const PaintWorkspace: React.FC = () => {
                     <IconButton label="Erase" shortcut="E" active={tool === 'erase'} onClick={() => setTool('erase')}><EraserIcon size={14} /></IconButton>
                     <IconButton label="Fill a UV island" shortcut="G" active={tool === 'island'} onClick={() => setTool('island')}><BucketIcon size={14} /></IconButton>
                     <IconButton label="Fill polygons: a triangle, a quad, a mesh part, a UV piece or an edge loop" shortcut="Q" active={tool === 'polygon'} onClick={() => setTool('polygon')}><SelectBoxIcon size={14} /></IconButton>
-                    {tool === 'polygon' && <Select value={pickMode} options={PICK_MODES.map((mode) => ({ value: mode, label: PICK_LABELS[mode] }))} onChange={(mode) => setPickMode(mode as PickMode)} className="w-28" />}
+                    {tool === 'polygon' && !pickingParts && <Select value={pickMode} options={PICK_MODES.map((mode) => ({ value: mode, label: PICK_LABELS[mode] }))} onChange={(mode) => setPickMode(mode as PickMode)} className="w-28" />}
                     <IconButton label="Draw a path on the surface: paint along it, fill it, ribbons, stitches and text" shortcut="L" active={tool === 'path'} onClick={() => { setTool('path'); setPanel('brush'); }}><SplineIcon size={14} /></IconButton>
                     <IconButton label="Pick a colour" shortcut="P" active={tool === 'pick'} onClick={() => setTool('pick')}><EyedropperIcon size={14} /></IconButton>
                     <IconButton label="Mark or clear seams (Shift clears)" shortcut="S" active={tool === 'seam'} onClick={() => setTool('seam')}><ScissorsIcon size={14} /></IconButton>
@@ -355,7 +358,7 @@ export const PaintWorkspace: React.FC = () => {
                         <PaintViewport session={session} tool={tool} brush={brush} target={target} view={view === 'uv2d' ? 'material' : view} maskImage={maskImage}
                             onBrushSize={(size) => setBrush({ ...brush, size })}
                             onPick={(color) => { setBrush({ ...brush, values: { ...brush.values, baseColor: color } }); setTool('paint'); }}
-                            onMessage={setMessage} frameSignal={frameSignal} uv={uv} pickMode={pickMode} onSurfacePick={onSurfacePick}
+                            onMessage={setMessage} frameSignal={frameSignal} uv={uv} pickMode={pickMode} onSurfacePick={onSurfacePick} picking={pickingParts}
                             pathEdit={tool === 'path' ? pathEdit : null} commands={viewportCommands} />
                     ) : (
                         <div className="flex flex-1 items-center justify-center text-xs text-zinc-500">
@@ -385,7 +388,7 @@ export const PaintWorkspace: React.FC = () => {
                     <Segmented value={panel} options={[{ value: 'layers', label: 'Layers' }, { value: 'brush', label: 'Brush' }, { value: 'set', label: 'Texture set' }, { value: 'uvs', label: 'UVs' }]} onChange={setPanel} label="Panel" />
                 </div>
                 {session ? (
-                    panel === 'layers' ? <LayerPanel session={session} selection={selection} onSelect={setSelection} resolve={resolve} graphs={graphs} textures={textures} onPaintWith={paintWith} onMessage={setMessage} onUseTool={setTool} />
+                    panel === 'layers' ? <LayerPanel session={session} selection={selection} onSelect={setSelection} resolve={resolve} graphs={graphs} textures={textures} onPaintWith={paintWith} onMessage={setMessage} />
                         : panel === 'brush' ? <div className="min-h-0 flex-1 overflow-y-auto">{tool === 'path' && (
                             <PathPanel paths={paths} path={activePath} point={pathPoint} extent={extent} graphs={graphs} onPick={(id) => { setPathId(id); setPathPoint(null); }}
                                 onNew={() => { setPathId(null); setPathPoint(null); setMessage('Click the model to start the new path.'); }}

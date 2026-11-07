@@ -7,6 +7,7 @@ import { DEFAULT_PACK, type Island, type PackSettings, type Placement } from '..
 import { newTriangleTiles, transferPicture } from '../../../texturing/uv/transfer';
 import { DEFAULT_UNWRAP, type UnwrapSettings } from '../../../texturing/uv/unwrap';
 import { UvWorkClient, measureLayout, type UvStats } from '../../../texturing/uv/uvWork';
+import { densityScales, islandAreas, relaxIsland, straighteningTurn, texelDensity, turnIsland, type IslandShape } from '../../../texturing/uv/relax';
 import { applyLayout, buildLayout, decodeLayout, encodeLayout, restoreLayout, type UvLayoutFile } from '../../../texturing/uv/uvLayout';
 import { buildCharts, buildTopology, chartCoordinates, edgeKey, existingSeams, type Chart, type UvTopology } from '../../../texturing/uv/uvTopology';
 import { BEFORE, GpuResetError, pictureKey, pictureOwner, pictureOwners, picturePrecision } from '../../../texturing/paint/paintStack';
@@ -383,6 +384,74 @@ export class UvSession {
      * Turns or scales selected islands about their own middles. A scale is kept as the island's size
      * against the rest, so packing again keeps it.
      */
+    /** The picked islands, or every island when none is picked. */
+    private targetIslands(): number[] {
+        if (!this.proposal) return [];
+        return this.selected.size ? [...this.selected] : this.proposal.placements.map((_, i) => i);
+    }
+
+    /** An island's shape for relaxing: its corners' coordinates, its vertices, and their places on the model. */
+    private islandShape(i: number): IslandShape {
+        const chart = this.proposal!.charts[i];
+        const positions = new Float64Array(chart.vertexWeld.length * 3);
+        chart.vertexWeld.forEach((weld, v) => positions.set(this.topology.positions.subarray(weld * 3, weld * 3 + 3), v * 3));
+        return { uv: this.proposal!.placements[i].uv, corners: chart.corners, positions };
+    }
+
+    /** Relaxes the picked islands (or all of them): less stretch, their edges kept unless `freeEdge`. */
+    relaxIslands(freeEdge = false): void {
+        if (!this.proposal) return;
+        this.remember('Relax islands');
+        for (const i of this.targetIslands()) this.proposal.placements[i].uv = relaxIsland(this.islandShape(i), { freeEdge });
+        this.setProposal(this.proposal.charts, this.proposal.placements, { keepSelection: true });
+        this.emit();
+    }
+
+    /** Turns the picked islands (or all of them) so their edges run along U and V. */
+    straightenIslands(): void {
+        if (!this.proposal) return;
+        this.remember('Straighten islands');
+        for (const i of this.targetIslands()) {
+            const placement = this.proposal.placements[i];
+            placement.uv = turnIsland(placement.uv, straighteningTurn(this.islandShape(i)));
+        }
+        this.setProposal(this.proposal.charts, this.proposal.placements, { keepSelection: true });
+        this.emit();
+    }
+
+    /**
+     * Brings the picked islands (or all of them) to one texel density: theirs together, or `target` texels
+     * per model unit. Kept as each island's size against the rest, so packing again keeps it.
+     */
+    evenTexelDensity(target?: number): void {
+        if (!this.proposal) return;
+        const islands = this.targetIslands();
+        const scales = densityScales(islands.map((i) => islandAreas(this.islandShape(i))), this.paint.stack.size, target);
+        this.remember(target ? 'Set texel density' : 'Even out texel density');
+        islands.forEach((i, k) => {
+            const scale = scales[k];
+            if (scale === 1) return;
+            this.density.set(i, (this.density.get(i) ?? 1) * scale);
+            const placement = this.proposal!.placements[i];
+            let cx = 0, cy = 0;
+            for (let j = 0; j < placement.uv.length; j += 2) { cx += placement.uv[j]; cy += placement.uv[j + 1]; }
+            cx /= placement.uv.length / 2; cy /= placement.uv.length / 2;
+            for (let j = 0; j < placement.uv.length; j += 2) {
+                placement.uv[j] = cx + (placement.uv[j] - cx) * scale;
+                placement.uv[j + 1] = cy + (placement.uv[j + 1] - cy) * scale;
+            }
+        });
+        this.setProposal(this.proposal.charts, this.proposal.placements, { keepSelection: true });
+        this.emit();
+    }
+
+    /** Texels per model unit of the picked islands (or all of them) together, on the set's pictures. */
+    get texelDensity(): number {
+        if (!this.proposal) return 0;
+        const total = this.targetIslands().map((i) => islandAreas(this.islandShape(i))).reduce((sum, each) => ({ uv: sum.uv + each.uv, model: sum.model + each.model }), { uv: 0, model: 0 });
+        return texelDensity(total, this.paint.stack.size);
+    }
+
     transformSelected(angle: number, scale: number): void {
         if (!this.proposal || !this.selected.size) return;
         this.remember(scale !== 1 ? (scale > 1 ? 'Make islands bigger' : 'Make islands smaller') : 'Turn islands');

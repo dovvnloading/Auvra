@@ -4,7 +4,7 @@
  * A normal map projected onto a surface from the three axes, as the Triplanar Normal Map node draws it:
  * each projection reads the map the right way round seen from outside its face (its u runs to the face's
  * right and its v up, so the frame they make with the face's normal is right-handed and opposite faces are
- * not mirrored), the map's own x turns with its u, and each projection's normal is laid onto the surface's
+ * not mirrored), its blue is rebuilt from red and green (so a BC5 map reads the same), the map's own x turns with its u, and each projection's normal is laid onto the surface's
  * with a whiteout blend before the three are mixed by how squarely the surface faces each axis. The result
  * is a world-space normal: the Material Output takes it with its Normal input set to world space.
  *
@@ -70,9 +70,13 @@ vec3 mgTriplanarNormal(sampler2D map, vec3 position, vec3 normal, float sharpnes
     vec3 weights = pow(abs(n), vec3(sharpness));
     weights /= max(weights.x + weights.y + weights.z, 1e-5);
     vec3 facing = vec3(n.x < 0.0 ? -1.0 : 1.0, n.y < 0.0 ? -1.0 : 1.0, n.z < 0.0 ? -1.0 : 1.0);
-    vec3 x = texture(map, vec2(-facing.x * position.z, position.y)).xyz * 2.0 - 1.0;
-    vec3 y = texture(map, vec2(-facing.y * position.x, position.z)).xyz * 2.0 - 1.0;
-    vec3 z = texture(map, vec2(facing.z * position.x, position.y)).xyz * 2.0 - 1.0;
+    vec3 x = vec3(texture(map, vec2(-facing.x * position.z, position.y)).xy * 2.0 - 1.0, 0.0);
+    vec3 y = vec3(texture(map, vec2(-facing.y * position.x, position.z)).xy * 2.0 - 1.0, 0.0);
+    vec3 z = vec3(texture(map, vec2(facing.z * position.x, position.y)).xy * 2.0 - 1.0, 0.0);
+    // Blue rebuilt from red and green, as a two-channel (BC5) map needs.
+    x.z = sqrt(max(1.0 - dot(x.xy, x.xy), 0.0));
+    y.z = sqrt(max(1.0 - dot(y.xy, y.xy), 0.0));
+    z.z = sqrt(max(1.0 - dot(z.xy, z.xy), 0.0));
     x.y *= green; y.y *= green; z.y *= green;
     x.xy *= strength; y.xy *= strength; z.xy *= strength;
     x.x *= -facing.x; y.x *= -facing.y; z.x *= facing.z;

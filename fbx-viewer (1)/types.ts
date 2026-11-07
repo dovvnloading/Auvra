@@ -6,6 +6,7 @@ import React from 'react';
 import type { ProjectStatus } from './utils/projectStatus';
 import type { MaterialOverrides } from './utils/materialOverrides';
 import type { ObjectMaterialOverrides } from './utils/materialInstances';
+import type { TextureSettings } from './texturing/textureSettings';
 import type { ModelFileReport } from './utils/fbxImport/nativeImporter';
 import type { ClipTakeSource } from './utils/clipTakes';
 import type { StoredBoneRole } from './utils/retargeting';
@@ -69,6 +70,13 @@ export interface TextureData {
   url: string;
   dimensions: { width: number; height: number };
   folder?: string; // Content browser folder path ('' or missing = root)
+  /** How it is kept and drawn, and for deep pictures what the file was (texturing/textureSettings.ts). */
+  settings?: TextureSettings;
+  /**
+   * The imported file itself, where `url` is its 8-bit preview: a deep picture (16-bit, floating point,
+   * TIFF, TGA, PSD) that only the texture decoder reads whole. Material assets draw with this one.
+   */
+  sourceUrl?: string;
 }
 
 export interface LoadedModelData {

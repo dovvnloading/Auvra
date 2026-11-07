@@ -81,6 +81,10 @@
   - the 2D and 3D views and widgets;
   - material instances, parallax and material decals;
   - part masks, the brush engine and paths.
+- **Round 4** brought:
+  - the scatter pass, inheritance and tiling modes, and flood fill on the GPU;
+  - baking at full depth, and UV relax, straighten and texel density;
+  - deep texture import, GPU compression for material textures, and views of what textures cost.
 
 See §6.
 
@@ -152,6 +156,8 @@ Auvra goes past those tools where being inside the engine helps:
   - Model textures are compressed to BC1, BC3 or BC5 in workers on desktop GPUs.
   - Textures used by material graphs are never compressed.
 - **Missing:** streaming, per-texture import settings and a budget view.
+
+*Since round 4:* 16-bit PNG, TIFF, OpenEXR, Radiance HDR, TGA and PSD import at their own depth, each texture keeps its own settings, material textures compress to BC7, BC5 or BC4, and a memory view shows what they cost. See Stage 8.
 
 ### 2.5 AI tools
 - **Describe:** makes a tileable material with colour, normal, roughness and metalness maps.
@@ -389,6 +395,8 @@ Fix the defects in §8 that lose work, give wrong results or mislead, before bui
 - **Widgets:** an angle dial, a position pad, eyedroppers from the views, a gradient eyedropper along a line, curves over a histogram, and code fields that mark errors.
 - **Canvas:** a cost map, named links, tidy layout, and shader errors marked on the node that caused them.
 
+**Landed in round 4:** a Custom GLSL node's error marks its code in the inspector; the error panel leads with a plain message per node and keeps the compiler's lines behind Details; named links work in shader graphs too.
+
 - **One canvas.** A single canvas, node finder and editing module for both the texture and the shader graph, fast with 1,000 nodes.
 - **The canvas tools in §5.** Pictures in the finder, insertion onto wires, named links, frames, align, bypass, collapse, find, minimap, editing sub-graphs in place, a cost heat map, and errors marked on the right node.
 - **2D view:** pixel values, histogram with range selection, colour pins, compare wipe, exposure, and handles for transforms, the tile sampler, gradients and shapes.
@@ -415,6 +423,12 @@ Fix the defects in §8 that lose work, give wrong results or mislead, before bui
 - **Mapping and decals:** a triplanar node for normal maps, and decals that carry a whole material.
 - **Still to come:** WebGPU, one material asset, and script-API access to material values.
 
+**Designed in round 4, not built yet: one material document.**
+- Each material holds its surface (today's shader graph, always there), plus an optional texture graph and an optional paint stack. Each of those writes named outputs, such as base colour, normal and height, as textures.
+- The surface reads those outputs by name through Material Picture nodes, not by fixed texture ids. So Update material and Paint's apply rewrite only the outputs.
+- Material Overrides keeps per-model and per-object values but points at one document. Retexture and the mask tool write a painted copy owned by the model, so Reset Textures drops the copy.
+- Old projects move over when they load, with nothing lost; the host reads both shapes for a while before the old fields go.
+
 - **One material asset.** It holds the surface model, plus optional texture graphs, a paint stack and parameters. The Materials tab, Paint, Retexture and Material Overrides all edit that asset rather than writing side channels.
 - **A physical surface model** with an OpenPBR vocabulary, implemented in both renderers on one shader path that works alongside weather, wind and compressed normals:
   - base colour, metalness and diffuse roughness;
@@ -437,6 +451,16 @@ Fix the defects in §8 that lose work, give wrong results or mislead, before bui
 ### Stage 3 — The graph engine grows up
 
 **Landed in round 3:** wires that carry a whole material, with make, split, blend, height blend, multi-blend, switch, transform and adjust nodes. Still to come: the scatter pass, inheritance and tiling modes, function graphs, loops and GPU flood fill.
+
+**Landed in round 4:**
+- **Scatter pass:** every copy is drawn in one instanced pass, with the higher, the brightest, the sum or the last copy winning where they overlap. On it:
+  - the tile sampler at full strength: up to 6 patterns, maps for size, turn, place, mask, colour and pattern choice, random mirroring, and Copy ID, Random value and Local UV outputs;
+  - shape scatter: placed by Poisson disc, a density map or a placement picture; built-in shapes, a picture or raised heights; tilted in 3D, sized and flipped at random;
+  - a tile generator and atlas scatter.
+- **Inheritance and tiling:** a node's size, bit depth, tiling and seed come from its input, from the graph, or are fixed. Graphs and nodes tile both ways, across only, down only or not at all. The graph has its own bit depth and a physical size.
+- **Flood fill on the GPU,** with followers to bounding box, index and position, and a mapper that turns, scales and flips at random.
+- **Material wires through graphs used as nodes,** and finder pictures for the material nodes.
+- **Still to come:** function graphs with previews of every value, a value processor, a pixel processor with named settings, the Iterate node, and normals that use the physical size.
 
 - **Material wires:** one wire carries a whole surface, with material blend, height blend, multi-blend, switch, transform and adjust nodes. Smart materials become material graphs.
 - **A scatter pass:** a placement pass, then instanced drawing with height-aware stacking. It gives the tile sampler at full strength (6 pattern inputs, maps for every property, per-copy ID, random value and UV), shape scatter (Poisson, density and custom placement; 3D and SDF shapes), a tile generator, atlas scatter and grid atlas.
@@ -499,6 +523,8 @@ One family per pull request, each with picture tooltips and the wrap-edge tiling
 - **Paths and fills:** editable paths with ribbons, stitches and text along them, and fills cast along an axis, round a ball or tube, or mirrored.
 - **Still to come:** projections for brushes, warp grids, decals wrapped onto the mesh, the 2D painting view, and particle brushes.
 
+**Landed in round 4:** part and ID colour masks pick whenever their effect is selected, with any tool, and laying a path on again replaces its copy.
+
 - **Paint with anything:** materials, textures and smart materials in every channel. Extended channels follow Stage 2.
 - **Layers:**
   - layers that read the stack below (anchors);
@@ -523,6 +549,19 @@ One family per pull request, each with picture tooltips and the wrap-edge tiling
 **Checked by:** a worn sci-fi helmet and a hand-painted prop painted end to end, on a clean model and on a messy imported one.
 
 ### Stage 7 — Baking and UVs at full depth
+
+**Landed in round 4:**
+- **Baking:**
+  - a bake size of its own and supersampling, held to what the graphics card safely takes, and averaged back so island edges don't darken;
+  - cages by distance, automatic or from a model, and rays along averaged normals;
+  - bake groups matched by name;
+  - a choice of normal map frame and green direction;
+  - cavity, bent normals, and colour, opacity and material carried over from the high-poly model.
+- **UVs:** relax, straighten, and texel density shown, evened out and set.
+- **Still to come:**
+  - fixing bakes in place: painting skew and cage offset, a view of the rays, rebaking only a changed region, one undo history with painting;
+  - supersampled bakes in strips, so big sets are not held back;
+  - pins you place, angle-based flattening, a texel density heat map, and density matched between sets.
 - **Baking:**
   - cages by distance, automatic or from a mesh, and averaged normals;
   - automatic grouping of meshes into bake sets, matching by name, and a choice of tangent space;
@@ -540,6 +579,12 @@ One family per pull request, each with picture tooltips and the wrap-edge tiling
 **Checked by:** a high-to-low bake of a hard-surface model with no ray gaps at hard edges, compared map by map with a trusted reference.
 
 ### Stage 8 — Export, interchange and the pipeline
+
+**Landed in round 4:**
+- **Import:** 16-bit PNG, TIFF, OpenEXR, Radiance HDR, TGA and flattened PSD, decoded at their own depth in a worker. Each texture keeps its settings: colour or data, normal map, compression, size limit, edges, filter and mip levels.
+- **Compression:** material textures compress by what they are, with BC7 for colour, BC5 for normal maps and BC4 for one channel of data, and Kaiser-filtered mip levels. Floating-point maps that stay within white compress too; light beyond white stays in half floats.
+- **Seeing the cost:** Texture Settings shows the picture before and after compression with the memory each takes, and a Texture memory view gives the total per level against the game's asset memory and per material.
+- **Still to come:** ASTC and ETC2 for phones, built games carrying compressed textures, a cache for compressed results, override, terrain and decal textures on the deep path, a compressed format for light beyond white, and KTX2.
 - **Export:**
   - templates per target (file names, packing, bit depth, normal convention, padding), starting with a web-first glTF template;
   - EXR, TGA and TIFF;
@@ -651,32 +696,46 @@ File references are relative to `fbx-viewer (1)/`.
 - Long names wrap in the Add menu and the material picker.
 - The material preview balls render; since round 2 they had fallen back to flat swatches.
 
+### Fixed in round 4
+- Flood fill labels islands on the GPU, reading back one pixel a check instead of the whole mask.
+- Material wires cross into graphs used as nodes, and named links work in shader graphs.
+- A part mask picks whenever its effect is selected; the toolbar's polygon mode no longer competes with it.
+- Laying a path on again replaces its copy.
+- The shader error panel leads with a plain message; the compiler's lines sit behind Details.
+- Material textures are compressed.
+- Found while checking round 4:
+  - Supersampled bakes no longer reset the graphics card, and the cavity map reads mid-grey instead of nearly black.
+  - EXR normal and data maps compress instead of being kept as light beyond white, and the BC5 preview no longer shows black.
+- Graph and painted height draw through the Parallax node (since round 3).
+
 ### Still open
 **Texture graph**
-1. Graph and painted height are kept at 16 bits, but nothing draws with height yet (Stage 2).
-2. Flood fill still labels islands on the CPU, from a one-bit mask. Its full-float result takes about 1 GB of GPU memory at 8K. GPU labelling is in Stage 3 (`texturing/graph/nodes/distance.ts`).
-3. There is no safe transform: rotation or fractional scale breaks tiling (`texturing/graph/nodes/transform.ts`).
-4. The Bitmap node always loads as 8-bit sRGB and is stretched to the graph; there's no crop or linear option (`texturing/graph/nodes/io.ts`).
-5. Choice parameters have no option editor, and step, group and description have no UI (Stage 4).
-6. Make it tile is a single cross-fade, so ghosting shows (Stage 5, photo tools).
-7. Update material draws mesh-reading nodes with stand-ins, because a material can go on any model. Per-model results come with Stage 9.
-
-8. Material wires don't cross into sub-graphs, and named links work in texture graphs only.
+1. There is no safe transform: rotation or fractional scale breaks tiling (`texturing/graph/nodes/transform.ts`).
+2. The Bitmap node always loads as 8-bit sRGB and is stretched to the graph; there's no crop or linear option (`texturing/graph/nodes/io.ts`).
+3. Choice parameters have no option editor, and step, group and description have no UI (Stage 4).
+4. Make it tile is a single cross-fade, so ghosting shows (Stage 5, photo tools).
+5. Update material draws mesh-reading nodes with stand-ins, because a material can go on any model. Per-model results come with Stage 9.
+6. A flood fill bounding box can come out wrong for an island larger than half the image along an axis that tiles.
+7. The graph's physical size is stored, but nothing uses it yet.
+8. The node finder ranks a longer name above an exact one: typing "Flood fill" and pressing Enter adds "Flood fill to random colour".
+9. A node added from the finder can land on top of another node.
+10. A Receive node still shows its unused input pin.
 
 **Painting, baking and UVs**
-9. A part mask's own pick mode and the toolbar's polygon mode are separate, and picks only count with the polygon tool. Picking should work whenever the mask effect is selected.
-10. Laying a path on again adds a second copy instead of replacing the first.
-
 11. The paint view's smoothing draws into a render target marked as an XR target. Recheck this when three.js is upgraded (`components/Texturing/Paint/PaintViewport.tsx`).
 12. A triangle that crosses a UDIM tile edge can pick a too-coarse mip at that edge.
+13. Supersampling is held to what the graphics card takes in one go: with every map at 2048, a 2×2 bake runs at 2048. Baking in strips would lift this.
+14. Cavity, bent normal and transferred maps are kept as extra baked maps, so texture graphs can't read them as mesh-map nodes yet.
 
-**Material graph and engine materials**
-13. When a shader fails to compile, the preview panel shows the raw compiler line under its plain message.
-
-14. Material textures are never compressed (`runtime/materials/materialLibrary.ts`, Stage 8).
+**Material graph, engine materials and textures**
 15. Unlit and Phong materials can't take a material asset (a message says so). Converting them is a later step.
 16. The surface has no coat tint, and car paint has no metal flakes.
-17. For the WebGPU renderer (#154):
+17. Deleting a material asks nothing and can't be undone.
+18. BC7 uses one block mode, so a block holding two very different colours blurs a little more than with a full encoder.
+19. Override, terrain and decal textures still load at 8 bits and uncompressed.
+20. Textures are compressed again each time a project opens, and built games carry the source files and compress them as they load.
+21. Normal maps aren't recognised by their file name on import (such as "_nor_gl"); they're marked by hand in Texture Settings.
+22. For the WebGPU renderer (#154):
     - its graph surface ignores weather and wind;
     - it caches translated shaders per graph object, so every value edit translates again; it should key by graph shape;
     - it should skip the vertex-colour multiply when a graph reads Vertex Color;

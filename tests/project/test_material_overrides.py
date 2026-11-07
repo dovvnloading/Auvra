@@ -55,6 +55,15 @@ class MaterialOverrideSchemaTests(unittest.TestCase):
             with self.subTest(bad=bad), self.assertRaises(ValueError):
                 validate_domain("objects", domain_document("objects", [placed(bad)]))
 
+    def test_a_texture_keeps_its_import_settings(self):
+        settings = {"colorSpace": "data", "normalMap": False, "compression": "bc4", "maxSize": 2048, "wrap": "clamp", "filter": "linear", "mips": True,
+                    "source": {"format": "exr", "depth": 32, "channels": 4, "hdr": True}, "preview": {"assetId": "b" * 64}}
+        document = validate_domain("textures", domain_document("textures", [{"id": "tex-height", "name": "Height.exr", "assetId": "a" * 64, "settings": settings}]))
+        self.assertEqual(document["documents"][0]["settings"], settings)
+        for bad in ({"compression": "astc"}, {"maxSize": 1000}, {"source": {"format": "gif", "depth": 8, "channels": 4}}, {"preview": {"assetId": "x"}}, {"tint": 1}):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                validate_domain("textures", domain_document("textures", [{"id": "t", "name": "T.png", "assetId": "a" * 64, "settings": bad}]))
+
     def test_accepts_a_physical_materials_values(self):
         override = {
             "coat": 1, "coatRoughness": 0.05, "sheenColor": "#cc6688", "sheenRoughness": 0.4, "thinFilm": 0.5,

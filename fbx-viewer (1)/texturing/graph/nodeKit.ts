@@ -159,12 +159,19 @@ float curveValue(sampler2D lut, float value, int channel) {
 /** The GLSL declarations a node's pass gets, and the values they take. */
 export const nodeBindings = (
     definition: TexNodeDef,
-    context: Pick<NodeRunContext, 'input' | 'params' | 'seed' | 'texture'>,
+    context: Pick<NodeRunContext, 'input' | 'params' | 'seed' | 'texture' | 'tiling'>,
     gpuConstant: (name: NonNullable<TexPortDef['fallback']>) => THREE.Texture,
 ): { declarations: string; inputs: Record<string, GpuImage | THREE.Texture>; uniforms: Record<string, unknown> } => {
-    const lines: string[] = ['uniform float uSeed;'];
+    // The node's tiling: inputs read past an edge come round where it repeats and stop at the edge where
+    // it does not; noises repeat only where it repeats.
+    const lines: string[] = [
+        'uniform float uSeed;',
+        'uniform ivec2 uTiles;',
+        'vec2 tileUv(vec2 uv) { return vec2(uTiles.x == 1 ? fract(uv.x) : clamp(uv.x, 0.0, 1.0), uTiles.y == 1 ? fract(uv.y) : clamp(uv.y, 0.0, 1.0)); }',
+        'ivec2 tilePeriod(ivec2 cells) { return ivec2(uTiles.x == 1 ? cells.x : 1048576, uTiles.y == 1 ? cells.y : 1048576); }',
+    ];
     const inputs: Record<string, GpuImage | THREE.Texture> = {};
-    const uniforms: Record<string, unknown> = { uSeed: context.seed };
+    const uniforms: Record<string, unknown> = { uSeed: context.seed, uTiles: [context.tiling[0] ? 1 : 0, context.tiling[1] ? 1 : 0] };
     for (const port of definition.inputs) {
         // A material input carries a picture per channel: the node binds the ones it reads itself.
         if (port.kind === 'material') continue;
@@ -174,8 +181,8 @@ export const nodeBindings = (
         lines.push(`uniform int w_${port.key};`);
         uniforms[`w_${port.key}`] = image ? 1 : 0;
         lines.push(gray
-            ? `vec4 c_${port.key}(vec2 uv) { float v = texture(t_${port.key}, uv).r; return vec4(v, v, v, 1.0); }\nfloat g_${port.key}(vec2 uv) { return texture(t_${port.key}, uv).r; }`
-            : `vec4 c_${port.key}(vec2 uv) { return texture(t_${port.key}, uv); }\nfloat g_${port.key}(vec2 uv) { return luma(texture(t_${port.key}, uv).rgb); }`);
+            ? `vec4 c_${port.key}(vec2 uv) { float v = texture(t_${port.key}, tileUv(uv)).r; return vec4(v, v, v, 1.0); }\nfloat g_${port.key}(vec2 uv) { return texture(t_${port.key}, tileUv(uv)).r; }`
+            : `vec4 c_${port.key}(vec2 uv) { return texture(t_${port.key}, tileUv(uv)); }\nfloat g_${port.key}(vec2 uv) { return luma(texture(t_${port.key}, tileUv(uv)).rgb); }`);
     }
     let needsCurve = false;
     for (const param of definition.params) {

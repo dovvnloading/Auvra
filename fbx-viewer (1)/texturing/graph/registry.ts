@@ -1,14 +1,16 @@
 import { ADJUST_NODES } from './nodes/adjust';
 import { DISTANCE_NODES } from './nodes/distance';
 import { GENERATOR_NODES } from './nodes/generators';
-import { INPUT_NODE_TYPE, IO_NODES, OUTPUT_NODE_TYPE, SUBGRAPH_NODE_TYPE, SUBGRAPH_SEED_KEY, SUBGRAPH_VARY_KEY, subgraphParamDefs } from './nodes/io';
+import { materialKey, MATERIAL_CHANNELS } from './material';
+import { INPUT_NODE_TYPE, IO_NODES, MATERIAL_INPUT_NODE_TYPE, MATERIAL_OUTPUT_NODE_TYPE, OUTPUT_NODE_TYPE, SUBGRAPH_NODE_TYPE, SUBGRAPH_SEED_KEY, SUBGRAPH_VARY_KEY, subgraphParamDefs } from './nodes/io';
 import { MATERIAL_NODES } from './nodes/materials';
+import { SCATTER_NODES } from './nodes/scatter';
 import { TRANSFORM_NODES } from './nodes/transform';
-import { OUTPUT_CHANNEL_LABELS, outputNodeKind, type NodeCategory, type OutputChannel, type PortKind, type TexGraphLink, type TexGraphNode, type TexNodeDef, type TexParamDef, type TextureGraph } from './types';
+import { OUTPUT_CHANNEL_LABELS, outputNodeKind, type NodeCategory, type OutputChannel, type PortKind, type TexGraphLink, type TexGraphNode, type TexNodeDef, type TexParamDef, type TexPortDef, type TextureGraph } from './types';
 
 /** Every node a texture graph can hold, by type; sub-graph nodes are made from the graph they use. */
 
-export const TEXTURE_NODE_DEFINITIONS: readonly TexNodeDef[] = [...IO_NODES, ...GENERATOR_NODES, ...ADJUST_NODES, ...TRANSFORM_NODES, ...DISTANCE_NODES, ...MATERIAL_NODES];
+export const TEXTURE_NODE_DEFINITIONS: readonly TexNodeDef[] = [...IO_NODES, ...GENERATOR_NODES, ...SCATTER_NODES, ...ADJUST_NODES, ...TRANSFORM_NODES, ...DISTANCE_NODES, ...MATERIAL_NODES];
 
 const BY_TYPE = new Map(TEXTURE_NODE_DEFINITIONS.map((definition) => [definition.type, definition]));
 
@@ -39,12 +41,17 @@ const SUBGRAPH_SEED_PARAMS: readonly TexParamDef[] = [
 const subgraphDefinition = (node: TexGraphNode, resolve: GraphResolver): TexNodeDef => {
     const entry = typeof node.params.graph === 'string' ? resolve(node.params.graph) : undefined;
     const graph = entry?.graph;
-    const inputs = (graph?.nodes ?? [])
-        .filter((candidate) => candidate.type === INPUT_NODE_TYPE)
-        .map((candidate) => ({ key: String(candidate.params.name || candidate.id), label: String(candidate.params.name || 'Input'), kind: (candidate.params.kind === 'gray' ? 'gray' : 'color') as PortKind, fallback: 'black' as const }));
-    const outputs = (graph?.nodes ?? [])
-        .filter((candidate) => candidate.type === OUTPUT_NODE_TYPE)
-        .map((candidate) => ({ key: candidate.id, label: outputLabel(candidate), kind: outputNodeKind(candidate.params) }));
+    // Its inputs and outputs: images, and whole materials (a material wire each).
+    const inputs: TexPortDef[] = (graph?.nodes ?? [])
+        .filter((candidate) => candidate.type === INPUT_NODE_TYPE || candidate.type === MATERIAL_INPUT_NODE_TYPE)
+        .map((candidate) => (candidate.type === MATERIAL_INPUT_NODE_TYPE
+            ? { key: String(candidate.params.name || candidate.id), label: String(candidate.params.name || 'Material'), kind: 'material' as const }
+            : { key: String(candidate.params.name || candidate.id), label: String(candidate.params.name || 'Input'), kind: (candidate.params.kind === 'gray' ? 'gray' : 'color') as PortKind, fallback: 'black' as const }));
+    const outputs: TexPortDef[] = (graph?.nodes ?? [])
+        .filter((candidate) => candidate.type === OUTPUT_NODE_TYPE || candidate.type === MATERIAL_OUTPUT_NODE_TYPE)
+        .map((candidate) => (candidate.type === MATERIAL_OUTPUT_NODE_TYPE
+            ? { key: candidate.id, label: String(candidate.params.name || '').trim() || 'Material', kind: 'material' as const }
+            : { key: candidate.id, label: outputLabel(candidate), kind: outputNodeKind(candidate.params) }));
     return {
         type: SUBGRAPH_NODE_TYPE,
         label: entry?.name ?? 'Missing graph',
@@ -57,7 +64,12 @@ const subgraphDefinition = (node: TexGraphNode, resolve: GraphResolver): TexNode
         async run(context) {
             if (!entry) throw new Error('The graph this node used is no longer in the project.');
             const given: Record<string, ReturnType<typeof context.input>> = {};
-            for (const input of inputs) given[input.key] = context.input(input.key);
+            for (const input of inputs) {
+                if (input.kind !== 'material') { given[input.key] = context.input(input.key); continue; }
+                // A material goes in as an image per channel, under its input's name and the channel's.
+                const material = context.material(input.key);
+                for (const channel of MATERIAL_CHANNELS) given[materialKey(input.key, channel)] = material?.[channel] ?? null;
+            }
             const values: Record<string, unknown> = {};
             for (const parameter of graph!.parameters) values[parameter.name] = context.params[parameter.name];
             return context.subgraph(entry.id, values, given);

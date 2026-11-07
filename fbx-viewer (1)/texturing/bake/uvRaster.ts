@@ -23,6 +23,7 @@ in vec4 uvEdges;
 in vec4 tangent;
 in vec3 color;
 in vec3 ids;
+in vec4 cage;
 out vec3 vPos;
 out vec3 vNormal;
 out vec2 vUv;
@@ -33,6 +34,7 @@ flat out vec3 vE1;
 flat out vec3 vE2;
 flat out vec4 vD;
 flat out vec3 vIds;
+out vec4 vCage;
 void main() {
     vPos = position;
     vNormal = normal;
@@ -44,6 +46,7 @@ void main() {
     vE2 = edge2;
     vD = uvEdges;
     vIds = ids;
+    vCage = cage;
     gl_Position = vec4(uv * 2.0 - 1.0, 0.0, 1.0);
 }`;
 
@@ -60,12 +63,16 @@ flat in vec3 vE1;
 flat in vec3 vE2;
 flat in vec4 vD;
 flat in vec3 vIds;
+// Bakes: the way a cage ray leaves (xyz) and how far out it starts (w, below 0 for the bake's own distance).
+in vec4 vCage;
 uniform int uHasTangent;
+// Bakes may ask for the frame worked out from texture coordinate slopes even where the mesh has tangents.
+uniform int uFrameFromUvs;
 // The tangent frame the renderer will use for a normal map on this surface: the mesh's own tangents
 // when it has them, else the one worked out from texture coordinate slopes, as the standard shader does.
 mat3 surfaceFrame(vec3 n) {
     // A w of 0 marks a mesh of the set that has no tangents of its own.
-    if (uHasTangent == 1 && abs(vTangent.w) > 0.5) {
+    if (uFrameFromUvs == 0 && uHasTangent == 1 && abs(vTangent.w) > 0.5) {
         vec3 along = vTangent.xyz - n * dot(n, vTangent.xyz);
         if (dot(along, along) > 1e-12) {
             vec3 t = normalize(along);
@@ -184,6 +191,30 @@ export class UvRaster {
         this.scene.remove(meshes.edges);
         renderTarget.scissorTest = false;
         renderer.setRenderTarget(previous);
+    }
+
+    /**
+     * Gives each vertex a cage ray (four per part vertex: the unit way out and the distance it starts at,
+     * below 0 for the bake's own distance), or takes them away (null).
+     */
+    setCage(values: Float32Array | null): void {
+        const part = this.part;
+        for (const [tile, meshes] of this.tiles) {
+            if (!values) { meshes.geometry.deleteAttribute('cage'); continue; }
+            const corners: number[] = [];
+            for (let t = 0; t < part.triangleTile.length; t++) {
+                if (part.triangleTile[t] !== tile) continue;
+                for (let k = 0; k < 3; k++) corners.push(part.indices[t * 3 + k]);
+            }
+            const data = new Float32Array(corners.length * 4);
+            corners.forEach((vertex, i) => data.set(values.subarray(vertex * 4, vertex * 4 + 4), i * 4));
+            meshes.geometry.setAttribute('cage', new THREE.BufferAttribute(data, 4));
+            // The lines along the edges share the triangles' corners.
+            meshes.lines.dispose();
+            const lines = edgeGeometry(meshes.geometry);
+            meshes.edges.geometry = lines;
+            meshes.lines = lines;
+        }
     }
 
     dispose(): void {

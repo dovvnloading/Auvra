@@ -16,6 +16,7 @@ import { sortByHierarchy } from './sceneGraph';
 import { normalizeMaterialOverrides, setMaterialOverrideField, withPaintedBaseMap, type MaterialOverrides } from './materialOverrides';
 import { MATERIALS_DOMAIN, materialAssetDocument, readMaterialAsset, withoutAssetTexture } from '../runtime/materials/materialLibrary';
 import { SKIN_PAINT_ENCODING, SKIN_PAINT_FILE_NAME, SKIN_PAINT_MIME, type SkinPaintFile, type SkinPaintReference } from './skinPaint/skinPaintFile';
+import type { TextureSettings } from '../texturing/textureSettings';
 
 const DB_NAME = 'OmniRenderDB';
 
@@ -52,6 +53,10 @@ export interface DBTexture {
   name: string;
   file: Blob;
   dimensions: { width: number; height: number };
+  /** Its settings (texturing/textureSettings.ts); a deep picture's `preview` is stored from `preview`. */
+  settings?: TextureSettings;
+  /** An 8-bit picture of a deep picture, stored beside it for the places that show one. */
+  preview?: Blob;
 }
 
 export interface DBAudio {
@@ -681,10 +686,20 @@ class DBOperations {
     this.requireNativeProject();
     const assetId = await projectService.uploadAsset(new File([texture.file], texture.name), transfer);
     assertTransferActive(transfer);
+    const previewAssetId = texture.preview
+      ? await projectService.uploadAsset(new File([texture.preview], `${texture.name} preview.png`, { type: 'image/png' }), transfer)
+      : null;
+    assertTransferActive(transfer);
+    const settings = previewAssetId ? { ...(texture.settings ?? {}), preview: { assetId: previewAssetId } } : texture.settings;
     transfer.onPhase?.('project_record_commit');
     await projectService.applyChanges([{ domain: 'textures', operation: 'upsert', id: texture.id, value: {
-      id: texture.id, name: texture.name, assetId, dimensions: texture.dimensions,
+      id: texture.id, name: texture.name, assetId, dimensions: texture.dimensions, ...(settings ? { settings } : {}),
     } }], transfer.diagnostics);
+  }
+
+  /** Stores a texture's settings (its preview kept as it was). */
+  async updateTextureSettings(id: string, settings: TextureSettings): Promise<void> {
+      await this.canonicalChange('textures', 'upsert', { id, settings }, id);
   }
 
   async getAllTextures(): Promise<DBTexture[]> {
@@ -928,7 +943,7 @@ frontendDiagnostics.instrumentClass(DBOperations, 'project_documents', [
   'updateModelTextureOverrides', 'updateModelMaterialOverrides', 'updateModelInfo', 'addModelTextureOverride', 'deleteModel',
   'addAnimations', 'addAttachment', 'updateAttachment', 'deleteAttachment',
   'addSocket', 'updateSocket', 'deleteSocket', 'addLevelObject',
-  'updateLevelObject', 'deleteLevelObject', 'getAllNativeLevelObjects', 'addTexture', 'updateTextureInfo', 'deleteTexture', 'deleteMaterialAsset',
+  'updateLevelObject', 'deleteLevelObject', 'getAllNativeLevelObjects', 'addTexture', 'updateTextureInfo', 'updateTextureSettings', 'deleteTexture', 'deleteMaterialAsset',
   'addAudio', 'updateAudioInfo', 'deleteAudio', 'saveBlueprint', 'deleteBlueprint',
   'getAllPrefabs', 'upsertPrefab', 'deletePrefab',
   'migrateLegacyDatabase', 'clearDatabase', 'deleteEntireDatabase',

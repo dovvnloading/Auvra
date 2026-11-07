@@ -8,6 +8,28 @@ import { useNotification } from '../context/NotificationContext';
 import { isAbortError, useOperationActions } from '../context/OperationContext';
 import { assetDiagnosticAttributes, frontendDiagnostics } from '../diagnostics/runtime';
 import { importFailureMessage } from '../utils/modelLoader';
+import { browserReadsWholly, pictureToRgba8, pngDepthOf, sniffPictureFormat } from '../texturing/textureDecode';
+import { decodePictureOffPage } from '../texturing/texturePipeline';
+import { encodePng } from '../texturing/png';
+import { setTextureSettings, type TextureSettings } from '../texturing/textureSettings';
+
+/**
+ * A deep picture (16-bit, floating point, TIFF, TGA, PSD) read whole off the page: its size, what the file
+ * was, and an 8-bit preview for the places that show a picture. Null for what the browser reads whole.
+ */
+const readDeepPicture = async (file: File): Promise<{ dimensions: { width: number; height: number }; settings: TextureSettings; preview: Blob } | null> => {
+  const head = new Uint8Array(await file.slice(0, 32).arrayBuffer());
+  const format = sniffPictureFormat(head, file.name);
+  if (!format) throw new Error('This file is not a picture that can be imported as a texture.');
+  if (browserReadsWholly(format, pngDepthOf(head))) return null;
+  const picture = await decodePictureOffPage(new Uint8Array(await file.arrayBuffer()), file.name);
+  const preview = await encodePng(pictureToRgba8(picture), picture.width, picture.height, 4);
+  return {
+    dimensions: { width: picture.width, height: picture.height },
+    settings: { source: { format, depth: picture.depth, channels: picture.channels, ...(picture.hdr ? { hdr: true } : {}) } },
+    preview,
+  };
+};
 
 /** A PNG cut short still shows, with the rest of it blank, so the browser cannot be asked. Its last chunk says it is all there. */
 const isCutShortPng = async (file: File): Promise<boolean> => {
@@ -41,6 +63,27 @@ export const useTextureManager = (setIsLoading: (loading: boolean) => void) => {
         projectService.assertWritable();
         await projectService.assertStorable(file);
         if (await isCutShortPng(file)) throw new Error('The image could not be read. It may be damaged or cut short.');
+        // A deep picture keeps its depth: decoded off the page, shown through an 8-bit preview.
+        const deep = await readDeepPicture(file);
+        if (deep) {
+          url = URL.createObjectURL(deep.preview);
+          const sourceUrl = URL.createObjectURL(file);
+          const deepTexture: TextureData = { id: crypto.randomUUID(), name: file.name, url, dimensions: deep.dimensions, settings: deep.settings, sourceUrl };
+          operation.update({ phase: 'project_upload', progress: 0.2, detail: 'Saving texture source', diagnostic });
+          await dbOperations.addTexture({ id: deepTexture.id, name: deepTexture.name, file, dimensions: deep.dimensions, settings: deep.settings, preview: deep.preview }, {
+            signal: operation.signal,
+            diagnostics: { operationId: operation.id, traceId: operation.traceId, spanId: operation.spanId, assetAlias },
+            onProgress: (progress) => operation.update({ progress: 0.2 + progress * 0.76, detail: 'Saving texture source' }),
+          });
+          if (operation.signal.aborted) throw new DOMException('Texture import was cancelled.', 'AbortError');
+          setTextureSettings(deepTexture.id, deep.settings);
+          // Material assets draw with the file itself, before the project is opened again.
+          materialLibrary.addTextureUrl(deepTexture.id, sourceUrl);
+          setTextures(prev => [...prev, deepTexture]);
+          url = null;
+          addNotification({ message: `Texture "${deepTexture.name}" saved to library at ${deep.settings.source?.depth ?? 8} bits a channel.`, type: 'success' });
+          return deepTexture.id;
+        }
         url = URL.createObjectURL(file);
         
         // Read dimensions
@@ -89,6 +132,8 @@ export const useTextureManager = (setIsLoading: (loading: boolean) => void) => {
         if (operation.signal.aborted) throw new DOMException('Texture import was cancelled.', 'AbortError');
         operation.update({ phase: 'library_publication', progress: 0.98, detail: 'Publishing texture', diagnostic });
         setTextures(prev => [...prev, newTexture]);
+        // Material assets can draw with it before the project is opened again.
+        materialLibrary.addTextureUrl(newTexture.id, newTexture.url);
         url = null;
         addNotification({ message: `Texture "${newTexture.name}" saved to library.`, type: 'success' });
         return newTexture.id;

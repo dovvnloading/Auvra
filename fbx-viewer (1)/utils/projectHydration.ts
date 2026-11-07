@@ -30,6 +30,8 @@ import { MATERIALS_DOMAIN, materialLibrary, readMaterialAsset, type MaterialAsse
 import { loadSkinPaint } from './skinPaint/modelSkin';
 import { applyLayout, decodeLayout } from '../texturing/uv/uvLayout';
 import { setLightVolumeSource } from '../runtime/lighting/lightVolumeLoader';
+import { normalizeTextureSettings, setTextureSettings } from '../texturing/textureSettings';
+import { createMaterialTextureLoader } from '../texturing/materialTextureLoader';
 
 /** The HUD document in the project 'hud' domain. */
 export const HUD_DOCUMENT_ID = 'hud-main';
@@ -286,11 +288,20 @@ export function createGameContentLoader(
       const diagnostic: DiagnosticAttributes = { assetAlias, assetKind: 'texture' };
       try {
         report(`Loading texture — ${item.name}`, 0.1, 'source_read', diagnostic);
-        const url = await loadProjectAssetUrl(item.assetId, traceAsset(assetAlias));
+        const settings = normalizeTextureSettings((item as { settings?: unknown }).settings);
+        const source = await loadProjectAssetUrl(item.assetId, traceAsset(assetAlias));
+        // A deep picture is shown through its 8-bit preview; material assets draw with the file itself.
+        const url = settings?.preview ? await loadProjectAssetUrl(settings.preview.assetId, traceAsset(assetAlias)) : source;
         assertCurrent();
-        textureAssetUrls.set(item.id, url);
+        textureAssetUrls.set(item.id, source);
+        setTextureSettings(item.id, settings);
         materialLibrary.releaseTexture(item.id);
-        textures.push({ id: item.id, name: item.name, dimensions: item.dimensions || { width: 0, height: 0 }, url, ...(typeof item.folder === 'string' ? { folder: item.folder } : {}) });
+        textures.push({
+          id: item.id, name: item.name, dimensions: item.dimensions || { width: 0, height: 0 }, url,
+          ...(typeof item.folder === 'string' ? { folder: item.folder } : {}),
+          ...(settings ? { settings } : {}),
+          ...(settings?.preview ? { sourceUrl: source } : {}),
+        });
       }
       catch (error) { recordAssetFailure('texture_hydration_failed', error, 'source_read', diagnostic); }
       complete(`Loaded texture — ${item.name}`, diagnostic);
@@ -298,7 +309,8 @@ export function createGameContentLoader(
     if (!materialsReady) {
       materialsReady = true;
       // Material assets, before the models whose materials use them.
-      materialLibrary.setTextureSource((textureId) => textureAssetUrls.get(textureId));
+      // Material textures are decoded at their own depth and compressed by role, unless the game turns compression off.
+      materialLibrary.setTextureSource((textureId) => textureAssetUrls.get(textureId), createMaterialTextureLoader({ compress: compressTextures }));
       materialLibrary.replaceAll(documents(MATERIALS_DOMAIN).map(readMaterialAsset).filter((asset): asset is MaterialAsset => asset !== null));
       // Levels' baked light volumes are read when a level is shown.
       setLightVolumeSource((assetId) => resolveAssetUrl(assetId), releaseAssetUrl);

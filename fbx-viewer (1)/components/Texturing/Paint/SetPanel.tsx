@@ -1,7 +1,8 @@
 import React, { useRef, useState } from 'react';
 import { CheckCircleIcon, DownloadIcon, FlameIcon, RefreshIcon } from '../../UI/Icons';
 import type * as THREE from 'three';
-import { BAKE_VERSION, DEFAULT_BAKE_SETTINGS, type BakeSettings } from '../../../texturing/bake/meshBaker';
+import { BAKE_VERSION, DEFAULT_BAKE_SETTINGS, EXTRA_MAPS, EXTRA_MAP_LABELS, type BakeSettings } from '../../../texturing/bake/meshBaker';
+import { SUPERSAMPLE, bakeBytesPerTexel, supersampled, type CageMode, type Supersample } from '../../../texturing/bake/bakeSetup';
 import { MESH_MAP_LABELS, MESH_MAPS, type MeshMapName } from '../../../texturing/graph/nodes/io';
 import { CHANNEL_LABELS, PAINT_CHANNELS, type PaintChannel } from '../../../texturing/paint/paintTypes';
 import type { PictureLayout } from '../../../texturing/materialOutput';
@@ -24,7 +25,9 @@ export const SetPanel: React.FC<{
     onReopen: () => void;
 }> = ({ session, models, onReopen }) => {
     const document = session.document;
-    const [settings, setSettings] = useState<BakeSettings>(() => ({ ...DEFAULT_BAKE_SETTINGS, ...(document.bake?.settings ?? {}) }));
+    // The bake's own size starts at the set's (and can be larger, for detail averaged down).
+    const [settings, setSettings] = useState<BakeSettings>(() => ({ ...DEFAULT_BAKE_SETTINGS, size: document.size, ...(document.bake?.settings ?? {}) }));
+    const [cageModel, setCageModel] = useState('');
     const [highPoly, setHighPoly] = useState('');
     const [layout, setLayout] = useState<PictureLayout>('separate');
     const [convention, setConvention] = useState<'bottom' | 'top'>('bottom');
@@ -71,14 +74,54 @@ export const SetPanel: React.FC<{
                     <span className="w-28 text-2xs text-zinc-400">Detail from</span>
                     <Select value={highPoly} options={[{ value: '', label: 'This surface (and its normal map)' }, ...models.filter((model) => model.id !== session.target.modelId).map((model) => ({ value: model.id, label: `High-poly: ${model.name}` }))]} onChange={(value) => setHighPoly(String(value))} className="min-w-0 flex-1" />
                 </div>
+                <div className="flex items-center gap-2">
+                    <span className="w-28 shrink-0 text-2xs text-zinc-400">Bake at</span>
+                    <Select value={settings.size} options={[9, 10, 11, 12, 13].map((power) => ({ value: power, label: `${2 ** power} × ${2 ** power}${power === document.size ? ' (the set\'s size)' : ''}` }))} onChange={(size) => setSettings({ ...settings, size: Number(size) })} className="min-w-0 flex-1" />
+                </div>
+                <div className="flex items-center gap-2">
+                    <span className="w-28 shrink-0 text-2xs text-zinc-400">Supersampling</span>
+                    <Segmented value={String(settings.supersample ?? 1)} options={SUPERSAMPLE.map((factor) => ({ value: String(factor), label: factor === 1 ? 'Off' : `${factor}×${factor}` }))} onChange={(factor) => setSettings({ ...settings, supersample: Number(factor) as Supersample })} label="Supersampling" />
+                </div>
+                {(() => {
+                    const plan = supersampled(settings.size, settings.supersample ?? 1, session.gpu.maxSize, bakeBytesPerTexel(settings.maps, settings.extras ?? [], Boolean(highPoly)));
+                    return plan.size !== document.size || plan.limited ? <p className="text-2xs leading-snug text-zinc-500">Baked at {2 ** plan.size} × {2 ** plan.size}{plan.limited ? ' (as large as the graphics card safely takes for these maps: fewer maps, or a smaller set, leave room for more)' : ''}{plan.size !== document.size ? `, then averaged to the set's ${2 ** document.size} × ${2 ** document.size}` : ''}.</p> : null;
+                })()}
                 <Row label="Rays per texel" value={settings.samples} min={16} max={512} step={16} onChange={(samples) => setSettings({ ...settings, samples })} />
                 <Row label="Occlusion reach" value={settings.occlusionDistance} min={0.01} max={0.5} step={0.005} onChange={(occlusionDistance) => setSettings({ ...settings, occlusionDistance })} />
                 {highPoly && (
                     <>
-                        <Row label="Search in front" value={settings.frontDistance} min={0.001} max={0.1} step={0.001} onChange={(frontDistance) => setSettings({ ...settings, frontDistance })} />
-                        <Row label="Search behind" value={settings.rearDistance} min={0.001} max={0.1} step={0.001} onChange={(rearDistance) => setSettings({ ...settings, rearDistance })} />
+                        <div className="flex items-center gap-2">
+                            <span className="w-28 shrink-0 text-2xs text-zinc-400">Cage</span>
+                            <Segmented value={settings.cage ?? 'distance'} options={[{ value: 'distance', label: 'By distance' }, { value: 'auto', label: 'Automatic' }, { value: 'mesh', label: 'From a model' }]} onChange={(cage) => setSettings({ ...settings, cage: cage as CageMode })} label="Cage" />
+                        </div>
+                        {(settings.cage ?? 'distance') === 'distance' && (
+                            <>
+                                <Row label="Search in front" value={settings.frontDistance} min={0.001} max={0.1} step={0.001} onChange={(frontDistance) => setSettings({ ...settings, frontDistance })} />
+                                <Row label="Search behind" value={settings.rearDistance} min={0.001} max={0.1} step={0.001} onChange={(rearDistance) => setSettings({ ...settings, rearDistance })} />
+                            </>
+                        )}
+                        {settings.cage === 'auto' && <p className="text-2xs leading-snug text-zinc-500">How far rays look is found from the two models: past nearly every gap between them, with a margin.</p>}
+                        {settings.cage === 'mesh' && (
+                            <Select value={cageModel} placeholder="Pick the cage model" options={models.filter((model) => model.id !== session.target.modelId && model.id !== highPoly).map((model) => ({ value: model.id, label: model.name }))} onChange={(value) => setCageModel(String(value))} className="w-full" />
+                        )}
+                        <label className="flex items-center gap-1.5 text-2xs text-zinc-300">
+                            <input type="checkbox" className="accent-sky-500" checked={settings.averagedNormals ?? true} onChange={(event) => setSettings({ ...settings, averagedNormals: event.target.checked })} />
+                            Rays along averaged normals (no gaps at hard edges)
+                        </label>
+                        <label className="flex items-center gap-1.5 text-2xs text-zinc-300">
+                            <input type="checkbox" className="accent-sky-500" checked={settings.matchByName ?? true} onChange={(event) => setSettings({ ...settings, matchByName: event.target.checked })} />
+                            Match meshes by name (_low and _high), else by where they are
+                        </label>
                     </>
                 )}
+                <div className="flex items-center gap-2">
+                    <span className="w-28 shrink-0 text-2xs text-zinc-400">Normal map frame</span>
+                    <Select value={settings.tangentSpace ?? 'renderer'} options={[{ value: 'renderer', label: 'As the renderer works it out' }, { value: 'uvs', label: 'From the UVs alone' }]} onChange={(tangentSpace) => setSettings({ ...settings, tangentSpace: tangentSpace as BakeSettings['tangentSpace'] })} className="min-w-0 flex-1" />
+                </div>
+                <div className="flex items-center gap-2">
+                    <span className="w-28 shrink-0 text-2xs text-zinc-400">Green points</span>
+                    <Segmented value={settings.normalConvention ?? 'openGl'} options={[{ value: 'openGl', label: 'Up (OpenGL)' }, { value: 'directX', label: 'Down (DirectX)' }]} onChange={(normalConvention) => setSettings({ ...settings, normalConvention: normalConvention as BakeSettings['normalConvention'] })} label="Normal map green" />
+                </div>
                 <Row label="Curvature strength" value={settings.curvatureStrength} min={0.1} max={5} step={0.05} onChange={(curvatureStrength) => setSettings({ ...settings, curvatureStrength })} />
                 <div className="flex items-center gap-2">
                     <span className="w-28 text-2xs text-zinc-400">IDs by</span>
@@ -91,6 +134,12 @@ export const SetPanel: React.FC<{
                             {MESH_MAP_LABELS[name]}
                         </label>
                     ))}
+                    {EXTRA_MAPS.filter((name) => highPoly || (name !== 'color' && name !== 'opacity' && name !== 'material')).map((name) => (
+                        <label key={name} className="flex items-center gap-1 text-2xs text-zinc-300">
+                            <input type="checkbox" className="accent-sky-500" checked={(settings.extras ?? []).includes(name)} onChange={(event) => setSettings({ ...settings, extras: event.target.checked ? [...(settings.extras ?? []), name] : (settings.extras ?? []).filter((item) => item !== name) })} />
+                            {EXTRA_MAP_LABELS[name]}
+                        </label>
+                    ))}
                 </div>
                 {busy && session.busy && session.progress > 0 ? (
                     <div className="space-y-1">
@@ -100,7 +149,7 @@ export const SetPanel: React.FC<{
                 ) : (
                     <Button className="w-full justify-center" disabled={busy} icon={<FlameIcon size={13} />} onClick={() => {
                         controller.current = new AbortController();
-                        void session.bake(settings, models.find((model) => model.id === highPoly)?.object ?? null, controller.current.signal);
+                        void session.bake(settings, models.find((model) => model.id === highPoly)?.object ?? null, controller.current.signal, models.find((model) => model.id === cageModel)?.object ?? null);
                     }}>{document.bake ? 'Bake again' : 'Bake mesh maps'}</Button>
                 )}
             </section>

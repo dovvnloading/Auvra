@@ -35,12 +35,12 @@ import {
     type MaterialValueType,
     type NodeEmitContext,
 } from './materialTypes';
-import { MATERIAL_NODE_DEFINITIONS, OUTPUT_NODE_TYPE } from './materialNodes';
+import { MATERIAL_NODE_DEFINITIONS, NAMED_RECEIVE_TYPE, NAMED_SEND_TYPE, OUTPUT_NODE_TYPE } from './materialNodes';
 import { hasHelper } from './materialGlsl';
 import { NODE_CODE_END, nodeCodeMark } from './shaderErrors';
 
 export * from './materialTypes';
-export { MATERIAL_NODE_DEFINITIONS, OUTPUT_NODE_TYPE, REROUTE_NODE_TYPE, swizzleMask } from './materialNodes';
+export { MATERIAL_NODE_DEFINITIONS, NAMED_RECEIVE_TYPE, NAMED_SEND_TYPE, OUTPUT_NODE_TYPE, REROUTE_NODE_TYPE, swizzleMask } from './materialNodes';
 
 export interface MaterialGraphNode {
     id: string;
@@ -221,6 +221,8 @@ export const readParam = (param: MaterialParamDef, value: unknown): MaterialPara
             return typeof value === 'boolean' ? value : param.default as boolean;
         case 'code':
             return typeof value === 'string' ? value.slice(0, MAX_CODE_LENGTH) : param.default as string;
+        case 'text':
+            return typeof value === 'string' ? value.trim().slice(0, MAX_TEXT_LENGTH) : param.default as string;
         case 'ramp':
             return readRamp(value, param.default as MaterialRamp);
         default: {
@@ -333,6 +335,40 @@ export const materialShaderVersions = (graph: MaterialGraph, uses: Iterable<Mate
     const shapes = new Set<string>();
     for (const values of uses) shapes.add(materialGraphShape(withMaterialParameters(graph, values)));
     return Math.max(1, shapes.size);
+};
+
+// ---------------------------------------------------------------------------
+// Named links
+// ---------------------------------------------------------------------------
+
+/** Longest text a node keeps (a named link's name). */
+export const MAX_TEXT_LENGTH = 64;
+
+/**
+ * The wires a graph's named links stand for: each Receive fed by the first Send of its name. They take
+ * the place of anything wired into a Receive's own input.
+ */
+export const namedMaterialLinks = (graph: Pick<MaterialGraph, 'nodes'>): MaterialGraphLink[] => {
+    const senders = new Map<string, string>();
+    for (const node of graph.nodes) {
+        const name = node.type === NAMED_SEND_TYPE ? String(node.params.name ?? '').trim() : '';
+        if (name && !senders.has(name)) senders.set(name, node.id);
+    }
+    const links: MaterialGraphLink[] = [];
+    for (const node of graph.nodes) {
+        if (node.type !== NAMED_RECEIVE_TYPE) continue;
+        const from = senders.get(String(node.params.name ?? '').trim());
+        if (from && from !== node.id) links.push({ fromNode: from, fromOutput: 'out', toNode: node.id, toInput: 'in' });
+    }
+    return links;
+};
+
+/** The graph with the wires its named links stand for (the same graph when it has none). */
+const withNamedLinks = (graph: MaterialGraph): MaterialGraph => {
+    const extra = namedMaterialLinks(graph);
+    if (!extra.length) return graph;
+    const fed = new Set(extra.map(link => `${link.toNode}:${link.toInput}`));
+    return { ...graph, links: [...graph.links.filter(link => !fed.has(`${link.toNode}:${link.toInput}`)), ...extra] };
 };
 
 // ---------------------------------------------------------------------------
@@ -618,7 +654,8 @@ export const bypassInput = (definition: MaterialNodeDef): MaterialInputDef | nul
 };
 
 /** Compiles the part of a (normalised) graph a stage needs to GLSL for graphMaterial.ts. */
-export const compileMaterialGraph = (graph: MaterialGraph, options: CompileOptions = {}): CompiledMaterialGraph => {
+export const compileMaterialGraph = (stored: MaterialGraph, options: CompileOptions = {}): CompiledMaterialGraph => {
+    const graph = withNamedLinks(stored);
     const stage = options.stage ?? 'fragment';
     const wanted = options.outputs ?? STAGE_OUTPUTS[stage];
     const builtinTable = STAGE_BUILTINS[stage];

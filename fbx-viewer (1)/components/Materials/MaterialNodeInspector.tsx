@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { ChevronDownIcon, ChevronRightIcon } from '../UI/Icons';
 import { Select } from '../UI/Select';
-import { ParamField } from './MaterialParamField';
+import { CodeField, ParamField } from './MaterialParamField';
 import {
     MAX_PARAMETER_NAME_LENGTH,
     OUTPUT_NODE_TYPE,
@@ -30,8 +30,10 @@ export const NodeInspector: React.FC<{
     title?: string;
     /** Inputs of the node that are wired: their values come from the wire. */
     wired?: ReadonlySet<string>;
+    /** What is wrong with the node's code, when the shader did not compile there (marked on its code). */
+    error?: string;
     onChangeNode: (node: MaterialGraphNode, coalesce?: string) => void;
-}> = ({ node, textures, title, wired, onChangeNode }) => {
+}> = ({ node, textures, title, wired, error, onChangeNode }) => {
     const definition = getMaterialNodeDefinition(node.type)!;
     const [toggled, setToggled] = useState<Record<string, boolean>>({});
     const blendMode = node.type === OUTPUT_NODE_TYPE ? materialGraphSettings({ nodes: [node], links: [] }).blendMode : null;
@@ -44,6 +46,22 @@ export const NodeInspector: React.FC<{
                     <span className="text-gray-500">{param.label}</span>
                     <span className="text-gray-400">Set by its wire</span>
                 </div>
+            );
+        }
+        if (param.kind === 'code') {
+            return (
+                <CodeField key={param.key} label={param.label} code={readParam(param, node.params[param.key]) as string} error={error ?? null}
+                    onChange={(value) => onChangeNode({ ...node, params: { ...node.params, [param.key]: value } }, `${node.id}:${param.key}`)} />
+            );
+        }
+        if (param.kind === 'text') {
+            return (
+                <label key={param.key} className="block space-y-1">
+                    <span className="text-2xs text-gray-500">{param.label}</span>
+                    <input aria-label={param.label} value={String(node.params[param.key] ?? '')} maxLength={64}
+                        onChange={(event) => onChangeNode({ ...node, params: { ...node.params, [param.key]: event.target.value } }, `${node.id}:${param.key}`)}
+                        className="w-full rounded border border-gray-700 bg-gray-950 px-2 py-1 text-xs text-white" />
+                </label>
             );
         }
         if (param.kind === 'select') {

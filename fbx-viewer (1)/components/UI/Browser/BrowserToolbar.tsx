@@ -3,10 +3,12 @@ import React, { useState } from 'react';
 import { BlueprintIcon, ComponentsIcon, FilmIcon, FolderPlusIcon, ImageIcon, MusicIcon, PaletteIcon, PlusIcon, SearchIcon, ShieldIcon, SkullIcon, SwordsIcon, UserIcon } from '../Icons';
 import { AssetCategory } from '../../../types';
 import { MODEL_FILE_ACCEPT } from './browserFolders';
+import { TEXTURE_FILE_ACCEPT } from '../../../texturing/textureDecode';
 
 /** File picker filter per import entry; animation clips are still bound through the FBX path. */
 const acceptFor = (category: AssetCategory): string => {
-    if (category === 'Texture') return 'image/*';
+    // Deep pictures too (16-bit PNG, TIFF, EXR, HDR, TGA, PSD), which the browser does not call images.
+    if (category === 'Texture') return TEXTURE_FILE_ACCEPT;
     if (category === 'Audio') return 'audio/*';
     if (category === 'Animation') return '.fbx';
     return MODEL_FILE_ACCEPT;

@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExtern
 import * as THREE from 'three';
 import { CompareIcon, CrossIcon, FrameIcon, PinIcon, PulseIcon, SunIcon, TilesIcon } from '../UI/Icons';
 import type { GpuImage } from '../../texturing/gpu/textureGpu';
+import { hash2 } from '../../texturing/graph/scatter';
 import { isParamLink, type TexGraphNode } from '../../texturing/graph/types';
 import { IconButton, Segmented } from '../UI/kit';
 import { finishPicking, stopsFrom, usePicking, type Rgba } from './eyedropper';
@@ -91,8 +92,8 @@ interface Handles {
     locked: (key: string) => boolean;
 }
 
-/** The handles a node gets on the image, from its settings. */
-const handlesFor = (node: TexGraphNode | null | undefined): Handles | null => {
+/** The handles a node gets on the image, from its settings (and the seed it drew with, for a Tile sampler's random shifts). */
+const handlesFor = (node: TexGraphNode | null | undefined, seed: number | undefined): Handles | null => {
     if (!node || node.bypass) return null;
     const p = node.params;
     const locked = (key: string) => isParamLink(p[key]);
@@ -108,7 +109,13 @@ const handlesFor = (node: TexGraphNode | null | undefined): Handles | null => {
         case 'gradient':
             return { frame: gradientFrame(num(p.angle, 0)), drag: (key, to) => ({ ...dragGradient(key, to) }), locked: () => isParamLink(p.angle) };
         case 'tileSampler': {
-            const settings = { columns: num(p.columns, 8), rows: num(p.rows, 8), size: num(p.size, 0.8), stretch: pair(p.stretch, [1, 1]), rotation: num(p.rotation, 0), offset: num(p.offset, 0) };
+            const randomness = num(p.positionRandom, 0.3);
+            // Each copy's random shift, as the node's shader works it out: hash2(cell, seed + 1) a cell.
+            const jitterAt = seed === undefined || isParamLink(p.positionRandom) ? undefined : (cell: Vec2): Vec2 => {
+                const random = hash2(cell[0], cell[1], Math.fround(seed + 1));
+                return [(random[0] - 0.5) * randomness, (random[1] - 0.5) * randomness];
+            };
+            const settings = { columns: num(p.columns, 8), rows: num(p.rows, 8), size: num(p.size, 0.8), stretch: pair(p.stretch, [1, 1]), rotation: num(p.rotation, 0), offset: num(p.offset, 0), jitterAt };
             return { frame: tileFrame(settings), drag: (key, to) => ({ ...dragTile(settings, key, to) }), locked };
         }
         default:
@@ -456,7 +463,7 @@ export const TextureView2D: React.FC<{
         return `${place}   R ${values[0].toFixed(3)}  G ${values[1].toFixed(3)}  B ${values[2].toFixed(3)}  A ${values[3].toFixed(3)}`;
     })();
 
-    const handles = onParams ? handlesFor(node) : null;
+    const handles = onParams ? handlesFor(node, node ? session.state(node.id)?.seed : undefined) : null;
     const toView = (point: Vec2) => (placement ? uvToView({ u: point[0], v: point[1] }, placement) : { x: 0, y: 0 });
     const onHandleDown = (event: React.PointerEvent, key: string) => {
         event.stopPropagation();
