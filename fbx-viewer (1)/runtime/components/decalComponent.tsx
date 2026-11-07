@@ -6,6 +6,7 @@ import { useGpuDecal } from '../../renderer/gpu/effects/decals';
 import type { TextureData } from '../../types';
 import { frontendDiagnostics } from '../../diagnostics/runtime';
 import { useGameContent } from '../GameContentContext';
+import { materialLibrary } from '../materials/materialLibrary';
 import type { ComponentDefinition, ComponentRenderProps } from './types';
 
 type Vec3 = [number, number, number];
@@ -29,9 +30,26 @@ export interface DecalSettings {
     /** Tint multiplied with the texture. */
     color: string;
     receivers: DecalReceiverMode;
+    /** A normal map (texture asset id or name) that bumps the surface under the decal; empty for none. */
+    normalTextureId: string;
+    /** 0..1: how rough the decal's own surface is (1 dull, 0 mirror-like). */
+    roughness: number;
+    /** 0..1: how metallic it is. */
+    metalness: number;
+    /** The colour it glows with (black for none), at `emissiveIntensity`. */
+    emissive: string;
+    emissiveIntensity: number;
+    /** A material asset the decal draws instead of its texture, tint and surface values; empty for none. */
+    materialId: string;
 }
 
-export const DECAL_DEFAULTS: DecalSettings = { textureId: '', size: [1, 1, 3], offset: [0, 0, 0], opacity: 1, color: '#ffffff', receivers: 'parent' };
+export const DECAL_DEFAULTS: DecalSettings = {
+    textureId: '', size: [1, 1, 3], offset: [0, 0, 0], opacity: 1, color: '#ffffff', receivers: 'parent',
+    normalTextureId: '', roughness: 1, metalness: 0, emissive: '#000000', emissiveIntensity: 1, materialId: '',
+};
+
+/** Strongest glow a decal takes. */
+export const MAX_DECAL_GLOW = 20;
 
 /** Smallest side of the projection box, in metres. */
 export const MIN_DECAL_SIZE = 0.01;
@@ -62,7 +80,17 @@ const readOffset = (value: unknown): Vec3 => {
  */
 export const resolveDecalSettings = (props: Record<string, unknown>): DecalSettings => {
     const { textureId, opacity, color, receivers } = props;
+    const unit = (value: unknown, fallback: number) => (typeof value === 'number' && Number.isFinite(value) ? clamp(value, 0, 1) : fallback);
+    const text = (value: unknown) => (typeof value === 'string' ? value.trim() : '');
     return {
+        normalTextureId: text(props.normalTextureId),
+        roughness: unit(props.roughness, DECAL_DEFAULTS.roughness),
+        metalness: unit(props.metalness, DECAL_DEFAULTS.metalness),
+        emissive: typeof props.emissive === 'string' && HEX_COLOR.test(props.emissive) ? props.emissive : DECAL_DEFAULTS.emissive,
+        emissiveIntensity: typeof props.emissiveIntensity === 'number' && Number.isFinite(props.emissiveIntensity)
+            ? clamp(props.emissiveIntensity, 0, MAX_DECAL_GLOW)
+            : DECAL_DEFAULTS.emissiveIntensity,
+        materialId: text(props.materialId),
         textureId: typeof textureId === 'string' ? textureId.trim() : DECAL_DEFAULTS.textureId,
         size: readSize(props.size),
         offset: readOffset(props.offset),
@@ -606,6 +634,37 @@ export class DecalProjector {
         material.map = map;
     }
 
+    /** The decal's own surface: how rough and metallic it is, and its glow. */
+    setSurface(roughness: number, metalness: number, emissive: string, emissiveIntensity: number): void {
+        const material = this.mesh.material;
+        material.roughness = roughness;
+        material.metalness = metalness;
+        material.emissive.set(emissive);
+        material.emissiveIntensity = emissiveIntensity;
+    }
+
+    /** The decal's normal map, or null for none. The caller owns (and disposes) it. */
+    setNormalMap(map: THREE.Texture | null): void {
+        const material = this.mesh.material;
+        if (material.normalMap === map) return;
+        if ((material.normalMap === null) !== (map === null)) material.needsUpdate = true;
+        material.normalMap = map;
+    }
+
+    /**
+     * Draws the decal with a material asset (its colour, normal, roughness, metalness, emission and
+     * opacity), or with its own texture, tint and surface again for null. A missing asset draws its own.
+     */
+    setMaterialAsset(materialId: string | null): void {
+        const material = this.mesh.material;
+        materialLibrary.assign(material, materialId);
+        // Still a decal whatever the asset says: drawn over the surface, not into its depth.
+        material.depthWrite = false;
+        material.polygonOffset = true;
+        material.polygonOffsetFactor = -4;
+        material.polygonOffsetUnits = -4;
+    }
+
     /** Shows the projection box outline (the editor does). */
     setVolumeVisible(visible: boolean): void {
         this.volume.visible = visible;
@@ -666,6 +725,7 @@ export class DecalProjector {
     dispose(): void {
         if (this.mesh.geometry !== this.empty) this.mesh.geometry.dispose();
         this.empty.dispose();
+        materialLibrary.assign(this.mesh.material, null);
         this.mesh.material.dispose();
         this.volume.geometry.dispose();
         this.volume.material.dispose();
@@ -726,6 +786,35 @@ const DecalRender: React.FC<ComponentRenderProps> = ({ object, component, mode }
     useGpuDecal(projector);
     useEffect(() => () => projector.dispose(), [projector]);
     useLayoutEffect(() => projector.setAppearance(settings.color, settings.opacity), [projector, settings.color, settings.opacity]);
+    useLayoutEffect(
+        () => projector.setSurface(settings.roughness, settings.metalness, settings.emissive, settings.emissiveIntensity),
+        [projector, settings.roughness, settings.metalness, settings.emissive, settings.emissiveIntensity],
+    );
+    useLayoutEffect(() => projector.setMaterialAsset(settings.materialId || null), [projector, settings.materialId]);
+    const normalUrl = findDecalTexture(textures, settings.normalTextureId)?.url;
+    useEffect(() => {
+        if (!normalUrl) return;
+        let current = true;
+        let loaded: THREE.Texture | null = null;
+        new THREE.TextureLoader().load(normalUrl, (texture) => {
+            if (!current) {
+                texture.dispose();
+                return;
+            }
+            // A normal map's values are directions, not colours.
+            texture.colorSpace = THREE.NoColorSpace;
+            loaded = texture;
+            projector.setNormalMap(texture);
+        }, undefined, (error) => {
+            if (current) frontendDiagnostics.failure('decal_texture_load_failed', error);
+        });
+        return () => {
+            current = false;
+            if (!loaded) return;
+            projector.setNormalMap(null);
+            loaded.dispose();
+        };
+    }, [projector, normalUrl]);
     // No selection reaches component renders, so the editor always shows the (faint) box.
     useLayoutEffect(() => projector.setVolumeVisible(mode === 'editor'), [projector, mode]);
 
@@ -765,7 +854,8 @@ const DecalRender: React.FC<ComponentRenderProps> = ({ object, component, mode }
 export const DECAL_COMPONENT: ComponentDefinition = {
     type: 'decal',
     label: 'Decal',
-    description: 'Projects a texture along the object\'s local -Z (rotate the object to aim it) onto surfaces inside a box. '
+    description: 'Projects a texture along the object\'s local -Z (rotate the object to aim it) onto surfaces inside a box, '
+        + 'with a normal map, roughness, metalness and glow of its own, or a whole material asset instead. '
         + 'Size is the box\'s width, height and depth in metres, whatever the object\'s scale, and Offset moves it from the object\'s origin. This Object projects onto the object\'s own model; '
         + 'Whole Scene onto any surface the box touches. Skinned (animated) meshes never receive decals.',
     props: [
@@ -780,7 +870,13 @@ export const DECAL_COMPONENT: ComponentDefinition = {
                 { label: 'This Object', value: 'parent' },
                 { label: 'Whole Scene', value: 'scene' }
             ]
-        }
+        },
+        { key: 'normalTextureId', label: 'Normal Map', type: 'texture', default: DECAL_DEFAULTS.normalTextureId },
+        { key: 'roughness', label: 'Roughness', type: 'number', default: DECAL_DEFAULTS.roughness, min: 0, max: 1, step: 0.05 },
+        { key: 'metalness', label: 'Metalness', type: 'number', default: DECAL_DEFAULTS.metalness, min: 0, max: 1, step: 0.05 },
+        { key: 'emissive', label: 'Glow Colour', type: 'color', default: DECAL_DEFAULTS.emissive },
+        { key: 'emissiveIntensity', label: 'Glow', type: 'number', default: DECAL_DEFAULTS.emissiveIntensity, min: 0, max: MAX_DECAL_GLOW, step: 0.1 },
+        { key: 'materialId', label: 'Material', type: 'material', default: DECAL_DEFAULTS.materialId }
     ],
     Render: DecalRender
 };

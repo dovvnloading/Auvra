@@ -1,9 +1,13 @@
 
-import React, { useCallback, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { Select } from '../../UI/Select';
+import { materialAssetUse, materialLibrary } from '../../../runtime/materials/materialLibrary';
+import { isSmartMaterialAsset } from '../../../texturing/paint/smartMaterials';
 import * as THREE from 'three';
 import { BranchIcon, CrossIcon, CubeIcon, CubesIcon, FogIcon, HashIcon, LayersIcon, LoopIcon, MountainIcon, MoveIcon, MusicIcon, MuteIcon, PersonIcon, PlusIcon, PuzzleIcon, RadioIcon, ResetIcon, RotateIcon, RouteIcon, ScaleIcon, SkullIcon, SunIcon, TimerIcon, TrashIcon, UserPlusIcon, UsersIcon, VolumeIcon, WarningIcon, WindIcon } from '../../UI/Icons';
 import { EditorState } from '../types';
 import { useAssets } from '../../../context/AssetContext';
+import { ObjectMaterialValues } from './ObjectMaterialValues';
 import { useGameContent } from '../../../runtime/GameContentContext';
 import { textureService } from '../../../services/TextureGenerationService';
 import { DescribeWithAI, nameFromWords } from '../../Tools/DescribeWithAI';
@@ -252,6 +256,22 @@ const PropRow: React.FC<{ label: string; children: React.ReactNode }> = ({ label
     </div>
 );
 
+/** A material asset that draws (not a graph for other graphs, nor one still without pictures), or none. */
+const MaterialPropField: React.FC<{ label: string; value: string; onChange: (value: string) => void }> = ({ label, value, onChange }) => {
+    const version = useSyncExternalStore((listener) => materialLibrary.subscribe(listener), () => materialLibrary.version);
+    const options = useMemo(() => [
+        { value: '', label: 'None: its own texture' },
+        ...(version >= 0 ? materialLibrary.list() : [])
+            .filter(asset => materialAssetUse(asset) === 'material' && !isSmartMaterialAsset(asset))
+            .map(asset => ({ value: asset.id, label: asset.name })),
+    ], [version]);
+    return (
+        <PropRow label={label}>
+            <div className="w-32"><Select value={options.some(option => option.value === value) ? value : ''} options={options} placeholder={label} onChange={(next: string) => onChange(next)} className="w-full" /></div>
+        </PropRow>
+    );
+};
+
 /** A texture from the project, or one painted from a description with a transparent background. */
 const TexturePropField: React.FC<{ label: string; value: string; onChange: (value: string) => void }> = ({ label, value, onChange }) => {
     const { textures } = useGameContent();
@@ -376,6 +396,8 @@ const ComponentPropField: React.FC<{
         }
         case 'texture':
             return <TexturePropField label={schema.label} value={readString(value, schema.default)} onChange={(next) => onChange(next, false)} />;
+        case 'material':
+            return <MaterialPropField label={schema.label} value={readString(value, schema.default)} onChange={(next) => onChange(next, false)} />;
         case 'select':
             return (
                 <PropRow label={schema.label}>
@@ -1093,6 +1115,14 @@ export const EnvironmentInspector: React.FC<EnvironmentInspectorProps> = ({ stat
                                     </div>
                                 </div>
                             </div>
+                        )}
+
+                        {selectedObject.modelId && (selectedObject.type === 'prop' || selectedObject.type === 'foliage') && (
+                            <ObjectMaterialValues
+                                key={`materials:${objectId}`}
+                                object={selectedObject}
+                                onCommit={(materialOverrides) => commitUpdate({ materialOverrides })}
+                            />
                         )}
 
                         <ComponentsSection

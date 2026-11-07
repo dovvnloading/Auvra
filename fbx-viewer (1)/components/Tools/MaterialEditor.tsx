@@ -5,7 +5,9 @@ import type { LoadedModelData, TextureData } from '../../types';
 import { Select } from '../UI/Select';
 import { materialAssetUse, materialLibrary } from '../../runtime/materials/materialLibrary';
 import { isSmartMaterialAsset } from '../../texturing/paint/smartMaterials';
-import { materialGraphParameters, type MaterialParameter } from '../../runtime/materials/materialGraph';
+import { materialGraphParameters, type MaterialParameter, type MaterialParameterValue } from '../../runtime/materials/materialGraph';
+import { Segmented } from '../UI/kit';
+import { assetShaderVersions, type ObjectMaterialOverrides } from '../../utils/materialInstances';
 import {
   MAX_EMISSIVE_INTENSITY,
   applyMaterialOverrides,
@@ -40,6 +42,8 @@ export interface MaterialEditorProps {
   textures: TextureData[];
   /** Persists the overrides on the model document. Without it the panel only previews. */
   onSave?: (modelId: string, overrides: MaterialOverrides) => Promise<void> | void;
+  /** The model's placed copies in the open level, whose own material values add shader versions. */
+  placedCopies?: ReadonlyArray<{ modelId: string; materialOverrides?: ObjectMaterialOverrides }>;
   className?: string;
 }
 
@@ -344,13 +348,44 @@ const NumberInput: React.FC<{ label: string; value: number; step: number; onChan
   />
 );
 
-/** One parameter of the assigned material asset: this material's value, or the asset's when unset. */
-const ParameterField: React.FC<{ parameter: MaterialParameter; value: number | number[] | undefined; onChange: (value: number | number[] | undefined) => void }> = ({ parameter, value, onChange }) => {
+/** The textures a texture parameter can take, the graph's own first. */
+const textureOptions = (textures: ReadonlyArray<{ id: string; name: string }>, graphTexture: string) => [
+  { value: '', label: 'As in the material' },
+  ...textures.filter(texture => texture.id !== graphTexture || graphTexture === '').map(texture => ({ value: texture.id, label: texture.name })),
+];
+
+/** One parameter of the assigned material asset: this material's value, or the one it inherits when unset. */
+const ParameterField: React.FC<{
+  parameter: MaterialParameter;
+  value: MaterialParameterValue | undefined;
+  /** The value used when this one is unset: the model's own, for a placed object; else the graph's. */
+  inherited?: MaterialParameterValue;
+  textures?: ReadonlyArray<{ id: string; name: string }>;
+  onChange: (value: MaterialParameterValue | undefined) => void;
+}> = ({ parameter, value, inherited, textures = [], onChange }) => {
   const id = useId();
   const { name, param } = parameter;
-  const current = value ?? parameter.value;
+  const current = value ?? inherited ?? parameter.value;
   const overridden = value !== undefined;
   const reset = () => onChange(undefined);
+  if (param.kind === 'texture') {
+    const picked = typeof value === 'string' ? value : '';
+    return (
+      <FieldRow label={name} overridden={overridden} onReset={reset}>
+        <Select value={picked} placeholder={name} options={textureOptions(textures, String(parameter.value ?? ''))}
+          onChange={(next: string) => onChange(next ? next : undefined)} className="flex-1 min-w-0" />
+      </FieldRow>
+    );
+  }
+  if (param.kind === 'boolean') {
+    return (
+      <FieldRow label={name} overridden={overridden} onReset={reset}>
+        <Segmented label={name} value={current === false ? 'off' : 'on'}
+          options={[{ value: 'on', label: 'On' }, { value: 'off', label: 'Off', hint: 'Each choice of a switch builds a shader version of its own' }]}
+          onChange={(next) => onChange(next === 'on')} />
+      </FieldRow>
+    );
+  }
   if (param.kind === 'color') {
     return <ColorField label={name} value={toHex(current as number[])} overridden={overridden} onChange={(hex) => onChange(fromHex(hex))} onReset={reset} />;
   }
@@ -375,19 +410,29 @@ const ParameterField: React.FC<{ parameter: MaterialParameter; value: number | n
   );
 };
 
-/** The assigned material asset's parameters (named in its graph), each set for this material or left at the asset's value. */
-const MaterialParameterFields: React.FC<{
+/**
+ * The assigned material asset's parameters (named in its graph), each set here or left at what it
+ * inherits (the asset's value, or the model's own for a placed object), with how many shader versions
+ * the asset builds for its uses when that is more than one.
+ */
+export const MaterialParameterFields: React.FC<{
   materialId: string;
   values: MaterialParameterSetting[] | undefined;
   onChange: (values: MaterialParameterSetting[] | undefined) => void;
-}> = ({ materialId, values, onChange }) => {
+  /** Values used where these set none (a placed object inherits its model's). */
+  inherited?: MaterialParameterSetting[];
+  textures?: ReadonlyArray<{ id: string; name: string }>;
+  /** Shader versions the asset builds for its uses (one per choice of its switches). */
+  versions?: number;
+  title?: string;
+}> = ({ materialId, values, onChange, inherited, textures, versions, title = 'Material parameters' }) => {
   const version = useSyncExternalStore((listener) => materialLibrary.subscribe(listener), () => materialLibrary.version);
   const parameters = useMemo(() => {
     const asset = materialLibrary.get(materialId);
     return asset ? materialGraphParameters(asset.graph) : [];
   }, [materialId, version]);
   if (!parameters.length) return null;
-  const set = (name: string, value: number | number[] | undefined) => {
+  const set = (name: string, value: MaterialParameterValue | undefined) => {
     const next = (values ?? []).filter(setting => setting.name !== name);
     if (value !== undefined) next.push({ name, value });
     next.sort((a, b) => a.name.localeCompare(b.name));
@@ -395,9 +440,17 @@ const MaterialParameterFields: React.FC<{
   };
   return (
     <div className="space-y-1 pl-2 border-l border-gray-800">
-      <p className="text-2xs font-bold text-gray-500">Material parameters</p>
+      <div className="flex items-center gap-2">
+        <p className="text-2xs font-bold text-gray-500">{title}</p>
+        {versions !== undefined && versions > 1 && (
+          <span className="ml-auto text-2xs text-amber-400/80" title="Each different choice of its switches builds a shader of its own, which takes time to build and memory to keep">
+            {versions} shader versions
+          </span>
+        )}
+      </div>
       {parameters.map((parameter) => (
         <ParameterField key={parameter.name} parameter={parameter} value={values?.find(setting => setting.name === parameter.name)?.value}
+          inherited={inherited?.find(setting => setting.name === parameter.name)?.value} textures={textures}
           onChange={(value) => set(parameter.name, value)} />
       ))}
     </div>
@@ -415,7 +468,7 @@ export const MaterialEditor: React.FC<MaterialEditorProps> = (props) => (
  * previews live on the model; unsaved edits are reverted when the panel closes
  * or the model changes.
  */
-const MaterialEditorSession: React.FC<MaterialEditorProps> = ({ model, textures, onSave, className = '' }) => {
+const MaterialEditorSession: React.FC<MaterialEditorProps> = ({ model, textures, onSave, placedCopies, className = '' }) => {
   const stored = useMemo(() => normalizeMaterialOverrides(model.materialOverrides), [model.materialOverrides]);
   const [saved, setSaved] = useState<MaterialOverrides>(stored);
   const [draft, setDraft] = useState<MaterialOverrides>(stored);
@@ -599,7 +652,8 @@ const MaterialEditorSession: React.FC<MaterialEditorProps> = ({ model, textures,
       <div className="px-3 pb-3 pt-1 space-y-1 border-t border-gray-800/80">
         <MaterialAssetField value={override.materialId} takesAsset={material.takesAsset} materialType={material.type} onChange={(value) => editField(material.name, 'materialId', value)} />
         {override.materialId && (
-          <MaterialParameterFields materialId={override.materialId} values={override.parameters}
+          <MaterialParameterFields materialId={override.materialId} values={override.parameters} textures={textures}
+            versions={assetShaderVersions(override.materialId, [{ id: model.id, materialOverrides: draft }], placedCopies ?? [])}
             onChange={(value) => editField(material.name, 'parameters', value)} />
         )}
         {override.materialId && <p className="text-2xs text-gray-500">Shaded by the material asset; the fields below apply again without one.</p>}

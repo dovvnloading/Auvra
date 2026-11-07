@@ -7,8 +7,19 @@ import type { PartMesh } from './partMesh';
  * dab can reach (so only their part of the pictures is drawn again).
  */
 
-/** Mirroring across the model's middle on some axes: a sign per axis (1 keeps, -1 mirrors) and the middle. */
-export interface Mirror { signs: readonly [number, number, number]; centre: readonly [number, number, number] }
+/**
+ * A copy of the surface a brush paints with: mirrored across the model's middle on some axes (a sign per
+ * axis, 1 keeps, -1 mirrors, and the middle), or moved by any `matrix` (16 numbers, column by column),
+ * which then takes the place of the signs.
+ */
+export interface Mirror { signs: readonly [number, number, number]; centre: readonly [number, number, number]; matrix?: readonly number[] }
+
+/** A point moved by a 4 × 4 matrix (16 numbers, column by column). */
+const moved = (m: readonly number[], x: number, y: number, z: number): [number, number, number] => [
+    m[0] * x + m[4] * y + m[8] * z + m[12],
+    m[1] * x + m[5] * y + m[9] * z + m[13],
+    m[2] * x + m[6] * y + m[10] * z + m[14],
+];
 
 export const NO_MIRROR: Mirror = { signs: [1, 1, 1], centre: [0, 0, 0] };
 
@@ -138,6 +149,15 @@ export class SurfacePicker {
 
     /** A box mirrored: its corners reflected across the middle on the mirrored axes. */
     private static mirrorBox(min: [number, number, number], max: [number, number, number], mirror: Mirror): void {
+        if (mirror.matrix) {
+            // The box round the moved corners.
+            const corners = [0, 1, 2, 3, 4, 5, 6, 7].map((k) => moved(mirror.matrix!, k & 1 ? max[0] : min[0], k & 2 ? max[1] : min[1], k & 4 ? max[2] : min[2]));
+            for (let axis = 0; axis < 3; axis++) {
+                min[axis] = Math.min(...corners.map((corner) => corner[axis]));
+                max[axis] = Math.max(...corners.map((corner) => corner[axis]));
+            }
+            return;
+        }
         for (let axis = 0; axis < 3; axis++) {
             if (mirror.signs[axis] > 0) continue;
             const low = 2 * mirror.centre[axis] - max[axis];
@@ -196,6 +216,7 @@ export class SurfacePicker {
         this.visitBoxes((min, max) => reaches(boxCorners(min, max)), (triangle) => {
             const corners: Array<[number, number, number]> = [0, 1, 2].map((k) => {
                 const v = indices[triangle * 3 + k] * 3;
+                if (mirror.matrix) return moved(mirror.matrix, positions[v], positions[v + 1], positions[v + 2]);
                 return [0, 1, 2].map((axis) => (mirror.signs[axis] > 0 ? positions[v + axis] : 2 * mirror.centre[axis] - positions[v + axis])) as [number, number, number];
             });
             if (reaches(corners)) visit(triangle);

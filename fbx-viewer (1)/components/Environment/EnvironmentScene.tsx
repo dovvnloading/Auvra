@@ -6,6 +6,7 @@ import { renderView } from './renderBundle';
 import type { ThreeEvent } from '@react-three/fiber';
 import { Grid, TransformControls } from '@react-three/drei';
 import { LoadedModelData, LevelObject } from '../../types';
+import { hasObjectMaterialValues } from '../../utils/materialInstances';
 import { InteractionMode, TransformSettings, TransformTool } from './types';
 import type { FoliageToolSettings } from './Foliage/foliageSettings';
 import { FoliageTool } from './Foliage/FoliageTool';
@@ -46,6 +47,12 @@ const isEmptyProp = (object: LevelObject) => object.type === 'prop' && !object.m
 /** Drawn one by one with its own marker rather than in an instanced layer. */
 const isMarkerObject = (object: LevelObject) => MARKER_TYPES.has(object.type) || isEmptyProp(object);
 const isInstancedObject = (object: LevelObject) => object.type !== 'terrain' && !isMarkerObject(object);
+/** Joins the instanced objects drawn on their own: what a previewed timeline moves, and what has material values of its own. */
+const drawnAloneIds = (previewTargets: string, objects: readonly LevelObject[]): string[] => {
+    const ids = new Set(previewTargets ? previewTargets.split('|') : []);
+    for (const object of objects) if (hasObjectMaterialValues(object)) ids.add(object.id);
+    return [...ids];
+};
 
 /** Selected instanced objects past this many keep the in-layer highlight instead of a proxy. */
 const MAX_SELECTION_PROXIES = 64;
@@ -761,11 +768,12 @@ export const EnvironmentScene: React.FC<EnvironmentSceneProps> = ({
     // While the Timeline editor previews a timeline, what it moves and poses is drawn on its own, as play draws it.
     const preview = useSyncExternalStore(timelinePreview.subscribe, timelinePreview.get, timelinePreview.get);
     const previewTargets = useMemo(() => (preview ? timelineTargetIds(preview.data).join('|') : ''), [preview]);
+    // Also lifted: objects with material values of their own, which wear materials of their own (materialInstances.ts).
     const previewedObjects = useMemo(
-        () => (previewTargets ? previewTargets.split('|') : [])
+        () => drawnAloneIds(previewTargets, resolvedObjects)
             .map(id => resolvedById.get(id))
             .filter((object): object is LevelObject => !!object && isInstancedObject(object) && !promotedIds.has(object.id)),
-        [previewTargets, resolvedById, promotedIds]
+        [previewTargets, resolvedObjects, resolvedById, promotedIds]
     );
     const liftedIds = useStableIdSet(useMemo(() => [...promotedIds, ...previewedObjects.map(object => object.id)], [promotedIds, previewedObjects]));
 

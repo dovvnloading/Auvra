@@ -12,8 +12,9 @@ import { encodePng16 } from './png';
  * and metallic share one picture (red, green, blue), as glTF and most engines pack them, so the
  * material samples it once; with one picture per channel the material reads each picture of its own.
  *
- * Height is kept with the material, at 16 bits a channel, but nothing draws with it yet: the material
- * graph leaves it out (materialReadsPicture).
+ * Height is kept with the material, at 16 bits a channel, and drawn with through a Parallax node: the
+ * graph moves every picture's UV with the view and shades the low parts, at a depth each use can change
+ * (its Height depth value).
  */
 
 export type MaterialChannel = 'baseColor' | 'normal' | 'roughness' | 'metallic' | 'height' | 'ambientOcclusion' | 'emissive' | 'opacity';
@@ -45,8 +46,11 @@ export const DEEP_EXPORT: ReadonlyArray<ChannelPicture['role']> = ['height', 'no
 /** What is kept at 16 bits a channel whatever the pictures are for: height's steps show at 8. */
 const ALWAYS_DEEP: ReadonlyArray<ChannelPicture['role']> = ['height'];
 
-/** Whether a material made by materialGraphForTextures draws with a picture of this role. Height it keeps, but does not draw with. */
-export const materialReadsPicture = (role: ChannelPicture['role']): boolean => role !== 'height';
+/** Whether a material made by materialGraphForTextures draws with a picture of this role: all do, height through Parallax. */
+export const materialReadsPicture = (role: ChannelPicture['role']): boolean => role.length > 0;
+
+/** How deep a height picture looks at first, in texture units; each use can change it (its Height depth value). */
+export const DEFAULT_PARALLAX_DEPTH = 0.03;
 
 /**
  * Encodes the channels as PNG pictures, `width` × `height`. `flipRows` puts the top of the image (v = 1)
@@ -224,7 +228,8 @@ const isTileLayout = (value: TileLayout | { columns: number; rows: number }): va
 /**
  * A material graph drawing with kept pictures, each wired into the input it is for: occlusion, roughness
  * and metallic from the packed picture, or from one picture each. With `tiles`, the pictures are a tile
- * atlas (tileAtlas), read through a UDIM Atlas node. Height is not drawn with.
+ * atlas (tileAtlas), read through a UDIM Atlas node. A height picture drives a Parallax node that moves
+ * every other picture's UV and shades the material's low parts, its depth a value each use can change.
  */
 export const materialGraphForTextures = (
     textures: ChannelTextureIds,
@@ -246,12 +251,22 @@ export const materialGraphForTextures = (
             params: { ...defaultParams(UDIM_ATLAS_NODE_TYPE), tiles: atlas.tiles.join(' '), columns: atlas.columns, tileSize: atlas.cell, gutter: atlas.gutter },
         });
     }
+    const wire = (fromNode: string, fromOutput: string, toInput: string) => graph.links.push({ fromNode, fromOutput, toNode: output.id, toInput });
+    // Height moves what every other picture shows with the view, at a depth each use of the material can set.
+    const parallax = Boolean(textures.height);
+    if (parallax) {
+        graph.nodes.push({ id: 'heightDepth', type: 'float', x: -420, y: 380, params: { ...defaultParams('float'), value: DEFAULT_PARALLAX_DEPTH }, parameter: 'Height depth' });
+        graph.nodes.push({ id: 'parallax', type: 'parallax', x: -180, y: 300, params: { ...defaultParams('parallax'), texture: textures.height } });
+        if (atlas) graph.links.push({ fromNode: 'udimTiles', fromOutput: 'out', toNode: 'parallax', toInput: 'uv' });
+        graph.links.push({ fromNode: 'heightDepth', fromOutput: 'out', toNode: 'parallax', toInput: 'depth' });
+        wire('parallax', 'shadow', 'selfShadow');
+    }
     let row = 0;
     const add = (id: string, type: string, params: Record<string, unknown>) => {
         graph.nodes.push({ id, type, x: 80, y: -60 + row++ * 230, params: { ...defaultParams(type), ...params } });
-        if (atlas) graph.links.push({ fromNode: 'udimTiles', fromOutput: 'out', toNode: id, toInput: 'uv' });
+        if (parallax) graph.links.push({ fromNode: 'parallax', fromOutput: 'uv', toNode: id, toInput: 'uv' });
+        else if (atlas) graph.links.push({ fromNode: 'udimTiles', fromOutput: 'out', toNode: id, toInput: 'uv' });
     };
-    const wire = (fromNode: string, fromOutput: string, toInput: string) => graph.links.push({ fromNode, fromOutput, toNode: output.id, toInput });
     if (textures.baseColor) {
         add('baseColor', 'texture', { texture: textures.baseColor, space: 'color' });
         wire('baseColor', 'rgb', 'baseColor');

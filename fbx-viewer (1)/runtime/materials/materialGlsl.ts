@@ -4,6 +4,8 @@
  * Every name starts with `mg` so it cannot meet three's own.
  */
 
+import { MG_TRIPLANAR_NORMAL } from './triplanarNormal';
+
 interface GlslHelper {
     /** Helpers this one calls. */
     needs?: readonly string[];
@@ -211,6 +213,58 @@ vec3 mgNormalFromHeight(float height, vec2 uv, float strength) {
     },
     // The surface's tangent frame (tangent, bitangent, normal; view space) from derivatives, for
     // meshes with or without tangents.
+    // --- Parallax occlusion mapping: steep parallax refined between its last two steps, and the height
+    // field's shadow toward the light, both marched in the surface's own (tangent) space. ---
+    mgParallaxUv: {
+        source: `
+vec2 mgParallaxUv(sampler2D heightMap, vec2 uv, vec3 view, float depth, float layers) {
+    vec2 dx = dFdx(uv);
+    vec2 dy = dFdy(uv);
+    // Fewer steps head-on, where the view crosses few heights.
+    float steps = max(mix(layers, layers * 0.5, abs(view.z)), 1.0);
+    float stepDepth = 1.0 / steps;
+    vec2 shift = view.xy / max(view.z, 0.08) * depth / steps;
+    vec2 at = uv;
+    float ground = 1.0 - textureGrad(heightMap, at, dx, dy).r;
+    float reached = 0.0;
+    for (int i = 0; i < 64; i++) {
+        if (reached >= ground || float(i) >= steps) break;
+        at -= shift;
+        ground = 1.0 - textureGrad(heightMap, at, dx, dy).r;
+        reached += stepDepth;
+    }
+    vec2 before = at + shift;
+    float below = ground - reached;
+    float above = (1.0 - textureGrad(heightMap, before, dx, dy).r) - reached + stepDepth;
+    float weight = clamp(below / min(below - above, -1e-5), 0.0, 1.0);
+    return mix(at, before, weight);
+}`,
+    },
+    mgParallaxShadow: {
+        source: `
+float mgParallaxShadow(sampler2D heightMap, vec2 uv, vec3 light, float depth, float layers) {
+    // A light below the surface leaves it unlit anyway.
+    if (light.z <= 0.0) return 1.0;
+    vec2 dx = dFdx(uv);
+    vec2 dy = dFdy(uv);
+    float height = textureGrad(heightMap, uv, dx, dy).r;
+    float steps = max(layers, 1.0);
+    float rise = (1.0 - height) / steps;
+    vec2 shift = light.xy / max(light.z, 0.08) * depth * (1.0 - height) / steps;
+    float level = height + rise;
+    vec2 at = uv + shift;
+    float blocked = 0.0;
+    for (int i = 0; i < 64; i++) {
+        if (float(i) >= steps || level >= 1.0) break;
+        // What rises above the ray toward the light shades the point: softer the further away it is.
+        blocked = max(blocked, (textureGrad(heightMap, at, dx, dy).r - level) * (1.0 - float(i) / steps));
+        level += rise;
+        at += shift;
+    }
+    return 1.0 - clamp(blocked * 8.0, 0.0, 1.0);
+}`,
+    },
+    mgTriplanarNormal: { source: MG_TRIPLANAR_NORMAL },
     mgTangentFrame: {
         source: `
 mat3 mgTangentFrame(vec3 position, vec3 normal, vec2 uv) {

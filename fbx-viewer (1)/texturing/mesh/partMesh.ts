@@ -305,7 +305,7 @@ export const buildWholeMesh = (root: THREE.Object3D): { positions: Float32Array;
 
 /**
  * A GPU geometry of the triangles in one UDIM tile, unshared so each corner carries its triangle's
- * edges (for the tangent frame the renderer works out) and its island and mesh.
+ * edges (for the tangent frame the renderer works out) and its island, mesh and own number.
  */
 export const tileGeometry = (part: PartMesh, tile: number): THREE.BufferGeometry => {
     const triangles: number[] = [];
@@ -320,7 +320,7 @@ export const tileGeometry = (part: PartMesh, tile: number): THREE.BufferGeometry
     const uvEdges = new Float32Array(count * 4);
     const tangent = part.tangents ? new Float32Array(count * 4) : null;
     const color = new Float32Array(count * 3);
-    const ids = new Float32Array(count * 2);
+    const ids = new Float32Array(count * 3);
     triangles.forEach((triangle, slot) => {
         const corners = [0, 1, 2].map((k) => part.indices[triangle * 3 + k]);
         const [i0, i1, i2] = corners;
@@ -342,8 +342,9 @@ export const tileGeometry = (part: PartMesh, tile: number): THREE.BufferGeometry
             if (tangent && part.tangents) tangent.set(part.tangents.subarray(vertex * 4, vertex * 4 + 4), at * 4);
             if (part.colors) color.set(part.colors.subarray(vertex * 3, vertex * 3 + 3), at * 3);
             else color.set([1, 1, 1], at * 3);
-            ids[at * 2] = part.triangleIsland[triangle];
-            ids[at * 2 + 1] = part.triangleMesh[triangle];
+            ids[at * 3] = part.triangleIsland[triangle];
+            ids[at * 3 + 1] = part.triangleMesh[triangle];
+            ids[at * 3 + 2] = triangle;
         });
     });
     const geometry = new THREE.BufferGeometry();
@@ -356,7 +357,7 @@ export const tileGeometry = (part: PartMesh, tile: number): THREE.BufferGeometry
     geometry.setAttribute('uvEdges', new THREE.BufferAttribute(uvEdges, 4));
     if (tangent) geometry.setAttribute('tangent', new THREE.BufferAttribute(tangent, 4));
     geometry.setAttribute('color', new THREE.BufferAttribute(color, 3));
-    geometry.setAttribute('ids', new THREE.BufferAttribute(ids, 2));
+    geometry.setAttribute('ids', new THREE.BufferAttribute(ids, 3));
     return geometry;
 };
 

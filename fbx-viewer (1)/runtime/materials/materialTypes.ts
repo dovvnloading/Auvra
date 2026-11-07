@@ -155,6 +155,11 @@ export interface MaterialNodeDef {
     /** The input a bypassed node passes through, where it is not the first (a Step's value, not its edge). */
     main?: string;
     /**
+     * The inputs the node reads with these static settings, where it reads only some (a Switch reads the
+     * side it picks): the others are not built into the shader, nor is anything feeding only them.
+     */
+    reads?: (statics: Readonly<Record<string, unknown>>) => readonly string[];
+    /**
      * GLSL statements computing the outputs, given each input as an expression of its type;
      * returns each output as an expression (of its type) the statements made available.
      */

@@ -230,6 +230,7 @@ void main() {
         params: [
             select('shape', 'Shape', 'disc', [['square', 'Square'], ['disc', 'Disc'], ['polygon', 'Polygon'], ['star', 'Star'], ['ring', 'Ring'], ['bell', 'Soft bump'], ['paraboloid', 'Dome'], ['hemisphere', 'Hemisphere'], ['pyramid', 'Pyramid'], ['cone', 'Cone'], ['gradient', 'Gradient'], ['wave', 'Wave']]),
             int('tiling', 'Repeat', 1, 1, 64),
+            vec2('centre', 'Centre', [0.5, 0.5], 0, 1, { hint: 'Where the shape sits in its tile.' }),
             float('size', 'Size', 0.8, 0, 2),
             vec2('stretch', 'Stretch', [1, 1], 0.05, 4),
             float('rotation', 'Turn (degrees)', 0, -360, 360, { step: 1 }),
@@ -245,7 +246,7 @@ void main() {
 }
 float edge(float d) { return 1.0 - smoothstep(1.0 - p_softness - 1e-4, 1.0 + 1e-4, d); }
 void main() {
-    vec2 p = (fract(vUv * float(p_tiling)) - 0.5) * 2.0;
+    vec2 p = (fract((vUv - p_centre + 0.5) * float(p_tiling)) - 0.5) * 2.0;
     p = rotate2(-radians(p_rotation)) * p;
     p /= max(vec2(p_size) * p_stretch, vec2(1e-4));
     float r = length(p);

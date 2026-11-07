@@ -122,10 +122,10 @@ A material asset describes a surface as a graph of nodes, so one material can be
    - **Input**: Number, Color, Vector 2, Vector, Time.
    - **Geometry**: UV, World Position, Local Position, Object Position, World Normal, Local Normal, View Direction, Camera Position, Camera Distance, Vertex Color, Fresnel.
    - **UV**: Tiling and Offset, Panner, Rotate UV, Polar Coordinates, Flipbook, Parallax Offset, UDIM Atlas (reads a set of UDIM tiles from one picture, as Paint makes it).
-   - **Texture**: Texture Sample, Normal Map, Triplanar Sample, Normal From Height, Normal Blend, Normal Strength. Set a Texture Sample or Triplanar Sample's **Read As** to **Data** for masks, roughness, metalness and height maps, so their values are not treated as sRGB colour; tick a Normal Map's **Flip Green (DirectX)** for maps baked with the green channel pointing down.
+   - **Texture**: Texture Sample, Normal Map, Triplanar Sample, Triplanar Normal Map, Parallax, Normal From Height, Normal Blend, Normal Strength. Set a Texture Sample or Triplanar Sample's **Read As** to **Data** for masks, roughness, metalness and height maps, so their values are not treated as sRGB colour; tick a Normal Map's **Flip Green (DirectX)** for maps baked with the green channel pointing down.
    - **Procedural**: Noise, Fractal Noise (gradient, simplex or value noise; fractal, turbulence or ridged), Voronoi, Checker, Brick, Gradient.
    - **Color**: Color Ramp, Blend (14 modes), Hue / Saturation / Value, RGB to HSV, HSV to RGB, Desaturate, Contrast, Posterize, Luminance.
-   - **Math**, **Vector** and **Logic**: arithmetic, trigonometry, Lerp, Clamp, Smoothstep, Remap, Split, Combine, Swizzle, Dot, Cross, Rotate About Axis, Branch and more.
+   - **Math**, **Vector** and **Logic**: arithmetic, trigonometry, Lerp, Clamp, Smoothstep, Remap, Split, Combine, Swizzle, Dot, Cross, Rotate About Axis, Branch, Switch and more.
    - **Custom**: Custom GLSL, your own function of four inputs.
    - **Utility**: Reroute.
 3. Drag from a pin to a pin of the other kind to wire them (outputs on the right, inputs on the left). Pin colours show the value type: grey a number, green a 2-vector, yellow a 3-vector or colour, purple a 4-vector. Math nodes take the widest type wired into them, so adding two colours gives a colour. A value of another type is converted (a single number fills every component, a longer vector is cut down). Each input takes one wire, so a new wire replaces the old one, and a wire that would make a loop is refused.
@@ -138,9 +138,10 @@ A material asset describes a surface as a graph of nodes, so one material can be
 8. Select nothing to set the material itself, on the Material Output. Its settings come first:
    - **Alpha mode**: **Opaque**; **Masked (cut-out)** (cut out where Opacity is below **Alpha clip**, and the shadow has the same holes); **Translucent**; **Additive** (glows add to what is behind).
    - **Two-sided** shades the back faces too; **Shading** **Unlit** shows the base colour and emission without lighting.
+   - **Normal input**: **Like a normal map** (tangent space, as the Normal Map node gives) or **In world space** (as the Triplanar Normal Map node gives).
 
    Below them are the values its unwired inputs take, in groups: **Base** (base colour, metalness, roughness), **Specular**, **Coat**, **Sheen**, **Thin film**, **Transmission**, **Emission** and **Opacity**. Click a group's header to open or close it. A group the material uses opens on its own, and an input with a wire into it says so instead of offering a value.
-9. Connect the Material Output's inputs for the surface: **Base colour**, **Metalness**, **Roughness**, **Normal** (tangent space), **Ambient occlusion**, **Emission colour** and **Emission strength**, **Opacity**, and the [physical layers](#physical-surfaces). **Vertex offset** moves its vertices (in world units): the offset moves the shadow too, and works on skinned and instanced meshes.
+9. Connect the Material Output's inputs for the surface: **Base colour**, **Metalness**, **Roughness**, **Normal**, **Ambient occlusion**, **Self-shadow** (darkens only the sunlight, as Parallax's Shadow does), **Emission colour** and **Emission strength**, **Opacity**, and the [physical layers](#physical-surfaces). **Vertex offset** moves its vertices (in world units): the offset moves the shadow too, and works on skinned and instanced meshes.
 
 The preview shows the material on a sphere, cube, plane, cylinder or knot, casting its shadow on a floor; drag it to turn it and scroll to zoom. **Lighting** under it picks what lights it and shows in its reflections: **Studio** (soft panels), **Room** (a bright interior with windows), **Outdoor** (open sky and the sun) or **Night**. **Background** shows what surrounds the shape behind it: the room or the outdoors themselves, or a lit backdrop for Studio and Night. A see-through material always shows it, so glass has something to show through it. Both choices are remembered. A shader that does not compile (a mistake in Custom GLSL) is reported under the preview with the line it names. Changes save on their own, and undo keeps each material's steps while the project is open, across switching tabs. Changing a value updates every model using the asset at once; only changes to wiring, to a node's choices or to what is bypassed rebuild its shader. Time nodes run in every viewport, in play and in builds, counting seconds from when the editor or the game opened.
 
@@ -149,6 +150,14 @@ To use a material asset on a model, open the model's **Material Overrides**, exp
 **Material asset** offers only assets that draw. A texture graph is offered once its pictures are made (**Update material**), and a painting once it is put on a model; until then the field names them in a note. A graph for other graphs is never offered. A material drawn without lighting, or an older kind of shaded material, cannot be shaded by a graph: its **Material asset** field is turned off and says so.
 
 Materials made before blend modes keep their look: one whose opacity was set or wired is **Translucent**, any other **Opaque**.
+
+A shader that does not compile marks the nodes whose code failed on the canvas, with what is wrong in plain words; the compiler's own lines stay under the preview.
+
+### Height, parallax and triplanar normals
+
+**Parallax** makes a flat surface look deep: it follows the view into a height map (white high, black low), so bricks, stones and tiles look raised as you move round them. Wire its **UV** into the textures it should move and its **Shadow** into the Material Output's **Self-shadow**, where the raised parts shade the low ones from the sun. **Depth** is in texture units; **Quality** takes 8, 16 or 32 steps; **Self-shadow** off skips the shadow. Materials made from pictures with a height (a texture graph's **Update material**, or a painting put on a model) are wired this way for you, with a depth of 0.03 that each model and placed object can change through the material's **Height depth** value.
+
+**Triplanar Normal Map** projects a normal map from the three axes, each face reading it the right way round, and blends the bumps onto the surface, so cliffs and rocks without good UVs get bumps with no seams or mirrored faces. It gives a world-space normal: set the Material Output's **Normal input** to **In world space**.
 
 ### Physical surfaces
 
@@ -162,11 +171,17 @@ Beyond base colour, metalness and roughness, the Material Output builds a surfac
 
 A material draws with the plainer, cheaper shader until one of these is wired or set away from its default. Only then does it draw as a physical surface, and only the layers it uses cost anything. Changing a value updates the material at once; turning a layer on or off rebuilds its shader. Rain and snow still lie on coated and see-through materials: rain makes a coat glossier, and snow covers glass rather than frosting it.
 
-### Material parameters
+### Material parameters: values, textures and switches
 
-A material asset can leave some of its values to the models that use it, like a material instance. Select a **Number**, **Color** or **Vector** node and give it a **Parameter name** (the node shows the name in its title). Nodes with the same name share one value.
+A material asset can leave some of its values to the models that use it, like a material instance. Select a **Number**, **Color** or **Vector** node, a **Texture Sample**, **Normal Map**, **Triplanar Sample**, **Triplanar Normal Map** or **Parallax** (its picture), or a **Switch**, and give it a **Parameter name** (the node shows the name in its title). Nodes with the same name share one value.
 
-In a model's **Material Overrides**, a material shaded by that asset lists its parameters under **Material parameters**. Set a value to give this material its own (a red tint on one model's crates, a blue one on another model using the same asset); the reset button returns it to the value in the graph. Like all overrides, the values belong to the model, so every placed copy of it shares them. Number, Color, Vector and Vector 2 values can all be parameters. Parameters only change values, not wiring, so every material using the asset keeps sharing one shader.
+A **Switch** picks its **On** or **Off** input when the material is built, so only the side picked is drawn and costs anything. Each choice of a switch builds a shader version of its own, which takes time to build and memory to keep: Material Overrides and the level inspector say how many versions a material builds when its switches make more than one. Values and textures never add one.
+
+In a model's **Material Overrides**, a material shaded by that asset lists its parameters under **Material parameters**. Set a value to give this material its own (a red tint on one model's crates, a blue one on another model using the same asset); the reset button returns it to the value in the graph. Like all overrides, the values belong to the model, so every placed copy of it shares them. Number, Color, Vector and Vector 2 values, textures and switches can all be parameters. Values and textures only change what the shader is given, so every material using the asset keeps sharing one shader; a switch set another way makes another version.
+
+A placed object can set its own values too, for that object alone: select it in the level and open **Material values** in the inspector. Each material shaded by an asset with parameters lists them, showing the model's value where the object sets none. The model and its other copies keep theirs. An object with values of its own is drawn on its own rather than with its model's other copies, in the editor and in play.
+
+While a game plays, the blueprint's **Set Material Number** and **Set Material Colour** nodes set a value on one object (a switch is on for any number but 0); its other copies keep theirs.
 
 ## Textures and audio
 

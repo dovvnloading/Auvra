@@ -200,7 +200,7 @@ export const MaterialSections: React.FC<{
                                 <Tooltip text={choice.hint ? `${choice.name}: ${choice.hint}` : choice.name}>
                                     <button onClick={() => onPick(choice)} className="flex w-full flex-col items-center gap-0.5 rounded border border-transparent p-1 text-2xs text-zinc-300 hover:border-zinc-700 hover:bg-zinc-800">
                                         <Thumb choice={choice} host={host} />
-                                        <span className="w-full truncate text-center leading-tight">{choice.name}</span>
+                                        <span className="line-clamp-2 w-full break-words text-center leading-tight">{choice.name}</span>
                                     </button>
                                 </Tooltip>
                                 <div className="absolute right-0.5 top-0.5 hidden gap-0.5 group-hover:flex">

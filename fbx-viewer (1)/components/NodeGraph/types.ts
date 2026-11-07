@@ -50,8 +50,8 @@ export interface NodeView {
     searchText?: string;
 }
 
-/** A kind of thing pins carry: its colour, and how a tooltip names it. */
-export interface PinKindStyle { colour: string; words: string }
+/** A kind of thing pins carry: its colour, how a tooltip names it, and whether its wires are drawn wide (a whole material). */
+export interface PinKindStyle { colour: string; words: string; wide?: boolean }
 
 export interface MenuItem {
     label: string;

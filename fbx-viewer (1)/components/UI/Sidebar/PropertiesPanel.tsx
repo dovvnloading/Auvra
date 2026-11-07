@@ -28,8 +28,10 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
     onPlayPause,
     onSpeedChange
 }) => {
-    const { models, selectedModelId, resetModelTexture, isLoading, blueprints, textures, updateModelMaterialOverrides, projectStatus } = useScene();
+    const { models, selectedModelId, resetModelTexture, isLoading, blueprints, textures, updateModelMaterialOverrides, projectStatus, levelObjects } = useScene();
     const selectedModel = models.find(m => m.id === selectedModelId) || null;
+    // Its copies in the open level, whose own material values can add shader versions.
+    const placedCopies = React.useMemo(() => (selectedModel ? levelObjects.filter(object => object.modelId === selectedModel.id) : []), [levelObjects, selectedModel]);
     // Closing the section ends the editing session (unsaved material edits are reverted).
     const [materialsOpen, setMaterialsOpen] = useState(false);
 
@@ -133,6 +135,7 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
                                         <MaterialEditor
                                             model={selectedModel}
                                             textures={textures}
+                                            placedCopies={placedCopies}
                                             onSave={projectStatus.readOnly ? undefined : updateModelMaterialOverrides}
                                         />
                                     </div>

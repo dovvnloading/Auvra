@@ -6,6 +6,7 @@ import { OUTPUT_NODE_TYPE } from '../../texturing/graph/nodes/io';
 import { textureNodeDefinition, type GraphResolver } from '../../texturing/graph/registry';
 import type { OutputChannel, TextureGraph } from '../../texturing/graph/types';
 import type { ChannelImages, MaterialChannel } from '../../texturing/materialOutput';
+import { histogramOf, type Histogram } from './view2d';
 
 /**
  * A texture graph open for editing: it redraws what an edit reaches as soon as the edit is made,
@@ -250,6 +251,20 @@ export class TextureGraphSession {
                 this.emit();
             }
         }
+    }
+
+    /** The histogram of an image (in 64 steps), read small without holding up the GPU. */
+    async histogram(image: GpuImage): Promise<Histogram | null> {
+        const small = this.gpu.image(128, 128, 'color', 8);
+        this.gpu.passNow(small, {
+            fragment: 'uniform int gray;\nvoid main() { vec4 v = texture(source, vUv); outColor = gray == 1 ? vec4(v.rrr, 1.0) : vec4(v.rgb, 1.0); }',
+            inputs: { source: image },
+            uniforms: { gray: image.kind === 'gray' ? 1 : 0 },
+        });
+        const reading = this.gpu.readRgba8Later(small);
+        this.gpu.release(small);
+        const pixels = await reading;
+        return pixels ? histogramOf(pixels, 64) : null;
     }
 
     /** The image a node shows: its chosen output, else its first. */

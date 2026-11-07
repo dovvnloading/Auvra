@@ -102,7 +102,7 @@ describe('decal settings', () => {
     expect(resolveDecalSettings({})).toEqual(DECAL_DEFAULTS);
     expect(resolveDecalSettings({
       textureId: '  Brick ', size: [-3, 0, 500], opacity: 2, color: '#FF8800', receivers: 'scene',
-    })).toEqual({ textureId: 'Brick', size: [3, MIN_DECAL_SIZE, MAX_DECAL_SIZE], offset: [0, 0, 0], opacity: 1, color: '#FF8800', receivers: 'scene' });
+    })).toEqual({ ...DECAL_DEFAULTS, textureId: 'Brick', size: [3, MIN_DECAL_SIZE, MAX_DECAL_SIZE], offset: [0, 0, 0], opacity: 1, color: '#FF8800', receivers: 'scene' });
     expect(resolveDecalSettings({
       textureId: 42, size: [1, Number.NaN, 1], opacity: -1, color: 'red', receivers: 'everything',
     })).toEqual({ ...DECAL_DEFAULTS, opacity: 0 });
@@ -114,7 +114,7 @@ describe('decal settings', () => {
     expect(DECAL_COMPONENT.type).toBe('decal');
     expect(DECAL_COMPONENT.label).toBe('Decal');
     const props = Object.fromEntries(DECAL_COMPONENT.props.map(prop => [prop.key, prop]));
-    expect(Object.keys(props)).toEqual(['textureId', 'size', 'offset', 'opacity', 'color', 'receivers']);
+    expect(Object.keys(props)).toEqual(['textureId', 'size', 'offset', 'opacity', 'color', 'receivers', 'normalTextureId', 'roughness', 'metalness', 'emissive', 'emissiveIntensity', 'materialId']);
     expect(props.size.default).toEqual([1, 1, 3]);
     expect(props.size).toMatchObject({ type: 'vector3', min: MIN_DECAL_SIZE, max: MAX_DECAL_SIZE });
     expect(props.opacity).toMatchObject({ type: 'number', min: 0, max: 1, default: 1 });
