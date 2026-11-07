@@ -1,6 +1,6 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useAssets } from '../../../context/AssetContext';
-import { pickRegion, type RegionPick, type RegionPicture } from '../../../texturing/paint/photoRegion';
+import { cropScale, pickRegion, type RegionPick, type RegionPicture } from '../../../texturing/paint/photoRegion';
 import { Button } from '../../UI/kit';
 import { SliderRow } from './PaintFields';
 
@@ -14,15 +14,19 @@ const pairOf = (value: unknown, fallback: Pair): Pair => (Array.isArray(value) &
  * Over a Bitmap's 2D view: its whole photo, where a click picks the material there (photoRegion), grown
  * by colour and texture within a tolerance. Everything else darkens and the best square of what was
  * picked is outlined; Use this square crops the Bitmap to it, so what comes after (Make it tile and the
- * rest) works from that material alone.
+ * rest) works from that material alone. The square then fills the picture, so with it goes `scale`: how
+ * much of the world the picture stands for after, against before (cropScale), for the graph's size in
+ * the world to follow and the bricks to keep their real size. Beside the button it says what changes.
  */
 export const PhotoRegionPicker: React.FC<{
     textureId: string;
     cropFrom: unknown;
     cropSize: unknown;
-    onApply: (patch: { cropFrom: Pair; cropSize: Pair }) => void;
+    /** The metres across the graph's picture stands for now. */
+    metres: number;
+    onApply: (patch: { cropFrom: Pair; cropSize: Pair }, scale: number) => void;
     onClose: () => void;
-}> = ({ textureId, cropFrom, cropSize, onApply, onClose }) => {
+}> = ({ textureId, cropFrom, cropSize, metres, onApply, onClose }) => {
     const { textures } = useAssets();
     const url = textures.find((texture) => texture.id === textureId)?.url;
     const [picture, setPicture] = useState<(RegionPicture & { shown: string }) | null>(null);
@@ -101,10 +105,15 @@ export const PhotoRegionPicker: React.FC<{
         const box = event.currentTarget.getBoundingClientRect();
         setSeed([(event.clientX - box.left) / scale, (event.clientY - box.top) / scale]);
     };
-    const apply = () => {
-        if (!picture || !square) return;
-        onApply({ cropFrom: [square.x / picture.width, square.y / picture.height], cropSize: [square.size / picture.width, square.size / picture.height] });
+    /** The crop a square gives, and how much of the world the picture then stands for against now. */
+    const cropOf = (chosen: { x: number; y: number; size: number }, of: RegionPicture) => {
+        const size: Pair = [chosen.size / of.width, chosen.size / of.height];
+        return { patch: { cropFrom: [chosen.x / of.width, chosen.y / of.height] as Pair, cropSize: size }, scale: cropScale([sizeX, sizeY], size, of.width, of.height) };
     };
+    const planned = picture && square ? cropOf(square, picture) : null;
+    const apply = () => { if (planned) onApply(planned.patch, planned.scale); };
+    const whole = () => { if (picture) onApply({ cropFrom: [0, 0], cropSize: [1, 1] }, cropScale([sizeX, sizeY], [1, 1], picture.width, picture.height)); };
+    const shownMetres = (value: number) => (value >= 10 ? value.toFixed(0) : value >= 1 ? value.toFixed(1) : value.toFixed(2));
 
     return (
         <div
@@ -124,11 +133,16 @@ export const PhotoRegionPicker: React.FC<{
                 <SliderRow label="Tolerance" value={tolerance} min={0} max={1} step={0.01} labelWidth="w-16"
                     hint="How different a part may look and still be picked: higher takes in more." onChange={setTolerance} />
                 <div className="flex items-center gap-1.5">
-                    <Button variant="ghost" size="sm" disabled={!cropped} onClick={() => onApply({ cropFrom: [0, 0], cropSize: [1, 1] })} title="Make the material from the whole photo again">Whole photo</Button>
+                    <Button variant="ghost" size="sm" disabled={!cropped || !picture} onClick={whole} title="Make the material from the whole photo again (its size in the world goes back with it)">Whole photo</Button>
                     <span className="flex-1" />
                     <Button variant="ghost" size="sm" onClick={onClose}>Cancel</Button>
-                    <Button variant="primary" size="sm" disabled={!square} onClick={apply}>Use this square</Button>
+                    <Button variant="primary" size="sm" disabled={!planned} onClick={apply}>Use this square</Button>
                 </div>
+                {planned && Math.abs(planned.scale - 1) > 0.01 && (
+                    <p className="text-2xs leading-snug text-ink-3">
+                        The square will fill the picture, so the graph's size in the world goes from {shownMetres(metres)} m to {shownMetres(metres * planned.scale)} m across: the picture stands for the same piece of wall the square did, and its bumps keep their depth. On a model, repeat the material {(1 / planned.scale).toFixed(1)} times as often for the bricks to keep their size.
+                    </p>
+                )}
             </div>
             <div ref={area} className="relative min-h-0 flex-1">
                 {failed && <p className="absolute inset-0 flex items-center justify-center text-2xs text-ink-3">The photo could not be read.</p>}

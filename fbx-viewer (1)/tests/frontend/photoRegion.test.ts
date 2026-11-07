@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { bestSquare, pickRegion, type RegionPicture } from '../../texturing/paint/photoRegion';
+import { bestSquare, cropScale, pickRegion, type RegionPicture } from '../../texturing/paint/photoRegion';
 
 /**
  * A photo of a brick wall with a door and a window in it: a click on the wall picks the wall, without
@@ -72,5 +72,16 @@ describe('pulling one material out of a photo', () => {
         const square = bestSquare(mask, 10, 6, light)!;
         expect(square.size).toBe(4);
         expect(square.x).toBe(6);
+    });
+});
+
+describe('keeping the feature scale when a square is used', () => {
+    it('scales the size in the world by how much of the photo the picture then shows', () => {
+        // A 400 x 300 photo, filled into the square: its middle 300 x 300 shows. A 120-pixel square shows 0.4 of that.
+        expect(cropScale([1, 1], [120 / 400, 120 / 300], 400, 300)).toBeCloseTo(0.4);
+        // Back to the whole photo from that square: two and a half times as much.
+        expect(cropScale([120 / 400, 120 / 300], [1, 1], 400, 300)).toBeCloseTo(2.5);
+        // The same square again changes nothing.
+        expect(cropScale([0.3, 0.4], [0.3, 0.4], 400, 300)).toBeCloseTo(1);
     });
 });

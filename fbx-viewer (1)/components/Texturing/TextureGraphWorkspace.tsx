@@ -430,6 +430,14 @@ const Workspace: React.FC<{
         if (node) update({ ...graph, nodes: graph.nodes.map((candidate) => (candidate.id === nodeId ? { ...node, params: { ...node.params, ...patch } } : candidate)) }, true, `${nodeId}:handle:${key}`);
     }, [graph, update]);
 
+    /** A Bitmap cropped to a picked square, the graph's size in the world following it, as one undo step. */
+    const cropPhoto = useCallback((nodeId: string, patch: Record<string, unknown>, scale: number) => {
+        const node = graph.nodes.find((candidate) => candidate.id === nodeId);
+        if (!node) return;
+        const size = { w: Math.max(0.001, Math.min(10000, (graph.physicalSize?.w ?? 1) * scale)), h: Math.max(0.001, Math.min(10000, (graph.physicalSize?.h ?? 1) * scale)) };
+        update({ ...graph, physicalSize: size, nodes: graph.nodes.map((candidate) => (candidate.id === nodeId ? { ...node, params: { ...node.params, ...patch } } : candidate)) }, true);
+    }, [graph, update]);
+
     /** Opens the graph a sub-graph node uses, or a processor's function graph, in place of this one. */
     const openGraph = useCallback((nodeId: string) => {
         const node = graph.nodes.find((candidate) => candidate.id === nodeId);
@@ -1200,7 +1208,8 @@ const Workspace: React.FC<{
             </div>
             <div className="flex w-[360px] shrink-0 flex-col border-l border-line bg-panel">
                 <div className="flex min-h-0 flex-1 flex-col border-b border-line">
-                    <TextureView2D session={session} nodeId={viewed} output={viewedOutput} node={graph.nodes.find((candidate) => candidate.id === viewed) ?? null} onParams={setParams} label={(() => {
+                    <TextureView2D session={session} nodeId={viewed} output={viewedOutput} node={graph.nodes.find((candidate) => candidate.id === viewed) ?? null} onParams={setParams}
+                        worldWidth={graph.physicalSize?.w ?? 1} onPhotoCrop={cropPhoto} label={(() => {
                         const node = graph.nodes.find((candidate) => candidate.id === viewed);
                         if (!node) return '2D';
                         const definition = textureNodeDefinition(node, resolve);

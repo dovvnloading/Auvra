@@ -205,3 +205,15 @@ export const pickRegion = (picture: RegionPicture, x: number, y: number, toleran
     const square = bestSquare(inner.some((value) => value) ? inner : mask, width, height, colour[0]);
     return { mask, share: area / (width * height), square };
 };
+
+/**
+ * How much more of the world a picture cropped from a photo `width` × `height` stands for after its crop
+ * changes from `before` to `after` (each a crop size, a share of the photo across and down). The graph
+ * fills its square with the crop, cut to fit, so what it shows is a square as wide as the crop's shorter
+ * side: a square half that side shows half as much of the wall, at twice the size, unless the graph's size
+ * in the world is halved with it.
+ */
+export const cropScale = (before: readonly [number, number], after: readonly [number, number], width: number, height: number): number => {
+    const side = (crop: readonly [number, number]) => Math.max(1e-6, Math.min(crop[0] * width, crop[1] * height));
+    return side(after) / side(before);
+};
