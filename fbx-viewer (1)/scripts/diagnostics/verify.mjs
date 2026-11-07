@@ -199,6 +199,7 @@ const EXEMPT = new Map(Object.entries({
   'components/Texturing/Paint/graphPictures.ts': 'pure-utility',
   'components/Texturing/Paint/pathLaying.ts': 'pure-utility',
   'components/Texturing/Paint/brushAlpha.ts': 'pure-utility',
+  'components/Texturing/Paint/retextureLayers.ts': 'pure-utility',
   'texturing/uv/uvTopology.ts': 'pure-utility',
   'texturing/uv/lscm.ts': 'pure-utility',
   'texturing/uv/unwrap.ts': 'pure-utility',

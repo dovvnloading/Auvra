@@ -1,5 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { ArrowDownIcon, ArrowUpIcon, BrushIcon, BucketIcon, CopyIcon, EyeIcon, EyeOffIcon, FilterIcon, FolderIcon, FolderMoveIcon, GraphIcon, LayersIcon, PackagePlusIcon, PlusIcon, TrashIcon, WandIcon } from '../../UI/Icons';
+import { ArrowDownIcon, ArrowUpIcon, BrushIcon, BucketIcon, CopyIcon, EyeIcon, EyeOffIcon, FilterIcon, FolderIcon, FolderMoveIcon, GraphIcon, LayersIcon, PackagePlusIcon, PlusIcon, RetextureIcon, TrashIcon, WandIcon } from '../../UI/Icons';
+import { materialLibrary } from '../../../runtime/materials/materialLibrary';
+import { retextureLayer, retextureResults } from './retextureLayers';
 import { BLEND_MODES, BLEND_MODE_LABELS, type BlendMode } from '../../../texturing/gpu/glslLibrary';
 import { PICK_LABELS, PICK_MODES, countTriangles, type PickMode } from '../../../texturing/paint/selection';
 import { PROJECTION_LABELS, type ProjectionAxis, type ProjectionMode } from '../../../texturing/paint/projections';
@@ -281,6 +283,8 @@ export const LayerPanel: React.FC<{
     };
     list(document.layers, 0);
 
+    // What Retexture made for this set, to bring in as a layer (read from the model's overrides and the texture library).
+    const retextured = addMenu ? retextureResults(session.target, session.host.materialOverrides(session.target.modelId), (id) => materialLibrary.get(id), textures) : [];
     const addMenuBody = addView === 'paint' ? (
         <MaterialPicker sections={sections} host={host} onPick={(choice) => { onPaintWith(choice); closeAdd(); }} onBack={() => setAddView('layers')} onMessage={onMessage} />
     ) : (
@@ -301,6 +305,21 @@ export const LayerPanel: React.FC<{
                         className="flex items-center gap-1 rounded border border-zinc-800 px-1.5 py-1 text-left text-2xs text-zinc-200 hover:bg-zinc-800"><FilterIcon size={11} className="shrink-0 text-zinc-500" /><span className="leading-tight">{FILTER_BUTTONS[kind]}</span></button>
                 ))}
             </div>
+            {retextured.length > 0 && (
+                <>
+                    <div className={sectionTitle}>From Retexture: a fill of its picture, to mask and paint over</div>
+                    <div className="space-y-1">
+                        {retextured.map((result) => (
+                            <button key={result.key} onClick={() => add(retextureLayer(document, result), 'Add Retexture result')}
+                                className="flex w-full items-center gap-2 rounded border border-zinc-800 px-2 py-1 text-left text-2xs text-zinc-200 hover:bg-zinc-800">
+                                <RetextureIcon size={12} className="shrink-0 text-zinc-400" />
+                                <span className="min-w-0 flex-1 truncate">{result.name}</span>
+                                <span className="shrink-0 text-zinc-500">{Object.keys(result.textures).length > 1 ? `${Object.keys(result.textures).length} maps` : 'colour'}</span>
+                            </button>
+                        ))}
+                    </div>
+                </>
+            )}
             <div className="px-1 pt-1 text-2xs leading-snug text-zinc-500">Or cover the whole surface with one of these:</div>
             <MaterialSections sections={sections} host={host} onPick={(choice) => add(choice.make(document), `Add ${choice.name}`)} onMessage={onMessage} />
         </div>
