@@ -494,7 +494,9 @@ export const MATERIAL_NODE_DEFINITIONS: MaterialNodeDef[] = [
             const normal = context.local('normal');
             return {
                 statements: [
-                    `vec3 ${normal} = texture(${context.param('texture')}, ${inputs.uv}).xyz * 2.0 - 1.0;`,
+                    // Blue is rebuilt from red and green, so a map compressed to two channels (BC5) reads the same.
+                    `vec3 ${normal} = vec3(texture(${context.param('texture')}, ${inputs.uv}).xy * 2.0 - 1.0, 0.0);`,
+                    `${normal}.z = sqrt(max(1.0 - dot(${normal}.xy, ${normal}.xy), 0.0));`,
                     ...(context.static('flipGreen') === true ? [`${normal}.y = -${normal}.y;`] : []),
                     `${normal}.xy *= ${context.param('strength')};`,
                 ],
