@@ -135,7 +135,7 @@ export const MATERIAL_NODE_DEFINITIONS: MaterialNodeDef[] = [
         type: OUTPUT_NODE_TYPE,
         label: 'Material Output',
         category: 'Output',
-        description: 'How the surface shades. Unconnected inputs take the values set here; the settings choose how it blends, clips and lights. Coat, sheen, thin film, transmission and the specular values make a physical surface, drawn only where they are used.',
+        description: 'How the surface shades. Unconnected inputs take the values set here; the settings choose how it blends, clips and lights. Coat, metal flakes, sheen, thin film, transmission and the specular values make a physical surface, drawn only where they are used.',
         inputs: [
             { key: 'baseColor', label: 'Base colour', type: 'vec3', fallback: fromParam('baseColor'), group: 'Base' },
             { key: 'metalness', label: 'Metalness', type: 'float', fallback: fromParam('metalness'), group: 'Base' },
@@ -151,6 +151,10 @@ export const MATERIAL_NODE_DEFINITIONS: MaterialNodeDef[] = [
             { key: 'coat', label: 'Coat', type: 'float', fallback: fromParam('coat'), group: 'Coat' },
             { key: 'coatRoughness', label: 'Coat roughness', type: 'float', fallback: fromParam('coatRoughness'), group: 'Coat' },
             { key: 'coatNormal', label: 'Coat normal', type: 'vec3', fallback: 'vec3(0.0, 0.0, 1.0)', group: 'Coat' },
+            { key: 'coatColor', label: 'Coat colour', type: 'vec3', fallback: fromParam('coatColor'), group: 'Coat' },
+            { key: 'flakeDensity', label: 'Flake density', type: 'float', fallback: fromParam('flakeDensity'), group: 'Flakes' },
+            { key: 'flakeSize', label: 'Flake size', type: 'float', fallback: fromParam('flakeSize'), group: 'Flakes' },
+            { key: 'flakeColor', label: 'Flake colour', type: 'vec3', fallback: fromParam('flakeColor'), group: 'Flakes' },
             { key: 'sheenColor', label: 'Sheen colour', type: 'vec3', fallback: fromParam('sheenColor'), group: 'Sheen' },
             { key: 'sheenRoughness', label: 'Sheen roughness', type: 'float', fallback: fromParam('sheenRoughness'), group: 'Sheen' },
             { key: 'thinFilm', label: 'Thin film', type: 'float', fallback: fromParam('thinFilm'), group: 'Thin film' },
@@ -177,6 +181,10 @@ export const MATERIAL_NODE_DEFINITIONS: MaterialNodeDef[] = [
             float('anisotropyRotation', 'Anisotropy direction (degrees)', 0, { min: 0, max: 360, step: 1, group: 'Specular' }),
             float('coat', 'Coat', 0, { min: 0, max: 1, step: 0.01, group: 'Coat' }),
             float('coatRoughness', 'Coat roughness', 0.03, { min: 0, max: 1, step: 0.01, group: 'Coat' }),
+            { key: 'coatColor', label: 'Coat colour', kind: 'color', default: [1, 1, 1], group: 'Coat' },
+            float('flakeDensity', 'Flake density', 0, { min: 0, max: 1, step: 0.01, group: 'Flakes' }),
+            float('flakeSize', 'Flake size', 0.02, { min: 0.001, max: 1, step: 0.001, group: 'Flakes' }),
+            { key: 'flakeColor', label: 'Flake colour', kind: 'color', default: [0.9, 0.9, 0.9], group: 'Flakes' },
             { key: 'sheenColor', label: 'Sheen colour', kind: 'color', default: [0, 0, 0], group: 'Sheen' },
             float('sheenRoughness', 'Sheen roughness', 0.5, { min: 0, max: 1, step: 0.01, group: 'Sheen' }),
             float('thinFilm', 'Thin film', 0, { min: 0, max: 1, step: 0.01, group: 'Thin film' }),
@@ -397,7 +405,7 @@ export const MATERIAL_NODE_DEFINITIONS: MaterialNodeDef[] = [
         type: FLIPBOOK_FRAMES_NODE_TYPE,
         label: 'Flipbook Frames',
         category: 'UV',
-        description: "The UV of the frame a texture graph's flipbook shows now: its Frames laid along the rows of a Columns × Rows grid from the top left, played once round every Loop seconds as the graph's time goes round, so the animation loops with no jump. Start later shifts one use's animation from another's. Wire it into every picture the flipbook made.",
+        description: "The UV of the frame a texture graph's flipbook shows now: its Frames laid along the rows of a Columns × Rows grid from the top left, played once round every Loop seconds as the graph's time goes round, so the animation loops with no jump. Each frame is read inside the edge of its own pixels round it in its cell, so filtering never reaches the next frame (Update material sets the edge). Start later shifts one use's animation from another's. Wire it into every picture the flipbook made.",
         keywords: ['flipbook', 'animated texture', 'texture graph', 'frames', 'loop', 'animation'],
         inputs: [
             { key: 'uv', label: 'UV', type: 'vec2', fallback: builtin('uv') },
@@ -409,19 +417,24 @@ export const MATERIAL_NODE_DEFINITIONS: MaterialNodeDef[] = [
             float('columns', 'Columns', 4, { min: 1, max: 64, step: 1 }),
             float('rows', 'Rows', 4, { min: 1, max: 64, step: 1 }),
             float('loop', 'Loop (seconds)', 4, { min: 0.1, max: 600, step: 0.1 }),
+            float('edgeU', 'Edge round each frame, across (share of its cell)', 0, { min: 0, max: 0.25, step: 0.001 }),
+            float('edgeV', 'Edge round each frame, up (share of its cell)', 0, { min: 0, max: 0.25, step: 0.001 }),
         ],
         emit: (inputs, context) => {
             const frames = context.param('frames');
             const columns = context.param('columns');
             const rows = context.param('rows');
+            const edge = context.local('edge');
             const frame = context.local('frame');
             const cell = context.local('cell');
             return {
                 statements: [
                     `float ${frame} = min(floor(fract((${context.builtin('time')} + ${inputs.offset}) / max(${context.param('loop')}, 0.001)) * ${frames}), ${frames} - 1.0);`,
                     `vec2 ${cell} = vec2(mod(${frame}, ${columns}), ${rows} - 1.0 - floor(${frame} / ${columns}));`,
+                    `vec2 ${edge} = vec2(${context.param('edgeU')}, ${context.param('edgeV')});`,
                 ],
-                outputs: { out: `((fract(${inputs.uv}) + ${cell}) / vec2(${columns}, ${rows}))` },
+                // Inside the frame's edge: the place in the frame (wrapped round it) scaled into what the edge leaves.
+                outputs: { out: `((${cell} + ${edge} + fract(${inputs.uv}) * (1.0 - 2.0 * ${edge})) / vec2(${columns}, ${rows}))` },
             };
         },
     },

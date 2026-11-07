@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { frontendDiagnostics } from '../../diagnostics/runtime';
 import { encodePng } from '../png';
 import { GLSL_LIBRARY } from './glslLibrary';
+import type { TexturingGpu } from './texturingGpu';
 
 /**
  * THE TEXTURING GPU
@@ -79,6 +80,11 @@ export interface PassOptions {
     blend?: 'add' | 'max' | 'alpha' | 'none';
     /** Only this rectangle of the target (pixels, from the bottom left). */
     scissor?: { x: number; y: number; width: number; height: number };
+    /**
+     * The pass in WGSL where it has its own (a function graph's, from its WGSL writer): WebGPU draws this in place
+     * of the GLSL's `fn_result` and main. WebGL2 ignores it.
+     */
+    wgsl?: { functions: string; result: string };
 }
 
 /** Pixel samples drawn before the work waits for the next frame. */
@@ -141,7 +147,7 @@ export class FrameBudget {
     }
 }
 
-export class TextureGpu {
+export class TextureGpu implements TexturingGpu {
     readonly renderer: THREE.WebGLRenderer;
     readonly canvas: HTMLCanvasElement;
     /** Grows with every context restore: what was made before it is gone. */
@@ -734,6 +740,11 @@ void main() {
             this.release(strip);
         }
         return out;
+    }
+
+    /** readUint16, for callers that work with any texturing GPU (WebGPU reads only asynchronously). */
+    async readUint16Async(source: PassInput, width: number, height: number, encode: 'color' | 'gray', flipRows = true): Promise<Uint16Array> {
+        return this.readUint16(source, width, height, encode, flipRows);
     }
 
     /** Reads a float image's first `channels` values per pixel, bottom row first. */

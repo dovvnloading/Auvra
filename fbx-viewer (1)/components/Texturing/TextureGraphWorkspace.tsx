@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { CompressionBadge } from '../Materials/CompressionBadge';
 import { ArrowLeftIcon, CheckCircleIcon, ChevronRightIcon, DiceIcon, ExternalLinkIcon, FlowIcon, InfoIcon, LayersIcon, RefreshIcon, WarningIcon } from '../UI/Icons';
 import { useAssets } from '../../context/AssetContext';
 import { useScene } from '../../context/SceneContext';
@@ -14,14 +15,14 @@ import { compileFunction, readFunctionGraph, type FunctionGraph, type NamedSetti
 import { PARAMETER_KINDS, PARAMETER_KIND_LABELS, applyPreset, presetFrom, putPreset, removePreset, renameParameter, renamePreset } from '../../texturing/graph/parameters';
 import { VALUE_SETTING_KINDS, valuePinKey } from '../../texturing/graph/nodeKit';
 import { graphAnimates, textureNodeDefinition, type GraphEntry, type GraphResolver } from '../../texturing/graph/registry';
-import { DEFAULT_ANIMATION, FLIPBOOK_FRAMES, flipbookFrameSize, flipbookGrid, frameTime, packFlipbook, readAnimation, type GraphAnimation } from '../../texturing/graph/animation';
+import { DEFAULT_ANIMATION, FLIPBOOK_FRAMES, flipbookEdge, flipbookFrameSize, flipbookGrid, frameTime, packFlipbook, readAnimation, type GraphAnimation } from '../../texturing/graph/animation';
 import { bakeSignature, readStoredGraph, withParameterPictures, type StoredTextureGraph } from '../../texturing/graph/stored';
 import { MATERIAL_CHANNELS, MATERIAL_CHANNEL_LABELS, materialKey, materialOf } from '../../texturing/graph/material';
 import { TILING_MODES } from '../../texturing/graph/inherit';
 import { OUTPUT_CHANNELS, OUTPUT_CHANNEL_LABELS, isParamLink, type GraphParameter, type GraphParameterKind, type GraphPreset, type OutputChannel, type TexGraphNode, type TexNodeDef, type TexParamDef, type TextureGraph, type TilingMode } from '../../texturing/graph/types';
 import { ROLE_LABELS, encodeChannels, rewriteMaterialPictures, type ChannelImages, type ChannelTextureIds, type MaterialChannel, type PictureLayout, materialReadsPicture } from '../../texturing/materialOutput';
 import { downloadChannelPictures } from '../../texturing/paint/channelDownload';
-import { paintStackEntries } from '../../texturing/paint/stackNode';
+import { openStacksVersion, paintStackEntries, subscribeOpenStacks } from '../../texturing/paint/stackNode';
 import type { PictureFormat } from '../../texturing/paint/pictureFiles';
 import { DownloadPicturesButton } from './Paint/DownloadPicturesButton';
 import { Button, IconButton, Segmented, Spinner } from '../UI/kit';
@@ -42,6 +43,7 @@ import { TextureView2D } from './TextureView2D';
 import type { Histogram } from './view2d';
 import { TextureView3D } from './TextureView3D';
 import { useTextureStore } from './useTextureStore';
+import { RefineWithAi } from './Paint/RefineWithAi';
 import type { GpuImage } from '../../texturing/gpu/textureGpu';
 
 /**
@@ -104,13 +106,15 @@ export const TextureGraphWorkspace: React.FC<{
     onSave: (next: MaterialAsset, immediately?: boolean) => void | Promise<boolean>;
     onOpenAsset: (id: string) => void;
 }> = ({ asset, assets, onSave, onOpenAsset }) => {
-    // Other graph materials, usable as nodes.
+    // Other graph materials, usable as nodes; paint stacks too, again as a set open in Paint changes.
+    const openStacks = useSyncExternalStore(subscribeOpenStacks, openStacksVersion);
     const entries = useMemo(() => {
+        void openStacks;
         const map = new Map<string, GraphEntry>();
         for (const candidate of assets) if (candidate.textureGraph) map.set(candidate.id, { id: candidate.id, name: candidate.name, graph: readStoredGraph(candidate.textureGraph).graph });
         for (const entry of paintStackEntries(assets)) map.set(entry.id, entry);
         return map;
-    }, [assets]);
+    }, [assets, openStacks]);
     const resolve: GraphResolver = useCallback((id) => entries.get(id), [entries]);
     const textureLookup = useMemo(() => materialLibrary.textureLookup(false), []);
     // Pictures at their own depth (16-bit, floating point) once read; the project's textures meanwhile.
@@ -228,15 +232,15 @@ const contextOf = (outerSession: TextureGraphSession, outer: StoredTextureGraph,
     return { inputs, parameters, seed, size, ...(iteration ? { iteration } : {}), version: JSON.stringify([version, parameters, seed, size, iteration ?? null]) };
 };
 
-/** What the 2D view can show of a node: each image it gives, each channel of a material it gives. */
+/** What the 2D view can show of a node: each image it gives, each channel of a material it gives (a curve is no picture). */
 const shownOptions = (definition: TexNodeDef): Array<{ value: string; label: string }> => definition.outputs.flatMap((port) => (port.kind === 'material'
     ? MATERIAL_CHANNELS.map((channel) => ({ value: materialKey(port.key, channel), label: `${port.label}: ${MATERIAL_CHANNEL_LABELS[channel]}` }))
-    : [{ value: port.key, label: port.label }]));
+    : port.kind === 'curve' ? [] : [{ value: port.key, label: port.label }]));
 
 /** The names a node's code can use: its inputs (c_, g_, w_), its settings (p_), the pixel's place and what it writes. */
 const codeNames = (definition: TexNodeDef): string[] => [
     'uv', 'vUv', 'outColor', 'uSeed', 'uSize',
-    ...definition.inputs.filter((port) => port.kind !== 'material').flatMap((port) => [`c_${port.key}`, `g_${port.key}`, `w_${port.key}`]),
+    ...definition.inputs.filter((port) => port.kind !== 'material' && port.kind !== 'curve').flatMap((port) => [`c_${port.key}`, `g_${port.key}`, `w_${port.key}`]),
     ...definition.params.map((param) => `p_${param.key}`),
 ];
 
@@ -427,6 +431,14 @@ const Workspace: React.FC<{
         if (node) update({ ...graph, nodes: graph.nodes.map((candidate) => (candidate.id === nodeId ? { ...node, params: { ...node.params, ...patch } } : candidate)) }, true, `${nodeId}:handle:${key}`);
     }, [graph, update]);
 
+    /** A Bitmap cropped to a picked square, the graph's size in the world following it, as one undo step. */
+    const cropPhoto = useCallback((nodeId: string, patch: Record<string, unknown>, scale: number) => {
+        const node = graph.nodes.find((candidate) => candidate.id === nodeId);
+        if (!node) return;
+        const size = { w: Math.max(0.001, Math.min(10000, (graph.physicalSize?.w ?? 1) * scale)), h: Math.max(0.001, Math.min(10000, (graph.physicalSize?.h ?? 1) * scale)) };
+        update({ ...graph, physicalSize: size, nodes: graph.nodes.map((candidate) => (candidate.id === nodeId ? { ...node, params: { ...node.params, ...patch } } : candidate)) }, true);
+    }, [graph, update]);
+
     /** Opens the graph a sub-graph node uses, or a processor's function graph, in place of this one. */
     const openGraph = useCallback((nodeId: string) => {
         const node = graph.nodes.find((candidate) => candidate.id === nodeId);
@@ -508,12 +520,15 @@ const Workspace: React.FC<{
         let height = 2 ** size.h;
         // An animated graph played as a flipbook: its frames round the loop, laid out on each picture.
         const animation = readAnimation(graph.animation);
-        const flipbook = animation.play === 'flipbook' && graphAnimates(graph, resolve) ? { frames: animation.frames, ...flipbookGrid(animation.frames), loop: animation.loop } : null;
+        const frameSize = flipbookFrameSize(size, animation.frames);
+        // Each frame sits inside an edge of its own pixels in its cell, which the Flipbook Frames node reads it inside of.
+        const flipbook = animation.play === 'flipbook' && graphAnimates(graph, resolve)
+            ? { frames: animation.frames, ...flipbookGrid(animation.frames), loop: animation.loop, edge: flipbookEdge(2 ** frameSize.w, 2 ** frameSize.h) }
+            : null;
         const packed: GpuImage[] = [];
         try {
             let images: ChannelImages;
             if (flipbook) {
-                const frameSize = flipbookFrameSize(size, flipbook.frames);
                 const frames: ChannelImages[] = [];
                 const dones: Array<() => void> = [];
                 done = () => { for (const release of dones) release(); };
@@ -525,7 +540,7 @@ const Workspace: React.FC<{
                 }
                 images = {};
                 for (const channel of Object.keys(frames[0]) as MaterialChannel[]) {
-                    const atlas = packFlipbook(session.gpu, frames.map((frame) => frame[channel]!), flipbook.columns, flipbook.rows);
+                    const atlas = packFlipbook(session.gpu, frames.map((frame) => frame[channel]!), flipbook.columns, flipbook.rows, flipbook.edge);
                     packed.push(atlas);
                     images[channel] = atlas;
                 }
@@ -1005,6 +1020,7 @@ const Workspace: React.FC<{
                     </div>
                 );
             })()}
+            <RefineWithAi session={session} graph={graph} name={asset.name} onGraph={(next) => update(next, true)} />
             <div className="space-y-2 border-t border-line pt-2">
                 <div className="flex items-center gap-1.5">
                     <span className="flex-1 text-2xs font-semibold text-ink-2">Parameters</span>
@@ -1081,6 +1097,8 @@ const Workspace: React.FC<{
                 {baking ?? 'Update material'}
             </Button>
             {!hasOutputs && <p className="text-2xs text-ink-3">Add an Output node for a channel (base colour, normal...) to make a material.</p>}
+            {/* What its pictures cost as the game keeps them, and where compression hurts (components/Materials/CompressionBadge.tsx). */}
+            {stored.baked && <CompressionBadge asset={materialLibrary.get(asset.id) ?? asset} />}
             <div className="grid grid-cols-[1fr_auto] items-center gap-x-2 gap-y-1.5">
                 <span className="text-2xs text-ink-2">{graph.size.w === graph.size.h ? 'Picture size' : 'Picture size (longest side)'}</span>
                 <Select value={stored.bakeSize} options={PICTURE_SIZES} onChange={(value) => change({ bakeSize: Number(value) })} className="w-32" />
@@ -1196,7 +1214,8 @@ const Workspace: React.FC<{
             </div>
             <div className="flex w-[360px] shrink-0 flex-col border-l border-line bg-panel">
                 <div className="flex min-h-0 flex-1 flex-col border-b border-line">
-                    <TextureView2D session={session} nodeId={viewed} output={viewedOutput} node={graph.nodes.find((candidate) => candidate.id === viewed) ?? null} onParams={setParams} label={(() => {
+                    <TextureView2D session={session} nodeId={viewed} output={viewedOutput} node={graph.nodes.find((candidate) => candidate.id === viewed) ?? null} onParams={setParams}
+                        worldWidth={graph.physicalSize?.w ?? 1} onPhotoCrop={cropPhoto} label={(() => {
                         const node = graph.nodes.find((candidate) => candidate.id === viewed);
                         if (!node) return '2D';
                         const definition = textureNodeDefinition(node, resolve);

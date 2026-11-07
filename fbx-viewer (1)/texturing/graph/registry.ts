@@ -18,7 +18,7 @@ import { GEOMETRY_NODES } from './nodes/geometry';
 import { WEATHERING_NODES } from './nodes/weathering';
 import { PAINT_STACK_NODE } from '../paint/stackNode';
 import { PHOTO_NODES } from './nodes/photo';
-import { SPLINE_NODES } from './nodes/splines';
+import { PATH_TOOL_NODES, SPLINE_NODES } from './nodes/splines';
 import { VECTOR_NODES } from './nodes/vector';
 import { SDF_NODES } from './nodes/sdf';
 import { PBR_CHECK_NODES } from './nodes/pbrChecks';
@@ -28,7 +28,7 @@ import { OUTPUT_CHANNEL_LABELS, outputNodeKind, type NodeCategory, type OutputCh
 
 /** Every node a texture graph can hold, by type; sub-graph nodes are made from the graph they use. */
 
-export const TEXTURE_NODE_DEFINITIONS: readonly TexNodeDef[] = [...IO_NODES, ...PROCESSOR_NODES, ITERATE_PLACEHOLDER, ...GENERATOR_NODES, ...NOISE_NODES, ...PATTERN_NODES, TEXT_NODE, ...SCATTER_NODES, ...ADJUST_NODES, ...COLOUR_NODES, ...TRANSFORM_NODES, ...FILTER_NODES, ...DISTANCE_NODES, ...GEOMETRY_NODES, ...WEATHERING_NODES, ...PHOTO_NODES, ...SPLINE_NODES, ...VECTOR_NODES, ...SDF_NODES, ...PBR_CHECK_NODES, TIME_NODE, ...MATERIAL_NODES, PAINT_STACK_NODE];
+export const TEXTURE_NODE_DEFINITIONS: readonly TexNodeDef[] = [...IO_NODES, ...PROCESSOR_NODES, ITERATE_PLACEHOLDER, ...GENERATOR_NODES, ...NOISE_NODES, ...PATTERN_NODES, TEXT_NODE, ...SCATTER_NODES, ...ADJUST_NODES, ...COLOUR_NODES, ...TRANSFORM_NODES, ...FILTER_NODES, ...DISTANCE_NODES, ...GEOMETRY_NODES, ...WEATHERING_NODES, ...PHOTO_NODES, ...SPLINE_NODES, ...PATH_TOOL_NODES, ...VECTOR_NODES, ...SDF_NODES, ...PBR_CHECK_NODES, TIME_NODE, ...MATERIAL_NODES, PAINT_STACK_NODE];
 
 const BY_TYPE = new Map(TEXTURE_NODE_DEFINITIONS.map((definition) => [definition.type, definition]));
 

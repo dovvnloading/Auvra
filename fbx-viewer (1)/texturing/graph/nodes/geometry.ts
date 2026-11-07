@@ -1,5 +1,6 @@
 import * as THREE from 'three';
-import type { GpuImage, TextureGpu } from '../../gpu/textureGpu';
+import type { GpuImage } from '../../gpu/textureGpu';
+import type { TexturingGpu as TextureGpu } from '../../gpu/texturingGpu';
 import { TRANSFORM_READ, tileSafeMatrix, transformMatrix, type Mat2 } from '../safeTransform';
 import { bool, color, colorIn, float, grayIn, int, out, seed, select, vec2 } from '../nodeKit';
 import type { NodeRunContext, TexNodeDef } from '../types';

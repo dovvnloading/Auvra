@@ -93,6 +93,19 @@ describe("a material graph in WGSL", () => {
     expect(compileGraphWgsl(tinted({ coat: 1, shading: "unlit" })).layers).toEqual([]);
   });
 
+  it("tints what is under a coloured coat, and works metal flakes into the surface as the WebGL path does", () => {
+    const paint = compileGraphWgsl(tinted({ coat: 1, coatColor: [1, 0.5, 0.4], flakeDensity: 0.5 }));
+    expect(paint.layers).toEqual(["coat", "flakes"]);
+    const body = surfaceBody(paint.wgsl);
+    expect(body).toMatch(/clamp\(material\.\w+_coatColor, vec3f\(0\.0\), vec3f\(1\.0\)\),\s*\), \(material\.flags/);
+    expect(paint.wgsl).toContain("fn mgMetalFlakes(p: vec3f, size: f32, density: f32) -> vec4f");
+    expect(paint.wgsl).toContain("fn mgFlakeNormal(normal: vec3f, flake: vec4f) -> vec3f");
+    expect(body).toContain("mgMetalFlakes(");
+    // The flakes lean the normal though none is wired.
+    expect(body).toContain("mgFlakeNormal(");
+    expect(body).toContain("out.normal = mappedNormal(in, out.normal");
+  });
+
   it("draws the specular, index of refraction and thin film a graph works out, under any coat", () => {
     const gem = compileGraphWgsl(tinted({ ior: 2.4, specularColor: [1, 0.9, 0.8], specularWeight: 0.9, thinFilm: 0.7, thinFilmThickness: 450, coat: 0.5 }));
     expect(gem.layers).toEqual(["specular", "coat", "thinFilm"]);

@@ -71,6 +71,30 @@ const renamedAuthoringTextures = <T>(value: T, rename: (textureId: string) => st
     return result as T;
 };
 
+/**
+ * A texture graph's picture parameters with the pictures they name renamed: each one's default, this material's
+ * value for it and its presets' values. (The `textures` record the editor keeps of them is renamed with the rest.)
+ */
+const renamedParameterPictures = (stored: Record<string, unknown>, rename: (textureId: string) => string): Record<string, unknown> => {
+    const graph = stored.graph && typeof stored.graph === 'object' ? stored.graph as Record<string, unknown> : null;
+    const parameters = Array.isArray(graph?.parameters) ? graph.parameters as Array<Record<string, unknown> | null> : [];
+    const pictureNames = new Set(parameters.filter((parameter) => parameter?.kind === 'texture' && typeof parameter.name === 'string').map((parameter) => parameter!.name as string));
+    if (!graph || !pictureNames.size) return stored;
+    const swap = (value: unknown) => (typeof value === 'string' && value ? rename(value) : value);
+    const swapValues = (values: unknown) => (values && typeof values === 'object' && !Array.isArray(values)
+        ? Object.fromEntries(Object.entries(values as Record<string, unknown>).map(([name, value]) => [name, pictureNames.has(name) ? swap(value) : value]))
+        : values);
+    return {
+        ...stored,
+        graph: {
+            ...graph,
+            parameters: parameters.map((parameter) => (parameter?.kind === 'texture' && pictureNames.has(parameter.name as string) ? { ...parameter, default: swap(parameter.default) } : parameter)),
+            ...(Array.isArray(graph.presets) ? { presets: graph.presets.map((preset: unknown) => (preset && typeof preset === 'object' ? { ...preset, values: swapValues((preset as { values?: unknown }).values) } : preset)) } : {}),
+        },
+        ...(stored.values !== undefined ? { values: swapValues(stored.values) } : {}),
+    };
+};
+
 /** The same authoring document with every mention of `textureId` cleared. */
 const withoutAuthoringTexture = <T>(value: T, textureId: string): T => renamedAuthoringTextures(value, (id) => (id === textureId ? '' : id));
 
@@ -91,7 +115,7 @@ export const withRenamedTextures = (asset: MaterialAsset, rename: (textureId: st
                 ? { ...node, params: { ...node.params, texture: rename(node.params.texture) } }
                 : node)),
         },
-        ...(asset.textureGraph ? { textureGraph: renamedAuthoringTextures(asset.textureGraph, rename) } : {}),
+        ...(asset.textureGraph ? { textureGraph: renamedParameterPictures(renamedAuthoringTextures(asset.textureGraph, rename), rename) } : {}),
         ...(asset.paint ? { paint: renamedAuthoringTextures(asset.paint, rename) } : {}),
         ...(pictures ? { pictures } : {}),
     };

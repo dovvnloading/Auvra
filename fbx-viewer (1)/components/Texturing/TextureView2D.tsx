@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import * as THREE from 'three';
-import { CompareIcon, CrossIcon, FrameIcon, InfoIcon, PauseIcon, PinIcon, PlayIcon, PulseIcon, SunDimIcon, SunIcon, TilesIcon } from '../UI/Icons';
+import { CompareIcon, CrossIcon, FrameIcon, InfoIcon, PauseIcon, PinIcon, PlayIcon, PulseIcon, SunDimIcon, SunIcon, TargetIcon, TilesIcon } from '../UI/Icons';
+import { PhotoRegionPicker } from './Paint/PhotoRegionPicker';
 import type { GpuImage } from '../../texturing/gpu/textureGpu';
 import { hash2 } from '../../texturing/graph/scatter';
 import { isParamLink, type TexGraphNode } from '../../texturing/graph/types';
@@ -108,13 +109,16 @@ interface Handles {
     remove?: (key: string) => Record<string, unknown> | null;
 }
 
-/** The handles a node gets on the image, from its settings (and the seed it drew with, for a Tile sampler's random shifts). */
-const handlesFor = (node: TexGraphNode | null | undefined, seed: number | undefined): Handles | null => {
+/**
+ * The handles a node gets on the image, from its settings (and the seed it drew with, for a Tile sampler's random
+ * shifts). `wired` says which of its inputs have a wire: points a curve wired in takes the place of get no handles.
+ */
+const handlesFor = (node: TexGraphNode | null | undefined, seed: number | undefined, wired: (input: string) => boolean = () => false): Handles | null => {
     if (!node || node.bypass) return null;
     const p = node.params;
     const locked = (key: string) => isParamLink(p[key]);
     // Nodes with lists of points (the spline nodes): a handle on every point, a click adds one.
-    const lists = (textureNodeDefinitionByType(node.type)?.params ?? []).filter((param) => param.kind === 'points' && !isParamLink(p[param.key])).map((param): PointList => {
+    const lists = (textureNodeDefinitionByType(node.type)?.params ?? []).filter((param) => param.kind === 'points' && !isParamLink(p[param.key]) && !(param.replacedBy && wired(param.replacedBy))).map((param): PointList => {
         const points = readPoints(p[param.key], param.default as Vec2[]);
         const curve = node.type !== 'pointList';
         const closed = Boolean(p.closed);
@@ -192,7 +196,14 @@ export const TextureView2D: React.FC<{
     node?: TexGraphNode | null;
     /** Changes the shown node's settings (its handles dragged); `key` names the handle, for one undo step a drag. */
     onParams?: (nodeId: string, patch: Record<string, unknown>, key: string) => void;
-}> = ({ session, nodeId, output, label, node, onParams }) => {
+    /** The metres across the graph's picture stands for. */
+    worldWidth?: number;
+    /**
+     * Crops a Bitmap to a picked square, the graph's size in the world times `scale` with it (one undo
+     * step), so features keep their real size; without it only the crop changes.
+     */
+    onPhotoCrop?: (nodeId: string, patch: Record<string, unknown>, scale: number) => void;
+}> = ({ session, nodeId, output, label, node, onParams, worldWidth = 1, onPhotoCrop }) => {
     const host = useRef<HTMLDivElement>(null);
     const canvas = useRef<HTMLCanvasElement>(null);
     const histogramCanvas = useRef<HTMLCanvasElement>(null);
@@ -213,6 +224,9 @@ export const TextureView2D: React.FC<{
     const [pins, setPins] = useState<ColourPin[]>([]);
     const [pinValues, setPinValues] = useState<ReadonlyMap<number, number[] | null>>(new Map());
     const [compare, setCompare] = useState<{ nodeId: string; output?: string; label: string } | null>(null);
+    /** A Bitmap's whole photo shown for picking one material out of it. */
+    const [regionOpen, setRegionOpen] = useState(false);
+    useEffect(() => { setRegionOpen(false); }, [nodeId]);
     const [wipe, setWipe] = useState(0.5);
     const [line, setLine] = useState<{ from: UV; to: UV } | null>(null);
     /** The pixel under the pointer (counted from the top left) and its values once read. */
@@ -229,6 +243,8 @@ export const TextureView2D: React.FC<{
     const animated = session.animates();
     const loop = session.loop();
     const state = nodeId ? session.state(nodeId) : undefined;
+    // Which of the node's inputs have a wire (a curve wired in takes the place of the points placed on it).
+    const wiredInput = (input: string): boolean => !!node && session.graph.links.some((link) => link.to === node.id && link.toInput === input);
     const other: GpuImage | null = compare && compare.nodeId !== nodeId ? session.imageOf(compare.nodeId, compare.output) : null;
     const ratio = typeof window === 'undefined' ? 1 : window.devicePixelRatio || 1;
 
@@ -502,7 +518,7 @@ export const TextureView2D: React.FC<{
             return;
         }
         // A click adds a point to a node with a list of them (within 12 pixels of a span, into it).
-        const current2d = onParams ? handlesFor(node, undefined) : null;
+        const current2d = onParams ? handlesFor(node, undefined, wiredInput) : null;
         if (current2d?.add && node && onParams && placement) {
             const near = (12 * placement.ratio) / (placement.zoom * Math.max(placement.imageWidth, 1));
             const patch = current2d.add([uv.u, uv.v], near);
@@ -519,7 +535,7 @@ export const TextureView2D: React.FC<{
         return `${place}   R ${values[0].toFixed(3)}  G ${values[1].toFixed(3)}  B ${values[2].toFixed(3)}  A ${values[3].toFixed(3)}`;
     })();
 
-    const handles = onParams ? handlesFor(node, node ? session.state(node.id)?.seed : undefined) : null;
+    const handles = onParams ? handlesFor(node, node ? session.state(node.id)?.seed : undefined, wiredInput) : null;
     const toView = (point: Vec2) => (placement ? uvToView({ u: point[0], v: point[1] }, placement) : { x: 0, y: 0 });
     const onHandleDown = (event: React.PointerEvent, key: string) => {
         event.stopPropagation();
@@ -540,6 +556,8 @@ export const TextureView2D: React.FC<{
     };
 
     const share = bins && range ? rangeShare(bins, range[0], range[1]) : null;
+    // A Bitmap with a photo can have one material picked out of it.
+    const photoId = node?.type === 'bitmap' && onParams && typeof node.params.texture === 'string' && node.params.texture ? node.params.texture : null;
     const cursor = picking ? 'cursor-crosshair' : pinning ? 'cursor-copy' : 'cursor-grab';
 
     return (
@@ -562,6 +580,9 @@ export const TextureView2D: React.FC<{
                 ><CompareIcon size={13} /></IconButton>
                 <IconButton label={lit ? 'Show the normal map as it is' : 'Light it as a normal map (the light follows the pointer)'} active={lit} disabled={image?.kind === 'gray'} onClick={() => setLit((value) => !value)}><SunIcon size={13} /></IconButton>
                 <IconButton label={hdr ? 'Stop marking values past 0 to 1' : 'Mark values past 0 to 1: red stripes above 1, blue below 0 (for deep pictures)'} active={hdr} onClick={() => setHdr((value) => !value)}><SunDimIcon size={13} /></IconButton>
+                {photoId && (
+                    <IconButton label="Pick one material in the photo: click it, and the best square of it is what the graph works from" active={regionOpen} onClick={() => setRegionOpen((value) => !value)}><TargetIcon size={13} /></IconButton>
+                )}
                 <span className="flex-1" />
                 <label className="flex items-center gap-1 text-2xs text-ink-3" title="Exposure in stops: brighter or darker, for looking only. Double-click to reset.">
                     <span>EV</span>
@@ -589,6 +610,10 @@ export const TextureView2D: React.FC<{
                 onPointerLeave={() => { wanted.current = null; setProbe(null); }}
             >
                 <canvas ref={canvas} className="absolute inset-0 h-full w-full" />
+                {regionOpen && photoId && node && onParams && (
+                    <PhotoRegionPicker textureId={photoId} cropFrom={node.params.cropFrom} cropSize={node.params.cropSize} metres={worldWidth}
+                        onApply={(patch, scale) => { if (onPhotoCrop) onPhotoCrop(node.id, patch, scale); else onParams(node.id, patch, 'region'); setRegionOpen(false); }} onClose={() => setRegionOpen(false)} />
+                )}
                 {image && state?.notes?.length ? (
                     <div className="pointer-events-none absolute inset-x-2 bottom-2 flex gap-1.5 rounded bg-panel/95 px-2 py-1 text-2xs leading-snug text-ink-2 shadow">
                         <InfoIcon size={12} className="mt-px shrink-0 text-accent" />

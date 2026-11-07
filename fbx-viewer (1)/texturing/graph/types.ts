@@ -1,6 +1,8 @@
 import type * as THREE from 'three';
-import type { GpuImage, ImagePrecision, PassOptions, TextureGpu } from '../gpu/textureGpu';
+import type { GpuImage, ImagePrecision, PassOptions } from '../gpu/textureGpu';
+import type { TexturingGpu } from '../gpu/texturingGpu';
 import type { GraphAnimation, GraphTime } from './animation';
+import type { Point } from './curves';
 import type { MaterialImages } from './material';
 
 /**
@@ -23,10 +25,18 @@ export type InputFallback = 'white' | 'black' | 'mid' | 'normal' | 'clear';
 
 /**
  * What a pin carries: one image (colour or grey; 'any' either), a whole material (one wire carrying
- * every surface channel: base colour, normal, roughness...), or a value: one number or vector worked
- * out on the GPU (a picture one pixel across), which a setting shown as a pin follows.
+ * every surface channel: base colour, normal, roughness...), a value: one number or vector worked
+ * out on the GPU (a picture one pixel across), which a setting shown as a pin follows, or a curve:
+ * paths in the picture (a Curve's, a mask's outlines), worked out on the CPU, which the spline nodes
+ * draw and the path tools change.
  */
-export type PinKind = PortKind | 'any' | 'material' | 'value';
+export type PinKind = PortKind | 'any' | 'material' | 'value' | 'curve';
+
+/** One path on a curve wire: a polyline in picture places (u across, v up, 0 to 1); a closed one ends where it starts. */
+export interface CurvePath { points: Point[]; closed: boolean }
+
+/** What a curve wire carries: one or more paths. */
+export type CurvePaths = readonly CurvePath[];
 
 export interface TexPortDef {
     key: string;
@@ -68,6 +78,8 @@ export interface TexParamDef {
     group?: string;
     /** Text of many lines (an SVG drawing), typed in a box with a button to read it from a file of these types. */
     multiline?: { accept: string; limit: number };
+    /** An input that takes this setting's place while something is wired to it (a curve wired in instead of points placed here). */
+    replacedBy?: string;
 }
 
 /** A node setting following the graph's parameters: one of them as it is, or a formula of them. */
@@ -226,7 +238,7 @@ export interface SubgraphRunOptions {
 
 /** Everything a node sees while it draws. */
 export interface NodeRunContext {
-    readonly gpu: TextureGpu;
+    readonly gpu: TexturingGpu;
     readonly node: TexGraphNode;
     readonly width: number;
     readonly height: number;
@@ -266,6 +278,10 @@ export interface NodeRunContext {
     external(name: string): GpuImage | THREE.Texture | null;
     /** The channels of the material wired into a material input (null when none is). */
     material(key: string): MaterialImages | null;
+    /** The paths of the curve wired into a curve input (null when none is). */
+    curve(key: string): CurvePaths | null;
+    /** Gives one of the node's curve outputs its paths. */
+    giveCurve(key: string, paths: CurvePaths): void;
     /**
      * Says something about how the node drew, shown on it and in its 2D view: a short phrase, then
      * ": " and the rest ("No curvature map: ..."). Not every caller listens.

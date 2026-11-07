@@ -180,6 +180,7 @@ describe('Material Overrides', () => {
   it('says plainly when a material cannot take a material asset', () => {
     open(new THREE.MeshBasicMaterial({ name: 'Sign' }));
     expect(within(screen.getByLabelText('Material asset')).getByRole('combobox').hasAttribute('disabled')).toBe(true);
-    expect(screen.getByText(/can't shade this material: it is drawn without lighting/)).toBeTruthy();
+    expect(screen.getByText(/can't shade this material yet: it is drawn without lighting/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Convert to a material' })).toBeTruthy();
   });
 });

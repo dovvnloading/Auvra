@@ -69,6 +69,9 @@ export const out = (kind: PortKind | 'any', key = 'out', label = 'Output'): TexP
 /** A pin carrying a whole material (every surface channel on one wire). */
 export const materialIn = (key: string, label: string): TexPortDef => ({ key, label, kind: 'material' });
 export const materialOut = (key = 'out', label = 'Material'): TexPortDef => ({ key, label, kind: 'material' });
+/** A pin carrying a curve: paths in the picture, worked out on the CPU. */
+export const curveIn = (key: string, label: string): TexPortDef => ({ key, label, kind: 'curve' });
+export const curveOut = (key = 'path', label = 'Path'): TexPortDef => ({ key, label, kind: 'curve' });
 
 export const defaultCurves = (): CurveSet => {
     const line = (): CurvePoint[] => [{ x: 0, y: 0 }, { x: 1, y: 1 }];
@@ -218,7 +221,7 @@ export const nodeBindings = (
     for (const port of definition.inputs) {
         // A material input carries a picture per channel: the node binds the ones it reads itself. A
         // value goes to the setting it is wired to.
-        if (port.kind === 'material' || port.kind === 'value') continue;
+        if (port.kind === 'material' || port.kind === 'value' || port.kind === 'curve') continue;
         const image = context.input(port.key);
         const gray = image ? image.kind === 'gray' : false;
         inputs[`t_${port.key}`] = image ?? gpuConstant(port.fallback ?? 'black');

@@ -1,4 +1,4 @@
-import { compileFunction, defaultPixelFunction, defaultValueFunction, functionReadsTime, glslFunction, readFunctionGraph, type FunctionGraph, type FunctionIr, type FunctionUse, type NamedSetting } from '../functionGraph';
+import { compileFunction, defaultPixelFunction, defaultValueFunction, functionReadsTime, glslFunction, readFunctionGraph, wgslFunction, type FunctionGraph, type FunctionIr, type FunctionUse, type NamedSetting } from '../functionGraph';
 import { anyIn, out, select } from '../nodeKit';
 import type { TexGraphNode, TexNodeDef, TexParamDef } from '../types';
 import { pixelProcessorCost } from './io';
@@ -147,11 +147,21 @@ const functionCost = (ir: FunctionIr): number => {
     return Math.min(1024, Math.max(1, reads + noises + Math.round(ir.steps.length / 8)));
 };
 
-/** The processor's function as a pass that writes its result, and roughly what each pixel costs. */
-const functionPass = (params: Readonly<Record<string, unknown>>, use: FunctionUse, pictures: readonly string[], fallback: typeof defaultPixelFunction): { fragment: string; cost: number } => {
+/** The names the WGSL writer reads the pass's uniforms by: the kit's own, as the WebGPU path keeps them. */
+const WGSL_KIT_NAMES = { uv: 'uv', pixel: 'pixel', size: 'uSize', seed: 'uSeed', iteration: 'uIteration', iterations: 'uIterations', world: 'uWorld', time: 'uTime', phase: 'uPhase', tiles: 'uTiles' };
+
+/**
+ * The processor's function as a pass that writes its result, roughly what each pixel costs, and the same
+ * function in WGSL (from the writer, not translated) for WebGPU.
+ */
+const functionPass = (params: Readonly<Record<string, unknown>>, use: FunctionUse, pictures: readonly string[], fallback: typeof defaultPixelFunction): { fragment: string; cost: number; wgsl: { functions: string; result: string } } => {
     const result = compileFunction(readFunctionGraph(params.function, fallback), { use, settings: readNamedSettings(params.settings), pictures });
     if (!result.ir) throw new Error(`Its function graph: ${result.error}`);
-    return { fragment: `${glslFunction(result.ir)}\nvoid main() { outColor = fn_result(); }`, cost: functionCost(result.ir) };
+    return {
+        fragment: `${glslFunction(result.ir)}\nvoid main() { outColor = fn_result(); }`,
+        cost: functionCost(result.ir),
+        wgsl: { functions: wgslFunction(result.ir, 'fn_result', WGSL_KIT_NAMES), result: 'fn_result(vUv_, fragCoord_.xy)' },
+    };
 };
 
 const functionParam = (fallback: () => unknown, showIf?: TexParamDef['showIf']): TexParamDef => ({
@@ -191,8 +201,8 @@ export const PIXEL_PROCESSOR: TexNodeDef = {
             await context.pass(image, `void main() {\nvec2 uv = vUv;\n#line 1\n${code}\n}`, { cost: pixelProcessorCost(code) });
             return { out: image };
         }
-        const { fragment, cost } = functionPass(context.params, 'pixel', PROCESSOR_PICTURES[PIXEL_PROCESSOR_TYPE], defaultPixelFunction);
-        await context.pass(image, fragment, { cost });
+        const { fragment, cost, wgsl } = functionPass(context.params, 'pixel', PROCESSOR_PICTURES[PIXEL_PROCESSOR_TYPE], defaultPixelFunction);
+        await context.pass(image, fragment, { cost, wgsl });
         return { out: image };
     },
 };
@@ -213,7 +223,8 @@ export const VALUE_PROCESSOR: TexNodeDef = {
     readsPass: processorReadsPass(defaultValueFunction),
     async run(context) {
         const image = context.image('color', 1, 1, 32);
-        await context.pass(image, functionPass(context.params, 'value', PROCESSOR_PICTURES[VALUE_PROCESSOR_TYPE], defaultValueFunction).fragment);
+        const { fragment, wgsl } = functionPass(context.params, 'value', PROCESSOR_PICTURES[VALUE_PROCESSOR_TYPE], defaultValueFunction);
+        await context.pass(image, fragment, { wgsl });
         return { out: image };
     },
 };

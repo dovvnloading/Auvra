@@ -13,7 +13,7 @@ describe('starter materials', () => {
     });
 
     it('use only the physical parts their look needs', () => {
-        expect(materialGraphFeatures(starter('carPaint').graph())).toEqual(['coat']);
+        expect(materialGraphFeatures(starter('carPaint').graph())).toEqual(['coat', 'flakes']);
         expect(materialGraphFeatures(starter('frostedGlass').graph())).toEqual(['specular', 'transmission']);
         expect(materialGraphFeatures(starter('velvet').graph())).toEqual(['sheen']);
         expect(materialGraphFeatures(starter('lacqueredWood').graph())).toEqual(['coat']);

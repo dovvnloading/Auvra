@@ -6,8 +6,9 @@ import { OUTPUT_NODE_TYPE, defaultParams, normalizeMaterialGraph, type MaterialG
  * Ready shader graphs offered when a material is made, each a few nodes with values close to the real
  * thing, to start from and to check the physical surface against photos. Colours are as picked (sRGB).
  *
- * - Car paint: a red metallic base under a glossy clear coat. Coats on cars are about 1.5 in index of
- *   refraction, which the coat uses; the base's flakes show as a broader, half-metal highlight.
+ * - Car paint: a deep red base strewn with silver metal flakes, under a glossy coat tinted red (a candy
+ *   finish): the flakes glint red through it, each catching the light at its own angle. Coats on cars are
+ *   about 1.5 in index of refraction, which the coat uses.
  * - Frosted glass: clear soda-lime glass (index 1.52) seen through, its surface roughened so what is
  *   behind blurs.
  * - Velvet: a rich wine-red base under a bright pink sheen, as its standing fibres catch light at
@@ -37,9 +38,13 @@ export const STARTER_MATERIALS: readonly StarterMaterial[] = [
     {
         key: 'carPaint',
         name: 'Car paint',
-        description: 'Red metallic paint under a glossy clear coat.',
+        description: 'Red paint with metal flakes glinting under a glossy tinted coat.',
         graph: () => normalizeMaterialGraph({
-            nodes: [output({ baseColor: [0.55, 0.02, 0.03], metalness: 0.5, roughness: 0.35, coat: 1, coatRoughness: 0.02 })],
+            nodes: [output({
+                baseColor: [0.45, 0.02, 0.03], metalness: 0.15, roughness: 0.4,
+                coat: 1, coatRoughness: 0.02, coatColor: [1, 0.6, 0.58],
+                flakeDensity: 0.45, flakeSize: 0.015, flakeColor: [0.92, 0.92, 0.92],
+            })],
             links: [],
         }),
     },

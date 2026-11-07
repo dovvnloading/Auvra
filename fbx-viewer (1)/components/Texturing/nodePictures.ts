@@ -97,6 +97,16 @@ const draw = async (gpu: TextureGpu, evaluator: TextureGraphEvaluator, request: 
         );
         node.params = { ...node.params, smooth: 0.06 };
         links.push({ from: 'first', fromOutput: 'distance', to: 'picture', toInput: 'a' }, { from: 'second', fromOutput: 'distance', to: 'picture', toInput: 'b' });
+    } else if (main && definition.inputs.find((port) => port.key === main)?.kind === 'curve') {
+        // A path tool is shown changing a wavy curve (Join paths: and a second one below it).
+        nodes.unshift({ ...createNode('curve', -200, 0, { points: [[0.12, 0.62], [0.36, 0.82], [0.62, 0.5], [0.88, 0.72]] }), id: 'sample' });
+        links.push({ from: 'sample', fromOutput: 'path', to: 'picture', toInput: main });
+        const second = definition.inputs.find((port) => port.kind === 'curve' && port.key !== main);
+        if (second) {
+            nodes.unshift({ ...createNode('curve', -200, 80, { points: [[0.88, 0.3], [0.62, 0.16], [0.36, 0.42], [0.12, 0.26]] }), id: 'second' });
+            links.push({ from: 'second', fromOutput: 'path', to: 'picture', toInput: second.key });
+        }
+        node.params = { ...node.params, width: 0.02 };
     } else if (definition.category === 'Photo and scans' && main) {
         // A stand-in photo: noise that does not tile, through a colourful gradient (its height as the height).
         nodes.unshift({ ...createNode('perlinNoise', -260, 0), id: 'sample', tiling: 'none' }, { ...createNode('gradientMap', -150, 0, { ramp: COLOURFUL_RAMP }), id: 'colourful' });

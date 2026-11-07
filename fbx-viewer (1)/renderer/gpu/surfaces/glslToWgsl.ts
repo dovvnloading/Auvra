@@ -25,6 +25,8 @@ export interface GlslFunction {
   params?: readonly string[];
   /** Which parameters it writes through, as `out` does. */
   outs?: readonly number[];
+  /** Other functions of the same name taking other types (GLSL overloads, each its own name in WGSL). */
+  overloads?: readonly GlslFunction[];
 }
 
 export interface GlslContext {
@@ -37,6 +39,8 @@ export interface GlslContext {
   functions: Record<string, GlslFunction>;
   /** Told of every function of `functions` or of the support code called. */
   called?: (name: string) => void;
+  /** Put before the WGSL name of every function translated (so one never meets a WGSL built-in of its name). */
+  functionPrefix?: string;
 }
 
 /** Functions the translated code may call, by what `GlslContext.called` is told. */
@@ -83,7 +87,7 @@ const CONSTANTS: Readonly<Record<string, string>> = {
 };
 
 /** Names WGSL keeps for itself or that the translation writes: a local called one of these is renamed. */
-const RESERVED = new Set(`
+export const RESERVED = new Set(`
   alias break case const const_assert continue continuing default diagnostic discard else enable false fn for if let loop
   override requires return struct switch true var while NULL Self abstract active alignas alignof as asm asm_fragment async
   attribute auto await become cast catch class co_await co_return co_yield coherent column_major common compile
@@ -205,6 +209,8 @@ export class GlslTranslator {
   private readonly scopes: Map<string, Local>[] = [new Map()];
   private returnType = "void";
   private temporaries = 0;
+  /** The function being translated: its by-value parameters (code to GLSL name), the scope they live in, and those its body assigns to. */
+  private parameters: { codes: Map<string, string>; scope: number; assigned: Set<string> } | null = null;
 
   constructor(private readonly context: GlslContext) {}
 
@@ -230,28 +236,86 @@ export class GlslTranslator {
     const returns = this.typeName();
     const name = this.name();
     this.expect("(");
-    const params: { name: string; type: string }[] = [];
+    const params: { name: string; type: string; out?: boolean }[] = [];
     if (!this.accept(")")) {
       do {
-        const type = this.typeName();
-        params.push({ name: this.name(), type });
+        // `out` and `inout` parameters are written through (pointers in WGSL); `in` and `const` change nothing.
+        let out = false;
+        while (["in", "out", "inout", "const", "highp", "mediump", "lowp"].includes(this.peek().text)) {
+          const qualifier = this.next().text;
+          if (qualifier === "out" || qualifier === "inout") out = true;
+        }
+        // A texture parameter (sampler2D) and arrays (float values[16]) as well as numbers and vectors.
+        const type = this.peek().text === "sampler2D" ? (this.next(), "sampler2D") : this.typeName();
+        const name = this.name();
+        let full = type;
+        if (this.accept("[")) {
+          const size = this.next();
+          this.expect("]");
+          full = `${type}[${size.text}]`;
+        }
+        params.push({ name, type: full, ...(out ? { out } : {}) });
       } while (this.accept(","));
       this.expect(")");
     }
     this.scopes.push(new Map());
-    const declared = params.map((param) => `${this.declare(param.name, param.type)}: ${wgslType(param.type)}`);
+    const codes = new Map<string, string>();
+    // A texture is handed over as WGSL keeps it: the texture and the sampler it is read with.
+    const declared = params.map((param) => {
+      const code = this.declare(param.name, param.type);
+      if (param.out) {
+        // Read and written through the pointer it is.
+        this.scopes[this.scopes.length - 1].set(param.name, { code: `(*${code})`, type: param.type });
+        return `${code}: ptr<function, ${wgslType(param.type)}>`;
+      }
+      if (param.type === "sampler2D") return `${code}_t: texture_2d<f32>, ${code}_s: sampler`;
+      codes.set(code, param.name);
+      return `${code}: ${wgslType(param.type)}`;
+    });
+    const outs = params.flatMap((param, index) => (param.out ? [index] : []));
     const previous = this.returnType;
     this.returnType = returns;
+    this.parameters = { codes, scope: this.scopes.length - 1, assigned: new Set() };
     this.expect("{");
     const lines: string[] = [];
     while (!this.accept("}")) lines.push(this.statement());
     this.expectEnd();
     this.returnType = previous;
     this.scopes.pop();
+    // GLSL lets a function change its own (by-value) parameters; WGSL does not. Each one the body assigns to comes
+    // in under another name and is copied into a variable of its own name, which the body then reads and changes.
+    const assigned = this.parameters.assigned;
+    this.parameters = null;
+    if (assigned.size) {
+      const taken = new Set([...(lines.join("\n").match(/[A-Za-z_]\w*/g) ?? []), ...codes.keys()]);
+      const copies: string[] = [];
+      params.forEach((param, index) => {
+        const code = [...codes].find(([, name]) => name === param.name)?.[0];
+        if (!code || !assigned.has(code)) return;
+        let held = `${code}_in`;
+        while (taken.has(held)) held = `${held}_`;
+        taken.add(held);
+        declared[index] = `${held}: ${wgslType(param.type)}`;
+        copies.push(`var ${code} = ${held};`);
+      });
+      lines.unshift(...copies);
+    }
     // A path WGSL cannot see the end of gets a value, as GLSL leaves it to chance.
     if (returns !== "void" && !/^\s*return\b[^;]*;\s*$/.test(lines[lines.length - 1] ?? "")) lines.push(`return ${wgslType(returns)}();`);
-    this.context.functions[name] = { returns, params: params.map((param) => param.type) };
-    const signature = `fn ${name}(${declared.join(", ")})${returns === "void" ? "" : ` -> ${wgslType(returns)}`}`;
+    // A second function of a name taking other types is an overload: WGSL has none, so it gets a name of its own.
+    const types = params.map((param) => param.type);
+    const existing = this.context.functions[name];
+    const prefix = this.context.functionPrefix ?? "";
+    let code = `${prefix}${name}`;
+    if (existing && (existing.params ?? []).join(",") !== types.join(",")) {
+      const list: GlslFunction[] = existing.overloads ? [...existing.overloads] : [{ ...existing, code: existing.code ?? name }];
+      code = `${prefix}${name}_${list.length}`;
+      list.push({ code, returns, params: types, ...(outs.length ? { outs } : {}) });
+      this.context.functions[name] = { ...existing, overloads: list };
+    } else {
+      this.context.functions[name] = { returns, params: types, ...(prefix ? { code } : {}), ...(outs.length ? { outs } : {}) };
+    }
+    const signature = `fn ${code}(${declared.join(", ")})${returns === "void" ? "" : ` -> ${wgslType(returns)}`}`;
     return `@diagnostic(off, derivative_uniformity)\n${signature} {\n${lines.join("\n")}\n}`;
   }
 
@@ -319,6 +383,7 @@ export class GlslTranslator {
   private lookup(name: string): Value {
     for (let index = this.scopes.length - 1; index >= 0; index--) {
       const local = this.scopes[index].get(name);
+      if (local?.type === "sampler2D") return { code: local.code, type: "sampler2D", constant: false, texture: { texture: `${local.code}_t`, sampler: `${local.code}_s` } };
       if (local) return { code: local.code, type: local.type, constant: false };
     }
     const outside = this.context.variables[name];
@@ -486,7 +551,22 @@ export class GlslTranslator {
     return lines;
   }
 
+  /** Notes a by-value parameter of the function an assignment changes (directly, or a component or element of it). */
+  private noteAssigned(left: Value): void {
+    if (!this.parameters) return;
+    const root = /^[A-Za-z_]\w*/.exec((left.mask?.base ?? left).code)?.[0];
+    const name = root ? this.parameters.codes.get(root) : undefined;
+    if (!root || name === undefined) return;
+    // Only when the name is the parameter here, not a local of the same name in a block inside.
+    for (let index = this.scopes.length - 1; index >= 0; index--) {
+      if (!this.scopes[index].has(name)) continue;
+      if (index === this.parameters.scope) this.parameters.assigned.add(root);
+      return;
+    }
+  }
+
   private assign(left: Value, operator: string, right: Value): string {
+    this.noteAssigned(left);
     const value = operator === "=" ? right : this.combine(operator.slice(0, -1), left, right);
     const fitted = this.fit(value, left.type);
     if (!left.mask || left.mask.letters.length === 1) return `${left.code} = ${fitted}`;
@@ -791,10 +871,36 @@ export class GlslTranslator {
     return { code: `${name}(${first.join(", ")})`, type, constant: false };
   }
 
+  /** The overload of a function whose parameters the arguments fit best: exactly, else by the widening GLSL allows. */
+  private overloadFor(name: string, overloads: readonly GlslFunction[], args: Value[]): GlslFunction {
+    const score = (candidate: GlslFunction): number => {
+      const params = candidate.params ?? [];
+      if (params.length !== args.length) return -1;
+      let total = 0;
+      for (let index = 0; index < params.length; index++) {
+        const arg = args[index];
+        const param = params[index];
+        if (arg.type === param) total += 2;
+        else if (arg.literal && sizeOf(param) === 1 && param !== "bool") total += 1;
+        else if (sizeOf(arg.type) === sizeOf(param) && sizeOf(param) > 0 && elementOf(param) === "float" && elementOf(arg.type) !== "bool") total += 0;
+        else return -1;
+      }
+      return total;
+    };
+    let best: GlslFunction | null = null;
+    let bestScore = -1;
+    for (const candidate of overloads) {
+      const value = score(candidate);
+      if (value > bestScore) { best = candidate; bestScore = value; }
+    }
+    return best ?? this.fail(`no ${name}() takes ${args.map((arg) => arg.type).join(", ")}`);
+  }
+
   private call(name: string, args: Value[]): Value {
     if (name in VECTOR_SIZES || name in MATRIX_SIZES) return this.construct(name, args);
 
-    const known = this.context.functions[name];
+    const found = this.context.functions[name];
+    const known = found?.overloads ? this.overloadFor(name, found.overloads, args) : found;
     if (known) {
       this.context.called?.(name);
       const parts = args.map((arg, index) => {
@@ -940,6 +1046,29 @@ export class GlslTranslator {
         this.countArguments(name, args, 1);
         this.context.called?.("mgRand");
         return { code: `mgRand(${this.fit(args[0], "vec2")})`, type: "float", constant: false };
+      case "texelFetch": {
+        const texture = args[0]?.texture;
+        if (!texture) this.fail(`${name}() needs a texture`);
+        this.countArguments(name, args, 3);
+        return { code: `textureLoad(${texture.texture}, ${this.fit(args[1], "ivec2")}, ${this.fit(args[2], "int")})`, type: "vec4", constant: false };
+      }
+      case "textureSize": {
+        const texture = args[0]?.texture;
+        if (!texture) this.fail(`${name}() needs a texture`);
+        this.countArguments(name, args, 1, 2);
+        return { code: `vec2i(textureDimensions(${texture.texture}, ${args.length > 1 ? this.fit(args[1], "int") : "0"}))`, type: "ivec2", constant: false };
+      }
+      case "floatBitsToUint":
+      case "floatBitsToInt":
+      case "uintBitsToFloat":
+      case "intBitsToFloat": {
+        this.countArguments(name, args, 1);
+        const size = Math.max(1, sizeOf(args[0].type));
+        const from = name.startsWith("float") ? "float" : name.startsWith("uint") ? "uint" : "int";
+        const to = name.endsWith("Uint") ? "uint" : name.endsWith("Int") ? "int" : "float";
+        const type = vectorOf(to, size);
+        return { code: `bitcast<${wgslType(type)}>(${this.fit(args[0], vectorOf(from, size))})`, type, constant: false };
+      }
       case "texture":
       case "texture2D":
       case "textureLod":

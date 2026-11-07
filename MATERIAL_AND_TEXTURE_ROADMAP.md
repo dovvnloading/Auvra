@@ -105,6 +105,10 @@
   - photo to material, a branching history with comparison, and graph brushes in colour;
   - animated materials, growing a texture from an example, and a WGSL writer for function graphs;
   - a material command line and script calls, compression-aware authoring, and kept terrain arrays.
+- **Round 10** brought:
+  - texture graphs cooked on WebGPU, a material package, and curves as wires;
+  - capture from photos lit from several sides, picking one material out of a photo, and an optional AI refinement;
+  - car paint with a tinted coat and metal flakes, headless cooking from the command line, and better block encoders.
 
 See §6.
 
@@ -462,6 +466,11 @@ Fix the defects in §8 that lose work, give wrong results or mislead, before bui
   - one-channel BC4 textures upload.
 - **Covered:** a picture-test scene for physical lobes, picture-reading materials and painted copies runs on both renderers.
 - **Still to come:** anisotropy on WebGPU, and specular below 4% there.
+
+**Landed in round 10:**
+- A coat colour, and metal flakes (density, size, colour) glinting under the coat, on both renderers.
+- Starter Car paint uses them.
+- Unlit and Phong materials can be converted so they take a material asset.
 
 **Designed in round 4: one material document.**
 - Each material holds its surface (today's shader graph, always there), plus an optional texture graph and an optional paint stack. Each of those writes named outputs, such as base colour, normal and height, as textures.
@@ -830,6 +839,16 @@ One family per pull request, each with picture tooltips and the wrap-edge tiling
 - A Strength row of exposed parameters: tiling width, lighting removed, height depth, invert, and roughness range.
 - **Still to come:** pulling one material out of a photo by label, multi-angle capture, generative nodes, the assistant, and the AI matching-maps step on the tiled colour.
 
+**Landed in round 10:**
+- **Multi-angle capture:** New › From photos lit from several sides.
+  - Three to eight photos from one spot, each lit from a different side, give a normal and colour per pixel by photometric stereo.
+  - The light directions are worked out from the photos.
+  - Height comes from the normal, with its broad drift removed.
+  - Which way round the relief faces is judged by shape: thin parts are grooves.
+- **Pick one material out of a photo:** a click in the photo's 2D view picks a region by colour and texture. Its best square becomes the tile source, keeping its size in the world.
+- **Refine with AI** (when a provider is set up): sends the tiled, delit colour and mixes the maps that come back over the graph's own.
+- **Still to come:** several patches from one pick, generative nodes, and the assistant that builds graphs.
+
 ### Stage 11 — Further past the best tools
 - Filters that cross UV seams.
 - A branching history with comparison.
@@ -855,6 +874,20 @@ One family per pull request, each with picture tooltips and the wrap-edge tiling
 - **Still to come:**
   - WebGPU compute paths;
   - headless cooking, balls and bakes from the command line;
+  - editing materials from an editor script.
+
+**Landed in round 10:**
+- **Texture graphs cooked on WebGPU:**
+  - a game drawing with WebGPU cooks its graphs on its own device;
+  - passes are translated to WGSL, and processors are written in WGSL directly;
+  - a graph that can't be cooked there falls back to WebGL2 and says why;
+  - a picture-test scene cooks one graph on each renderer.
+- **Headless command line:** `cook`, `ball` and `bake-mesh-maps` run with the editor closed, in the same headless browser the picture tests use.
+- **A material package (`.auvramat`):** a texture graph with its parameters, presets, the graphs it uses as nodes and every picture. It can be published and imported into projects or My library, with its parameters live.
+- **Curves as wires:** Mask to paths, Curve, Bridge, Picture along a curve and Scatter along curves pass curves, with offset, smooth, resample and join path tools.
+- **Still to come:**
+  - the editor's own texture graphs on WebGPU;
+  - scatters, compressed pictures and paint stacks on the WebGPU path;
   - editing materials from an editor script.
 ## 7. How each stage is checked
 
@@ -1023,35 +1056,53 @@ File references are relative to `fbx-viewer (1)/`.
   - Its normal map was noise.
   - Its height raised the mortar.
 
+### Fixed in round 10
+- **Materials:**
+  - Car paint has a coat tint and metal flakes.
+  - Unlit and Phong materials can be converted.
+  - Cooking, balls and bakes run headless.
+- **Compression:**
+  - BC7 uses modes 1 and 3, and ASTC uses two-partition blocks, for blocks with two very different colours.
+  - Decoding matches a real GPU exactly.
+- **Texture graph:**
+  - Function graphs' WGSL is used, on the WebGPU path.
+  - Flipbook frames have an edge, so they don't bleed.
+- **Painting:**
+  - Comparison works in every view.
+  - Paint stack folders reuse the open stack, and stack nodes redraw as the set changes.
+- **Found while checking round 10:**
+  - The shared shader library's hash assigned to its own parameter, which WGSL refuses, so no graph could cook on WebGPU. The translator now copies such parameters, and a WGSL check covers every pass.
+  - The material package left out pictures not loaded in the editor.
+  - Capture's light directions defaulted backwards for brick.
+  - The picked square changed the material's scale.
+  - Two material graphs differing only in their output node's id shared one shader.
+
 ### Still open
 **Texture graph**
 1. Update material draws mesh-reading nodes with stand-ins, because a material can go on any model. Per-model results come with cooking.
 2. A flood fill box is approximate for an island covering more than about three quarters of a tiling axis.
-3. Nothing runs the WGSL writer yet: texture graphs still draw on WebGL2.
+3. The editor's own texture graphs still run on WebGL2. On WebGPU, graphs with scatters, compressed pictures, paint stacks or code-mode structs fall back.
 4. Leaks and dripping rust are placed by noise and slope, not run down the model.
 5. Read-around filters are checked for tiling by reading their shaders, not by measuring pixels.
 6. Renaming a parameter doesn't reach other graphs using the graph, or objects' material values.
-7. Flipbook frames may bleed slightly at cell edges with texture filtering.
+7. Curves don't pass in or out of graphs used as nodes.
 
 **Painting, baking and UVs**
 8. The paint view's smoothing draws into a render target marked as an XR target. Recheck this when three.js is upgraded (`components/Texturing/Paint/PaintViewport.tsx`).
 9. A triangle that crosses a UDIM tile edge can pick a too-coarse mip at that edge.
 10. The whole-model glTF keeps only the main maps of the model's other painted sets, and a UDIM set's vertex exactly on a tile edge can land in the wrong cell.
-11. A paint stack folder always builds its own stack, and a stack node redraws only when its set saves.
-12. Comparison in the history works only in the Material view.
-13. Photo to material doesn't yet use the AI matching-maps step, and its starting guesses (invert, roughness) come from simple measures.
+11. Capture works on the middle square of each photo, up to 1024 px, and blocks the editor while it runs. The light's height is set by hand.
+12. Picking takes one best square, not several patches.
 
 **Material graph, engine materials and textures**
-14. Unlit and Phong materials can't take a material asset (a message says so). Converting them is a later step.
-15. The surface has no coat tint, and car paint has no metal flakes.
-16. BC7 uses one block mode, and ASTC and ETC2 use simple block modes, so some blocks blur a little more than with full encoders.
-17. A texture never drawn in the editor has nothing kept, so a built game compresses it as it loads.
-18. My library lives in the editor's own storage on this machine; painted copies and painting presets can't be added.
-19. MaterialX can't be imported from a zip, and image tiling is ignored.
-20. On WebGPU, anisotropy isn't drawn and specular can't go below 4%; both need a wider surface buffer.
-21. On WebGPU, a scene drawn before a ray-traced one can still change it slightly (a leak across scenes on one device), seen in local picture runs.
-22. The compression badge shows only on shader-graph materials, not in a texture graph's Material tab.
-23. Cooking, balls and mesh-map bakes can't run headless from the command line.
+13. ETC2 still uses its first two modes only.
+14. A texture never drawn in the editor has nothing kept, so a built game compresses it as it loads.
+15. My library lives in the editor's own storage on this machine; painted copies and painting presets can't be added.
+16. MaterialX can't be imported from a zip, and image tiling is ignored.
+17. On WebGPU, anisotropy isn't drawn, specular can't go below 4%, and the coat colour also tints metal reflections; these need a wider surface buffer.
+18. On WebGPU, a scene drawn before a ray-traced one can still change it slightly (a leak across scenes on one device), seen in local picture runs.
+19. Flakes and coat colour aren't in glTF export or in Material Overrides.
+20. Command-line bakes use default settings, with no high-poly or cage model, and write maps bottom row first.
 
 ## 9. Sources and references
 

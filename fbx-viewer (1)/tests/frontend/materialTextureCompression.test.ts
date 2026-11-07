@@ -38,12 +38,37 @@ describe('material texture compression', () => {
         for (let i = 0; i < 256; i++) ramp.set([(i % 16) * 16, (i % 16) * 8 + 40, 200 - (i % 16) * 6, 255 - (i % 16) * 3], i * 4);
         expect(encodeLevel(ramp, 16, 16, 'bc7').length).toBe(16 * 16);
         expect(worstError(ramp, decodeLevel(encodeLevel(ramp, 16, 16, 'bc7'), 16, 16, 'bc7'), [0, 1, 2, 3])).toBeLessThanOrEqual(6);
-        // Colour changing two ways in a block is fitted with one line (mode 6 only): close on average.
+        // Colour changing two ways in a block, with alpha, is fitted with one line (mode 6): close on average.
         const rgba = gradient(16);
         const back = decodeLevel(encodeLevel(rgba, 16, 16, 'bc7'), 16, 16, 'bc7');
         let total = 0;
         for (let i = 0; i < rgba.length; i++) total += Math.abs(rgba[i] - back[i]);
         expect(total / rgba.length).toBeLessThan(8);
+    });
+
+    it('splits opaque BC7 blocks of colours one line cannot hold (modes 1 and 3), and keeps them exactly opaque', () => {
+        const modeOf = (byte: number) => { let mode = 0; while (mode < 8 && !((byte >> mode) & 1)) mode++; return mode; };
+        // Red on the left, green over blue on the right: three colours, two of them on one line.
+        const block = new Uint8Array(4 * 4 * 4);
+        for (let i = 0; i < 16; i++) block.set((i & 3) < 2 ? [220, 30, 40, 255] : (i >> 2) < 2 ? [40, 200, 60, 255] : [20, 60, 210, 255], i * 4);
+        const encoded = encodeLevel(block, 4, 4, 'bc7');
+        expect([1, 3]).toContain(modeOf(encoded[0]));
+        const back = decodeLevel(encoded, 4, 4, 'bc7');
+        expect(worstError(block, back, [0, 1, 2])).toBeLessThanOrEqual(4);
+        expect(worstError(block, back, [3])).toBe(0);
+        // A red and a blue that sum alike stay apart in one line (mode 6), and opaque stays opaque there too.
+        const pair = new Uint8Array(4 * 4 * 4);
+        for (let i = 0; i < 16; i++) pair.set((i & 3) < 2 ? [220, 30, 40, 255] : [20, 60, 210, 255], i * 4);
+        const pairBack = decodeLevel(encodeLevel(pair, 4, 4, 'bc7'), 4, 4, 'bc7');
+        expect(worstError(pair, pairBack, [0, 1, 2])).toBeLessThanOrEqual(2);
+        expect(worstError(pair, pairBack, [3])).toBe(0);
+        // Hard-edged shapes come back far closer than one line a block could keep them.
+        const shapes = new Uint8Array(32 * 32 * 4);
+        for (let y = 0; y < 32; y++) for (let x = 0; x < 32; x++) shapes.set((x * 3 + y * 5) % 23 < 11 ? [235, 225, 210, 255] : (x + y) % 13 < 6 ? [30, 90, 160, 255] : [180, 40, 30, 255], (y * 32 + x) * 4);
+        const shapesBack = decodeLevel(encodeLevel(shapes, 32, 32, 'bc7'), 32, 32, 'bc7');
+        let total = 0;
+        for (let i = 0; i < shapes.length; i++) total += Math.abs(shapes[i] - shapesBack[i]);
+        expect(total / shapes.length).toBeLessThan(4);
     });
 
     it('keeps one channel close in BC4, read back 0..1 from the signed format', () => {

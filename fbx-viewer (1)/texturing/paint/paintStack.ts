@@ -436,7 +436,25 @@ const FILTER_KINDS = { blur: 0, sharpen: 1, hsl: 2, levels: 3, warp: 4, invert: 
  * Baked maps kept at 16 bits, on the GPU and when saved: where each texel is, normals, and smooth values
  * that steps would show in. Only the ID colours are fine at 8.
  */
-const FINE_MAPS: ReadonlySet<MeshMapName> = new Set(['position', 'height', 'curvature', 'ambientOcclusion', 'thickness', 'normal', 'worldNormal']);
+export const FINE_MAPS: ReadonlySet<MeshMapName> = new Set(['position', 'height', 'curvature', 'ambientOcclusion', 'thickness', 'normal', 'worldNormal']);
+
+/**
+ * A baked map as the PNG it is kept as: 16 bits a channel when `fine` (8 would step it in 1/255ths, so noise
+ * and triplanar masks read from it would turn blocky, and normals and occlusion would band once lit), else 8
+ * at `width` × `height`; bottom row first, as the baker drew it. `check` runs after the read back (a lost GPU
+ * says so there).
+ */
+export const encodeBakedMap = async (gpu: TextureGpu, image: GpuImage, fine: boolean, width = image.width, height = image.height, check: () => void = () => undefined): Promise<Blob> => {
+    const gray = image.kind === 'gray';
+    if (fine) {
+        const samples = gpu.readUint16(image, image.width, image.height, gray ? 'gray' : 'color', false);
+        check();
+        return encodePng16(samples, image.width, image.height, gray ? 1 : 4);
+    }
+    const pixels = gpu.readRgba8(image, width, height, gray ? 'gray' : 'raw', false);
+    check();
+    return encodePng(pixels, width, height);
+};
 
 /** Picture keys: a layer's channel, or a mask effect. */
 export const pictureKey = (owner: string, channel?: PaintChannel): string => (channel ? `${owner}:${channel}` : owner);
@@ -606,6 +624,7 @@ export class PaintStack {
     private abandoned = false;
     /** The layer whose mask is kept whole for the mask view, and that mask by tile. */
     private watched: string | null = null;
+    private drawn = 0;
     private readonly watchedMasks = new Map<number, GpuImage>();
     /** Each triangle's box of texture coordinates within its tile: lowest u, v, highest u, v. */
     private triangleUvBoxes: Float32Array | null = null;
@@ -1093,19 +1112,7 @@ export class PaintStack {
             for (const [name, image] of Object.entries(result.maps)) {
                 if (!image) continue;
                 this.assertUsable();
-                let blob: Blob;
-                const gray = image.kind === 'gray';
-                if (FINE_MAPS.has(name as MeshMapName)) {
-                    // 8 bits would step these in 1/255ths: noise and triplanar masks read from them would turn
-                    // blocky, and normals and occlusion would band once lit. Read a strip at a time.
-                    const samples = this.gpu.readUint16(image, image.width, image.height, gray ? 'gray' : 'color', false);
-                    this.assertUsable();
-                    blob = await encodePng16(samples, image.width, image.height, gray ? 1 : 4);
-                } else {
-                    const pixels = this.gpu.readRgba8(image, this.size, this.size, gray ? 'gray' : 'raw', false);
-                    this.assertUsable();
-                    blob = await encodePng(pixels, this.size, this.size);
-                }
+                const blob = await encodeBakedMap(this.gpu, image, FINE_MAPS.has(name as MeshMapName), this.size, this.size, () => this.assertUsable());
                 const assetId = await this.host.storePicture(blob);
                 maps[name as MeshMapName] = { ...(maps[name as MeshMapName] ?? {}), [String(tile)]: { assetId } };
             }
@@ -1115,17 +1122,7 @@ export class PaintStack {
             for (const [name, image] of Object.entries(result.extras ?? {})) {
                 if (!image) continue;
                 this.assertUsable();
-                const gray = image.kind === 'gray';
-                let blob: Blob;
-                if (image.precision !== 8) {
-                    const samples = this.gpu.readUint16(image, image.width, image.height, gray ? 'gray' : 'color', false);
-                    this.assertUsable();
-                    blob = await encodePng16(samples, image.width, image.height, gray ? 1 : 4);
-                } else {
-                    const pixels = this.gpu.readRgba8(image, image.width, image.height, gray ? 'gray' : 'raw', false);
-                    this.assertUsable();
-                    blob = await encodePng(pixels, image.width, image.height);
-                }
+                const blob = await encodeBakedMap(this.gpu, image, image.precision !== 8, image.width, image.height, () => this.assertUsable());
                 const assetId = await this.host.storePicture(blob);
                 extras[name as ExtraBakeMap] = { ...(extras[name as ExtraBakeMap] ?? {}), [String(tile)]: { assetId } };
             }
@@ -1265,6 +1262,51 @@ export class PaintStack {
         if (layerId) this.invalidate();
     }
 
+    /** How many compose rounds have drawn anything: changes when what the set looks like may have. */
+    get drawnCount(): number { return this.drawn; }
+
+    /**
+     * One folder's layers put together on their own over a whole tile, as a stack of just that folder draws
+     * them, from this stack's pictures and bake: each channel the set draws, padded past the islands, the
+     * normal laid over the bake as the set's own is. The pictures are the caller's to release; null when the
+     * folder (or the tile) is not there.
+     */
+    async composeFolderAlone(folderId: string, tile: number): Promise<Partial<Record<PaintChannel, GpuImage>> | null> {
+        const folder = allLayers(this.document.layers).find((layer) => layer.id === folderId && layer.kind === 'folder');
+        if (!folder || !this.tiles.includes(tile)) return null;
+        const rect: Rect = { x0: 0, y0: 0, x1: this.size, y1: this.size };
+        const area: Area = { tile, rect, inner: rect, width: this.size, height: this.size, at: new THREE.Vector2(0, 0) };
+        const accs = new Map<PaintChannel, GpuImage>();
+        for (const channel of new Set<PaintChannel>([...this.document.channels, 'normal'])) {
+            const acc = this.gpu.image(this.size, this.size, CHANNEL_IS_COLOR[channel] ? 'color' : 'gray', 16);
+            const base = CHANNEL_DEFAULT[channel];
+            this.gpu.clear(acc, [base[0], base[1], base[2], 1]);
+            accs.set(channel, acc);
+        }
+        try {
+            await this.composeLayers([folder], area, accs);
+        } catch (error) {
+            for (const image of accs.values()) this.gpu.release(image);
+            throw error;
+        }
+        const padding = this.padding.get(tile);
+        const out: Partial<Record<PaintChannel, GpuImage>> = {};
+        for (const [channel, image] of accs) {
+            if (!padding) { out[channel] = image; continue; }
+            out[channel] = padImage(this.gpu, image, padding.coverage, padding.nearest);
+            this.gpu.release(image);
+        }
+        if (out.normal) {
+            const finished = this.finalNormal(tile, out.normal, out.height ?? null);
+            this.gpu.release(out.normal);
+            out.normal = finished;
+        }
+        return out;
+    }
+
+    /** The layer whose mask is watched (shown), if any. */
+    get watchedLayer(): string | null { return this.watched; }
+
     /** The watched layer's mask on a tile as last worked out (for showing it). */
     cachedMask(layerId: string, tile: number): GpuImage | null {
         return layerId === this.watched ? this.watchedMasks.get(tile) ?? null : null;
@@ -1294,6 +1336,7 @@ export class PaintStack {
                         if (this.abandoned) return;
                         await this.composeTile(tile, byChannel);
                     }
+                    if (work.length) this.drawn++;
                     this.problem = null;
                     this.emit();
                 } while (this.again);

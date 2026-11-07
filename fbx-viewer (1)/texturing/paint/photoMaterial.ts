@@ -1,5 +1,6 @@
 import { createNode } from '../graph/document';
 import type { GraphParameter, GraphParameterGroup, TexGraphLink, TexGraphNode, TextureGraph } from '../graph/types';
+import { brightAndDarkWidths } from './shapeWidths';
 
 /**
  * PHOTO TO MATERIAL
@@ -36,39 +37,6 @@ export const PHOTO_GROUPS: readonly GraphParameterGroup[] = [
     { name: metal, description: 'Metallic where the photo shows a chosen colour (none unless set).', folded: true },
 ];
 
-/** A light blur (1 2 1 across and down, edges held), so single grains of a photo don't count as shapes. */
-const lightBlur = (values: ArrayLike<number>, width: number, height: number): Float32Array => {
-    const across = new Float32Array(width * height);
-    const blurred = new Float32Array(width * height);
-    for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
-        const i = y * width + x;
-        across[i] = (values[y * width + Math.max(x - 1, 0)] + 2 * values[i] + values[y * width + Math.min(x + 1, width - 1)]) / 4;
-    }
-    for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
-        const i = y * width + x;
-        blurred[i] = (across[Math.max(y - 1, 0) * width + x] + 2 * across[i] + across[Math.min(y + 1, height - 1) * width + x]) / 4;
-    }
-    return blurred;
-};
-
-/**
- * How wide the shapes a set of pixels makes are, on average: twice its area over the length of its edge.
- * A line comes out as its width, a block as about half its shorter side. Null when the set is too small
- * a share of the picture to tell.
- */
-const shapeWidth = (values: Float32Array, width: number, height: number, inSet: (value: number) => boolean): number | null => {
-    let area = 0;
-    let edge = 0;
-    for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
-        const i = y * width + x;
-        const here = inSet(values[i]);
-        if (here) area++;
-        if (x + 1 < width && here !== inSet(values[i + 1])) edge++;
-        if (y + 1 < height && here !== inSet(values[i + width])) edge++;
-    }
-    return area >= width * height * 0.01 && edge > 0 ? (2 * area) / edge : null;
-};
-
 /**
  * A guess at whether a photo's bright parts are its low ones, from its brightness values (0 to 1, rows of
  * `width`). Crevices photograph as thin lines (mortar, grout, cracks) and the faces between them as
@@ -79,17 +47,7 @@ const shapeWidth = (values: Float32Array, width: number, height: number, inSet: 
  * to the 95th percentile of the lightly blurred brightness.
  */
 export const guessInvertHeight = (brightness: ArrayLike<number>, width = Math.round(Math.sqrt(brightness.length))): boolean => {
-    const height = width > 0 ? Math.floor(brightness.length / width) : 0;
-    if (width < 8 || height < 8) return false;
-    const blurred = lightBlur(brightness, width, height);
-    const sorted = Float32Array.from(blurred).sort();
-    const low = sorted[Math.floor(sorted.length * 0.05)];
-    const high = sorted[Math.floor(sorted.length * 0.95)];
-    const middle = (low + high) / 2;
-    const quarter = (high - low) / 4;
-    if (quarter < 1e-3) return false;
-    const bright = shapeWidth(blurred, width, height, (value) => value > middle + quarter);
-    const dark = shapeWidth(blurred, width, height, (value) => value < middle - quarter);
+    const { bright, dark } = brightAndDarkWidths(brightness, width);
     return bright !== null && dark !== null && bright < dark * 0.8;
 };
 
@@ -176,4 +134,74 @@ export const photoMaterialGraph = (textureId: string, size = 10, options: { inve
 export const photoMaterialName = (fileName: string): string => {
     const words = fileName.replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim();
     return (words ? words.charAt(0).toUpperCase() + words.slice(1) : 'Photo').slice(0, 120);
+};
+
+/** A graph made from photos (a photo material or a capture): one AI matching maps can refine. */
+export const isPhotoGraph = (graph: TextureGraph): boolean => graph.nodes.some((node) => node.type === 'bitmap' && (node.name === 'Photo' || node.name === 'Captured colour'));
+
+/** The node whose picture the base colour output takes: in a photo material, the tiled colour with its lighting taken out. */
+export const baseColourSource = (graph: TextureGraph): TexGraphNode | null => {
+    const output = graph.nodes.find((node) => node.type === 'output' && node.params.channel === 'baseColor');
+    const link = output && graph.links.find((each) => each.to === output.id && each.toInput === 'in');
+    return (link && graph.nodes.find((node) => node.id === link.from)) ?? null;
+};
+
+/** The maps an AI step gives back for a colour, by what each is. */
+export type AiMapRole = 'normal' | 'roughness' | 'metalness' | 'height';
+
+const AI_MAPS: Record<AiMapRole, { channel: string; name: string; mixed: string; grey: boolean }> = {
+    normal: { channel: 'normal', name: 'AI normal', mixed: 'Normal with the AI\'s', grey: false },
+    roughness: { channel: 'roughness', name: 'AI roughness', mixed: 'Roughness with the AI\'s', grey: true },
+    metalness: { channel: 'metallic', name: 'AI metallic', mixed: 'Metallic with the AI\'s', grey: true },
+    height: { channel: 'height', name: 'AI height', mixed: 'Height with the AI\'s', grey: true },
+};
+
+export const AI_GROUP: GraphParameterGroup = { name: 'AI maps', description: 'Maps an AI made from the tiled colour, mixed with the ones worked out here.' };
+export const AI_MIX_PARAMETER: GraphParameter = {
+    name: 'aiMix', label: 'AI maps mixed in', kind: 'float', default: 0.5, min: 0, max: 1, step: 0.01, group: AI_GROUP.name,
+    description: 'How much of the AI\'s maps is mixed with the ones worked out here: 0 leaves them out, 1 takes the AI\'s alone.',
+};
+
+/**
+ * The graph with maps an AI made (project textures, by role) offered beside its own: each comes in by a
+ * Bitmap and is mixed over what fed that output before, as strongly as an AI maps parameter says (a
+ * normal is put back to unit length after). Its own maps stay as they were, under the mix. Maps given
+ * again replace the pictures of the AI Bitmaps already there.
+ */
+export const withAiMaps = (graph: TextureGraph, maps: readonly { role: AiMapRole; texture: string }[]): TextureGraph => {
+    const next: TextureGraph = structuredClone(graph);
+    if (!next.parameters.some((parameter) => parameter.name === AI_MIX_PARAMETER.name)) next.parameters = [...next.parameters, structuredClone(AI_MIX_PARAMETER) as GraphParameter];
+    if (!(next.groups ?? []).some((group) => group.name === AI_GROUP.name)) next.groups = [...(next.groups ?? []), { ...AI_GROUP }];
+    for (const map of maps) {
+        const spec = AI_MAPS[map.role];
+        if (!spec) continue;
+        const already = next.nodes.find((node) => node.type === 'bitmap' && node.name === spec.name);
+        if (already) { already.params = { ...already.params, texture: map.texture }; continue; }
+        const output = next.nodes.find((node) => node.type === 'output' && node.params.channel === spec.channel);
+        const feed = output && next.links.find((link) => link.to === output.id && link.toInput === 'in');
+        if (!output || !feed) continue;
+        const add = (type: string, x: number, y: number, params: Record<string, unknown>, name: string) => {
+            const node = createNode(type, x, y, params);
+            node.name = name;
+            next.nodes.push(node);
+            return node;
+        };
+        const bitmap = add('bitmap', output.x - 720, output.y + 70, { texture: map.texture, fit: 'fill' }, spec.name);
+        let ai = bitmap;
+        if (spec.grey) {
+            ai = add('grayscale', output.x - 480, output.y + 70, { mode: 'luminance' }, `${spec.name}, grey`);
+            next.links.push({ from: bitmap.id, fromOutput: 'out', to: ai.id, toInput: 'in' });
+        }
+        const mix = add('blend', output.x - 240, output.y, { mode: 'normal', opacity: { $bind: AI_MIX_PARAMETER.name } }, spec.mixed);
+        next.links.push({ from: ai.id, fromOutput: 'out', to: mix.id, toInput: 'foreground' });
+        next.links.push({ from: feed.from, fromOutput: feed.fromOutput, to: mix.id, toInput: 'background' });
+        let last = mix;
+        if (map.role === 'normal') {
+            last = add('normalAdjust', output.x - 120, output.y + 40, { strength: 1 }, 'Normal mix, unit length');
+            next.links.push({ from: mix.id, fromOutput: 'out', to: last.id, toInput: 'in' });
+        }
+        feed.from = last.id;
+        feed.fromOutput = 'out';
+    }
+    return next;
 };

@@ -1,5 +1,6 @@
 import type * as THREE from 'three';
-import type { GpuImage, ImagePrecision, TextureGpu } from '../gpu/textureGpu';
+import type { GpuImage, ImagePrecision } from '../gpu/textureGpu';
+import type { TexturingGpu } from '../gpu/texturingGpu';
 import { readAnimation, timeAt, type GraphTime } from './animation';
 import { coerceParam, formulaScope, graphContentKey, hashText, mixSeeds, parameterValues, resolveNodeParams, subgraphRunSeed, MAX_SIZE_LOG2 } from './document';
 import { MATERIAL_CHANNELS, materialKey, materialOf, materialResults, type MaterialImages } from './material';
@@ -9,7 +10,7 @@ import { nodeBindings, valuePinKey } from './nodeKit';
 import { PROCESSOR_TYPES } from './nodes/processors';
 import { ALL_MESH_MAPS, GRAPH_USING_TYPES, INPUT_NODE_TYPE, MATERIAL_INPUT_NODE_TYPE, MATERIAL_OUTPUT_NODE_TYPE, MESH_MAP_NODE_TYPE, MESH_READING_NODE_TYPES, OUTPUT_NODE_TYPE, SUBGRAPH_SEED_KEY, SUBGRAPH_VARY_KEY, meshMapKey } from './nodes/io';
 import { graphAnimates, textureNodeDefinition, type GraphResolver } from './registry';
-import { outputNodeKind, type NodeRunContext, type PortKind, type TexGraphLink, type TexGraphNode, type TexNodeDef, type TextureGraph, type TilingMode } from './types';
+import { outputNodeKind, type CurvePaths, type NodeRunContext, type PortKind, type TexGraphLink, type TexGraphNode, type TexNodeDef, type TextureGraph, type TilingMode } from './types';
 
 /**
  * TEXTURE GRAPH EVALUATION
@@ -58,6 +59,8 @@ export interface EvaluateRequest {
 export interface NodeState {
     signature: string;
     outputs: Record<string, GpuImage>;
+    /** The paths on its curve outputs (worked out on the CPU, so nothing to let go of). */
+    curves?: Record<string, CurvePaths>;
     width: number;
     height: number;
     /** What went wrong drawing it, in words. */
@@ -154,7 +157,7 @@ export class TextureGraphEvaluator {
     private readonly stopListening: () => void;
 
     constructor(
-        private readonly gpu: TextureGpu,
+        private readonly gpu: TexturingGpu,
         private readonly resolve: GraphResolver,
         private readonly texture: (textureId: string) => THREE.Texture | null,
         private readonly depth = 0,
@@ -276,7 +279,7 @@ export class TextureGraphEvaluator {
             const links = plan.incoming.get(node.id);
             // What the node takes after when it takes after its input: the first picture wired (a value a
             // setting follows is no picture).
-            const pictures = definition.inputs.filter((port) => port.kind !== 'value');
+            const pictures = definition.inputs.filter((port) => port.kind !== 'value' && port.kind !== 'curve');
             const first = pictures.map((port) => info.get(links?.get(port.key)?.from ?? '')).find((details): details is NodeDetails => details !== undefined && !details.value);
             // Size: from the first wired input or the graph, then the node's own change.
             let { width, height } = resolveSize(node.size?.mode ?? definition.sizeFrom, node.size, first, { width: graphWidth, height: graphHeight });
@@ -298,11 +301,12 @@ export class TextureGraphEvaluator {
                 ? definition.kindOf(params)
                 : wiredKinds.length ? (wiredKinds.includes('color') ? 'color' : 'gray') : definition.anyDefault ?? 'gray';
             // A material output carries a picture per channel, each of its channel's kind: it has no one kind.
-            for (const port of definition.outputs) if (port.kind !== 'material') kinds[port.key] = port.kind === 'any' ? anyKind : port.kind === 'value' ? 'color' : port.kind;
+            // (Nor does a curve output: it carries paths, not pictures.)
+            for (const port of definition.outputs) if (port.kind !== 'material' && port.kind !== 'curve') kinds[port.key] = port.kind === 'any' ? anyKind : port.kind === 'value' ? 'color' : port.kind;
             if (node.type === OUTPUT_NODE_TYPE) kinds.out = outputNodeKind(params);
             if (main) {
                 const passed = outputKind(links?.get(main)) ?? (definition.inputs.find((port) => port.key === main)?.kind === 'gray' ? 'gray' : null);
-                if (passed) for (const port of definition.outputs) if (port.kind !== 'material') kinds[port.key] = passed;
+                if (passed) for (const port of definition.outputs) if (port.kind !== 'material' && port.kind !== 'curve') kinds[port.key] = passed;
             }
             // Precision: as asked, the graph's, else the widest wired in, else by kind.
             const wired = pictures.map((port) => info.get(links?.get(port.key)?.from ?? '')?.precision).filter((bits): bits is ImagePrecision => bits !== undefined);
@@ -430,6 +434,7 @@ export class TextureGraphEvaluator {
             // Every picture the node takes, so whatever it still holds when it fails (or is not kept) goes back.
             const made: GpuImage[] = [];
             const notes: string[] = [];
+            const curves: Record<string, CurvePaths> = {};
             const leftovers = () => {
                 const kept = new Set(Object.values(state.outputs));
                 for (const image of made) if (!kept.has(image)) this.gpu.release(image);
@@ -440,9 +445,10 @@ export class TextureGraphEvaluator {
                 // read back first by the rest.
                 const runDetails = !main && !definition.settingsInShader ? await this.withValuesRead(definition, details, plan.incoming.get(node.id)) : details;
                 state.outputs = main
-                    ? this.passThrough(definition, main, details, plan.incoming.get(node.id), made)
-                    : await definition.run(this.context(node, definition, runDetails, plan, request, external, made, notes));
+                    ? this.passThrough(definition, main, details, plan.incoming.get(node.id), made, curves)
+                    : await definition.run(this.context(node, definition, runDetails, plan, request, external, made, notes, curves));
                 if (notes.length) state.notes = notes;
+                if (Object.keys(curves).length) state.curves = curves;
             } catch (error) {
                 state.outputs = {};
                 leftovers();
@@ -471,10 +477,13 @@ export class TextureGraphEvaluator {
      * A bypassed node's outputs: the image wired into its main input, as it is, on every output; or,
      * with nothing wired there, that input's own fallback value.
      */
-    private passThrough(definition: TexNodeDef, main: string, details: NodeDetails, links: Map<string, TexGraphLink> | undefined, made: GpuImage[]): Record<string, GpuImage> {
+    private passThrough(definition: TexNodeDef, main: string, details: NodeDetails, links: Map<string, TexGraphLink> | undefined, made: GpuImage[], curves: Record<string, CurvePaths>): Record<string, GpuImage> {
         const link = links?.get(main);
         const source = link ? this.cache.get(link.from)?.outputs : undefined;
         const outputs: Record<string, GpuImage> = {};
+        // A curve passes on as it is to every curve output; the pictures the node draws of it are left black.
+        const passedCurve = definition.inputs.find((input) => input.key === main)?.kind === 'curve' && link ? this.cache.get(link.from)?.curves?.[link.fromOutput] : undefined;
+        for (const port of definition.outputs) if (port.kind === 'curve' && passedCurve) curves[port.key] = passedCurve;
         if (definition.inputs.find((input) => input.key === main)?.kind === 'material') {
             // A material passes on whole to every material output; anything else the node gives is left black.
             const material = source && link ? materialOf(source, link.fromOutput) : null;
@@ -495,6 +504,7 @@ export class TextureGraphEvaluator {
         }
         const image = link ? source?.[link.fromOutput] ?? null : null;
         for (const port of definition.outputs) {
+            if (port.kind === 'curve') continue;
             if (image) { outputs[port.key] = this.gpu.retain(image); continue; }
             const kind = details.kinds[port.key] ?? 'color';
             const filled = this.gpu.image(details.width, details.height, kind, details.precision);
@@ -532,6 +542,7 @@ export class TextureGraphEvaluator {
         external: Readonly<Record<string, ExternalImage | null | undefined>>,
         made: GpuImage[],
         notes: string[] = [],
+        curves: Record<string, CurvePaths> = {},
     ): NodeRunContext {
         const gpu = this.gpu;
         const links = plan.incoming.get(node.id);
@@ -578,6 +589,12 @@ export class TextureGraphEvaluator {
                 const outputs = link ? this.cache.get(link.from)?.outputs : undefined;
                 return outputs && link ? materialOf(outputs, link.fromOutput) : null;
             },
+            curve: (key) => {
+                const link = links?.get(key);
+                // Wired to a node that gave no curve (it failed): no paths, rather than the node's own.
+                return link ? this.cache.get(link.from)?.curves?.[link.fromOutput] ?? [] : null;
+            },
+            giveCurve: (key, paths) => { curves[key] = paths; },
             subgraph: async (graphId, params, inputs, options = {}) => {
                 if (this.depth >= MAX_DEPTH || this.visiting.has(graphId)) throw new Error('This graph uses itself, directly or through others.');
                 const entry = this.resolve(graphId);

@@ -1,13 +1,15 @@
 import { decodeBlocks, encodeBlocks } from './bcEncoder';
-import { ASTC_BLOCK_BYTES, decodeAstcBlock, encodeAstcBlock } from './astcEncoder';
+import { ASTC_BLOCK_BYTES, decodeAstcBlock, encodeAstcBlock, spreadStart } from './astcEncoder';
 import { ETC2A_BLOCK_BYTES, ETC2_BLOCK_BYTES, decodeEtc2AlphaBlock, decodeEtc2Block, encodeEtc2AlphaBlock, encodeEtc2Block } from './etc2Encoder';
 
 /**
  * MATERIAL TEXTURE COMPRESSION
  *
  * Material assets' textures compressed for the GPU, by what they hold:
- * - colour (and colour with alpha): BC7, one byte a pixel, here its mode 6 (one subset, colour and alpha
- *   end points with a shared low bit, sixteen steps between);
+ * - colour (and colour with alpha): BC7, one byte a pixel: its mode 6 (one subset, colour and alpha end points with
+ *   a shared low bit, sixteen steps between), or for opaque blocks of two colours one line cannot hold, modes 1 and 3
+ *   (the block split in two one of 64 ways, each half with end points of its own: eight steps, or four from finer
+ *   end points), whichever comes back closest;
  * - normal maps: BC5, red and green only, a byte a pixel (the shader rebuilds blue);
  * - one channel of data (roughness, metalness, occlusion, height, masks): BC4, half a byte a pixel.
  *   three r164 cannot upload unsigned BC4 (its format table checks the wrong constant), so it is written
@@ -158,9 +160,35 @@ export const kaiserMipLevels = (rgba: Uint8Array, width: number, height: number,
     return levels;
 };
 
-// --- BC7, mode 6 ---------------------------------------------------------------------------------
+// --- BC7: mode 6, and modes 1 and 3 for opaque blocks of two colours -----------------------------
 
 const BC7_WEIGHTS = [0, 4, 9, 13, 17, 21, 26, 30, 34, 38, 43, 47, 51, 55, 60, 64];
+const BC7_WEIGHTS_3 = [0, 9, 18, 27, 37, 46, 55, 64];
+const BC7_WEIGHTS_2 = [0, 21, 43, 64];
+
+/**
+ * BC7's 64 ways of splitting a block in two, as the format defines them: one bit a pixel (pixel 0 lowest, row by row),
+ * set where the pixel is in the second subset.
+ */
+const BC7_PARTITIONS = [
+    0xcccc, 0x8888, 0xeeee, 0xecc8, 0xc880, 0xfeec, 0xfec8, 0xec80, 0xc800, 0xffec, 0xfe80, 0xe800, 0xffe8, 0xff00, 0xfff0, 0xf000,
+    0xf710, 0x008e, 0x7100, 0x08ce, 0x008c, 0x7310, 0x3100, 0x8cce, 0x088c, 0x3110, 0x6666, 0x366c, 0x17e8, 0x0ff0, 0x718e, 0x399c,
+    0xaaaa, 0xf0f0, 0x5a5a, 0x33cc, 0x3c3c, 0x55aa, 0x9696, 0xa55a, 0x73ce, 0x13c8, 0x324c, 0x3bdc, 0x6996, 0xc33c, 0x9966, 0x0660,
+    0x0272, 0x04e4, 0x4e40, 0x2720, 0xc936, 0x936c, 0x39c6, 0x639c, 0x9336, 0x9cc6, 0x817e, 0xe718, 0xccf0, 0x0fcc, 0x7744, 0xee22,
+];
+
+/** For each split, the pixel of the second subset whose index drops its top bit (the first subset's is pixel 0). */
+const BC7_ANCHORS = [
+    15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
+    15, 2, 8, 2, 2, 8, 8, 15, 2, 8, 2, 2, 8, 8, 2, 2,
+    15, 15, 6, 8, 2, 8, 15, 15, 2, 8, 2, 2, 2, 15, 15, 6,
+    6, 2, 6, 8, 15, 15, 2, 2, 15, 15, 15, 15, 15, 2, 2, 15,
+];
+
+/** Splits tried in full for a block (the ones whose halves each lie nearest a line of colour). */
+const BC7_SPLITS_TRIED = 2;
+/** A block mode 6 keeps this close (summed squared error over its pixels and channels) is not split. */
+const BC7_CLOSE_ENOUGH = 96;
 
 /** The 4×4 block at (bx, by), clamped at the picture's edges: sixteen RGBA pixels. */
 const readBlock = (rgba: Uint8Array, width: number, height: number, bx: number, by: number, block: Uint8Array): void => {
@@ -173,13 +201,17 @@ const readBlock = (rgba: Uint8Array, width: number, height: number, bx: number, 
     }
 };
 
-/** A 7-bit end point and its low bit for each of two colours, the pair nearest them. */
-const quantizeEndpoint = (colour: number[]): { q: number[]; p: number } => {
+
+/**
+ * A 7-bit end point and its low bit, the pair nearest a colour and alpha. In an opaque block the alpha comes first, so
+ * the block stays exactly opaque.
+ */
+const quantizeEndpoint = (colour: number[], opaque: boolean): { q: number[]; p: number } => {
     let best = { q: [0, 0, 0, 0], p: 0 };
     let bestError = Infinity;
     for (let p = 0; p < 2; p++) {
         const q = colour.map(value => Math.min(127, Math.max(0, Math.round((value - p) / 2))));
-        const error = q.reduce((sum, value, c) => sum + ((value << 1 | p) - colour[c]) ** 2, 0);
+        const error = q.reduce((sum, value, c) => sum + ((value << 1 | p) - colour[c]) ** 2 * (opaque && c === 3 ? 64 : 1), 0);
         if (error < bestError) { bestError = error; best = { q, p }; }
     }
     return best;
@@ -193,11 +225,12 @@ class BitWriter {
     }
 }
 
-const encodeBc7Block = (block: Uint8Array): Uint8Array => {
+/** Mode 6: one subset, colour and alpha end points of 7 bits with a low bit each, sixteen steps between. */
+const encodeBc7Mode6 = (block: Uint8Array, opaque: boolean): Uint8Array => {
     // The main axis through the block's colours and alphas; its two ends become the end points.
     const mean = [0, 0, 0, 0];
     for (let i = 0; i < 16; i++) for (let c = 0; c < 4; c++) mean[c] += block[i * 4 + c] / 16;
-    let axis = [1, 1, 1, 1];
+    let axis = spreadStart(Array.from({ length: 16 }, (_, i) => Array.from(block.subarray(i * 4, i * 4 + 4))), mean);
     for (let iteration = 0; iteration < 6; iteration++) {
         const next = [0, 0, 0, 0];
         for (let i = 0; i < 16; i++) {
@@ -216,14 +249,14 @@ const encodeBc7Block = (block: Uint8Array): Uint8Array => {
         high = Math.max(high, t);
     }
     const end = (t: number) => mean.map((value, c) => Math.min(255, Math.max(0, value + axis[c] * t)));
-    let first = quantizeEndpoint(end(low));
-    let second = quantizeEndpoint(end(high));
+    let first = quantizeEndpoint(end(low), opaque);
+    let second = quantizeEndpoint(end(high), opaque);
     const palette = () => {
         const a = first.q.map(value => value << 1 | first.p);
         const b = second.q.map(value => value << 1 | second.p);
         return BC7_WEIGHTS.map(weight => a.map((value, c) => ((64 - weight) * value + weight * b[c] + 32) >> 6));
     };
-    let colours = palette();
+    const colours = palette();
     let indices = Array.from({ length: 16 }, (_, i) => {
         let best = 0, bestError = Infinity;
         for (let k = 0; k < 16; k++) {
@@ -237,7 +270,6 @@ const encodeBc7Block = (block: Uint8Array): Uint8Array => {
     if (indices[0] >= 8) {
         [first, second] = [second, first];
         indices = indices.map(index => 15 - index);
-        colours = palette();
     }
     const out = new BitWriter();
     out.write(1 << 6, 7);
@@ -247,6 +279,245 @@ const encodeBc7Block = (block: Uint8Array): Uint8Array => {
     out.write(indices[0], 3);
     for (let i = 1; i < 16; i++) out.write(indices[i], 4);
     return out.bytes;
+};
+
+/** A pixel's sums for a line fit: count, red, green, blue, and their products (rr, rg, rb, gg, gb, bb). */
+const SUMS = 10;
+const pixelSums = new Float64Array(16 * SUMS);
+const blockSums = new Float64Array(SUMS);
+const halfSums = new Float64Array(SUMS);
+
+/** What is left of a group of pixels' spread off its main axis (its sums given): how far it lies from a line of colour. */
+const offLine = (s: Float64Array): number => {
+    const n = s[0];
+    if (n < 2) return 0;
+    const xx = s[4] - s[1] * s[1] / n, xy = s[5] - s[1] * s[2] / n, xz = s[6] - s[1] * s[3] / n;
+    const yy = s[7] - s[2] * s[2] / n, yz = s[8] - s[2] * s[3] / n, zz = s[9] - s[3] * s[3] / n;
+    // The largest spread along one axis, by power iteration from the widest channel.
+    let x = xx >= yy && xx >= zz ? 1 : 0.1, y = yy > xx && yy >= zz ? 1 : 0.1, z = zz > xx && zz > yy ? 1 : 0.1;
+    let along = 0;
+    for (let step = 0; step < 5; step++) {
+        const nx = xx * x + xy * y + xz * z, ny = xy * x + yy * y + yz * z, nz = xz * x + yz * y + zz * z;
+        const length = Math.sqrt(nx * nx + ny * ny + nz * nz);
+        if (length < 1e-9) break;
+        along = length / Math.sqrt(x * x + y * y + z * z);
+        x = nx / length; y = ny / length; z = nz / length;
+    }
+    return Math.max(0, xx + yy + zz - along);
+};
+
+/**
+ * BC7's splits of a block, best first, as many as are tried: those whose two halves each lie nearest a line of colour.
+ * The second half's sums are summed from its pixels; the first's are what is left of the block's.
+ */
+const bestSplits = (block: Uint8Array): number[] => {
+    blockSums.fill(0);
+    for (let i = 0; i < 16; i++) {
+        const r = block[i * 4], g = block[i * 4 + 1], b = block[i * 4 + 2];
+        const at = i * SUMS;
+        pixelSums[at] = 1; pixelSums[at + 1] = r; pixelSums[at + 2] = g; pixelSums[at + 3] = b;
+        pixelSums[at + 4] = r * r; pixelSums[at + 5] = r * g; pixelSums[at + 6] = r * b;
+        pixelSums[at + 7] = g * g; pixelSums[at + 8] = g * b; pixelSums[at + 9] = b * b;
+        for (let k = 0; k < SUMS; k++) blockSums[k] += pixelSums[at + k];
+    }
+    const kept: Array<{ split: number; cost: number }> = [];
+    for (let split = 0; split < BC7_PARTITIONS.length; split++) {
+        const mask = BC7_PARTITIONS[split];
+        halfSums.fill(0);
+        for (let i = 0; i < 16; i++) if ((mask >> i) & 1) for (let k = 0; k < SUMS; k++) halfSums[k] += pixelSums[i * SUMS + k];
+        let cost = offLine(halfSums);
+        for (let k = 0; k < SUMS; k++) halfSums[k] = blockSums[k] - halfSums[k];
+        cost += offLine(halfSums);
+        if (kept.length < BC7_SPLITS_TRIED || cost < kept[kept.length - 1].cost) {
+            kept.push({ split, cost });
+            kept.sort((a, b) => a.cost - b.cost);
+            if (kept.length > BC7_SPLITS_TRIED) kept.pop();
+        }
+    }
+    return kept.map(entry => entry.split);
+};
+
+interface SubsetFit {
+    /** End points as the block stores them, and their low bits (shared in mode 1). */
+    raw: [number[], number[]];
+    p: [number, number];
+    /** End points as the decoder makes them. */
+    colour: [number[], number[]];
+    /** Each pixel's index (only the subset's pixels are set). */
+    indices: number[];
+    error: number;
+}
+
+/** Mode 1's end points: 6 bits and a low bit shared by the subset's two, widened to 8 by repeating the top bit. */
+const quantizeMode1 = (a: number[], b: number[]): Pick<SubsetFit, 'raw' | 'p' | 'colour'> => {
+    let best: Pick<SubsetFit, 'raw' | 'p' | 'colour'> | null = null;
+    let bestError = Infinity;
+    for (let p = 0; p < 2; p++) {
+        let error = 0;
+        const raw: [number[], number[]] = [[], []];
+        const colour: [number[], number[]] = [[], []];
+        [a, b].forEach((target, end) => {
+            for (let c = 0; c < 3; c++) {
+                const guess = Math.round((target[c] * 127 / 255 - p) / 2);
+                let chosen = 0, chosenError = Infinity, chosenValue = 0;
+                for (let q = Math.max(0, guess - 1); q <= Math.min(63, guess + 1); q++) {
+                    const seven = (q << 1) | p;
+                    const value = (seven << 1) | (seven >> 6);
+                    const off = (value - target[c]) ** 2;
+                    if (off < chosenError) { chosenError = off; chosen = q; chosenValue = value; }
+                }
+                raw[end].push(chosen);
+                colour[end].push(chosenValue);
+                error += chosenError;
+            }
+        });
+        if (error < bestError) { bestError = error; best = { raw, p: [p, p], colour }; }
+    }
+    return best!;
+};
+
+/** Mode 3's end points: 7 bits each and a low bit for each end point's three channels. */
+const quantizeMode3 = (a: number[], b: number[]): Pick<SubsetFit, 'raw' | 'p' | 'colour'> => {
+    const raw: [number[], number[]] = [[], []];
+    const p: [number, number] = [0, 0];
+    const colour: [number[], number[]] = [[], []];
+    [a, b].forEach((target, end) => {
+        let bestError = Infinity;
+        for (let bit = 0; bit < 2; bit++) {
+            const q = target.map(value => Math.min(127, Math.max(0, Math.round((value - bit) / 2))));
+            const error = q.reduce((sum, value, c) => sum + ((value << 1 | bit) - target[c]) ** 2, 0);
+            if (error < bestError) { bestError = error; raw[end] = q; p[end] = bit; colour[end] = q.map(value => value << 1 | bit); }
+        }
+    });
+    return { raw, p, colour };
+};
+
+const splitPalette = new Int32Array(8 * 3);
+
+/** One subset's end points and indices: from its main axis, refined twice by least squares on the indices it gets. */
+const fitSubset = (block: Uint8Array, members: number[], weights: readonly number[], quantize: (a: number[], b: number[]) => Pick<SubsetFit, 'raw' | 'p' | 'colour'>): SubsetFit => {
+    const mean = [0, 0, 0];
+    for (const i of members) for (let c = 0; c < 3; c++) mean[c] += block[i * 4 + c] / members.length;
+    let axis = spreadStart(members.map(i => Array.from(block.subarray(i * 4, i * 4 + 3))), mean);
+    for (let step = 0; step < 6; step++) {
+        const next = [0, 0, 0];
+        for (const i of members) {
+            const d0 = block[i * 4] - mean[0], d1 = block[i * 4 + 1] - mean[1], d2 = block[i * 4 + 2] - mean[2];
+            const dot = d0 * axis[0] + d1 * axis[1] + d2 * axis[2];
+            next[0] += d0 * dot; next[1] += d1 * dot; next[2] += d2 * dot;
+        }
+        const length = Math.hypot(next[0], next[1], next[2]);
+        if (length < 1e-6) break;
+        axis = next.map(value => value / length);
+    }
+    let low = Infinity, high = -Infinity;
+    for (const i of members) {
+        const t = (block[i * 4] - mean[0]) * axis[0] + (block[i * 4 + 1] - mean[1]) * axis[1] + (block[i * 4 + 2] - mean[2]) * axis[2];
+        low = Math.min(low, t);
+        high = Math.max(high, t);
+    }
+    let a = mean.map((value, c) => Math.min(255, Math.max(0, value + axis[c] * low)));
+    let b = mean.map((value, c) => Math.min(255, Math.max(0, value + axis[c] * high)));
+    let best: SubsetFit | null = null;
+    for (let round = 0; round < 3; round++) {
+        const quantized = quantize(a, b);
+        const [ea, eb] = quantized.colour;
+        for (let k = 0; k < weights.length; k++) {
+            for (let c = 0; c < 3; c++) splitPalette[k * 3 + c] = ((64 - weights[k]) * ea[c] + weights[k] * eb[c] + 32) >> 6;
+        }
+        const indices = new Array<number>(16).fill(0);
+        let error = 0;
+        for (const i of members) {
+            const r = block[i * 4], g = block[i * 4 + 1], bl = block[i * 4 + 2];
+            let chosen = 0, chosenError = Infinity;
+            for (let k = 0; k < weights.length; k++) {
+                const dr = splitPalette[k * 3] - r, dg = splitPalette[k * 3 + 1] - g, db = splitPalette[k * 3 + 2] - bl;
+                const off = dr * dr + dg * dg + db * db;
+                if (off < chosenError) { chosenError = off; chosen = k; }
+            }
+            indices[i] = chosen;
+            error += chosenError;
+        }
+        if (!best || error < best.error) best = { ...quantized, indices, error };
+        if (error === 0) break;
+        // End points that best fit the indices given.
+        let aa = 0, ab = 0, bb = 0;
+        const ax = [0, 0, 0], bx = [0, 0, 0];
+        for (const i of members) {
+            const t = weights[indices[i]] / 64;
+            const s = 1 - t;
+            aa += s * s; ab += s * t; bb += t * t;
+            for (let c = 0; c < 3; c++) { ax[c] += s * block[i * 4 + c]; bx[c] += t * block[i * 4 + c]; }
+        }
+        const det = aa * bb - ab * ab;
+        if (Math.abs(det) < 1e-9) break;
+        a = ax.map((value, c) => Math.min(255, Math.max(0, (value * bb - bx[c] * ab) / det)));
+        b = bx.map((value, c) => Math.min(255, Math.max(0, (value * aa - ax[c] * ab) / det)));
+    }
+    return best!;
+};
+
+/**
+ * Mode 1 (6-bit end points, eight steps) or mode 3 (8-bit end points, four steps): two subsets of an opaque block split
+ * the way `split` says, each with end points of its own. Returns the block and its error.
+ */
+const encodeBc7Split = (block: Uint8Array, split: number, mode: 1 | 3): { bytes: Uint8Array; error: number } => {
+    const mask = BC7_PARTITIONS[split];
+    const weights = mode === 1 ? BC7_WEIGHTS_3 : BC7_WEIGHTS_2;
+    const quantize = mode === 1 ? quantizeMode1 : quantizeMode3;
+    const anchors = [0, BC7_ANCHORS[split]];
+    const fits = [0, 1].map((subset) => {
+        const members = Array.from({ length: 16 }, (_, i) => i).filter(i => ((mask >> i) & 1) === subset);
+        const fit = fitSubset(block, members, weights, quantize);
+        // A subset's first pixel (its anchor) has no top bit in its index: when it would need one, the end points swap.
+        if (fit.indices[anchors[subset]] >= weights.length / 2) {
+            fit.raw = [fit.raw[1], fit.raw[0]];
+            fit.p = [fit.p[1], fit.p[0]];
+            fit.colour = [fit.colour[1], fit.colour[0]];
+            for (const i of members) fit.indices[i] = weights.length - 1 - fit.indices[i];
+        }
+        return fit;
+    });
+    const out = new BitWriter();
+    out.write(1 << mode, mode + 1);
+    out.write(split, 6);
+    const bits = mode === 1 ? 6 : 7;
+    for (let c = 0; c < 3; c++) for (const fit of fits) { out.write(fit.raw[0][c], bits); out.write(fit.raw[1][c], bits); }
+    if (mode === 1) { out.write(fits[0].p[0], 1); out.write(fits[1].p[0], 1); } else for (const fit of fits) { out.write(fit.p[0], 1); out.write(fit.p[1], 1); }
+    const indexBits = mode === 1 ? 3 : 2;
+    for (let i = 0; i < 16; i++) out.write(fits[(mask >> i) & 1].indices[i], indexBits - (i === 0 || i === anchors[1] ? 1 : 0));
+    return { bytes: out.bytes, error: fits[0].error + fits[1].error };
+};
+
+const blockError = (block: Uint8Array, decoded: Uint8Array): number => {
+    let error = 0;
+    for (let i = 0; i < 64; i++) error += (decoded[i] - block[i]) ** 2;
+    return error;
+};
+
+const decodedScratch = new Uint8Array(64);
+
+/**
+ * A block in BC7: mode 6 (one line of colour and alpha), or for an opaque block of two colours that one line cannot
+ * hold, mode 1 or 3 split the best of BC7's ways, whichever comes back closest.
+ */
+const encodeBc7Block = (block: Uint8Array): Uint8Array => {
+    let opaque = true;
+    for (let i = 3; i < 64; i += 4) if (block[i] !== 255) { opaque = false; break; }
+    let best = encodeBc7Mode6(block, opaque);
+    if (!opaque) return best;
+    decodeBc7Block(best, decodedScratch);
+    let bestError = blockError(block, decodedScratch);
+    if (bestError <= BC7_CLOSE_ENOUGH) return best;
+    for (const split of bestSplits(block)) {
+        for (const mode of [1, 3] as const) {
+            const tried = encodeBc7Split(block, split, mode);
+            if (tried.error < bestError) { best = tried.bytes; bestError = tried.error; }
+        }
+        // A split that keeps the block close enough ends the search.
+        if (bestError <= BC7_CLOSE_ENOUGH) break;
+    }
+    return best;
 };
 
 class BitReader {
@@ -259,19 +530,49 @@ class BitReader {
     }
 }
 
-/** Mode 6 BC7 blocks back to RGBA, for the compression preview (the only mode written here). */
+/** BC7 blocks of the modes written here (6, 1 and 3) back to RGBA, exactly as a graphics card decodes them. */
 const decodeBc7Block = (bytes: Uint8Array, out: Uint8Array): void => {
     const bits = new BitReader(bytes);
-    if (bits.read(7) !== 1 << 6) { out.fill(0); return; }
-    const q = [[0, 0, 0, 0], [0, 0, 0, 0]];
-    for (let c = 0; c < 4; c++) { q[0][c] = bits.read(7); q[1][c] = bits.read(7); }
-    const p = [bits.read(1), bits.read(1)];
-    const a = q[0].map(value => value << 1 | p[0]);
-    const b = q[1].map(value => value << 1 | p[1]);
+    let mode = 0;
+    while (mode < 8 && bits.read(1) === 0) mode++;
+    if (mode === 6) {
+        const q = [[0, 0, 0, 0], [0, 0, 0, 0]];
+        for (let c = 0; c < 4; c++) { q[0][c] = bits.read(7); q[1][c] = bits.read(7); }
+        const p = [bits.read(1), bits.read(1)];
+        const a = q[0].map(value => value << 1 | p[0]);
+        const b = q[1].map(value => value << 1 | p[1]);
+        for (let i = 0; i < 16; i++) {
+            const weight = BC7_WEIGHTS[bits.read(i === 0 ? 3 : 4)];
+            for (let c = 0; c < 4; c++) out[i * 4 + c] = ((64 - weight) * a[c] + weight * b[c] + 32) >> 6;
+        }
+        return;
+    }
+    if (mode !== 1 && mode !== 3) { out.fill(0); return; }
+    const split = bits.read(6);
+    const endpointBits = mode === 1 ? 6 : 7;
+    const raw = [[0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]];
+    for (let c = 0; c < 3; c++) for (let end = 0; end < 4; end++) raw[end][c] = bits.read(endpointBits);
+    let p: number[];
+    if (mode === 1) {
+        const shared = [bits.read(1), bits.read(1)];
+        p = [shared[0], shared[0], shared[1], shared[1]];
+    } else {
+        p = [bits.read(1), bits.read(1), bits.read(1), bits.read(1)];
+    }
+    const colour = raw.map((end, k) => end.map((value) => {
+        const full = value << 1 | p[k];
+        return mode === 1 ? (full << 1) | (full >> 6) : full;
+    }));
+    const mask = BC7_PARTITIONS[split];
+    const anchor = BC7_ANCHORS[split];
+    const weights = mode === 1 ? BC7_WEIGHTS_3 : BC7_WEIGHTS_2;
+    const indexBits = mode === 1 ? 3 : 2;
     for (let i = 0; i < 16; i++) {
-        const index = bits.read(i === 0 ? 3 : 4);
-        const weight = BC7_WEIGHTS[index];
-        for (let c = 0; c < 4; c++) out[i * 4 + c] = ((64 - weight) * a[c] + weight * b[c] + 32) >> 6;
+        const subset = (mask >> i) & 1;
+        const weight = weights[bits.read(indexBits - (i === 0 || i === anchor ? 1 : 0))];
+        const a = colour[subset * 2], b = colour[subset * 2 + 1];
+        for (let c = 0; c < 3; c++) out[i * 4 + c] = ((64 - weight) * a[c] + weight * b[c] + 32) >> 6;
+        out[i * 4 + 3] = 255;
     }
 };
 

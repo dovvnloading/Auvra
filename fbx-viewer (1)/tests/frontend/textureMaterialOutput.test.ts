@@ -47,7 +47,7 @@ describe('painted and graph-made pictures as engine materials', () => {
     it('writes height at 16 bits whatever the pictures are for, and the rest as asked', async () => {
         const deep: string[] = [];
         const gpu = {
-            readUint16: (image: GpuImage) => { deep.push((image as unknown as { name: string }).name); return new Uint16Array(4); },
+            readUint16Async: async (image: GpuImage) => { deep.push((image as unknown as { name: string }).name); return new Uint16Array(4); },
             toPng: async () => new Blob(),
         } as unknown as TextureGpu;
         const image = (name: string, kind: 'color' | 'gray') => ({ name, kind }) as unknown as GpuImage;
