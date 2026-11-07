@@ -21,7 +21,7 @@ describe('unlit and Phong materials converted to take a material asset', () => {
         const root = new THREE.Group().add(mesh);
         expect(convertsForAsset(phong)).toBe(true);
         applyMaterialOverrides(root, { Sign: { materialId: 'converted' } });
-        const copy = mesh.material as THREE.MeshStandardMaterial;
+        const copy = mesh.material as unknown as THREE.MeshStandardMaterial;
         expect(copy).not.toBe(phong);
         expect(copy.isMeshStandardMaterial).toBe(true);
         expect(copy.name).toBe('Sign');
