@@ -58,13 +58,34 @@ export const MESH_MAP_LABELS: Record<MeshMapName, string> = {
 export const MESH_MAP_KIND: Record<MeshMapName, PortKind> = {
     ambientOcclusion: 'gray', curvature: 'gray', normal: 'color', worldNormal: 'color', position: 'color', thickness: 'gray', id: 'color', height: 'gray',
 };
-/** What a mesh map reads as when no model is there to bake it from. */
-const MESH_MAP_STAND_IN: Record<MeshMapName, string> = {
+
+/**
+ * Maps a bake can keep besides those, when asked for in its settings (texturing/bake's EXTRA_MAPS, by
+ * the same names): cavity, bent normals, and colour, opacity and materials carried over from a
+ * high-poly model. Mesh map nodes read them the same way, under the same kind of key.
+ */
+export const EXTRA_MESH_MAPS = ['cavity', 'bentNormal', 'color', 'opacity', 'material'] as const;
+export type ExtraMeshMapName = typeof EXTRA_MESH_MAPS[number];
+/** Every map a Mesh map node can read. */
+export const ALL_MESH_MAPS: readonly AnyMeshMapName[] = [...MESH_MAPS, ...EXTRA_MESH_MAPS];
+export type AnyMeshMapName = MeshMapName | ExtraMeshMapName;
+export const ANY_MESH_MAP_LABELS: Record<AnyMeshMapName, string> = {
+    ...MESH_MAP_LABELS,
+    cavity: 'Cavity', bentNormal: 'Bent normal', color: 'Colour from the high-poly model', opacity: 'Opacity from the high-poly model', material: 'Materials from the high-poly model',
+};
+export const ANY_MESH_MAP_KIND: Record<AnyMeshMapName, PortKind> = {
+    ...MESH_MAP_KIND, cavity: 'gray', bentNormal: 'color', color: 'color', opacity: 'gray', material: 'color',
+};
+const isMeshMap = (value: unknown): value is AnyMeshMapName => (ALL_MESH_MAPS as readonly unknown[]).includes(value);
+
+/** What a mesh map reads as when no model is there to bake it from (or the bake did not keep it). */
+const MESH_MAP_STAND_IN: Record<AnyMeshMapName, string> = {
     ambientOcclusion: 'vec4(1.0)', curvature: 'vec4(0.5)', normal: 'vec4(0.5, 0.5, 1.0, 1.0)', worldNormal: 'vec4(0.5, 1.0, 0.5, 1.0)',
     position: 'vec4(vUv, 0.5, 1.0)', thickness: 'vec4(0.5)', id: 'vec4(0.0, 0.0, 0.0, 1.0)', height: 'vec4(0.5)',
+    cavity: 'vec4(0.5)', bentNormal: 'vec4(0.5, 0.5, 1.0, 1.0)', color: 'vec4(0.5, 0.5, 0.5, 1.0)', opacity: 'vec4(1.0)', material: 'vec4(0.0, 0.0, 0.0, 1.0)',
 };
 
-export const meshMapKey = (name: MeshMapName): string => `mesh:${name}`;
+export const meshMapKey = (name: AnyMeshMapName): string => `mesh:${name}`;
 
 /** An image of the node's size and `kind` holding `source` (an image or a project texture). */
 const imageFrom = async (context: NodeRunContext, source: GpuImage | THREE.Texture, kind: PortKind): Promise<GpuImage> => {
@@ -196,16 +217,16 @@ export const IO_NODES: TexNodeDef[] = [
         type: MESH_MAP_NODE_TYPE,
         label: 'Mesh map',
         category: 'Mesh maps',
-        description: 'A map baked from the model being painted: occlusion, curvature, normals, position, thickness or IDs. Smart masks and materials are built on these.',
-        keywords: ['baked', 'ao', 'curvature', 'world normal', 'position', 'thickness', 'id', 'mesh'],
+        description: 'A map baked from the model being painted: occlusion, curvature, normals, position, thickness or IDs, and when the bake kept them, cavity, bent normals, and colour, opacity and materials carried over from a high-poly model. Smart masks and materials are built on these.',
+        keywords: ['baked', 'ao', 'curvature', 'world normal', 'position', 'thickness', 'id', 'mesh', 'cavity', 'bent normal', 'high poly', 'transfer'],
         inputs: [],
         outputs: [out('any')],
-        params: [select('map', 'Map', 'ambientOcclusion', MESH_MAPS.map((name) => [name, MESH_MAP_LABELS[name]] as [string, string]))],
+        params: [select('map', 'Map', 'ambientOcclusion', ALL_MESH_MAPS.map((name) => [name, ANY_MESH_MAP_LABELS[name]] as [string, string]))],
         sizeFrom: 'graph',
-        kindOf: (params) => MESH_MAP_KIND[(MESH_MAPS as readonly string[]).includes(String(params.map)) ? params.map as MeshMapName : 'ambientOcclusion'],
+        kindOf: (params) => ANY_MESH_MAP_KIND[isMeshMap(params.map) ? params.map : 'ambientOcclusion'],
         async run(context) {
-            const name = ((MESH_MAPS as readonly string[]).includes(String(context.params.map)) ? context.params.map : 'ambientOcclusion') as MeshMapName;
-            const kind = MESH_MAP_KIND[name];
+            const name: AnyMeshMapName = isMeshMap(context.params.map) ? context.params.map : 'ambientOcclusion';
+            const kind = ANY_MESH_MAP_KIND[name];
             const baked = context.external(meshMapKey(name));
             if (baked) return { out: await imageFrom(context, baked, kind) };
             const image = context.image(kind);

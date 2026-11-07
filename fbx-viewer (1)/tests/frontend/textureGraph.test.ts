@@ -364,3 +364,17 @@ describe("the graph's size in the world", () => {
         expect(normalizeTextureGraph({ ...graph, physicalSize: { w: -1, h: 3 } }).physicalSize).toBeUndefined();
     });
 });
+
+describe('extra baked maps', () => {
+    it('are mesh map choices under the names the baker keeps them by', async () => {
+        const { EXTRA_MAPS } = await import('../../texturing/bake/meshBaker');
+        const { ALL_MESH_MAPS, EXTRA_MESH_MAPS, MESH_MAP_NODE_TYPE, meshMapKey } = await import('../../texturing/graph/nodes/io');
+        expect([...EXTRA_MESH_MAPS]).toEqual([...EXTRA_MAPS]);
+        const definition = textureNodeDefinitionByType(MESH_MAP_NODE_TYPE)!;
+        const choices = definition.params.find((param) => param.key === 'map')!.options!.map((option) => option.value);
+        expect(choices).toEqual([...ALL_MESH_MAPS]);
+        expect(definition.kindOf!({ map: 'cavity' })).toBe('gray');
+        expect(definition.kindOf!({ map: 'bentNormal' })).toBe('color');
+        expect(meshMapKey('cavity')).toBe('mesh:cavity');
+    });
+});

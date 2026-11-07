@@ -13,7 +13,7 @@ import { createNode, newNodeId } from '../../texturing/graph/document';
 import { mainInput, unknownNodeMessage } from '../../texturing/graph/evaluator';
 import { wireFits } from '../../texturing/graph/material';
 import { NAMED_RECEIVE_TYPE, NAMED_SEND_TYPE, linkName, namedLinks } from '../../texturing/graph/namedLinks';
-import { INPUT_NODE_TYPE, ITERATE_NODE_TYPE, MATERIAL_INPUT_NODE_TYPE, MATERIAL_OUTPUT_NODE_TYPE, MESH_MAPS, MESH_MAP_LABELS, MESH_MAP_NODE_TYPE, OUTPUT_NODE_TYPE, REROUTE_NODE_TYPE, SUBGRAPH_NODE_TYPE } from '../../texturing/graph/nodes/io';
+import { ALL_MESH_MAPS, ANY_MESH_MAP_LABELS, EXTRA_MESH_MAPS, INPUT_NODE_TYPE, ITERATE_NODE_TYPE, MATERIAL_INPUT_NODE_TYPE, MATERIAL_OUTPUT_NODE_TYPE, MESH_MAP_NODE_TYPE, OUTPUT_NODE_TYPE, REROUTE_NODE_TYPE, SUBGRAPH_NODE_TYPE } from '../../texturing/graph/nodes/io';
 import { feedbackPairs } from '../../texturing/graph/iterate';
 import { NODE_CATEGORY_ORDER, TEXTURE_NODE_DEFINITIONS, placeholderDefinition, textureNodeDefinition, type GraphResolver } from '../../texturing/graph/registry';
 import { OUTPUT_CHANNELS, OUTPUT_CHANNEL_LABELS, type OutputChannel, type PinKind, type TexGraphComment, type TexGraphLink, type TexGraphNode, type TexNodeDef, type TexPortDef, type TextureGraph } from '../../texturing/graph/types';
@@ -161,13 +161,16 @@ const NODE_ENTRIES: readonly FinderEntry[] = (() => {
             outputs: [],
         });
     }
-    for (const map of MESH_MAPS) {
+    for (const map of ALL_MESH_MAPS) {
+        const extra = (EXTRA_MESH_MAPS as readonly string[]).includes(map);
         entries.push({
             id: `mesh:${map}`,
-            label: `Mesh map: ${MESH_MAP_LABELS[map]}`,
+            label: `Mesh map: ${ANY_MESH_MAP_LABELS[map]}`,
             category: 'Mesh maps',
-            description: `The ${MESH_MAP_LABELS[map].toLowerCase()} map baked from the model the graph is used on.`,
-            keywords: ['mesh map', 'baked', map],
+            description: extra
+                ? `The ${ANY_MESH_MAP_LABELS[map].toLowerCase()} map, when the bake of the model the graph is used on kept it (chosen among the bake's extra maps).`
+                : `The ${ANY_MESH_MAP_LABELS[map].toLowerCase()} map baked from the model the graph is used on.`,
+            keywords: ['mesh map', 'baked', map, ...(extra ? ['extra', 'high poly'] : [])],
             inputs: [],
             outputs: ['any'],
         });
