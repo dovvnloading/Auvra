@@ -64,6 +64,12 @@ export interface ViewportCommands {
 /** Fonts the browser has, for text along a path. */
 export const PATH_FONTS = ['sans-serif', 'serif', 'monospace', 'cursive', 'Arial', 'Georgia', 'Times New Roman', 'Courier New', 'Verdana', 'Trebuchet MS', 'Impact'];
 
+/** Whether a texture's picture is in (a texture still loading or being read has none yet, or one of no size). */
+const pictureReady = (texture: THREE.Texture | null): texture is THREE.Texture => {
+    const image = texture?.image as { width?: number } | undefined;
+    return Boolean(image && (image.width ?? 0) > 0);
+};
+
 /** Where a click met the surface: its triangle, the place on the model and its texture coordinates. */
 export interface SurfaceHit { triangle: number; point: THREE.Vector3; uv: THREE.Vector2 }
 export type ViewMode = 'material' | PaintChannel | 'ambientOcclusion' | `mesh:${MeshMapName}` | `extra:${ExtraBakeMap}` | 'mask' | 'uvChecker' | 'uvStretch';
@@ -628,16 +634,25 @@ export const PaintViewport: React.FC<{
     /** Each vertex's place on the decal, kept while the decal stays where it is. */
     const decalCoords = useRef<{ start: DecalStart; reach: number; coords: Float32Array } | null>(null);
     const decalFrame = useRef<number | null>(null);
+    /** Placed while its picture is still being read: tried again shortly, the cursor saying so. */
+    const decalRetry = useRef<{ timer: number; since: number } | null>(null);
+    const [decalWaiting, setDecalWaiting] = useState(false);
+    const stopWaiting = useCallback(() => {
+        if (decalRetry.current) window.clearTimeout(decalRetry.current.timer);
+        decalRetry.current = null;
+        setDecalWaiting(false);
+    }, []);
 
     /** Gives up the decal shown (the pictures as they were) and lets painting go on. */
     const dropDecal = useCallback((forget: boolean) => {
         if (decalFrame.current !== null) { cancelAnimationFrame(decalFrame.current); decalFrame.current = null; }
+        stopWaiting();
         const live = decalLive.current;
         decalLive.current = null;
         if (live) live.cancel();
         if (forget) { decalPlace.current = null; decalCoords.current = null; }
         if (session.locked === DECAL_LOCK) session.unlock();
-    }, [session]);
+    }, [session, stopWaiting]);
 
     /** Lays the decal on again where it is now, as it is now set (the last showing given up first). */
     const showDecal = () => {
@@ -650,8 +665,19 @@ export const PaintViewport: React.FC<{
         if (!session.usable) return;
         if (session.locked && session.locked !== DECAL_LOCK) { onMessage(session.locked); return; }
         if (!target) { onMessage('Pick a paint layer, or a painted mask effect, to lay the decal on.'); return; }
-        const picture = decal.textureId ? session.host.texture(decal.textureId) : null;
-        if (!picture) { onMessage(decal.textureId ? 'The decal\'s picture is still loading: move the decal again in a moment.' : 'Pick the decal\'s picture in the Brush panel first.'); return; }
+        if (!decal.textureId) { onMessage('Pick the decal\'s picture in the Brush panel first.'); return; }
+        const picture = session.host.texture(decal.textureId);
+        // A picture still being read (a deep one is read whole first): the decal stays placed and goes on once it is in.
+        if (!pictureReady(picture)) {
+            const since = decalRetry.current?.since ?? performance.now();
+            if (decalRetry.current) window.clearTimeout(decalRetry.current.timer);
+            if (performance.now() - since > 30_000) { stopWaiting(); onMessage('The decal\'s picture could not be read: pick it again, or another.'); return; }
+            decalRetry.current = { since, timer: window.setTimeout(() => showDecalSoon(), 150) };
+            setDecalWaiting(true);
+            onMessage('Reading the decal\'s picture: the decal goes on where you clicked as soon as it is in.');
+            return;
+        }
+        stopWaiting();
         const modelSize = Math.max(1e-6, session.part.bounds.getSize(new THREE.Vector3()).length());
         const width = decal.size * modelSize;
         const height = width / pictureAspect(picture);
@@ -958,7 +984,7 @@ export const PaintViewport: React.FC<{
         <div
             ref={host}
             className="relative min-h-0 min-w-0 flex-1 overflow-hidden"
-            style={{ cursor: picking || tool === 'pick' || tool === 'polygon' || tool === 'decal' ? 'crosshair' : showCursor ? 'none' : 'default' }}
+            style={{ cursor: tool === 'decal' && decalWaiting ? 'progress' : picking || tool === 'pick' || tool === 'polygon' || tool === 'decal' ? 'crosshair' : showCursor ? 'none' : 'default' }}
             onPointerDown={onPointerDown}
             onPointerMove={onPointerMove}
             onPointerUp={onPointerUp}
