@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import * as THREE from 'three';
-import { contractPaintedCopies, expandPaintedCopies, isPaintedCopy, paintedCopyGraph } from '../../utils/paintedCopies';
+import { contractPaintedCopies, drawnPaintedCopies, expandPaintedCopies, isPaintedCopy, isPreviewCopy, paintedCopyGraph } from '../../utils/paintedCopies';
 import { materialGraphSettings } from '../../runtime/materials/materialGraph';
 import { bindMaterialGraph, boundMaterialGraph } from '../../runtime/materials/graphMaterial';
 import { materialAssetDocument, materialLibrary, readMaterialAsset, type MaterialAsset } from '../../runtime/materials/materialLibrary';
@@ -95,5 +95,25 @@ describe('painted base maps kept as painted copies', () => {
         const graph = boundMaterialGraph(visor)!;
         expect(graph.nodes.find(node => node.id === 'painted')?.params.texture).toBe('tex-painted');
         expect(visor.normalMap).toBe(normalMap);
+    });
+
+    it('draw in the Material Overrides preview through copies: the saved one, or one kept only for an unsaved picture', () => {
+        const stored = contractPaintedCopies('helmet', { Visor: { mapTextureId: 'saved', paintedMap: true } }, [], nextId);
+        const copy = stored.upserts[0];
+        // As saved: through the model's own copy.
+        expect(drawnPaintedCopies('helmet', { Visor: { mapTextureId: 'saved', paintedMap: true, roughness: 0.2 } }, [copy])).toEqual({
+            overrides: { Visor: { roughness: 0.2, materialId: copy.id } }, previews: [],
+        });
+        // An unsaved picture: a copy for the preview only, which saving never takes for the model's own.
+        const drawn = drawnPaintedCopies('helmet', { Visor: { mapTextureId: 'unsaved', paintedMap: true } }, [copy]);
+        expect(drawn.previews).toHaveLength(1);
+        const preview = drawn.previews[0];
+        expect(isPreviewCopy(preview.id)).toBe(true);
+        expect(preview).toMatchObject({ owner: { modelId: 'helmet', material: 'Visor' }, pictures: { baseColor: 'unsaved' } });
+        expect(drawn.overrides).toEqual({ Visor: { materialId: preview.id } });
+        const saving = contractPaintedCopies('helmet', { Visor: { mapTextureId: 'unsaved', paintedMap: true } }, [copy, preview], nextId);
+        expect(saving.upserts.map(item => [item.id, item.pictures?.baseColor])).toEqual([[copy.id, 'unsaved']]);
+        expect(saving.removals).toEqual([]);
+        expect(saving.overrides).toEqual({ Visor: { materialId: copy.id } });
     });
 });

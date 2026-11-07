@@ -8,7 +8,7 @@ import { isSmartMaterialAsset } from '../../texturing/paint/smartMaterials';
 import { materialGraphParameters, type MaterialParameter, type MaterialParameterValue } from '../../runtime/materials/materialGraph';
 import { Segmented } from '../UI/kit';
 import { assetShaderVersions, type ObjectMaterialOverrides } from '../../utils/materialInstances';
-import { expandPaintedCopies, isPaintedCopy } from '../../utils/paintedCopies';
+import { drawnPaintedCopies, expandPaintedCopies, isPaintedCopy } from '../../utils/paintedCopies';
 import {
   MAX_EMISSIVE_INTENSITY,
   applyMaterialOverrides,
@@ -496,6 +496,23 @@ const MaterialEditorSession: React.FC<MaterialEditorProps> = ({ model, textures,
   const materials = useMemo(() => listModelMaterials(model.object), [model.object]);
   const dirty = !materialOverridesEqual(draft, saved);
 
+  /** Preview-only painted copies in the material library, by id. */
+  const previewCopies = useRef(new Set<string>());
+  /**
+   * The overrides as they draw: painted base maps through the model's painted copies, as saved (an unsaved
+   * picture through a copy kept only for the preview, put in the library and taken out once not shown).
+   */
+  const drawn = useCallback((overrides: MaterialOverrides): MaterialOverrides => {
+    const { overrides: shown, previews } = drawnPaintedCopies(model.id, overrides, materialLibrary.list());
+    const live = new Set(previews.map((copy) => copy.id));
+    for (const copy of previews) {
+      if (materialLibrary.get(copy.id)?.pictures?.baseColor !== copy.pictures?.baseColor) materialLibrary.upsert(copy);
+    }
+    for (const id of previewCopies.current) if (!live.has(id)) materialLibrary.remove(id);
+    previewCopies.current = live;
+    return shown;
+  }, [model.id]);
+
   // Adopt stored overrides that change underneath the panel (e.g. a reload) unless there are unsaved edits.
   useEffect(() => {
     const previous = savedRef.current;
@@ -514,7 +531,7 @@ const MaterialEditorSession: React.FC<MaterialEditorProps> = ({ model, textures,
     return () => {
       session.current += 1;
       const endSession = () => {
-        const bound = applyMaterialOverrides(object, savedRef.current, (textureId, slot) => cache.get(overrideTextureCacheKey(textureId, slot))).boundTextureKeys;
+        const bound = applyMaterialOverrides(object, drawn(savedRef.current), (textureId, slot) => cache.get(overrideTextureCacheKey(textureId, slot))).boundTextureKeys;
         for (const [key, texture] of cache) {
           if (!bound.has(key)) texture.dispose();
         }
@@ -527,7 +544,7 @@ const MaterialEditorSession: React.FC<MaterialEditorProps> = ({ model, textures,
       if (savingRef.current) deferredEnd.current = endSession;
       else endSession();
     };
-  }, [model.object]);
+  }, [model.object, drawn]);
 
   const textureUrls = useMemo(() => new Map(textures.map((texture) => [texture.id, texture.url])), [textures]);
 
@@ -598,10 +615,10 @@ const MaterialEditorSession: React.FC<MaterialEditorProps> = ({ model, textures,
     return null;
   }, [textureUrls, model.object]);
 
-  // Live preview: every draft change is laid onto the model's materials.
+  // Live preview: every draft change is laid onto the model's materials, painted pictures through painted copies.
   useEffect(() => {
-    applyMaterialOverrides(model.object, draft, resolveTexture);
-  }, [model.object, draft, resolveTexture, textureVersion]);
+    applyMaterialOverrides(model.object, drawn(draft), resolveTexture);
+  }, [model.object, draft, drawn, resolveTexture, textureVersion]);
 
   const editField = <K extends MaterialOverrideField>(name: string, field: K, value: MaterialOverride[K] | undefined) => {
     setError(null);
