@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { budgetWarnings, levelTextureCost, materialTextureCost, sumCosts, textureCost, textureIdsIn } from '../../texturing/textureBudget';
-import type { LevelObject } from '../../types';
+import type { LevelObject, LoadedModelData } from '../../types';
 
 const ALL = { bptc: true, rgtc: true };
 const MB = 1024 * 1024;
@@ -35,7 +35,7 @@ describe('texture memory', () => {
     it('adds up a level\'s textures: its models\' materials, overrides, decals and objects\' values', () => {
         const textures = new Map(['albedo', 'logo', 'dents', 'paint', 'unused'].map(id => [id, texture(id, 256, { mips: false })] as const));
         const materials = new Map([['bricks', { id: 'bricks', name: 'Bricks', textureIds: ['albedo'] }], ['rust', { id: 'rust', name: 'Rust', textureIds: ['dents'] }]]);
-        const models = [
+        const models: Array<Pick<LoadedModelData, 'id' | 'materialOverrides'>> = [
             { id: 'wall', materialOverrides: { Body: { materialId: 'bricks' } } },
             { id: 'crate', materialOverrides: { Lid: { mapTextureId: 'paint' } } },
             { id: 'barrel', materialOverrides: { Body: { mapTextureId: 'unused' } } },

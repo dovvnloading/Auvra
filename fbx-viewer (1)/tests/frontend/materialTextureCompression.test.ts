@@ -133,7 +133,8 @@ describe('a material texture made from its picture', () => {
         setTextureSettings('t', { wrap: 'mirror', filter: 'nearest', maxSize: 256 });
         const { texture, format } = await textureFromPicture(picture(512, 512), { textureId: 't', slot: 'map', flipY: true }, false);
         expect(format).toBe('rgba8');
-        expect([texture.image.width, texture.image.height]).toEqual([256, 256]);
+        const image = texture.image as { width: number; height: number };
+        expect([image.width, image.height]).toEqual([256, 256]);
         expect(texture.wrapS).toBe(THREE.MirroredRepeatWrapping);
         expect(texture.magFilter).toBe(THREE.NearestFilter);
         expect(texture.colorSpace).toBe(THREE.SRGBColorSpace);
