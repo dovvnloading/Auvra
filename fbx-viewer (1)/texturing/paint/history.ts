@@ -1,6 +1,6 @@
 import type { TileBake } from '../bake/meshBaker';
 import type { GpuImage } from '../gpu/textureGpu';
-import type { BrushSettings, HistoryEntry } from './strokes';
+import { historyBytes, type BrushSettings, type HistoryEntry } from './strokes';
 import { PARTICLE_PRESETS } from './particles';
 
 /**
@@ -84,4 +84,79 @@ export const bakeStepsToForget = (past: readonly HistoryEntry[], future: readonl
         forget.push(entry);
     }
     return forget;
+};
+
+// ---------------------------------------------------------------------------
+// Branches
+// ---------------------------------------------------------------------------
+
+/** Steps undone and then replaced by a new one, kept as a branch off the step they came after (null: the start). */
+export interface HistoryBranch { from: HistoryEntry | null; steps: HistoryEntry[] }
+
+/** The history's lines: the one the set is on (past, and future as redo takes it, last first) and the branches off it. */
+export interface HistoryLines { past: HistoryEntry[]; future: HistoryEntry[]; branches: HistoryBranch[] }
+
+/** Before a new step: the undone steps it replaces are kept as a branch off where it is made. */
+export const branchBeforeStep = (lines: HistoryLines): void => {
+    if (!lines.future.length) return;
+    lines.branches.push({ from: lines.past[lines.past.length - 1] ?? null, steps: [...lines.future].reverse() });
+    lines.future = [];
+};
+
+/** The branch holding a step, or null. */
+export const branchOf = (lines: Pick<HistoryLines, 'branches'>, entry: HistoryEntry | null): HistoryBranch | null =>
+    entry ? lines.branches.find((branch) => branch.steps.includes(entry)) ?? null : null;
+
+/**
+ * Goes to just after `target` (null: the start) anywhere in the history: along the current line, or onto
+ * the branch holding it (and first onto any branch that one comes off), the line it leaves kept as a
+ * branch. `step` takes one step back or forward on the current line, false when it cannot.
+ */
+export const travelTo = (lines: HistoryLines, target: HistoryEntry | null, step: (direction: 'undo' | 'redo') => boolean): boolean => {
+    const at = () => lines.past[lines.past.length - 1] ?? null;
+    const onLine = (entry: HistoryEntry | null) => entry === null || lines.past.includes(entry) || lines.future.includes(entry);
+    const along = (entry: HistoryEntry | null): boolean => {
+        const back = entry === null || lines.past.includes(entry);
+        while (at() !== entry) if (!step(back ? 'undo' : 'redo')) return false;
+        return true;
+    };
+    if (onLine(target)) return along(target);
+    const branch = branchOf(lines, target);
+    if (!branch) return false;
+    if (!onLine(branch.from) && !travelTo(lines, branch.from, step)) return false;
+    if (!along(branch.from)) return false;
+    const tail = [...lines.future].reverse();
+    lines.branches = lines.branches.filter((other) => other !== branch);
+    if (tail.length) lines.branches.push({ from: branch.from, steps: tail });
+    lines.future = [...branch.steps].reverse();
+    return along(target);
+};
+
+/**
+ * The branches to let go of: the oldest first while every step held (on the line and on branches) takes
+ * more than `budget` bytes or there are more than `most` branches; then any branch nothing reaches any
+ * more (it came off a step let go of, or off the start once older steps went: `startMoved`).
+ */
+export const branchesToDrop = (lines: HistoryLines, budget: number, most: number, startMoved: boolean): HistoryBranch[] => {
+    const bytesOf = (steps: readonly HistoryEntry[]) => steps.reduce((sum, entry) => sum + historyBytes(entry), 0);
+    let total = bytesOf(lines.past) + bytesOf(lines.future) + lines.branches.reduce((sum, branch) => sum + bytesOf(branch.steps), 0);
+    const kept = [...lines.branches];
+    const dropped: HistoryBranch[] = [];
+    while (kept.length && (total > budget || kept.length > most)) {
+        const oldest = kept.shift()!;
+        total -= bytesOf(oldest.steps);
+        dropped.push(oldest);
+    }
+    // Those coming off a step no longer held go too, and those coming off theirs.
+    for (let changed = true; changed;) {
+        changed = false;
+        for (const branch of [...kept]) {
+            const reached = branch.from === null ? !startMoved : lines.past.includes(branch.from) || lines.future.includes(branch.from) || kept.some((other) => other !== branch && other.steps.includes(branch.from!));
+            if (reached) continue;
+            kept.splice(kept.indexOf(branch), 1);
+            dropped.push(branch);
+            changed = true;
+        }
+    }
+    return dropped;
 };

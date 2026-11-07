@@ -257,14 +257,15 @@ export const PaintViewport: React.FC<{
             copy.matrix.multiplyMatrices(inverse, mesh.matrixWorld);
             root.add(copy);
         });
-        const tiles = new Map<number, { mesh: THREE.Mesh; lit: THREE.MeshStandardMaterial; single: THREE.ShaderMaterial; preview: Preview }>();
+        const tiles = new Map<number, { mesh: THREE.Mesh; lit: THREE.MeshStandardMaterial; single: THREE.ShaderMaterial; preview: Preview; compareLit: THREE.MeshStandardMaterial; comparePreview: Preview }>();
         for (const tile of stack.tiles) {
             const lit = new THREE.MeshStandardMaterial({ roughness: 1, metalness: 1, side: THREE.DoubleSide });
+            const compareLit = new THREE.MeshStandardMaterial({ roughness: 1, metalness: 1, side: THREE.DoubleSide });
             const single = SINGLE_VIEW.clone();
             single.toneMapped = false;
             const mesh = new THREE.Mesh(tileGeometry(session.part, tile), lit);
             root.add(mesh);
-            tiles.set(tile, { mesh, lit, single, preview: { base: null, orm: null, emissive: null, normal: null, single: null } });
+            tiles.set(tile, { mesh, lit, single, preview: { base: null, orm: null, emissive: null, normal: null, single: null }, compareLit, comparePreview: { base: null, orm: null, emissive: null, normal: null, single: null } });
         }
         const layoutMesh = new THREE.Mesh(new THREE.BufferGeometry(), LAYOUT_VIEW);
         layoutMesh.visible = false;
@@ -290,8 +291,10 @@ export const PaintViewport: React.FC<{
         for (const entry of world.tiles.values()) {
             entry.mesh.geometry.dispose();
             entry.lit.dispose();
+            entry.compareLit.dispose();
             entry.single.dispose();
             for (const target of Object.values(entry.preview)) target?.dispose();
+            for (const target of Object.values(entry.comparePreview)) target?.dispose();
         }
         world.hidden.dispose();
         world.seamLines.geometry.dispose();
@@ -349,31 +352,37 @@ export const PaintViewport: React.FC<{
         const COPY = 'void main() { outColor = texture(source, vUv); }';
         // Colour pictures hold sRGB values: written to the view's sRGB pictures in linear ones.
         const LINEAR = 'void main() { outColor = vec4(srgbToLinear(texture(source, vUv).rgb), 1.0); }';
+        /** A lit material drawing with channels' pictures (copied into its view pictures). */
+        const fillLit = (lit: THREE.MeshStandardMaterial, preview: Preview, outputs: Partial<Record<string, GpuImage>>) => {
+            const base = outputs.baseColor ? copyInto(preview, 'base', 'colour', LINEAR, { source: outputs.baseColor }) : null;
+            const emissive = outputs.emissive ? copyInto(preview, 'emissive', 'colour', LINEAR, { source: outputs.emissive }) : null;
+            const normal = outputs.normal ? copyInto(preview, 'normal', 'half', COPY, { source: outputs.normal }) : null;
+            const orm = copyInto(preview, 'orm', 'bytes',
+                'uniform int hasR; uniform int hasM;\nvoid main() { outColor = vec4(texture(ao, vUv).r, hasR == 1 ? texture(rough, vUv).r : 0.6, hasM == 1 ? texture(metal, vUv).r : 0.0, 1.0); }',
+                { ao: outputs.ambientOcclusion ?? gpu.constant('white'), rough: outputs.roughness ?? null, metal: outputs.metallic ?? null },
+                { hasR: outputs.roughness ? 1 : 0, hasM: outputs.metallic ? 1 : 0 });
+            const maps = [base, normal, orm, emissive].map((target) => target?.texture ?? null);
+            // Only a change of which pictures it draws with makes three build the material again.
+            const changed = lit.map !== maps[0] || lit.normalMap !== maps[1] || lit.roughnessMap !== maps[2] || lit.emissiveMap !== maps[3];
+            lit.map = maps[0];
+            lit.color.set(base ? 0xffffff : 0x808080);
+            lit.normalMap = maps[1];
+            lit.roughnessMap = maps[2];
+            lit.metalnessMap = maps[2];
+            lit.aoMap = maps[2];
+            lit.emissiveMap = maps[3];
+            lit.emissive.setScalar(emissive ? 1 : 0);
+            if (changed) lit.needsUpdate = true;
+        };
+        const comparison = session.comparison;
         for (const [tile, entry] of world.tiles) {
             const outputs = stack.outputs.get(tile) ?? {};
             const preview = entry.preview;
             if (view === 'material') {
-                const base = outputs.baseColor ? copyInto(preview, 'base', 'colour', LINEAR, { source: outputs.baseColor }) : null;
-                const emissive = outputs.emissive ? copyInto(preview, 'emissive', 'colour', LINEAR, { source: outputs.emissive }) : null;
-                const normal = outputs.normal ? copyInto(preview, 'normal', 'half', COPY, { source: outputs.normal }) : null;
-                const orm = copyInto(preview, 'orm', 'bytes',
-                    'uniform int hasR; uniform int hasM;\nvoid main() { outColor = vec4(texture(ao, vUv).r, hasR == 1 ? texture(rough, vUv).r : 0.6, hasM == 1 ? texture(metal, vUv).r : 0.0, 1.0); }',
-                    { ao: outputs.ambientOcclusion ?? gpu.constant('white'), rough: outputs.roughness ?? null, metal: outputs.metallic ?? null },
-                    { hasR: outputs.roughness ? 1 : 0, hasM: outputs.metallic ? 1 : 0 });
-                const lit = entry.lit;
-                const maps = [base, normal, orm, emissive].map((target) => target?.texture ?? null);
-                // Only a change of which pictures it draws with makes three build the material again.
-                const changed = lit.map !== maps[0] || lit.normalMap !== maps[1] || lit.roughnessMap !== maps[2] || lit.emissiveMap !== maps[3];
-                lit.map = maps[0];
-                lit.color.set(base ? 0xffffff : 0x808080);
-                lit.normalMap = maps[1];
-                lit.roughnessMap = maps[2];
-                lit.metalnessMap = maps[2];
-                lit.aoMap = maps[2];
-                lit.emissiveMap = maps[3];
-                lit.emissive.setScalar(emissive ? 1 : 0);
-                if (changed) lit.needsUpdate = true;
-                entry.mesh.material = lit;
+                fillLit(entry.lit, preview, outputs);
+                // The step compared with, for the other side of the wipe.
+                if (comparison) fillLit(entry.compareLit, entry.comparePreview, comparison.images.get(tile) ?? {});
+                entry.mesh.material = entry.lit;
             } else {
                 let image: GpuImage | null | undefined = null;
                 if (view === 'mask') image = maskImage(tile);
@@ -420,7 +429,9 @@ export const PaintViewport: React.FC<{
 
     // Where the view is drawn with several samples per pixel, sized to it.
     const smooth = useRef<THREE.WebGLRenderTarget | null>(null);
-    useEffect(() => () => { smooth.current?.dispose(); smooth.current = null; }, []);
+    /** The step compared with, drawn for the left of the wipe. */
+    const compareTarget = useRef<THREE.WebGLRenderTarget | null>(null);
+    useEffect(() => () => { smooth.current?.dispose(); smooth.current = null; compareTarget.current?.dispose(); compareTarget.current = null; }, []);
 
     const pathRef = useRef(pathEdit);
     pathRef.current = pathEdit;
@@ -526,13 +537,33 @@ export const PaintViewport: React.FC<{
             const renderer = gpu.renderer;
             renderer.setRenderTarget(target);
             renderer.render(world.scene, world.camera);
+            const comparison = session.comparison;
+            if (comparison && view === 'material') {
+                // The step compared with, drawn the same way, on the left of the wipe; the set now on its right.
+                let other = compareTarget.current;
+                if (!other || other.width !== width || other.height !== height) {
+                    other?.dispose();
+                    other = compareTarget.current = viewTarget(gpu, width, height);
+                }
+                for (const entry of world.tiles.values()) entry.mesh.material = entry.compareLit;
+                renderer.setRenderTarget(other);
+                renderer.render(world.scene, world.camera);
+                for (const entry of world.tiles.values()) entry.mesh.material = entry.lit;
+                renderer.setRenderTarget(null);
+                gpu.drawToScreen({
+                    fragment: 'uniform float uWipe;\nuniform float uPixel;\nvoid main() { vec4 c = vUv.x < uWipe ? texture(chosen, vUv) : texture(current, vUv); float line = 1.0 - smoothstep(uPixel, uPixel * 2.0, abs(vUv.x - uWipe)); outColor = mix(c, vec4(1.0), line * 0.9); }',
+                    inputs: { chosen: other.texture, current: target.texture },
+                    uniforms: { uWipe: comparison.wipe, uPixel: 1 / Math.max(1, width) },
+                });
+                return;
+            }
             // Back onto the screen's corner the view takes, the samples smoothed into each pixel.
             renderer.setRenderTarget(null);
             gpu.drawToScreen({ fragment: 'void main() { outColor = texture(source, vUv); }', inputs: { source: target.texture } });
         });
         drawPath(element);
         drawRays(element);
-    }, [drawPath, drawRays, gpu, placeCamera, size, world]);
+    }, [drawPath, drawRays, gpu, placeCamera, session, size, view, world]);
 
     useEffect(() => { draw(); }, [draw, pathEdit?.path, pathEdit?.point]);
 
@@ -542,7 +573,7 @@ export const PaintViewport: React.FC<{
     }, [draw, updateMaterials, version, uvVersion]);
 
     // ---- pointer ----
-    const gesture = useRef<{ kind: 'orbit' | 'pan'; x: number; y: number } | { kind: 'stroke'; stroke: Stroke; depth: GpuImage; anchor: { x: number; y: number } } | { kind: 'pathPoint'; index: number } | { kind: 'decal' } | null>(null);
+    const gesture = useRef<{ kind: 'orbit' | 'pan'; x: number; y: number } | { kind: 'stroke'; stroke: Stroke; depth: GpuImage; anchor: { x: number; y: number } } | { kind: 'pathPoint'; index: number } | { kind: 'decal' } | { kind: 'wipe' } | null>(null);
     /** Clone: where strokes copy from (Ctrl-click sets it). */
     const cloneSource = useRef<{ triangle: number; uv: THREE.Vector2 } | null>(null);
 
@@ -749,6 +780,11 @@ export const PaintViewport: React.FC<{
             return;
         }
         if (event.button !== 0) return;
+        // Comparing: the wipe's line is dragged, wherever the tool.
+        if (session.comparison && view === 'material' && Math.abs(x - session.comparison.wipe * size.width) < 10 * size.ratio) {
+            gesture.current = { kind: 'wipe' };
+            return;
+        }
         if (tool === 'path' && pathEdit) {
             // A point near the pointer is picked (and can be dragged); elsewhere a new point goes on the surface.
             placeCamera();
@@ -821,6 +857,10 @@ export const PaintViewport: React.FC<{
         setCursor({ x: x / size.ratio, y: y / size.ratio });
         const current = gesture.current;
         if (!current) return;
+        if (current.kind === 'wipe') {
+            session.setCompareWipe(x / Math.max(1, size.width));
+            return;
+        }
         if (current.kind === 'decal') {
             placeDecal(x, y);
             return;
@@ -992,6 +1032,13 @@ export const PaintViewport: React.FC<{
             onContextMenu={(event) => event.preventDefault()}
         >
             <canvas ref={canvas} className="absolute inset-0 h-full w-full" />
+            {session.comparison && view === 'material' && (
+                <>
+                    <div className="pointer-events-none absolute top-2 max-w-[45%] truncate rounded bg-zinc-900/85 px-2 py-0.5 text-2xs text-zinc-200" style={{ right: `calc(${(1 - session.comparison.wipe) * 100}% + 8px)` }}>{session.comparison.label}</div>
+                    <div className="pointer-events-none absolute top-2 rounded bg-zinc-900/85 px-2 py-0.5 text-2xs text-zinc-200" style={{ left: `calc(${session.comparison.wipe * 100}% + 8px)` }}>Now</div>
+                    <div className="absolute bottom-0 top-0 w-4 -translate-x-1/2 cursor-ew-resize" style={{ left: `${session.comparison.wipe * 100}%` }} title="Drag to move the wipe" />
+                </>
+            )}
             {stencilTexture && <StencilOverlay texture={stencilTexture} place={stencilPlace(brush.stencil, pictureAspect(stencilTexture), size.width / size.ratio, size.height / size.ratio)} />}
             {showCursor && (
                 <div className="pointer-events-none absolute rounded-full border border-white/80 mix-blend-difference" style={{
