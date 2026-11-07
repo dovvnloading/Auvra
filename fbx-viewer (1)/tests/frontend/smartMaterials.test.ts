@@ -132,7 +132,9 @@ describe('smart materials as texture graphs', () => {
         const graph = smartMaterialGraph(worn, resolve);
         const wear = graph.parameters.find((parameter) => parameter.name === 'amount');
         expect(wear?.default).toBe(0.3);
-        expect(wear?.label).toBe('Paint: Wear');
+        // Under a group named after the layer, its own label kept whole.
+        expect(wear?.label).toBe('Wear');
+        expect(wear?.group).toBe('Paint');
         const mask = smartMaskGraph(BUILTIN_GRAPHS.get('builtin:edgeWear')!.graph, { amount: 0.8 });
         expect(mask.parameters.find((parameter) => parameter.name === 'amount')?.default).toBe(0.8);
         expect(BUILTIN_GRAPHS.get('builtin:edgeWear')!.graph.parameters.find((parameter) => parameter.name === 'amount')?.default).toBe(0.55);

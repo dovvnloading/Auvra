@@ -300,6 +300,8 @@ export interface TexNodeDef {
     bypass?: false;
     /** How the editor shows its images. */
     preview?: 'normal';
+    /** Ready-set versions offered in the finder as entries of their own (each grunge look). */
+    variants?: ReadonlyArray<{ key: string; label: string; description: string; params: Record<string, unknown> }>;
     /**
      * Bits a channel its images need from its settings, when more than its kind says (a Bitmap of a
      * 16-bit or floating-point picture); used when the node is not set to a depth of its own.

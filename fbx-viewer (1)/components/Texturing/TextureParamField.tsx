@@ -253,7 +253,8 @@ export const TextureParamField: React.FC<{
     return (
         <div className="space-y-1" title={param.hint}>
             <div className="flex items-center gap-1.5">
-                <span className="min-w-0 flex-1 truncate">{label}</span>
+                {/* A long label is cut to fit; it shows in full (with what the setting does) on hover. */}
+                <span className="min-w-0 flex-1 truncate" title={param.hint ? `${param.label}: ${param.hint}` : param.label}>{label}</span>
                 {inline(param) && !linked && !following && <ParamControl param={param} value={value} textures={textures} onChange={onChange} extras={extras} />}
                 {linkButton}
             </div>
