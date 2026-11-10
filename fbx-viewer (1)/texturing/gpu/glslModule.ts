@@ -117,7 +117,7 @@ const storedType = (type: string): string => type.replace(/^bool/, 'uint').repla
 export const translatePass = (input: PassModuleInput): PassModule => {
     const instances = input.instances;
     const varyings = (instances?.varyings ?? []).map((entry) => {
-        const found = /^(flat\\s+)?(float|int|uint|vec[234]|ivec[234]|uvec[234])\\s+([A-Za-z_]\\w*)$/.exec(entry.trim());
+        const found = /^(flat\s+)?(float|int|uint|vec[234]|ivec[234]|uvec[234])\s+([A-Za-z_]\w*)$/.exec(entry.trim());
         if (!found) throw new GlslError(`unknown instanced varying "${entry}"`);
         return { name: found[3], type: found[2], flat: Boolean(found[1]) || found[2] === 'int' || found[2] === 'uint' };
     });
