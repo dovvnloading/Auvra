@@ -258,12 +258,14 @@ export class WebGpuTexturing implements TexturingGpu {
             throw error;
         }
         const types = module.textures.map((name) => sampleTypes[names.indexOf(name)] ?? 'float');
+        // Placement shaders read packed copy textures and uniforms in the vertex stage as well.
+        const stages = instances ? 1 | FRAGMENT_STAGE : FRAGMENT_STAGE;
         const layout = this.device.createBindGroupLayout({
             entries: [
-                { binding: 0, visibility: FRAGMENT_STAGE, buffer: { type: 'read-only-storage' } },
+                { binding: 0, visibility: stages, buffer: { type: 'read-only-storage' } },
                 ...module.textures.flatMap((_name, index) => [
-                    { binding: 1 + index * 2, visibility: FRAGMENT_STAGE, texture: { sampleType: types[index] } },
-                    { binding: 2 + index * 2, visibility: FRAGMENT_STAGE, sampler: { type: types[index] === 'float' ? 'filtering' : 'non-filtering' } },
+                    { binding: 1 + index * 2, visibility: stages, texture: { sampleType: types[index] } },
+                    { binding: 2 + index * 2, visibility: stages, sampler: { type: types[index] === 'float' ? 'filtering' : 'non-filtering' } },
                 ]),
             ],
         });
