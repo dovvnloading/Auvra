@@ -646,7 +646,7 @@ class NativeProviderHost:
         if descriptor.kind == "cloud" and self._credential_status(descriptor.provider_id) not in {"configured", "memoryOnly"}:
             raise HostOperationError("provider_not_configured", "Provider credential is not configured")
         if (descriptor.kind == "cloud" and
-                (configured.require_cost_confirmation or payload.get("estimatedCostMicroUsd") is None) and
+                (configured.require_cost_confirmation or payload.get("estimatedCostMicroUsd") in (None, 0)) and
                 payload.get("consent") != "explicit"):
             raise HostOperationError("budget_exceeded", "Cloud provider cost requires explicit confirmation")
         prompt = payload.get("input", "")
@@ -742,7 +742,13 @@ class NativeProviderHost:
             if meta is None:
                 raise HostOperationError("invalid_job", "Job recovery metadata is unavailable")
             configured = self.settings.get(existing.provider)
-            retry_cost = self._check_budget(existing.provider, configured, meta.get("estimatedCostMicroUsd"))
+            # A prior reservation may have used stale pricing. Recheck on
+            # retry, with the previous reservation as a conservative floor.
+            retry_estimate = self._cost_estimate(existing.provider, configured, {
+                "modelId": existing.model,
+                "estimatedCostMicroUsd": meta.get("estimatedCostMicroUsd"),
+            })
+            retry_cost = self._check_budget(existing.provider, configured, retry_estimate)
             job = self.jobs.retry(payload["jobId"], project_id=active.project_id)
             if retry_cost:
                 job = self.jobs.add_cost(job.job_id, retry_cost, project_id=active.project_id)
@@ -1234,32 +1240,46 @@ class NativeProviderHost:
                     continue
         return "absent" if self._vault is not None else "unavailable"
 
-    def _cost_estimate(self, provider_id: str, settings: Any, payload: Mapping[str, Any]) -> Any:
-        """What the request says it costs, or with budgets set, what the catalog does: a limit must see every job."""
-        estimate = payload.get("estimatedCostMicroUsd")
-        if estimate is not None or not all((settings.max_job_cost_micro_usd, settings.max_daily_cost_micro_usd, settings.max_monthly_cost_micro_usd)):
-            return estimate
+    def _cost_estimate(self, provider_id: str, settings: Any, payload: Mapping[str, Any]) -> int | None:
+        """Reserve at least the host's catalog estimate when enforcing cloud budgets.
+
+        The frontend's estimate is only a confirmation hint: it may increase a
+        reservation, but cannot lower a provider catalog price or turn unknown
+        pricing into an apparently free cloud request.
+        """
+        hint = payload.get("estimatedCostMicroUsd")
+        if hint is not None and (not isinstance(hint, int) or isinstance(hint, bool) or hint < 0):
+            raise HostOperationError("invalid_request", "Provider cost estimate is invalid")
+        limits = (settings.max_job_cost_micro_usd, settings.max_daily_cost_micro_usd,
+                  settings.max_monthly_cost_micro_usd)
+        if self.registry.get(provider_id).kind != "cloud" or not any(limits):
+            return hint
         try:
             adapter = self._adapter(provider_id)
+            details = adapter.model_details(payload["modelId"]) if hasattr(adapter, "model_details") else None
+            trusted = rough_job_cost(details)
         except Exception:
+            trusted = None
+        # A configured budget is not enforceable against missing/zero pricing.
+        # Do not fall back to the untrusted hint, even for a retry.
+        if not isinstance(trusted, int) or trusted <= 0:
             return None
-        details = adapter.model_details(payload["modelId"]) if hasattr(adapter, "model_details") else None
-        return rough_job_cost(details)
+        return max(trusted, hint or 0)
 
     def _check_budget(self, provider_id: str, settings: Any, estimate: Any) -> int:
         """Validate one reservation against durable provider-specific caps."""
-        if estimate is None:
-            return 0
-        if not isinstance(estimate, int) or isinstance(estimate, bool) or estimate < 0:
+        if estimate is not None and (not isinstance(estimate, int) or isinstance(estimate, bool) or estimate < 0):
             raise HostOperationError("invalid_request", "Provider cost estimate is invalid")
         if self.registry.get(provider_id).kind == "local":
-            if estimate != 0:
+            if estimate not in (None, 0):
                 raise HostOperationError("invalid_request", "Local provider cost must be zero")
-            return 0
-        if estimate == 0:
             return 0
         limits = (settings.max_job_cost_micro_usd, settings.max_daily_cost_micro_usd,
                   settings.max_monthly_cost_micro_usd)
+        if estimate is None or estimate == 0:
+            if any(limits):
+                raise HostOperationError("budget_exceeded", "Cloud model price is unavailable for the configured budget")
+            return 0
         if any(limit <= 0 for limit in limits):
             raise HostOperationError("budget_exceeded", "Cloud provider budget is not configured")
         totals = self.jobs.cost_totals(provider_id)
