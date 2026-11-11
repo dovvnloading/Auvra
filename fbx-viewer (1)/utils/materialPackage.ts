@@ -1,5 +1,5 @@
 import { materialAssetDocument, readMaterialAsset, type MaterialAsset } from '../runtime/materials/materialLibrary';
-import { makeZip, readZip } from '../texturing/zip';
+import { makeZip, openZip } from '../texturing/zip';
 import { libraryMaterial, libraryNodeGraphs, portableSettings, usedNodeGraphs, type LibraryEntry, type LibraryPicture, type UserMaterialLibrary } from './userMaterialLibrary';
 import { capturePictures, type MaterialWithParts, type ProjectPictures } from './userMaterialLibraryActions';
 
@@ -124,14 +124,19 @@ const side = (value: unknown): number | null => (Number.isInteger(value) && (val
 
 /** Reads a package, or says plainly why it cannot (not a package, from a newer editor, or damaged). */
 export const readMaterialPackage = async (file: Blob): Promise<MaterialPackage> => {
-    let files: Map<string, Uint8Array>;
+    let zip: Awaited<ReturnType<typeof openZip>>;
     try {
-        files = await readZip(file);
+        zip = await openZip(file);
     } catch (failure) {
         if (failure instanceof Error && failure.message === 'not a ZIP archive') throw new MaterialPackageError(NOT_A_PACKAGE);
         throw damaged(failure instanceof Error ? failure.message : String(failure));
     }
-    const manifestBytes = files.get(MANIFEST);
+    let manifestBytes: Uint8Array | undefined;
+    try {
+        manifestBytes = await zip.read(MANIFEST);
+    } catch (failure) {
+        throw damaged(failure instanceof Error ? failure.message : String(failure));
+    }
     if (!manifestBytes) throw new MaterialPackageError(NOT_A_PACKAGE);
     let manifest: Partial<Manifest>;
     try {
@@ -153,6 +158,23 @@ export const readMaterialPackage = async (file: Blob): Promise<MaterialPackage> 
         if (!graph) throw damaged('a graph it uses as a node could not be read');
         return shared(graph);
     });
+    // The manifest is validated before any picture is inflated. Unknown ZIP
+    // members are never decoded or retained in the editor's memory.
+    const requested = new Set<string>();
+    for (const raw of Array.isArray(manifest.pictures) ? manifest.pictures : []) {
+        if (typeof raw?.file === 'string') requested.add(raw.file);
+        if (typeof raw?.preview === 'string') requested.add(raw.preview);
+    }
+    if (typeof manifest.ball === 'string') requested.add(manifest.ball);
+    const files = new Map<string, Uint8Array>();
+    try {
+        for (const name of requested) {
+            const bytes = await zip.read(name);
+            if (bytes) files.set(name, bytes);
+        }
+    } catch (failure) {
+        throw damaged(failure instanceof Error ? failure.message : String(failure));
+    }
     const pictures: LibraryPicture[] = (Array.isArray(manifest.pictures) ? manifest.pictures : []).map((raw: Partial<ManifestPicture>) => {
         const id = text(raw?.id);
         const width = side(raw?.width);
