@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import copy
+from dataclasses import dataclass
 import os
 from pathlib import Path
 import threading
@@ -31,7 +32,7 @@ from Auvra.providers import (
 from Auvra.providers.adapters import MediaJob
 from Auvra.providers.reframe import ReframeAdapter
 from Auvra.providers.credentials import MemoryCredentialStore, WindowsCredentialManager
-from Auvra.providers.fal_catalog import NEW_TEXTURE_SIZE, SKY_SIZE, media_output_url, media_outputs, rough_job_cost
+from Auvra.providers.fal_catalog import NEW_TEXTURE_SIZE, SKY_SIZE, media_output_url, media_outputs
 from Auvra.providers.transport import StdlibTransport
 
 from .previews import PreviewError
@@ -69,6 +70,22 @@ _POLL_FIRST_SECONDS = 0.05
 _POLL_MOST_SECONDS = 2.0
 _POLL_LIMIT_SECONDS = 15 * 60
 _MODELS_PAGE = 200
+
+@dataclass(frozen=True, slots=True)
+class ProviderChargeCeiling:
+    """Provider-enforced maximum charge for *every* request of this model.
+
+    Only an adapter backed by a provider guarantee that the request cannot
+    cost more than this value may construct it. Catalog unit rates and rough
+    estimates are not guarantees. No production cloud adapter implements
+    this contract yet; budgeted paid requests fail closed until one does.
+    'reference' must be a nonsecret provider quote/limit identifier.
+    """
+    provider_id: str
+    model_id: str
+    max_micro_usd: int
+    reference: str
+
 
 
 def _assert_state_path_safe(path: Path) -> None:
@@ -682,15 +699,27 @@ class NativeProviderHost:
             retain = getattr(self.project_host, "retain_pending_asset", None)
             if callable(retain):
                 retain(active.project_id, asset_id)
+        hint = payload.get("estimatedCostMicroUsd")
+        if hint is not None and (type(hint) is not int or hint < 0):
+            raise HostOperationError("invalid_request", "Provider cost estimate is invalid")
         with self._lock:
-            estimated_cost = self._check_budget(descriptor.provider_id, configured, self._cost_estimate(descriptor.provider_id, configured, payload))
+            ceiling = (self._provider_charge_ceiling(descriptor.provider_id, payload["modelId"])
+                       if descriptor.kind == "cloud" else None)
+            estimated_cost = self._check_budget(
+                descriptor.provider_id, configured,
+                ceiling.max_micro_usd if ceiling is not None else (hint if descriptor.kind == "local" else None),
+            )
+            pricing_provenance = ({"cost_source": "provider_enforced", "cost_reference": ceiling.reference,
+                                   "cost_micro_usd": estimated_cost} if ceiling is not None else {})
             job = self.jobs.create(provider=descriptor.provider_id, model=payload["modelId"], capability=capability.value, prompt_hash=prompt_hash,
                                    project_id=active.project_id, cost_micro_usd=estimated_cost,
-                                   provenance={"route": descriptor.kind, "provider": descriptor.provider_id, "model": payload["modelId"], "capability": capability.value})
+                                   provenance={"route": descriptor.kind, "provider": descriptor.provider_id, "model": payload["modelId"],
+                                               "capability": capability.value, **pricing_provenance})
             self._meta[job.job_id] = {"projectId": active.project_id, "prompt": prompt, "assetIds": asset_ids, "route": descriptor.kind,
                                        "providerId": descriptor.provider_id, "modelId": payload["modelId"], "capability": capability.value,
                                        "settingsHash": self._settings_hash(configured), "createdAt": self._now(), "promptHash": prompt_hash,
                                        "estimatedCostMicroUsd": estimated_cost,
+                                       "costReference": ceiling.reference if ceiling is not None else None,
                                        "projectRevision": active.revision, "targetElementId": target,
                                        "targetElementName": selected.get("name") if selected is not None else None}
             self._queue_job_event(job.job_id, "queued", 0, descriptor)
@@ -742,16 +771,21 @@ class NativeProviderHost:
             if meta is None:
                 raise HostOperationError("invalid_job", "Job recovery metadata is unavailable")
             configured = self.settings.get(existing.provider)
-            # A prior reservation may have used stale pricing. Recheck on
-            # retry, with the previous reservation as a conservative floor.
-            retry_estimate = self._cost_estimate(existing.provider, configured, {
-                "modelId": existing.model,
-                "estimatedCostMicroUsd": meta.get("estimatedCostMicroUsd"),
-            })
-            retry_cost = self._check_budget(existing.provider, configured, retry_estimate)
+            # A retry may be billed again: re-authorize with a fresh provider
+            # ceiling, never a persisted previous cost reservation.
+            descriptor = self.registry.get(existing.provider)
+            ceiling = (self._provider_charge_ceiling(existing.provider, existing.model)
+                       if descriptor.kind == "cloud" else None)
+            retry_cost = self._check_budget(
+                existing.provider, configured,
+                ceiling.max_micro_usd if ceiling is not None else (0 if descriptor.kind == "local" else None),
+            )
             job = self.jobs.retry(payload["jobId"], project_id=active.project_id)
             if retry_cost:
-                job = self.jobs.add_cost(job.job_id, retry_cost, project_id=active.project_id)
+                job = self.jobs.add_cost(job.job_id, retry_cost, project_id=active.project_id,
+                                         cost_source="provider_enforced", cost_reference=ceiling.reference)
+            meta["estimatedCostMicroUsd"] = retry_cost
+            meta["costReference"] = ceiling.reference if ceiling is not None else None
             descriptor = self.registry.get(job.provider)
             capability = Capability(job.capability)
             self._futures[job.job_id] = self._executor.submit(self._run_job, job.job_id, job.provider, job.model, capability)
@@ -1240,31 +1274,28 @@ class NativeProviderHost:
                     continue
         return "absent" if self._vault is not None else "unavailable"
 
-    def _cost_estimate(self, provider_id: str, settings: Any, payload: Mapping[str, Any]) -> int | None:
-        """Reserve at least the host's catalog estimate when enforcing cloud budgets.
+    def _provider_charge_ceiling(self, provider_id: str, model_id: str) -> ProviderChargeCeiling | None:
+        """Accept only a provider-enforced worst-case bill, never a UI/catalog estimate.
 
-        The frontend's estimate is only a confirmation hint: it may increase a
-        reservation, but cannot lower a provider catalog price or turn unknown
-        pricing into an apparently free cloud request.
+        An adapter must only implement provider_enforced_charge_ceiling if the
+        upstream provider guarantees the ceiling for all possible request
+        variants, output quantities and run times of the named model.
+        The guarantee must apply at dispatch time, not only when estimated.
         """
-        hint = payload.get("estimatedCostMicroUsd")
-        if hint is not None and (not isinstance(hint, int) or isinstance(hint, bool) or hint < 0):
-            raise HostOperationError("invalid_request", "Provider cost estimate is invalid")
-        limits = (settings.max_job_cost_micro_usd, settings.max_daily_cost_micro_usd,
-                  settings.max_monthly_cost_micro_usd)
-        if self.registry.get(provider_id).kind != "cloud" or not any(limits):
-            return hint
         try:
-            adapter = self._adapter(provider_id)
-            details = adapter.model_details(payload["modelId"]) if hasattr(adapter, "model_details") else None
-            trusted = rough_job_cost(details)
+            method = getattr(self._adapter(provider_id), "provider_enforced_charge_ceiling", None)
+            quote = method(model_id) if callable(method) else None
         except Exception:
-            trusted = None
-        # A configured budget is not enforceable against missing/zero pricing.
-        # Do not fall back to the untrusted hint, even for a retry.
-        if not isinstance(trusted, int) or trusted <= 0:
             return None
-        return max(trusted, hint or 0)
+        if (not isinstance(quote, ProviderChargeCeiling)
+                or quote.provider_id != provider_id or quote.model_id != model_id
+                or type(quote.max_micro_usd) is not int
+                or not 0 < quote.max_micro_usd <= 9_223_372_036_854_775_807
+                or not isinstance(quote.reference, str)
+                or not 1 <= len(quote.reference) <= 128
+                or not all(char.isascii() and (char.isalnum() or char in "._:-") for char in quote.reference)):
+            return None
+        return quote
 
     def _check_budget(self, provider_id: str, settings: Any, estimate: Any) -> int:
         """Validate one reservation against durable provider-specific caps."""
@@ -1276,12 +1307,12 @@ class NativeProviderHost:
             return 0
         limits = (settings.max_job_cost_micro_usd, settings.max_daily_cost_micro_usd,
                   settings.max_monthly_cost_micro_usd)
-        if estimate is None or estimate == 0:
-            if any(limits):
-                raise HostOperationError("budget_exceeded", "Cloud model price is unavailable for the configured budget")
-            return 0
+        # Zero means disabled, never unlimited. Require all three enforceable
+        # caps and a fresh upstream-enforced maximum before a paid dispatch.
         if any(limit <= 0 for limit in limits):
             raise HostOperationError("budget_exceeded", "Cloud provider budget is not configured")
+        if estimate is None or estimate == 0:
+            raise HostOperationError("budget_exceeded", "Provider-enforced maximum charge is unavailable")
         totals = self.jobs.cost_totals(provider_id)
         if estimate > limits[0]:
             raise HostOperationError("budget_exceeded", "Job cost exceeds provider budget")
