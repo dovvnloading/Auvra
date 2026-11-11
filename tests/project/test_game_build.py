@@ -302,3 +302,45 @@ class CookedPicturesBuildTests(unittest.TestCase):
         self.assertEqual([item["id"] for item in kept["textures"]], ["baked-orm", "library-picture", "other"])
         self.assertIs(without_baked_pictures({"materials": [], "textures": [{"id": "x"}]})["textures"][0]["id"], "x")
 
+
+    def test_a_paint_stack_reference_keeps_applied_input_pictures_in_always_cook_builds(self) -> None:
+        from Auvra.project.game_build import without_baked_pictures
+
+        source = {
+            "id": "paint-source", "pictures": {"baseColor": "paint-colour"},
+            # A legacy document might not have a textureIds list, so mention counts alone cannot guard the applied map.
+            "paint": {"modelId": "model", "layers": [{"id": "layer", "kind": "fill"}],
+                      "applied": {"textures": {"baseColor": "paint-colour"}, "at": 1}},
+            "textureGraph": {"graph": {"nodes": []}, "baked": {"textures": {"baseColor": "paint-colour"}}},
+        }
+        unrelated = {
+            "id": "unused", "pictures": {"baseColor": "unused-colour"}, "textureIds": ["unused-colour"],
+            "textureGraph": {"graph": {"nodes": []}, "baked": {"textures": {"baseColor": "unused-colour"}}},
+        }
+
+        def build(consumer_node: dict) -> tuple[list[str], set[str]]:
+            content = {
+                "materials": [
+                    source, unrelated,
+                    {"id": "consumer", "textureGraph": {"graph": {"nodes": [consumer_node]}}},
+                ],
+                "textures": [
+                    {"id": "paint-colour", "assetId": TEXTURE_ID},
+                    {"id": "unused-colour", "assetId": UNUSED_ID},
+                ],
+            }
+            packed = without_baked_pictures(content)
+            return ([item["id"] for item in packed["textures"]],
+                    game_build_module._referenced_asset_ids(packed))
+
+        # A legacy source with no textureIds keeps its texture document AND its
+        # asset file bytes in the manifest; logical IDs must never become asset hashes.
+        # Image asset hashes, not logical texture document IDs, reach the game manifest.
+        expected = (["paint-colour"], {TEXTURE_ID})
+        self.assertEqual(build({"type": "subgraph", "params": {"graph": "paint:paint-source"}}), expected)
+        self.assertEqual(build({"type": "iterate", "params": {"graph": "paint:paint-source"}}), expected)
+        self.assertEqual(build({"type": "paintStack", "params": {"asset": "paint-source", "folder": ""}}), expected)
+        # A folder has no bundled per-folder output yet; never substitute the whole applied picture.
+        self.assertEqual(build({"type": "subgraph", "params": {"graph": "paint:paint-source:folder"}}), ([], set()))
+
+

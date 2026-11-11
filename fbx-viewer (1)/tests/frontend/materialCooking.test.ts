@@ -2,6 +2,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as THREE from 'three';
 import { GRAPH_SEED, MaterialCookPlanner, PICTURE_SIZE, cookRequestFor, cookSignature, cookedTextureId, steppedPictureSize, type CookCache, type CookedPictures } from '../../runtime/materials/materialCooking';
 import { boundMaterialGraph } from '../../runtime/materials/graphMaterial';
+import { graphCookSources } from '../../runtime/materials/graphCooker';
+import { graphContent } from '../../runtime/materials/materialCookingSetup';
+import { createPaintDocument, newFillLayer } from '../../texturing/paint/paintTypes';
+import { paintBakedKey, paintStackEntry } from '../../texturing/paint/stackNode';
+import type { TextureGraph } from '../../texturing/graph/types';
 import { materialLibrary, type MaterialAsset } from '../../runtime/materials/materialLibrary';
 import { surfaceGraphForPictures } from '../../texturing/materialOutput';
 import { applyObjectMaterialPreset, setObjectMaterialValue, releaseSessionMaterials } from '../../utils/materialInstances';
@@ -38,6 +43,74 @@ afterEach(() => {
 });
 
 describe('texture graphs cooked by the game', () => {
+    it('resolves nested Paint stacks, preloads applied picture inputs and invalidates the cooked signature', () => {
+        const document = createPaintDocument('model', ['Body'], 8);
+        document.layers = [newFillLayer(document, 'Base', { baseColor: { kind: 'value', value: [0.4, 0.3, 0.2] } })];
+        document.applied = { textures: { baseColor: 'paint-colour', orm: 'paint-orm' }, at: 1 };
+        const paintAsset: MaterialAsset = {
+            ...crate(), id: 'painted', name: 'Painted helmet',
+            textureGraph: undefined,
+            paint: document as unknown as Record<string, unknown>,
+            pictures: { baseColor: 'paint-colour', orm: 'paint-orm' },
+        };
+        const subgraph: TextureGraph = {
+            version: 1, size: { w: 8, h: 8 }, seed: 0, links: [], parameters: [],
+            nodes: [
+                { id: 'stack', type: 'subgraph', x: 0, y: 0, params: { graph: 'paint:painted' } },
+                { id: 'bmp', type: 'bitmap', x: 0, y: 0, params: { texture: 'nested-bitmap' } },
+            ],
+        };
+        const root: TextureGraph = {
+            version: 1, size: { w: 8, h: 8 }, seed: 0, links: [], parameters: [],
+            nodes: [{ id: 'use', type: 'subgraph', x: 0, y: 0, params: { graph: 'nested' } }],
+        };
+        const target: MaterialAsset = { ...crate(), textureGraph: { graph: root } };
+        const nestedAsset: MaterialAsset = { ...crate(), id: 'nested', textureGraph: { graph: subgraph } };
+        const assetOf = (id: string) => id === 'painted' ? paintAsset : undefined;
+        const resolve = (id: string) => id === 'nested'
+            ? { id, name: id, graph: subgraph }
+            : paintStackEntry(id, assetOf);
+        const sources = graphCookSources(root, resolve, assetOf);
+        expect([...sources.textureIds].sort()).toEqual(['nested-bitmap', 'paint-colour', 'paint-orm']);
+        expect([...sources.paintInputs]).toEqual([
+            [paintBakedKey('painted', 'baseColor'), 'paint-colour'],
+            [paintBakedKey('painted', 'orm'), 'paint-orm'],
+        ]);
+        const udimAsset = { ...paintAsset, paint: { ...document, udim: true } as unknown as Record<string, unknown> };
+        const udimResolver = (id: string) => id === 'nested'
+            ? { id, name: id, graph: subgraph }
+            : paintStackEntry(id, () => udimAsset);
+        expect(() => graphCookSources(root, udimResolver, () => udimAsset)).toThrow(/UDIM tiles/);
+        expect(() => graphCookSources(root, resolve, () => undefined)).toThrow(/no painted set/);
+        const unappliedAsset = { ...paintAsset, paint: { ...document, applied: undefined } as unknown as Record<string, unknown> };
+        const unappliedResolver = (id: string) => id === 'nested'
+            ? { id, name: id, graph: subgraph }
+            : paintStackEntry(id, () => unappliedAsset);
+        expect(() => graphCookSources(root, unappliedResolver, () => unappliedAsset)).toThrow(/no applied pictures/);
+        const folderGraph: TextureGraph = {
+            ...subgraph, nodes: [{ id: 'folder', type: 'subgraph', x: 0, y: 0,
+                params: { graph: 'paint:painted:' + document.layers[0].id } }],
+        };
+        const folderResolver = (id: string) => id === 'nested'
+            ? { id, name: id, graph: folderGraph }
+            : paintStackEntry(id, assetOf);
+        expect(() => graphCookSources(root, folderResolver, assetOf)).toThrow(/folder needs its own baked pictures/);
+
+        materialLibrary.replaceAll([target, nestedAsset, paintAsset]);
+        const before = graphContent(target);
+        const repainted = { ...document, applied: { textures: { baseColor: 'reapplied-colour', orm: 'paint-orm' }, at: 2 } };
+        materialLibrary.upsert({ ...paintAsset, paint: repainted as unknown as Record<string, unknown>, pictures: repainted.applied.textures });
+        expect(graphContent(target)).not.toBe(before);
+        const direct: MaterialAsset = {
+            ...target,
+            textureGraph: { graph: { ...root, nodes: [{ id: 'direct', type: 'paintStack', x: 0, y: 0, params: { asset: 'painted', folder: '' } }] } },
+        };
+        const directBefore = graphContent(direct);
+        const paintedAgain = { ...document, applied: { textures: { baseColor: 'third-colour', orm: 'paint-orm' }, at: 3 } };
+        materialLibrary.upsert({ ...paintAsset, paint: paintedAgain as unknown as Record<string, unknown>, pictures: paintedAgain.applied.textures });
+        expect(graphContent(direct)).not.toBe(directBefore);
+    });
+
     it('ask for what a use sets: its graph values, seed and picture size', () => {
         const request = cookRequestFor(crate(), { Wetness: 0.7, Tint: [1, 0, 0], [GRAPH_SEED]: 4.2, [PICTURE_SIZE]: 12 });
         expect(request.values).toEqual({ Wetness: 0.7 });

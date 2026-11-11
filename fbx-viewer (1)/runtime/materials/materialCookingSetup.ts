@@ -62,17 +62,39 @@ export const indexedDbCookCache = (): CookCache | null => {
 };
 
 /** A graph's content for a cooked set's signature, with every graph it uses as a node. */
-const graphContent = (asset: MaterialAsset): string => {
+export const graphContent = (asset: MaterialAsset): string => {
     const seen = new Set<string>();
     const parts: string[] = [];
+    const paintVersion = (id: string) => {
+        // Synthetic Paint graph references are not material ids; include applied pictures and
+        // paint document content so a new Apply changes the next cooked result's cache key.
+        const assetId = id.slice('paint:'.length).split(':')[0];
+        const painted = materialLibrary.get(assetId);
+        parts.push(JSON.stringify({ paintGraph: id, document: painted?.paint ?? null, pictures: painted?.pictures ?? null }));
+    };
     const visit = (from: MaterialAsset) => {
         const graph = (from.textureGraph as { graph?: unknown } | undefined)?.graph;
         parts.push(JSON.stringify(graph ?? null));
         const text = parts[parts.length - 1];
+        // Whole Paint stack nodes can also appear directly in a texture graph.
+        const nodes = graph && typeof graph === 'object' ? (graph as { nodes?: unknown }).nodes : undefined;
+        if (Array.isArray(nodes)) for (const raw of nodes) {
+            const node = raw as { type?: unknown; params?: { asset?: unknown; folder?: unknown } } | null;
+            if (node?.type !== 'paintStack' || typeof node.params?.asset !== 'string' || !node.params.asset) continue;
+            const id = `paint:${node.params.asset}:${String(node.params.folder ?? '')}`;
+            if (seen.has(id)) continue;
+            seen.add(id);
+            paintVersion(id);
+        }
         for (const match of text.matchAll(/"graph":"([^"]+)"/g)) {
             const id = match[1];
-            const used = seen.has(id) ? undefined : materialLibrary.get(id);
+            if (seen.has(id)) continue;
             seen.add(id);
+            if (id.startsWith('paint:')) {
+                paintVersion(id);
+                continue;
+            }
+            const used = materialLibrary.get(id);
             if (used) visit(used);
         }
     };

@@ -688,6 +688,50 @@ def _texture_mentions(value: Any, into: dict[str, int]) -> None:
             _texture_mentions(child, into)
 
 
+def _applied_paint_input_texture_ids(content: Mapping[str, list[dict[str, Any]]]) -> set[str]:
+    """Applied pictures read by whole Paint stacks referenced in texture graphs.
+
+    Unlike ordinary material pictures, these must be shipped even in always-cook games.
+    Legacy material documents may omit textureIds despite having paint.applied.textures.
+    Folders need their own baked outputs and are deliberately not substituted.
+    """
+    paint_sources: set[str] = set()
+    for material in content.get("materials", []):
+        stored = material.get("textureGraph")
+        graph = stored.get("graph") if isinstance(stored, Mapping) else None
+        nodes = graph.get("nodes") if isinstance(graph, Mapping) else None
+        if not isinstance(nodes, list):
+            continue
+        for node in nodes:
+            if not isinstance(node, Mapping):
+                continue
+            params = node.get("params")
+            if not isinstance(params, Mapping):
+                continue
+            if node.get("type") in ("subgraph", "iterate"):
+                used = params.get("graph")
+                if isinstance(used, str) and used.startswith("paint:"):
+                    source, _, folder = used[len("paint:"):].partition(":")
+                    if source and not folder:
+                        paint_sources.add(source)
+            if node.get("type") == "paintStack" and not params.get("folder"):
+                source = params.get("asset")
+                if isinstance(source, str) and source:
+                    paint_sources.add(source)
+
+    protected: set[str] = set()
+    for material in content.get("materials", []):
+        if material.get("id") not in paint_sources:
+            continue
+        paint = material.get("paint")
+        applied = paint.get("applied") if isinstance(paint, Mapping) else None
+        pictures = applied.get("textures") if isinstance(applied, Mapping) else None
+        # Generic material pictures may come from a different procedural graph.
+        if isinstance(pictures, Mapping):
+            protected.update(value for value in pictures.values() if isinstance(value, str) and value)
+    return protected
+
+
 def without_baked_pictures(content: dict[str, list[dict[str, Any]]]) -> dict[str, list[dict[str, Any]]]:
     """For a game that always cooks its texture graphs (runtime/materials/materialCooking.ts): the content without the
     pictures those graphs baked, which the game makes itself, so they are not shipped. A picture anything else names (a
@@ -710,7 +754,8 @@ def without_baked_pictures(content: dict[str, list[dict[str, Any]]]) -> dict[str
             continue
         for document in documents:
             _texture_mentions(document, mentions)
-    dropped = {texture_id for texture_id, own in baked.items() if mentions.get(texture_id, 0) <= own}
+    protected_pictures = _applied_paint_input_texture_ids(content)
+    dropped = {texture_id for texture_id, own in baked.items() if mentions.get(texture_id, 0) <= own and texture_id not in protected_pictures}
     if not dropped:
         return content
     return {**content, "textures": [item for item in content.get("textures", []) if item.get("id") not in dropped]}
@@ -782,6 +827,9 @@ def _referenced_asset_ids(content: Mapping[str, list[dict[str, Any]]]) -> set[st
 
     for documents in content.values():
         collect(documents)
+    # Paint's applied values are *texture document IDs*, not asset file IDs. Keeping
+    # their texture documents in without_baked_pictures() is what ensures the actual
+    # assetId fields above are included; do not add texture IDs as file IDs here.
     return references
 
 

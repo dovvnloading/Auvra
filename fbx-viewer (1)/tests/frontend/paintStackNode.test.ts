@@ -1,9 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
+import * as THREE from 'three';
+import type { NodeRunContext } from '../../texturing/graph/types';
 import { graphContentKey } from '../../texturing/graph/document';
 import { textureNodeDefinition } from '../../texturing/graph/registry';
 import { createPaintDocument, newFillLayer, newFolder, newPaintLayer, type PaintDocument } from '../../texturing/paint/paintTypes';
 import type { PaintStack } from '../../texturing/paint/paintStack';
-import { PAINT_STACK_NODE, PAINT_STACK_NODE_TYPE, openStacksVersion, paintStackEntries, paintStackEntry, registerOpenStack, setName, stackLayers, subscribeOpenStacks } from '../../texturing/paint/stackNode';
+import { PAINT_STACK_NODE, PAINT_STACK_NODE_TYPE, openStacksVersion, paintBakedKey, paintStackEntries, paintStackEntry, registerOpenStack, setName, stackLayers, subscribeOpenStacks } from '../../texturing/paint/stackNode';
 
 const painted = (): PaintDocument => {
     const document = createPaintDocument('model', ['Body'], 10);
@@ -71,6 +73,53 @@ describe('paint stacks as graph nodes', () => {
         } finally {
             vi.useRealTimers();
         }
+    });
+
+
+    it('uses applied whole-set textures in the standalone game without requiring the editor painter', async () => {
+        const colour = new THREE.DataTexture(new Uint8Array([130, 80, 10, 255]), 1, 1);
+        const packed = new THREE.DataTexture(new Uint8Array([255, 128, 30, 255]), 1, 1);
+        const external: Record<string, THREE.Texture> = {
+            [paintBakedKey('helmet', 'baseColor')]: colour,
+            [paintBakedKey('helmet', 'orm')]: packed,
+        };
+        const drawn = vi.fn(async (_target: unknown, _shader: string, _options: unknown) => undefined);
+        const clear = vi.fn();
+        const note = vi.fn();
+        const context = {
+            params: { asset: 'helmet', folder: '' },
+            external: (key: string) => external[key] ?? null,
+            pass: drawn,
+            image: (kind: string) => ({ kind }),
+            gpu: { clear },
+            note,
+        } as unknown as NodeRunContext;
+        const result = await PAINT_STACK_NODE.run(context);
+        expect(Object.keys(result)).toEqual(PAINT_STACK_NODE.outputs.map((port) => port.key));
+        expect(drawn).toHaveBeenCalledTimes(3);
+        expect(drawn.mock.calls[1][1]).toContain('.g');
+        expect(drawn.mock.calls[2][1]).toContain('.b');
+        expect(drawn.mock.calls[0][2]).toEqual({ inputs: { painted: colour } });
+        expect(clear).toHaveBeenCalled();
+        expect(note).toHaveBeenCalledWith(expect.stringContaining('last applied'));
+        colour.dispose();
+        packed.dispose();
+    });
+
+    it('never replaces a folder with the whole set or silently substitutes blank pictures', async () => {
+        const picture = new THREE.DataTexture(new Uint8Array([255, 255, 255, 255]), 1, 1);
+        const base = {
+            external: (key: string) => key === paintBakedKey('helmet', 'baseColor') ? picture : null,
+            image: () => ({ kind: 'color' }),
+            gpu: { clear: vi.fn() },
+            pass: vi.fn(async () => undefined),
+            note: vi.fn(),
+        };
+        await expect(PAINT_STACK_NODE.run({ ...base, params: { asset: 'helmet', folder: 'grime' } } as unknown as NodeRunContext))
+            .rejects.toThrow(/folder needs its own baked pictures/);
+        await expect(PAINT_STACK_NODE.run({ ...base, external: () => null, params: { asset: 'helmet', folder: '' } } as unknown as NodeRunContext))
+            .rejects.toThrow(/no applied pictures/);
+        picture.dispose();
     });
 
     it('put a folder together on its own, and are a node the graph knows', () => {
