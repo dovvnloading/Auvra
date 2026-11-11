@@ -107,7 +107,17 @@ check(source.bootstrap.includes("isDevelopment") && source.bootstrap.includes("F
 check(source.bootstrap.includes("requires the packaged WebView2 host"), "production fallback does not fail closed");
 check(source.vite.includes("hud-frame.html") && !source.vite.includes("@tailwindcss/vite"), "Vite still uses the rejected Tailwind 4 plugin");
 check(source.styles.includes("@tailwind base") && source.styles.includes("@tailwind utilities"), "local Tailwind 3 directives are missing");
-check(source.packageJson.includes('"tailwindcss": "3.4.17"') && source.packageJson.includes('"postcss": "8.5.26"') && source.packageJson.includes('"autoprefixer": "10.4.21"'), "pinned Tailwind 3/PostCSS pipeline is missing");
+// Keep Tailwind on v3 and PostCSS on v8, but do not freeze their security/patch versions here.
+// package-lock is the authority for the exact installed versions.
+const pipelineDeps = JSON.parse(source.packageJson).devDependencies ?? {};
+const pipelineLock = JSON.parse(source.packageLock).packages ?? {};
+const pinnedMajor = (name, major) => {
+  const declared = pipelineDeps[name];
+  return typeof declared === "string"
+    && new RegExp(`^${major}\\.\\d+\\.\\d+$`).test(declared)
+    && pipelineLock[`node_modules/${name}`]?.version === declared;
+};
+check(pinnedMajor("tailwindcss", 3) && pinnedMajor("postcss", 8) && pinnedMajor("autoprefixer", 10), "pinned Tailwind 3/PostCSS pipeline is missing");
 check(!source.packageJson.includes("@tailwindcss/vite") && !source.packageLock.includes('"node_modules/@tailwindcss/'), "rejected Tailwind 4 packages remain");
 check(!source.packageLock.includes('"node_modules/lightningcss":') && !source.packageLock.includes('"node_modules/@tailwindcss/oxide'), "rejected MPL/native Tailwind closure remains");
 check(source.postcss.includes("tailwindcss") && source.postcss.includes("autoprefixer"), "PostCSS config is incomplete");
