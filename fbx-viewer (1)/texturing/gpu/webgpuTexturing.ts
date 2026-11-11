@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { encodePng } from '../png';
 import { GlslError } from '../../renderer/gpu/surfaces/glslToWgsl';
+import { COMPRESSED } from '../../renderer/gpu/texturePool';
 import { translatePass, type PassModule } from './glslModule';
 import { FrameBudget, ShaderError, type GpuImage, type ImageKind, type ImagePrecision, type InstanceOptions, type PassInput, type PassOptions } from './textureGpu';
 import type { TexturingGpu } from './texturingGpu';
@@ -14,8 +15,9 @@ import { layoutUniforms, packUniforms, type UniformLayout } from './uniformLayou
  * GLSL translated (glslModule.ts) or a function graph's own, uniforms one struct in a storage buffer,
  * pixels read back through mapped buffers. Instanced copies use the same placement GLSL translated
  * into WGSL, with hardware depth for higher-wins and blending for max/add. Rows lie in memory as
- * WebGL keeps them (the first row is v = 0). What it cannot do yet (compressed pictures, a pass
- * that does not translate or compile) it refuses with WebGpuUnsupported, saying why,
+ * WebGL keeps them (the first row is v = 0). Compressed picture inputs use the same BC/ETC2/ASTC
+ * format table and device feature gates as the renderer. What it cannot do yet (a pass that does
+ * not translate or compile) it refuses with WebGpuUnsupported, saying why,
  * and the caller draws that graph with WebGL2 instead.
  *
  * WebGPU's own types are not needed here: the device is described by the little of it this uses.
@@ -83,6 +85,65 @@ export const dataTextureFormat = (format: number, type: number, srgb: boolean): 
     if (type === THREE.FloatType) return { format: `${base}32float`, bytes: channels * 4 };
     if (type === THREE.HalfFloatType) return { format: `${base}16float`, bytes: channels * 2 };
     return null;
+};
+
+
+/** A validated, precomputed block-compressed upload (no GPU object has been allocated yet). */
+interface CompressedUpload {
+    format: string;
+    width: number;
+    height: number;
+    levels: Array<{
+        data: ArrayBufferView;
+        mipLevel: number;
+        bytesPerRow: number;
+        rowsPerImage: number;
+        size: [number, number];
+    }>;
+}
+
+/** Share the surface renderer's block formats and retain graph-specific device fallback reasons. */
+export const compressedUpload = (
+    texture: THREE.CompressedTexture,
+    maxSize: number,
+    hasFeature: (name: string) => boolean,
+): CompressedUpload => {
+    const format = COMPRESSED[texture.format as number];
+    if (!format) throw new WebGpuUnsupported('compressed picture format ' + texture.format + ' is not supported on WebGPU');
+    const feature = 'texture-compression-' + format.feature;
+    if (!hasFeature(feature)) throw new WebGpuUnsupported('compressed picture requires the WebGPU ' + feature + ' feature');
+    const levels = texture.mipmaps as unknown as Array<{ data: ArrayBufferView; width: number; height: number }> | undefined;
+    if (!levels?.length) throw new WebGpuUnsupported('compressed picture has no mip levels');
+    let first = 0;
+    while (first < levels.length - 1 && Math.max(levels[first].width, levels[first].height) > maxSize) first++;
+    const firstLevel = levels[first];
+    if (!Number.isInteger(firstLevel.width) || !Number.isInteger(firstLevel.height) || firstLevel.width < 1 || firstLevel.height < 1) {
+        throw new WebGpuUnsupported('compressed picture has invalid dimensions');
+    }
+    const { blockSize, blockBytes } = format;
+    const width = Math.ceil(firstLevel.width / blockSize) * blockSize;
+    const height = Math.ceil(firstLevel.height / blockSize) * blockSize;
+    if (Math.max(width, height) > maxSize) throw new WebGpuUnsupported('compressed picture is larger than this card limit (' + maxSize + ' px)');
+    const mips = Math.min(levels.length - first, Math.floor(Math.log2(Math.max(width, height))) + 1);
+    const planned: CompressedUpload['levels'] = [];
+    for (let mip = 0; mip < mips; mip++) {
+        const level = levels[first + mip];
+        const mipWidth = Math.max(1, width >> mip);
+        const mipHeight = Math.max(1, height >> mip);
+        const blocksWide = Math.ceil(mipWidth / blockSize);
+        const blocksHigh = Math.ceil(mipHeight / blockSize);
+        const bytes = blocksWide * blocksHigh * blockBytes;
+        if (!level || !Number.isInteger(level.width) || !Number.isInteger(level.height) ||
+            !ArrayBuffer.isView(level.data) || level.data.byteLength !== bytes ||
+            Math.ceil(level.width / blockSize) !== blocksWide || Math.ceil(level.height / blockSize) !== blocksHigh) {
+            throw new WebGpuUnsupported('compressed picture mip ' + (first + mip) + ' has invalid dimensions or block length');
+        }
+        planned.push({
+            data: level.data, mipLevel: mip, bytesPerRow: blocksWide * blockBytes,
+            rowsPerImage: blocksHigh, size: [blocksWide * blockSize, blocksHigh * blockSize],
+        });
+    }
+    return { format: texture.colorSpace === THREE.SRGBColorSpace && format.srgb ? format.srgb : format.format, width, height, levels: planned };
 };
 
 const isFloat32 = (format: string): boolean => format.endsWith('32float');
@@ -201,8 +262,25 @@ export class WebGpuTexturing implements TexturingGpu {
         const srgb = texture.colorSpace === THREE.SRGBColorSpace;
         const data = texture as THREE.DataTexture;
         let handle: Handle;
-        if ((texture as THREE.CompressedTexture).isCompressedTexture) throw new WebGpuUnsupported('a compressed picture is read, which the WebGPU path does not read yet');
-        if (data.isDataTexture) {
+        if ((texture as THREE.CompressedTexture).isCompressedTexture) {
+            const plan = compressedUpload(texture as THREE.CompressedTexture, this.maxSize, (feature) => this.device.features.has(feature));
+            const gpuTexture = this.device.createTexture({
+                size: [plan.width, plan.height], format: plan.format, mipLevelCount: plan.levels.length,
+                usage: TEXTURE_USAGE.TEXTURE_BINDING | TEXTURE_USAGE.COPY_DST,
+            });
+            try {
+                for (const level of plan.levels) {
+                    this.device.queue.writeTexture(
+                        { texture: gpuTexture, mipLevel: level.mipLevel }, level.data,
+                        { bytesPerRow: level.bytesPerRow, rowsPerImage: level.rowsPerImage }, level.size,
+                    );
+                }
+            } catch (error) {
+                gpuTexture.destroy();
+                throw error;
+            }
+            handle = { texture: gpuTexture, view: gpuTexture.createView(), format: plan.format, key: '', bytes: 0 };
+        } else if (data.isDataTexture) {
             const image = data.image as { data: ArrayBufferView; width: number; height: number };
             const shape = dataTextureFormat(texture.format, texture.type, srgb);
             if (!shape) throw new WebGpuUnsupported(`a picture of format ${texture.format} and type ${texture.type} is read, which the WebGPU path does not read yet`);
@@ -227,17 +305,24 @@ export class WebGpuTexturing implements TexturingGpu {
         return isImage(input) ? handleOf(input) : this.textureHandle(input);
     }
 
-    /** How a three texture (or an image) is sampled: repeating unless it clamps, smooth unless it is sharp or cannot be. */
+    /** Match Three's address and image filtering, including block-compressed mip chains. */
     private sampler(input: PassInput | null | undefined, filterable: boolean): unknown {
         const texture = input && !isImage(input) ? input : null;
         const address = (wrap: number) => (wrap === THREE.ClampToEdgeWrapping ? 'clamp-to-edge' : wrap === THREE.MirroredRepeatWrapping ? 'mirror-repeat' : 'repeat');
-        const nearest = !filterable || (texture ? texture.magFilter === THREE.NearestFilter : false);
+        const mag = !filterable || texture?.magFilter === THREE.NearestFilter ? 'nearest' : 'linear';
+        const min = !filterable || (texture && [THREE.NearestFilter, THREE.NearestMipmapNearestFilter, THREE.NearestMipmapLinearFilter].includes(texture.minFilter)) ? 'nearest' : 'linear';
+        const mipped = !!(texture && (texture as THREE.CompressedTexture).isCompressedTexture && (texture as THREE.CompressedTexture).mipmaps.length > 1);
+        const mip = !filterable || !mipped ||
+            (texture && [THREE.NearestFilter, THREE.LinearFilter, THREE.NearestMipmapNearestFilter, THREE.LinearMipmapNearestFilter].includes(texture.minFilter))
+            ? 'nearest' : 'linear';
         const u = texture ? address(texture.wrapS) : 'repeat';
         const v = texture ? address(texture.wrapT) : 'repeat';
-        const key = `${u}:${v}:${nearest ? 'nearest' : 'linear'}`;
+        const anisotropy = texture && mag === 'linear' && min === 'linear' && mip === 'linear'
+            ? Math.max(1, Math.min(16, texture.anisotropy || 1)) : 1;
+        const key = [u, v, mag, min, mip, anisotropy].join(':');
         let made = this.samplers.get(key);
         if (!made) {
-            made = this.device.createSampler({ addressModeU: u, addressModeV: v, magFilter: nearest ? 'nearest' : 'linear', minFilter: nearest ? 'nearest' : 'linear' });
+            made = this.device.createSampler({ addressModeU: u, addressModeV: v, magFilter: mag, minFilter: min, mipmapFilter: mip, maxAnisotropy: anisotropy });
             this.samplers.set(key, made);
         }
         return made;
