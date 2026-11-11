@@ -209,7 +209,7 @@ export const wholeFormat = (picture: { depth: number; hdr: boolean }): KeptForma
 export const limitedSize = (width: number, height: number, maxSize: number | undefined): { width: number; height: number } => {
     let w = width;
     let h = height;
-    while (maxSize && (w > maxSize || h > maxSize) && w > 1 && h > 1) {
+    while (maxSize && (w > maxSize || h > maxSize) && (w > 1 || h > 1)) {
         w = Math.max(1, w >> 1);
         h = Math.max(1, h >> 1);
     }

@@ -141,6 +141,14 @@ describe('the format a texture is kept in', () => {
         expect(limitedSize(4096, 2048, 1024)).toEqual({ width: 1024, height: 512 });
     });
 
+    it('estimates the capped dimensions of narrow strip textures', () => {
+        expect(limitedSize(1, 8192, 256)).toEqual({ width: 1, height: 256 });
+        expect(limitedSize(8192, 1, 256)).toEqual({ width: 256, height: 1 });
+        expect(limitedSize(2, 8192, 256)).toEqual({ width: 1, height: 256 });
+        expect(limitedSize(8192, 2, 256)).toEqual({ width: 256, height: 1 });
+        expect(limitedSize(1, 8192, undefined)).toEqual({ width: 1, height: 8192 });
+    });
+
     it('compresses floating-point normal and data maps that stay within white, and keeps floating-point colour whole', () => {
         const float = { ...picture, depth: 32 };
         expect(keptFormat('normal', undefined, ALL, float)).toBe('bc5');
