@@ -14,12 +14,11 @@ import { AiRouteBar } from './AiRouteBar';
 
 interface SettingsModalProps { onClose: () => void; }
 
-type SettingsPage = 'models' | 'keys' | 'spending';
+type SettingsPage = 'models' | 'keys';
 
 const PAGES: readonly { id: SettingsPage; label: string }[] = [
   { id: 'models', label: 'Models' },
   { id: 'keys', label: 'Keys' },
-  { id: 'spending', label: 'Spending' },
 ];
 
 const JOBS: readonly { capability: ProviderCapability; label: string; hint: string }[] = [
@@ -39,32 +38,7 @@ const KEY_WORDS: Record<string, { text: string; good: boolean }> = {
   absent: { text: 'No key', good: false },
 };
 
-const dollarsOf = (microUsd: number | undefined): string => (microUsd ? String(microUsd / 1_000_000) : '');
-const microUsdOf = (dollars: string): number => Math.max(0, Math.round((Number(dollars) || 0) * 1_000_000));
-
-/** An amount in dollars that saves when left. Empty means no limit. */
-const LimitField: React.FC<{ label: string; value: number | undefined; onCommit: (microUsd: number) => void }> = ({ label, value, onCommit }) => {
-  const [text, setText] = useState(dollarsOf(value));
-  useEffect(() => { setText(dollarsOf(value)); }, [value]);
-  return (
-    <div className="relative">
-      <span className="pointer-events-none absolute left-1.5 top-1/2 -translate-y-1/2 text-2xs text-ink-3">$</span>
-      <input
-        type="number"
-        min={0}
-        step={0.01}
-        aria-label={label}
-        placeholder="No limit"
-        value={text}
-        onChange={(event) => setText(event.target.value)}
-        onBlur={() => { if (microUsdOf(text) !== (value ?? 0)) onCommit(microUsdOf(text)); }}
-        className="h-6 w-full rounded border border-line bg-well pl-4 pr-1 text-xs tabular-nums text-ink placeholder:text-ink-3 hover:border-gray-700 focus:border-accent/70 focus:outline-none"
-      />
-    </div>
-  );
-};
-
-/** Which model does which job, the keys that pay for them, and how much they may spend. */
+/** Local inference stays active. Paid cloud jobs are removed because costs cannot be bounded. */
 export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
   const [page, setPage] = useState<SettingsPage>('models');
   const [providers, setProviders] = useState<ProviderDescriptor[]>([]);
@@ -151,6 +125,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
     const local = provider.route === 'local';
     const words = local ? null : KEY_WORDS[provider.credentialStatus ?? 'absent'] ?? KEY_WORDS.absent;
     const hasKey = provider.credentialStatus === 'configured' || provider.credentialStatus === 'memoryOnly';
+    const removedCloud = !local;
     const running = health[provider.id]?.status === 'healthy';
     const waitingForKey = keyWindowFor === provider.id;
     return (
@@ -158,12 +133,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
         <span className="shrink-0 text-ink-3">{local ? <ChipIcon size={14} /> : <CloudIcon size={14} />}</span>
         <span className="w-28 shrink-0 truncate text-xs text-ink">{provider.name || provider.id}</span>
         <span className={`min-w-0 flex-1 truncate text-2xs ${waitingForKey ? 'text-ink' : local ? (running ? 'text-ok' : 'text-ink-3') : words?.good ? 'text-ok' : 'text-ink-3'}`}>
-          {waitingForKey ? 'Paste the key in the window that opened' : local ? (running ? 'Running on this computer' : 'Not running on this computer') : words?.text}
+          {removedCloud ? 'Cloud AI removed: provider charges cannot be capped' : waitingForKey ? 'Paste the key in the window that opened' : local ? (running ? 'Running on this computer' : 'Not running on this computer') : words?.text}
         </span>
         {!local && hasKey && <Button variant="ghost" size="sm" disabled={busy || keyWindowFor !== null} onClick={() => void removeKey(provider)}>Remove</Button>}
-        {!local && <Button size="sm" disabled={busy || keyWindowFor !== null || provider.credentialStatus === 'unavailable'} onClick={() => void addKey(provider)}>{hasKey ? 'Replace key' : 'Add key'}</Button>}
+        {!local && !removedCloud && <Button size="sm" disabled={busy || keyWindowFor !== null || provider.credentialStatus === 'unavailable'} onClick={() => void addKey(provider)}>{hasKey ? 'Replace key' : 'Add key'}</Button>}
         <label className="flex shrink-0 items-center gap-1 text-2xs text-ink-3" title="Off, this provider does no work, whatever it has been chosen for">
-          <input type="checkbox" className="accent-accent" checked={Boolean(provider.settings?.enabled)} onChange={(event) => void save(provider, { enabled: event.target.checked })} /> On
+          <input type="checkbox" className="accent-accent" disabled={removedCloud || busy} checked={!removedCloud && Boolean(provider.settings?.enabled)} onChange={(event) => void save(provider, { enabled: event.target.checked })} /> On
         </label>
       </li>
     );
@@ -218,7 +193,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
 
             {page === 'keys' && (
               <>
-                <p className="px-4 pb-1 pt-3 text-2xs text-ink-3">A key goes into a Windows prompt, and never reaches the editor's page or the project.</p>
+                <p className="px-4 pb-1 pt-3 text-2xs text-ink-3">Cloud AI and spending budgets have been removed because provider charges cannot be capped. Local models remain available. Existing cloud keys can be deleted below.</p>
                 <label className="flex items-center gap-2 px-4 pb-2 text-2xs text-ink-2">
                   <input type="checkbox" className="accent-accent" checked={rememberCredential} onChange={(event) => setRememberCredential(event.target.checked)} />
                   Keep keys in the Windows vault. Off, a new key lasts until the editor closes.
@@ -233,40 +208,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
               </>
             )}
 
-            {page === 'spending' && (
-              <>
-                <p className="px-4 pb-2 pt-3 text-2xs text-ink-3">
-                  Set all three for a provider and each image job is checked against them using the catalog's price before it is sent. Language model jobs are not counted, as their cost depends on the answer.
-                </p>
-                <table className="w-full text-xs">
-                  <thead>
-                    <tr className="border-y border-line text-left text-2xs text-ink-3">
-                      <th className="px-4 py-1.5 font-normal">Provider</th>
-                      <th className="w-24 py-1.5 pr-2 font-normal">Per job</th>
-                      <th className="w-24 py-1.5 pr-2 font-normal">Per day</th>
-                      <th className="w-24 py-1.5 pr-4 font-normal">Per month</th>
-                      <th className="w-20 py-1.5 pr-4 text-center font-normal" title="Each job asks first">Confirm</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {cloudProviders.map((provider) => {
-                      const budgets = provider.settings?.budgets ?? { perJobMicroUsd: 0, dailyMicroUsd: 0, monthlyMicroUsd: 0 };
-                      return (
-                        <tr key={provider.id}>
-                          <td className="px-4 py-1 text-ink">{provider.name || provider.id}</td>
-                          <td className="py-1 pr-2"><LimitField label={`${provider.name} per job`} value={budgets.perJobMicroUsd} onCommit={(value) => void save(provider, { budgets: { ...budgets, perJobMicroUsd: value } })} /></td>
-                          <td className="py-1 pr-2"><LimitField label={`${provider.name} per day`} value={budgets.dailyMicroUsd} onCommit={(value) => void save(provider, { budgets: { ...budgets, dailyMicroUsd: value } })} /></td>
-                          <td className="py-1 pr-4"><LimitField label={`${provider.name} per month`} value={budgets.monthlyMicroUsd} onCommit={(value) => void save(provider, { budgets: { ...budgets, monthlyMicroUsd: value } })} /></td>
-                          <td className="py-1 pr-4 text-center">
-                            <input type="checkbox" className="accent-accent" aria-label={`Confirm the cost of each ${provider.name} job`} checked={provider.settings?.requireCostConfirmation ?? true} onChange={(event) => void save(provider, { requireCostConfirmation: event.target.checked })} />
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </>
-            )}
           </div>
         </div>
         {message && <div role="alert" className="selectable shrink-0 border-t border-line bg-bad/10 px-4 py-1.5 text-2xs text-ink">{message}</div>}
