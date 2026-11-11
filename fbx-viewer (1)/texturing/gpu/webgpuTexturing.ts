@@ -146,6 +146,9 @@ export const compressedUpload = (
     return { format: texture.colorSpace === THREE.SRGBColorSpace && format.srgb ? format.srgb : format.format, width, height, levels: planned };
 };
 
+const MIN_NEAREST_FILTERS: ReadonlySet<number> = new Set([THREE.NearestFilter, THREE.NearestMipmapNearestFilter, THREE.NearestMipmapLinearFilter]);
+const MIP_NEAREST_FILTERS: ReadonlySet<number> = new Set([THREE.NearestFilter, THREE.LinearFilter, THREE.NearestMipmapNearestFilter, THREE.LinearMipmapNearestFilter]);
+
 const isFloat32 = (format: string): boolean => format.endsWith('32float');
 
 interface Handle { texture: WgpuTexture; view: unknown; format: string; key: string; bytes: number }
@@ -310,10 +313,10 @@ export class WebGpuTexturing implements TexturingGpu {
         const texture = input && !isImage(input) ? input : null;
         const address = (wrap: number) => (wrap === THREE.ClampToEdgeWrapping ? 'clamp-to-edge' : wrap === THREE.MirroredRepeatWrapping ? 'mirror-repeat' : 'repeat');
         const mag = !filterable || texture?.magFilter === THREE.NearestFilter ? 'nearest' : 'linear';
-        const min = !filterable || (texture && [THREE.NearestFilter, THREE.NearestMipmapNearestFilter, THREE.NearestMipmapLinearFilter].includes(texture.minFilter)) ? 'nearest' : 'linear';
+        const min = !filterable || (texture && MIN_NEAREST_FILTERS.has(texture.minFilter)) ? 'nearest' : 'linear';
         const mipped = !!(texture && (texture as THREE.CompressedTexture).isCompressedTexture && (texture as THREE.CompressedTexture).mipmaps.length > 1);
         const mip = !filterable || !mipped ||
-            (texture && [THREE.NearestFilter, THREE.LinearFilter, THREE.NearestMipmapNearestFilter, THREE.LinearMipmapNearestFilter].includes(texture.minFilter))
+            (texture && MIP_NEAREST_FILTERS.has(texture.minFilter))
             ? 'nearest' : 'linear';
         const u = texture ? address(texture.wrapS) : 'repeat';
         const v = texture ? address(texture.wrapT) : 'repeat';
