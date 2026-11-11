@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import { translatePass } from '../../texturing/gpu/glslModule';
 import { layoutUniforms, packUniforms, shapeOf } from '../../texturing/gpu/uniformLayout';
-import { WebGpuTexturing, WebGpuUnsupported, dataTextureFormat, imageFormat, type WgpuDevice } from '../../texturing/gpu/webgpuTexturing';
+import { WebGpuTexturing, WebGpuUnsupported, compressedUpload, dataTextureFormat, imageFormat, type WgpuDevice } from '../../texturing/gpu/webgpuTexturing';
 import { nodeBindings } from '../../texturing/graph/nodeKit';
 import { TEXTURE_NODE_DEFINITIONS } from '../../texturing/graph/registry';
 import { defaultNodeParams } from '../../texturing/graph/document';
@@ -120,18 +120,18 @@ describe('uniforms in a storage buffer', () => {
 });
 
 /** A WebGPU device that keeps what it is asked, and reads back rows numbered by their place. */
-const fakeDevice = () => {
+const fakeDevice = (supported: readonly string[] = []) => {
     const calls: Array<{ what: string; descriptor?: unknown }> = [];
     let lastCopy: { width: number; height: number; bytesPerRow: number; bytes: number } | null = null;
     const device: WgpuDevice & { calls: typeof calls } = {
         calls,
         limits: { maxTextureDimension2D: 8192 },
-        features: { has: () => false },
+        features: { has: (name) => supported.includes(name) },
         lost: new Promise(() => undefined),
         queue: {
             submit: () => calls.push({ what: 'submit' }),
             writeBuffer: (_buffer, _offset, data) => calls.push({ what: 'writeBuffer', descriptor: data }),
-            writeTexture: (destination, data) => calls.push({ what: 'writeTexture', descriptor: { destination, length: data.byteLength } }),
+            writeTexture: (destination, data, layout, size) => calls.push({ what: 'writeTexture', descriptor: { destination, length: data.byteLength, layout, size } }),
             copyExternalImageToTexture: () => calls.push({ what: 'copyExternal' }),
             onSubmittedWorkDone: async () => undefined,
         },
@@ -276,6 +276,76 @@ void main() {
         const image = gpu.image(8, 8, 'color', 8);
         await expect(gpu.drawInstances(image, { count: 1, varyings: [], vertex: '', fragment: '', stack: 'max' })).rejects.toBeInstanceOf(WebGpuUnsupported);
         await expect(gpu.pass(image, { fragment: 'struct S { float a; };\nvoid main() { outColor = vec4(1.0); }' })).rejects.toThrow(/does not translate/);
+    });
+
+
+    it('uploads a complete BC7 sRGB mip chain once and samples it with mip filtering', async () => {
+        const device = fakeDevice(['texture-compression-bc']);
+        const gpu = new WebGpuTexturing(device);
+        const picture = new THREE.CompressedTexture([
+            { data: new Uint8Array(64), width: 8, height: 8 },
+            { data: new Uint8Array(16), width: 4, height: 4 },
+        ] as unknown as ImageData[], 8, 8, THREE.RGBA_BPTC_Format);
+        picture.colorSpace = THREE.SRGBColorSpace;
+        picture.minFilter = THREE.LinearMipmapLinearFilter;
+        picture.anisotropy = 8;
+        picture.needsUpdate = true;
+        const out = gpu.image(8, 8, 'color', 8);
+        const fragment = 'void main() { outColor = texture(picture, vUv); }';
+        await gpu.pass(out, { fragment, inputs: { picture } });
+        await gpu.pass(out, { fragment, inputs: { picture } });
+        const uploads = device.calls.filter((call) => call.what === 'writeTexture');
+        expect(uploads).toHaveLength(2);
+        expect(uploads.map((call) => (call.descriptor as { length: number }).length)).toEqual([64, 16]);
+        expect(uploads.map((call) => (call.descriptor as { destination: { mipLevel: number } }).destination.mipLevel)).toEqual([0, 1]);
+        expect(uploads.map((call) => (call.descriptor as { layout: { bytesPerRow: number; rowsPerImage: number } }).layout))
+            .toEqual([{ bytesPerRow: 32, rowsPerImage: 2 }, { bytesPerRow: 16, rowsPerImage: 1 }]);
+        expect(device.calls.find((call) => call.what === 'createTexture' && (call.descriptor as { format?: string }).format === 'bc7-rgba-unorm-srgb')?.descriptor)
+            .toMatchObject({ size: [8, 8], mipLevelCount: 2, usage: 6 });
+        expect(device.calls.find((call) => call.what === 'createSampler' && (call.descriptor as { maxAnisotropy?: number }).maxAnisotropy === 8)?.descriptor)
+            .toMatchObject({ minFilter: 'linear', magFilter: 'linear', mipmapFilter: 'linear' });
+        picture.dispose();
+        expect(device.calls.some((call) => call.what === 'destroyTexture')).toBe(true);
+    });
+
+    it('supports the same BC4/BC5, ETC2 and ASTC formats as the surface renderer', async () => {
+        const choices: Array<{ format: THREE.CompressedPixelFormat; feature: string; expected: string; bytes: number }> = [
+            { format: THREE.SIGNED_RED_RGTC1_Format, feature: 'texture-compression-bc', expected: 'bc4-r-snorm', bytes: 8 },
+            { format: THREE.RED_GREEN_RGTC2_Format, feature: 'texture-compression-bc', expected: 'bc5-rg-unorm', bytes: 16 },
+            { format: THREE.RGB_ETC2_Format, feature: 'texture-compression-etc2', expected: 'etc2-rgb8unorm', bytes: 8 },
+            { format: THREE.RGBA_ETC2_EAC_Format, feature: 'texture-compression-etc2', expected: 'etc2-rgba8unorm', bytes: 16 },
+            { format: THREE.RGBA_ASTC_4x4_Format, feature: 'texture-compression-astc', expected: 'astc-4x4-unorm', bytes: 16 },
+        ];
+        for (const choice of choices) {
+            const picture = new THREE.CompressedTexture([
+                { data: new Uint8Array(choice.bytes), width: 4, height: 4 },
+            ] as unknown as ImageData[], 4, 4, choice.format);
+            const device = fakeDevice([choice.feature]);
+            const gpu = new WebGpuTexturing(device);
+            const dest = gpu.image(4, 4, 'color', 8);
+            await gpu.pass(dest, { fragment: 'void main() { outColor = texture(source, vUv); }', inputs: { source: picture } });
+            expect(device.calls.some((call) => call.what === 'createTexture' && (call.descriptor as { format?: string }).format === choice.expected)).toBe(true);
+            expect(device.calls.find((call) => call.what === 'writeTexture')?.descriptor).toMatchObject({ length: choice.bytes, layout: { bytesPerRow: choice.bytes, rowsPerImage: 1 } });
+            picture.dispose();
+        }
+    });
+
+    it('rejects unsupported compression features, missing mip data and wrong block lengths before allocating', async () => {
+        const picture = new THREE.CompressedTexture([
+            { data: new Uint8Array(16), width: 4, height: 4 },
+        ] as unknown as ImageData[], 4, 4, THREE.RGBA_BPTC_Format);
+        expect(() => compressedUpload(picture, 8192, () => false)).toThrow(/texture-compression-bc/);
+        expect(() => compressedUpload(new THREE.CompressedTexture([], 4, 4, THREE.RGBA_BPTC_Format), 8192, () => true)).toThrow(/no mip levels/);
+        const broken = new THREE.CompressedTexture([
+            { data: new Uint8Array(3), width: 4, height: 4 },
+        ] as unknown as ImageData[], 4, 4, THREE.RGBA_BPTC_Format);
+        expect(() => compressedUpload(broken, 8192, () => true)).toThrow(/block length/);
+        const device = fakeDevice();
+        const gpu = new WebGpuTexturing(device);
+        const target = gpu.image(4, 4, 'color', 8);
+        await expect(gpu.pass(target, { fragment: 'void main() { outColor = texture(source, vUv); }', inputs: { source: picture } }))
+            .rejects.toBeInstanceOf(WebGpuUnsupported);
+        expect(device.calls.filter((call) => call.what === 'createTexture')).toHaveLength(1);
     });
 
     it('reads pixels back the way WebGL does: padding stripped, rows flipped when asked', async () => {
