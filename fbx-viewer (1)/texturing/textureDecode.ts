@@ -306,10 +306,13 @@ export const pictureToRgba8 = (picture: DecodedPicture, linearColour = false): U
     return out;
 };
 
-/** Each channel as a half float (the GPU's 16-bit floats), keeping a deep picture's depth. */
-export const pictureToHalf = (picture: DecodedPicture): Uint16Array => {
+/** Each channel as a half float, optionally reversing DirectX normal-map green without quantizing or mutating the source. */
+export const pictureToHalf = (picture: DecodedPicture, flipGreen = false): Uint16Array => {
     const out = new Uint16Array(picture.rgba.length);
-    for (let i = 0; i < out.length; i++) out[i] = THREE.DataUtils.toHalfFloat(picture.rgba[i]);
+    for (let i = 0; i < out.length; i++) {
+        const value = picture.rgba[i];
+        out[i] = THREE.DataUtils.toHalfFloat(flipGreen && i % 4 === 1 ? 1 - value : value);
+    }
     return out;
 };
 
