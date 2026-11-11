@@ -374,6 +374,54 @@ class ProviderCoreTests(unittest.TestCase):
         finally:
             store.close()
 
+    def test_provider_cost_provenance_migrates_and_survives_retries(self):
+        with tempfile.TemporaryDirectory() as folder:
+            db = str(Path(folder) / "cost-ledger.sqlite")
+            store = SQLiteJobStore(db)
+            legacy = store.create(
+                project_id="project-1", provider="fal", model="fal-ai/flux/dev",
+                capability="media.generate", prompt_hash="a" * 64, cost_micro_usd=10,
+            )
+            store.close()
+
+            # Simulate a ledger created before provider-quote provenance columns.
+            raw = sqlite3.connect(db)
+            raw.execute("DROP TABLE cost_events")
+            raw.executescript("""
+                CREATE TABLE cost_events (
+                  event_id INTEGER PRIMARY KEY AUTOINCREMENT, job_id TEXT NOT NULL,
+                  provider TEXT NOT NULL, amount_micro_usd INTEGER NOT NULL,
+                  occurred_at REAL NOT NULL
+                );
+            """)
+            raw.execute(
+                "INSERT INTO cost_events (job_id, provider, amount_micro_usd, occurred_at) VALUES (?,?,?,?)",
+                (legacy.job_id, "fal", 10, jobs_module.time.time()),
+            )
+            raw.commit(); raw.close()
+
+            reopened = SQLiteJobStore(db)
+            try:
+                with self.assertRaises(ValueError):
+                    reopened.add_cost(legacy.job_id, 50, project_id="project-1",
+                                      cost_source="rough_estimate", cost_reference="guess")
+                with self.assertRaises(ValueError):
+                    reopened.add_cost(legacy.job_id, 50, project_id="project-1",
+                                      cost_source="provider_enforced", cost_reference="bad/token")
+                job = reopened.add_cost(legacy.job_id, 50, project_id="project-1",
+                                        cost_source="provider_enforced", cost_reference="provider-quote-50")
+                self.assertEqual(job.cost_micro_usd, 60)
+                self.assertEqual(job.provenance["cost_source"], "provider_enforced")
+                self.assertEqual(job.provenance["cost_reference"], "provider-quote-50")
+                events = reopened._db.execute(
+                    "SELECT amount_micro_usd, cost_source, cost_reference FROM cost_events ORDER BY event_id"
+                ).fetchall()
+                self.assertEqual([tuple(row) for row in events],
+                                 [(10, None, None), (50, "provider_enforced", "provider-quote-50")])
+                self.assertEqual(reopened.cost_totals("fal")["aggregate"], 60)
+            finally:
+                reopened.close()
+
     def test_jobs_are_project_scoped_and_sensitive_events_never_persist(self):
         store = SQLiteJobStore()
         job = store.create(project_id="project-a", provider="fal", model="fal-ai/flux/dev", capability="media.generate", prompt_hash="a" * 64)
