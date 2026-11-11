@@ -13,7 +13,7 @@ from types import SimpleNamespace
 from Auvra.desktop.credential_prompt import CredentialPromptUnavailableError
 from Auvra.desktop.dialogs import DialogSelection, DialogUnavailableError
 from Auvra.desktop.previews import PreviewStore
-from Auvra.desktop.provider_host import NativeProviderHost
+from Auvra.desktop.provider_host import NativeProviderHost, ProviderChargeCeiling
 from Auvra.host.dispatcher import HostOperationError
 from Auvra.project import ProjectIndex, ProjectService
 from Auvra.providers import Capability
@@ -79,6 +79,11 @@ class _Folders:
 
 
 class _Adapter:
+    # Offline fixture: represents a provider with a genuine hard billing ceiling.
+    # No production cloud adapter currently has that capability.
+    def provider_enforced_charge_ceiling(self, model_id):
+        return ProviderChargeCeiling("openai", model_id, 100, "fixture-fixed-100")
+
     def complete(self, *, model: str, prompt: str, capability="text", structured_command: bool = False):
         assert not structured_command
         return TextResult("openai", model, "safe normalized output")
@@ -302,7 +307,7 @@ class ProviderHostTests(unittest.TestCase):
                 host.handle("provider.configure", {"providerId": "openai", "expectedSettingsRevision": 0, "settings": {
                     "enabled": True, "routes": [{"capability": "text", "modelId": "gpt-4o-mini"}],
                     "fallbackPolicy": "none", "requireCostConfirmation": False,
-                    "budgets": {"perJobMicroUsd": 0, "dailyMicroUsd": 0, "monthlyMicroUsd": 0}}})
+                    "budgets": {"perJobMicroUsd": 200, "dailyMicroUsd": 1_000, "monthlyMicroUsd": 3_000}}})
                 submitted = host.handle("inference.submit", {"projectId": "project-1", "expectedRevision": 0,
                     "providerId": "openai", "modelId": "gpt-4o-mini", "capability": "text", "route": "cloud",
                     "input": "private prompt", "consent": "explicit"})
@@ -313,6 +318,9 @@ class ProviderHostTests(unittest.TestCase):
                         break
                     time.sleep(0.01)
                 self.assertEqual(current["job"]["outputText"], "safe normalized output")
+                self.assertEqual(host.jobs.get(job_id).provenance["cost_source"], "provider_enforced")
+                self.assertEqual(host.jobs.get(job_id).provenance["cost_reference"], "fixture-fixed-100")
+                self.assertEqual(host.jobs.get(job_id).cost_micro_usd, 100)
                 self.assertEqual(project.service.active.revision, 0)
                 self.assertTrue(any(event[0] == "provider.progress" for event in host.drain_events()))
             finally:
@@ -455,33 +463,37 @@ class ProviderHostTests(unittest.TestCase):
             finally:
                 host.shutdown()
 
-    def test_a_job_with_budgets_set_is_held_to_them_by_the_catalog_price(self) -> None:
-        from Auvra.providers.fal_catalog import CatalogModel
+    def test_rough_catalog_cost_is_never_an_authority_for_cloud_budgets(self) -> None:
+        from Auvra.providers.fal_catalog import CatalogModel, rough_job_cost
 
-        class Priced:
+        class RoughOnly:
             def model_details(self, _model):
-                return CatalogModel("a/b", "A B", frozenset({Capability.MEDIA_EDIT}), "image-to-image", "", 40_000, "images")
+                return CatalogModel("a/b", "A B", frozenset({Capability.MEDIA_EDIT}),
+                                    "image-to-image", "", 40_000, "images")
+
+        class HardBound(RoughOnly):
+            def provider_enforced_charge_ceiling(self, model_id):
+                return ProviderChargeCeiling("fal", model_id, 40_000, "fixture-hard-40k")
 
         with tempfile.TemporaryDirectory() as raw:
-            host = NativeProviderHost(Path(raw), project_host=_Project(), adapters={"fal": Priced()})
+            host = NativeProviderHost(Path(raw), project_host=_Project(), adapters={"fal": RoughOnly()})
             try:
-                unset = SimpleNamespace(max_job_cost_micro_usd=0, max_daily_cost_micro_usd=0, max_monthly_cost_micro_usd=0)
-                self.assertIsNone(host._cost_estimate("fal", unset, {"modelId": "a/b"}))
-                limits = SimpleNamespace(max_job_cost_micro_usd=10_000, max_daily_cost_micro_usd=100_000, max_monthly_cost_micro_usd=100_000)
-                self.assertEqual(host._cost_estimate("fal", limits, {"modelId": "a/b"}), 40_000)
-                for hint in (None, 0, 7, 40_000):
-                    estimate = host._cost_estimate("fal", limits, {"modelId": "a/b", "estimatedCostMicroUsd": hint})
-                    self.assertEqual(estimate, 40_000)
-                    with self.assertRaises(HostOperationError) as raised:
-                        host._check_budget("fal", limits, estimate)
-                    self.assertEqual(raised.exception.code, "budget_exceeded")
-                bigger = host._cost_estimate("fal", limits, {"modelId": "a/b", "estimatedCostMicroUsd": 45_000})
-                self.assertEqual(bigger, 45_000)
-                enough = SimpleNamespace(max_job_cost_micro_usd=50_000, max_daily_cost_micro_usd=100_000, max_monthly_cost_micro_usd=100_000)
-                self.assertEqual(host._check_budget("fal", enough, bigger), 45_000)
-                with self.assertRaises(HostOperationError) as raised:
-                    host._cost_estimate("fal", limits, {"modelId": "a/b", "estimatedCostMicroUsd": -1})
-                self.assertEqual(raised.exception.code, "invalid_request")
+                self.assertEqual(rough_job_cost(RoughOnly().model_details("a/b")), 40_000)
+                self.assertIsNone(host._provider_charge_ceiling("fal", "a/b"))
+                limits = SimpleNamespace(max_job_cost_micro_usd=10_000, max_daily_cost_micro_usd=100_000,
+                                         max_monthly_cost_micro_usd=100_000)
+                with self.assertRaises(HostOperationError) as blocked:
+                    host._check_budget("fal", limits, None)
+                self.assertEqual(blocked.exception.code, "budget_exceeded")
+                host._adapters["fal"] = HardBound()
+                ceiling = host._provider_charge_ceiling("fal", "a/b")
+                self.assertEqual(ceiling.max_micro_usd, 40_000)
+                with self.assertRaises(HostOperationError) as over:
+                    host._check_budget("fal", limits, ceiling.max_micro_usd)
+                self.assertEqual(over.exception.code, "budget_exceeded")
+                enough = SimpleNamespace(max_job_cost_micro_usd=50_000, max_daily_cost_micro_usd=100_000,
+                                         max_monthly_cost_micro_usd=100_000)
+                self.assertEqual(host._check_budget("fal", enough, ceiling.max_micro_usd), 40_000)
             finally:
                 host.shutdown()
 
@@ -489,6 +501,10 @@ class ProviderHostTests(unittest.TestCase):
         from Auvra.providers.fal_catalog import CatalogModel
 
         class Priced:
+            # This fixture represents a provider-guaranteed maximum.
+            def provider_enforced_charge_ceiling(self, model_id):
+                return ProviderChargeCeiling("fal", model_id, 40_000, "fixture-hard-40k")
+
             def model_details(self, _model):
                 return CatalogModel("a/b", "A B", frozenset({Capability.MEDIA_EDIT}), "image-to-image", "", 40_000, "images")
 
@@ -503,7 +519,7 @@ class ProviderHostTests(unittest.TestCase):
                            "providerId": "fal", "modelId": "a/b", "capability": Capability.MEDIA_EDIT.value,
                            "route": "cloud", "input": "test", "consent": "explicit"}
                 with mock.patch.object(host, "_credential_status", return_value="configured"):
-                    for hint in (None, 0, 7):
+                    for hint in (None, 0, 7, 40_000, 50_000):
                         with self.subTest(hint=hint), self.assertRaises(HostOperationError) as raised:
                             host._submit({**request, "estimatedCostMicroUsd": hint})
                         self.assertEqual(raised.exception.code, "budget_exceeded")
@@ -511,7 +527,7 @@ class ProviderHostTests(unittest.TestCase):
             finally:
                 host.shutdown()
 
-    def test_unknown_cloud_prices_fail_closed_when_budgets_are_set(self) -> None:
+    def test_unknown_cloud_prices_fail_closed_even_with_large_client_hint(self) -> None:
         class Unpriced:
             def model_details(self, _model):
                 return None
@@ -519,13 +535,153 @@ class ProviderHostTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw:
             host = NativeProviderHost(Path(raw), project_host=_Project(), adapters={"fal": Unpriced()})
             try:
-                limits = SimpleNamespace(max_job_cost_micro_usd=10_000, max_daily_cost_micro_usd=100_000, max_monthly_cost_micro_usd=100_000)
-                for hint in (None, 0, 5_000):
-                    estimate = host._cost_estimate("fal", limits, {"modelId": "a/b", "estimatedCostMicroUsd": hint})
-                    self.assertIsNone(estimate)
-                    with self.assertRaises(HostOperationError) as raised:
-                        host._check_budget("fal", limits, estimate)
-                    self.assertEqual(raised.exception.code, "budget_exceeded")
+                host.registry.discover_models("fal", ["a/b"], {"a/b": {Capability.MEDIA_EDIT}})
+                host.settings.set("fal", enabled=True, routes={Capability.MEDIA_EDIT: "a/b"},
+                                  require_cost_confirmation=False, max_job_cost_micro_usd=100_000,
+                                  max_daily_cost_micro_usd=100_000, max_monthly_cost_micro_usd=100_000)
+                request = {"projectId": "project-1", "expectedRevision": 0, "providerId": "fal",
+                           "modelId": "a/b", "capability": Capability.MEDIA_EDIT.value,
+                           "route": "cloud", "input": "test", "consent": "explicit"}
+                with mock.patch.object(host, "_credential_status", return_value="configured"):
+                    for hint in (None, 0, 1, 50_000, 100_000):
+                        with self.subTest(hint=hint), self.assertRaises(HostOperationError) as blocked:
+                            host._submit({**request, "estimatedCostMicroUsd": hint})
+                        self.assertEqual(blocked.exception.code, "budget_exceeded")
+                self.assertEqual(host.jobs.list(project_id="project-1"), ())
+            finally:
+                host.shutdown()
+
+    def test_zero_or_partially_configured_cloud_caps_fail_closed_with_a_ceiling(self) -> None:
+        class HardBound:
+            def provider_enforced_charge_ceiling(self, model_id):
+                return ProviderChargeCeiling("fal", model_id, 40, "fixture-hard-40")
+
+        with tempfile.TemporaryDirectory() as raw:
+            host = NativeProviderHost(Path(raw), project_host=_Project(), adapters={"fal": HardBound()})
+            try:
+                host.registry.discover_models("fal", ["a/b"], {"a/b": {Capability.MEDIA_EDIT}})
+                request = {"projectId": "project-1", "expectedRevision": 0, "providerId": "fal",
+                           "modelId": "a/b", "capability": Capability.MEDIA_EDIT.value,
+                           "route": "cloud", "input": "test", "consent": "explicit"}
+                with mock.patch.object(host, "_credential_status", return_value="configured"):
+                    for caps in ((0, 0, 0), (0, 100, 100), (100, 0, 100), (100, 100, 0)):
+                        host.settings.set("fal", enabled=True, routes={Capability.MEDIA_EDIT: "a/b"},
+                                          require_cost_confirmation=False,
+                                          max_job_cost_micro_usd=caps[0], max_daily_cost_micro_usd=caps[1],
+                                          max_monthly_cost_micro_usd=caps[2])
+                        for hint in (None, 0, 1_000):
+                            with self.subTest(caps=caps, hint=hint), self.assertRaises(HostOperationError) as blocked:
+                                host._submit({**request, "estimatedCostMicroUsd": hint})
+                            self.assertEqual(blocked.exception.code, "budget_exceeded")
+                self.assertEqual(host.jobs.list(project_id="project-1"), ())
+            finally:
+                host.shutdown()
+
+    def test_unverified_malformed_and_wrong_model_ceiling_is_rejected(self) -> None:
+        class Quoter:
+            quote = None
+            def provider_enforced_charge_ceiling(self, _model_id):
+                return self.quote
+
+        quoter = Quoter()
+        with tempfile.TemporaryDirectory() as raw:
+            host = NativeProviderHost(Path(raw), project_host=_Project(), adapters={"fal": quoter})
+            try:
+                for value in (
+                    None, 40, {"max_micro_usd": 40}, 
+                    ProviderChargeCeiling("openai", "a/b", 40, "ref"),
+                    ProviderChargeCeiling("fal", "other", 40, "ref"),
+                    ProviderChargeCeiling("fal", "a/b", 0, "ref"),
+                    ProviderChargeCeiling("fal", "a/b", -1, "ref"),
+                    ProviderChargeCeiling("fal", "a/b", True, "ref"),
+                    ProviderChargeCeiling("fal", "a/b", 40, ""),
+                    ProviderChargeCeiling("fal", "a/b", 40, "secret/token"),
+                ):
+                    quoter.quote = value
+                    with self.subTest(value=value):
+                        self.assertIsNone(host._provider_charge_ceiling("fal", "a/b"))
+                quoter.quote = ProviderChargeCeiling("fal", "a/b", 40, "provider-hard-cap-1")
+                self.assertEqual(host._provider_charge_ceiling("fal", "a/b").max_micro_usd, 40)
+            finally:
+                host.shutdown()
+
+    def test_cloud_reservations_enforce_daily_and_monthly_buckets(self) -> None:
+        class HardBound:
+            def provider_enforced_charge_ceiling(self, model_id):
+                return ProviderChargeCeiling("fal", model_id, 80, "provider-hard-cap-80")
+
+        with tempfile.TemporaryDirectory() as raw:
+            host = NativeProviderHost(Path(raw), project_host=_Project(), adapters={"fal": HardBound()})
+            try:
+                host.registry.discover_models("fal", ["a/b"], {"a/b": {Capability.MEDIA_EDIT}})
+                request = {"projectId": "project-1", "expectedRevision": 0, "providerId": "fal",
+                           "modelId": "a/b", "capability": Capability.MEDIA_EDIT.value,
+                           "route": "cloud", "input": "test", "consent": "explicit"}
+                for daily, monthly in ((150, 500), (500, 150)):
+                    with self.subTest(daily=daily, monthly=monthly):
+                        host.settings.set("fal", enabled=True, routes={Capability.MEDIA_EDIT: "a/b"},
+                                          require_cost_confirmation=False, max_job_cost_micro_usd=100,
+                                          max_daily_cost_micro_usd=daily, max_monthly_cost_micro_usd=monthly)
+                        before = host.jobs.cost_totals("fal")["aggregate"]
+                        with mock.patch.object(host, "_credential_status", return_value="configured"),                                 mock.patch.object(host._executor, "submit", return_value=mock.Mock()):
+                            if before == 0:
+                                accepted = host._submit(request)
+                                self.assertIsNotNone(accepted["job"]["jobId"])
+                                self.assertEqual(host.jobs.get(accepted["job"]["jobId"]).cost_micro_usd, 80)
+                            with self.assertRaises(HostOperationError) as blocked:
+                                host._submit(request)
+                        self.assertEqual(blocked.exception.code, "budget_exceeded")
+            finally:
+                host.shutdown()
+
+    def test_retry_uses_new_provider_ceiling_not_persisted_reservation(self) -> None:
+        class HardBound:
+            ceiling = 100
+            reference = "provider-first-100"
+            def provider_enforced_charge_ceiling(self, model_id):
+                return (ProviderChargeCeiling("fal", model_id, self.ceiling, self.reference)
+                        if self.ceiling is not None else None)
+
+        adapter = HardBound()
+        with tempfile.TemporaryDirectory() as raw:
+            host = NativeProviderHost(Path(raw), project_host=_Project(), adapters={"fal": adapter})
+            try:
+                host.registry.discover_models("fal", ["a/b"], {"a/b": {Capability.MEDIA_EDIT}})
+                host.settings.set("fal", enabled=True, routes={Capability.MEDIA_EDIT: "a/b"},
+                                  require_cost_confirmation=False, max_job_cost_micro_usd=250,
+                                  max_daily_cost_micro_usd=450, max_monthly_cost_micro_usd=450)
+                request = {"projectId": "project-1", "expectedRevision": 0, "providerId": "fal",
+                           "modelId": "a/b", "capability": Capability.MEDIA_EDIT.value,
+                           "route": "cloud", "input": "test", "consent": "explicit"}
+                with mock.patch.object(host, "_credential_status", return_value="configured"),                         mock.patch.object(host._executor, "submit", return_value=mock.Mock()):
+                    job_id = host._submit(request)["job"]["jobId"]
+                job = host.jobs.get(job_id)
+                self.assertEqual(job.cost_micro_usd, 100)
+                self.assertEqual(job.provenance["cost_reference"], "provider-first-100")
+                host.jobs.transition(job_id, "submitting")
+                host.jobs.transition(job_id, "failed")
+                host._meta[job_id]["estimatedCostMicroUsd"] = 1
+                adapter.ceiling, adapter.reference = 200, "provider-second-200"
+                with mock.patch.object(host._executor, "submit", return_value=mock.Mock()):
+                    host._retry({"projectId": "project-1", "expectedRevision": 0, "jobId": job_id})
+                job = host.jobs.get(job_id)
+                self.assertEqual(job.cost_micro_usd, 300)
+                self.assertEqual(job.provenance["cost_reference"], "provider-second-200")
+                self.assertEqual(job.provenance["cost_micro_usd"], 200)
+                self.assertEqual(host.jobs.cost_totals("fal")["aggregate"], 300)
+                host.jobs.transition(job_id, "submitting")
+                host.jobs.transition(job_id, "failed")
+                adapter.ceiling = None
+                with self.assertRaises(HostOperationError) as unknown:
+                    host._retry({"projectId": "project-1", "expectedRevision": 0, "jobId": job_id})
+                self.assertEqual(unknown.exception.code, "budget_exceeded")
+                self.assertEqual(host.jobs.get(job_id).state.value, "failed")
+                self.assertEqual(host.jobs.get(job_id).cost_micro_usd, 300)
+                adapter.ceiling = 260
+                with self.assertRaises(HostOperationError) as over:
+                    host._retry({"projectId": "project-1", "expectedRevision": 0, "jobId": job_id})
+                self.assertEqual(over.exception.code, "budget_exceeded")
+                self.assertEqual(host.jobs.get(job_id).cost_micro_usd, 300)
             finally:
                 host.shutdown()
 
