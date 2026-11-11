@@ -354,10 +354,15 @@ describe('bounded material ZIP import', () => {
             { name: 'a', data: new Uint8Array([1]) },
             { name: 'b', data: new Uint8Array([2]) },
         ]);
-        // Make the second local header point at the first one's bytes.
-        const secondCentral = archive.length - 22 - (46 + 1) * 2 + 47;
-        new DataView(archive.buffer).setUint32(secondCentral + 42, 0, true);
-        await expect(openZip(archive)).rejects.toThrow();
+        // Enlarge the first stored member into the second local header.
+        // All size fields agree, but the two members' spans now overlap.
+        const view = new DataView(archive.buffer);
+        const centralStart = archive.length - 22 - (46 + 1) * 2;
+        view.setUint32(18, 16, true);
+        view.setUint32(22, 16, true);
+        view.setUint32(centralStart + 20, 16, true);
+        view.setUint32(centralStart + 24, 16, true);
+        await expect(openZip(archive)).rejects.toThrow('overlapping members');
         const zip64 = zipFixture([{ name: 'one', data: new Uint8Array([1]) }]);
         new DataView(zip64.buffer).setUint32(zip64.length - 22 + 16, 0xffffffff, true);
         await expect(openZip(zip64)).rejects.toThrow('ZIP64');
