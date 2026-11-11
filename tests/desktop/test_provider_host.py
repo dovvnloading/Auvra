@@ -455,24 +455,106 @@ class ProviderHostTests(unittest.TestCase):
             finally:
                 host.shutdown()
 
-    def test_a_job_with_budgets_set_is_held_to_them_by_the_catalog_price(self) -> None:
-        from Auvra.providers.fal_catalog import CatalogModel
-
-        class Priced:
-            def model_details(self, _model):
-                return CatalogModel("a/b", "A B", frozenset({Capability.MEDIA_EDIT}), "image-to-image", "", 40_000, "images")
-
+    def test_cloud_budget_bypass_removed_without_disabling_cloud_ai(self) -> None:
+        """Old cost hints cannot authorize a fake cap; paid AI still routes with consent."""
         with tempfile.TemporaryDirectory() as raw:
-            host = NativeProviderHost(Path(raw), project_host=_Project(), adapters={"fal": Priced()})
+            host = NativeProviderHost(Path(raw), project_host=_Project(), adapters={"openai": _Adapter()})
             try:
-                unset = SimpleNamespace(max_job_cost_micro_usd=0, max_daily_cost_micro_usd=0, max_monthly_cost_micro_usd=0)
-                self.assertIsNone(host._cost_estimate("fal", unset, {"modelId": "a/b"}))
-                limits = SimpleNamespace(max_job_cost_micro_usd=10_000, max_daily_cost_micro_usd=100_000, max_monthly_cost_micro_usd=100_000)
-                self.assertEqual(host._cost_estimate("fal", limits, {"modelId": "a/b"}), 40_000)
-                self.assertEqual(host._cost_estimate("fal", limits, {"modelId": "a/b", "estimatedCostMicroUsd": 7}), 7)
-                with self.assertRaises(HostOperationError) as raised:
-                    host._check_budget("fal", limits, 40_000)
-                self.assertEqual(raised.exception.code, "budget_exceeded")
+                host.registry.discover_models("openai", ("gpt-4o-mini",))
+                with self.assertRaises(HostOperationError) as error:
+                    host._configure({"providerId": "openai", "expectedSettingsRevision": 0,
+                                     "settings": {"enabled": True,
+                                                  "routes": [{"capability": "text", "modelId": "gpt-4o-mini"}],
+                                                  "fallbackPolicy": "none", "requireCostConfirmation": False,
+                                                  "budgets": {"perJobMicroUsd": 10_000,
+                                                              "dailyMicroUsd": 100_000,
+                                                              "monthlyMicroUsd": 100_000}}})
+                self.assertEqual(error.exception.code, "invalid_request")
+                # An old client hint cannot install or bypass an unenforceable cap.
+                settings = {"enabled": True,
+                            "routes": [{"capability": "text", "modelId": "gpt-4o-mini"}],
+                            "fallbackPolicy": "none", "requireCostConfirmation": False,
+                            "budgets": {"perJobMicroUsd": 0, "dailyMicroUsd": 0,
+                                        "monthlyMicroUsd": 0}}
+                configured = host._configure({"providerId": "openai",
+                                              "expectedSettingsRevision": 0, "settings": settings})
+                self.assertTrue(configured["settings"]["enabled"])
+                self.assertTrue(configured["settings"]["requireCostConfirmation"])
+                self.assertEqual(configured["settings"]["budgets"], settings["budgets"])
+                request = {"projectId": "project-1", "expectedRevision": 0,
+                           "providerId": "openai", "modelId": "gpt-4o-mini",
+                           "capability": Capability.TEXT.value, "route": "cloud",
+                           "input": "test"}
+                with mock.patch.object(host, "_credential_status", return_value="configured"), \
+                        mock.patch.object(host._executor, "submit", return_value=mock.Mock()) as sent:
+                    for hint in (None, 0, 7, 40_000):
+                        with self.subTest(hint=hint):
+                            with self.assertRaises(HostOperationError) as rejected:
+                                host._submit({**request, "estimatedCostMicroUsd": hint})
+                            self.assertEqual(rejected.exception.code, "budget_exceeded")
+                            accepted = host._submit({**request, "estimatedCostMicroUsd": hint,
+                                                     "consent": "explicit"})
+                            self.assertEqual(accepted["job"]["status"], "queued")
+                            job = host.jobs.get(accepted["job"]["jobId"])
+                            # This field is an unreserved ledger entry, NOT a provider bill.
+                            self.assertEqual(job.cost_micro_usd, 0)
+                    self.assertEqual(sent.call_count, 4)
+                self.assertEqual(host.jobs.cost_totals("openai")["aggregate"], 0)
+            finally:
+                host.shutdown()
+
+    def test_legacy_nonzero_cloud_limits_are_not_advertised_or_enforced(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            host = NativeProviderHost(Path(raw), project_host=_Project(), adapters={"openai": _Adapter()})
+            try:
+                host.registry.discover_models("openai", ("gpt-4o-mini",))
+                host.settings.set("openai", enabled=True,
+                                  routes={Capability.TEXT: "gpt-4o-mini"},
+                                  require_cost_confirmation=False,
+                                  max_job_cost_micro_usd=100,
+                                  max_daily_cost_micro_usd=100, max_monthly_cost_micro_usd=100)
+                public = host._provider_status({"providerId": "openai"})
+                self.assertTrue(public["settings"]["enabled"])
+                self.assertTrue(public["settings"]["requireCostConfirmation"])
+                self.assertEqual(public["settings"]["budgets"],
+                                 {"perJobMicroUsd": 0, "dailyMicroUsd": 0, "monthlyMicroUsd": 0})
+                with mock.patch.object(host, "_credential_status", return_value="configured"), \
+                        mock.patch.object(host._executor, "submit", return_value=mock.Mock()):
+                    payload = {"projectId": "project-1", "expectedRevision": 0,
+                               "providerId": "openai", "modelId": "gpt-4o-mini",
+                               "capability": "text", "route": "cloud",
+                               "consent": "explicit", "input": "test",
+                               "estimatedCostMicroUsd": 10_000}
+                    accepted = host._submit(payload)
+                    self.assertEqual(host.jobs.get(accepted["job"]["jobId"]).cost_micro_usd, 0)
+            finally:
+                host.shutdown()
+
+    def test_cloud_retry_needs_explicit_consent_and_preserves_ai_route(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            host = NativeProviderHost(Path(raw), project_host=_Project(), adapters={"openai": _Adapter()})
+            try:
+                host.registry.discover_models("openai", ("gpt-4o-mini",))
+                host.settings.set("openai", enabled=True,
+                                  routes={Capability.TEXT: "gpt-4o-mini"})
+                with mock.patch.object(host, "_credential_status", return_value="configured"), \
+                        mock.patch.object(host._executor, "submit", return_value=mock.Mock()):
+                    queued = host._submit({"projectId": "project-1", "expectedRevision": 0,
+                                           "providerId": "openai", "modelId": "gpt-4o-mini",
+                                           "capability": "text", "route": "cloud",
+                                           "input": "test", "consent": "explicit"})
+                    job_id = queued["job"]["jobId"]
+                    host.jobs.transition(job_id, "submitting")
+                    host.jobs.transition(job_id, "failed")
+                    with self.assertRaises(HostOperationError) as blocked:
+                        host._retry({"projectId": "project-1", "expectedRevision": 0, "jobId": job_id})
+                    self.assertEqual(blocked.exception.code, "budget_exceeded")
+                    self.assertEqual(host.jobs.get(job_id).state.value, "failed")
+                    retried = host._retry({"projectId": "project-1", "expectedRevision": 0,
+                                           "jobId": job_id, "consent": "explicit"})
+                    self.assertEqual(retried["job"]["status"], "queued")
+                    self.assertEqual(host.jobs.get(job_id).attempt, 2)
+                    self.assertEqual(host.jobs.cost_totals("openai")["aggregate"], 0)
             finally:
                 host.shutdown()
 
