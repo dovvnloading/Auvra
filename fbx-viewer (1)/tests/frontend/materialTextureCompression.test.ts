@@ -190,6 +190,37 @@ describe('a material texture made from its picture', () => {
         expect(texture.userData.auvraTextureSettings).toBe(true);
     });
 
+    it.each([
+        [false, false], [false, true], [true, false], [true, true],
+    ])('applies DirectX normal green inversion %s and row flip %s at 8-bit and half-float depth', async (flipGreen, flipY) => {
+        const rgba = new Float32Array([
+            0.3, 0.25, 0.7, 1, 0.3, 0.375, 0.7, 1,
+            0.3, 0.625, 0.7, 1, 0.3, 0.75, 0.7, 1,
+        ]);
+        const original = Array.from(rgba);
+        setTextureSettings('normal', { normalMap: true, flipGreen, compression: 'none' });
+        for (const depth of [16, 32] as const) {
+            const { texture, format } = await textureFromPicture({
+                width: 2, height: 2, channels: 4, depth, hdr: false, rgba,
+            }, { textureId: 'normal', slot: 'normal', flipY }, false);
+            expect(format).toBe(depth === 32 ? 'half' : 'rgba8');
+            const data = (texture as THREE.DataTexture).image.data as Uint8Array | Uint16Array;
+            for (let pixel = 0; pixel < 4; pixel++) {
+                const sourcePixel = flipY ? (1 - Math.floor(pixel / 2)) * 2 + pixel % 2 : pixel;
+                for (const channel of [0, 1, 2, 3]) {
+                    const originalValue = rgba[sourcePixel * 4 + channel];
+                    const expected = channel === 1 && flipGreen ? 1 - originalValue : originalValue;
+                    const value = format === 'half'
+                        ? THREE.DataUtils.fromHalfFloat(data[pixel * 4 + channel])
+                        : data[pixel * 4 + channel] / 255;
+                    expect(value).toBeCloseTo(expected, 2);
+                }
+            }
+        }
+        // A texture load must not change the decoded picture shared by other uploads.
+        expect(Array.from(rgba)).toEqual(original);
+    });
+
     it('keeps floating-point light as half floats, read as stored', async () => {
         const { texture, format } = await textureFromPicture(picture(4, 4, { hdr: true, depth: 32 }), { textureId: 'sky', slot: 'map', flipY: false }, true);
         expect(format).toBe('half');

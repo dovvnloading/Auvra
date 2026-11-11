@@ -71,6 +71,28 @@ describe('loadGameContent', () => {
     expect(revoked).toEqual([]);
   });
 
+  it('releases both the deep texture source and its preview when level residency evicts it', async () => {
+    const source = 'a'.repeat(64);
+    const preview = 'b'.repeat(64);
+    const loader = createGameContentLoader({
+      textures: [{
+        id: 'deep', name: 'Normal.exr', assetId: source,
+        settings: { source: { format: 'exr', depth: 32, channels: 4 }, preview: { assetId: preview } },
+      }],
+    }, { resolveAssetUrl, generateThumbnails: false });
+    await loader.load({ textures: new Set(['deep']) });
+    expect(created).toHaveLength(2);
+    expect(loader.content().textures[0]).toMatchObject({ sourceUrl: created[0], url: created[1] });
+
+    loader.release({ textures: new Set(['deep']) });
+    expect(loader.content().textures).toEqual([]);
+    expect([...revoked].sort()).toEqual([...created].sort());
+
+    // Both URLs leave the owned set, so cleaning up the loader cannot revoke them twice.
+    loader.releaseAll();
+    expect([...revoked].sort()).toEqual([...created].sort());
+  });
+
   it('defaults settings and HUD when the project has none', async () => {
     const loaded = await loadGameContent({}, { resolveAssetUrl, generateThumbnails: false });
     expect(loaded.settings).toEqual(DEFAULT_GAME_SETTINGS);
