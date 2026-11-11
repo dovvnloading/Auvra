@@ -88,7 +88,7 @@ export const textureFromPicture = async (
         texture.generateMipmaps = false;
         texture.minFilter = levels.length > 1 ? THREE.LinearMipmapLinearFilter : THREE.LinearFilter;
     } else if (format === 'half') {
-        const half = pictureToHalf(sized);
+        const half = pictureToHalf(sized, settings?.flipGreen === true);
         texture = new THREE.DataTexture(request.flipY ? flipped(half, width, height) : half, width, height, THREE.RGBAFormat, THREE.HalfFloatType);
         // Half floats are not filtered into mip levels here.
         texture.generateMipmaps = false;
