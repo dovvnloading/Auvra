@@ -69,17 +69,55 @@ export const packCompressed = (picture: CompressedPicture): Uint8Array => {
     return out;
 };
 
-/** Reads the container back; null for anything else (or a damaged one). */
+/** Each format uses 4×4 GPU blocks; a partial block still occupies a whole block. */
+const BLOCK_BYTES: Record<MaterialTextureFormat, number> = {
+    bc7: 16, bc5: 16, bc4: 8, astc: 16, etc2: 8, etc2a: 16,
+};
+const MAX_TEXTURE_DIMENSION = 16384;
+const MAX_HEADER_BYTES = 64 * 1024;
+
+const validDimension = (value: unknown): value is number =>
+    typeof value === 'number' && Number.isSafeInteger(value) && value > 0 && value <= MAX_TEXTURE_DIMENSION;
+
+const validFormat = (value: unknown): value is MaterialTextureFormat =>
+    typeof value === 'string' && Object.prototype.hasOwnProperty.call(BLOCK_BYTES, value);
+
+/** Reads the container back; never hand malformed cached blocks to the GPU. */
 export const unpackCompressed = (bytes: Uint8Array): CompressedPicture | null => {
     if (bytes.length < 8 || !MAGIC.every((value, at) => bytes[at] === value)) return null;
     try {
         const length = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(4, true);
+        if (length === 0 || length > MAX_HEADER_BYTES || length > bytes.length - 8) return null;
         const header = JSON.parse(new TextDecoder().decode(bytes.subarray(8, 8 + length))) as {
-            format: MaterialTextureFormat; width: number; height: number; levels: Array<{ width: number; height: number; offset: number; length: number }>;
+            format?: unknown; width?: unknown; height?: unknown; levels?: unknown;
         };
+        if (!header || !validFormat(header.format) || !validDimension(header.width) || !validDimension(header.height)
+            || !Array.isArray(header.levels) || header.levels.length === 0
+            || header.levels.length > Math.floor(Math.log2(Math.max(header.width, header.height))) + 1) return null;
+
         const start = 8 + length;
-        const levels = header.levels.map(level => ({ width: level.width, height: level.height, data: bytes.slice(start + level.offset, start + level.offset + level.length) }));
-        if (levels.some(level => level.data.length === 0)) return null;
+        const payloadLength = bytes.length - start;
+        const spans: Array<{ width: number; height: number; offset: number; length: number }> = [];
+        let width = header.width;
+        let height = header.height;
+        let offset = 0;
+        for (const entry of header.levels) {
+            if (!entry || typeof entry !== 'object') return null;
+            const level = entry as Record<string, unknown>;
+            const levelLength = Math.ceil(width / 4) * Math.ceil(height / 4) * BLOCK_BYTES[header.format];
+            // packCompressed writes tightly packed, ordered mip levels. Check every span before slicing.
+            if (level.width !== width || level.height !== height || level.offset !== offset
+                || level.length !== levelLength || offset + levelLength > payloadLength) return null;
+            spans.push({ width, height, offset, length: levelLength });
+            offset += levelLength;
+            width = Math.max(1, Math.floor(width / 2));
+            height = Math.max(1, Math.floor(height / 2));
+        }
+        if (offset !== payloadLength) return null;
+        const levels = spans.map(level => ({
+            width: level.width, height: level.height,
+            data: bytes.subarray(start + level.offset, start + level.offset + level.length),
+        }));
         return { format: header.format, width: header.width, height: header.height, levels };
     } catch {
         return null;
