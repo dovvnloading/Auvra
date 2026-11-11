@@ -202,6 +202,29 @@ class ProjectTests(unittest.TestCase):
         self.assertFalse(staged.exists())
         self.assertEqual(json.loads(manifest.read_text(encoding="utf-8")), {})
 
+    def test_manifest_temp_cleanup_failure_does_not_resurrect_removed_blob(self):
+        ref = self.repo.assets.put_stream(io.BytesIO(b"manifest-temp-failure"))
+        blob = self.repo.assets.path_for(ref.asset_id)
+        staged = blob.parent / ".incoming" / f".delete-{ref.asset_id}"
+        manifest = self.root / "Content" / "manifest.json"
+        original_unlink = Path.unlink
+
+        def refuse_temp_unlink(path, *args, **kwargs):
+            if Path(path).name.startswith("manifest.json.tmp-"):
+                raise PermissionError("cannot remove temporary manifest")
+            return original_unlink(path, *args, **kwargs)
+
+        with mock.patch.object(Path, "unlink", new=refuse_temp_unlink):
+            with self.assertRaises(PermissionError):
+                self.repo.assets.remove(ref.asset_id)
+        self.assertFalse(blob.exists())
+        self.assertTrue(staged.is_file())
+        self.assertNotIn(ref.asset_id, json.loads(manifest.read_text(encoding="utf-8")))
+        self.repo.close()
+        self.repo = ProjectRepository(self.root)
+        self.assertFalse(blob.exists())
+        self.assertFalse(staged.exists())
+
     def test_interrupted_asset_remove_restores_manifest_blob_before_validation(self):
         ref = self.repo.assets.put_stream(io.BytesIO(b"keep-on-crash"))
         self.repo.apply_changes({
