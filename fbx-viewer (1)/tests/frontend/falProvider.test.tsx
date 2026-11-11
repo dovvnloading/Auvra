@@ -119,19 +119,35 @@ describe('the host provider service', () => {
       budgets: { perJobMicroUsd: 0, dailyMicroUsd: 0, monthlyMicroUsd: 0 },
     });
     const { service, calls } = fakeHost((method, payload) => {
-      if (method === 'provider.list') return { providers: [{ providerId: 'fal', route: 'cloud', capabilities: ['code'] }, { providerId: 'openai', route: 'cloud', capabilities: ['code', 'text'] }] };
-      if (method === 'provider.getStatus') return payload.providerId === 'fal'
+      if (method === 'provider.list') return { providers: [{ providerId: 'ollama', route: 'local', capabilities: ['code'] }, { providerId: 'llama.cpp', route: 'local', capabilities: ['code', 'text'] }] };
+      if (method === 'provider.getStatus') return payload.providerId === 'ollama'
         ? { providerId: 'fal', settingsRevision: 2, settings: { ...settings([]), enabled: false } }
         : { providerId: 'openai', settingsRevision: 5, settings: settings([{ capability: 'code', modelId: 'gpt' }, { capability: 'text', modelId: 'gpt' }]) };
       return { settingsRevision: 9 };
     });
-    await service.routeCapability('fal', 'code', 'mistralai/mistral-nemo');
+    await service.routeCapability('ollama', 'code', 'local-model');
     const configured = calls.filter((call) => call.method === 'provider.configure');
-    expect(configured.map((call) => call.payload.providerId)).toEqual(['openai', 'fal']);
+    expect(configured.map((call) => call.payload.providerId)).toEqual(['llama.cpp', 'ollama']);
     expect((configured[0].payload.settings as { routes: unknown[] }).routes).toEqual([{ capability: 'text', modelId: 'gpt' }]);
     expect(configured[0].payload.expectedSettingsRevision).toBe(5);
-    expect(configured[1].payload.settings).toMatchObject({ enabled: true, routes: [{ capability: 'code', modelId: 'mistralai/mistral-nemo' }] });
-    expect(service.getConfiguredRoute('code')?.providerId).toBe('fal');
+    expect(configured[1].payload.settings).toMatchObject({ enabled: true, routes: [{ capability: 'code', modelId: 'local-model' }] });
+    expect(service.getConfiguredRoute('code')?.providerId).toBe('ollama');
+  });
+
+  it('does not route a capability to a paid cloud provider after its retirement', async () => {
+    const { service, calls } = fakeHost((method) => {
+      if (method === 'provider.list') return { providers: [
+        { providerId: 'fal', route: 'cloud', capabilities: ['code'], available: false },
+        { providerId: 'ollama', route: 'local', capabilities: ['code'], available: true },
+      ] };
+      if (method === 'provider.getStatus') return { providerId: 'fal', settingsRevision: 1, settings: {
+        enabled: false, routes: [], fallbackPolicy: 'none', requireCostConfirmation: true,
+        budgets: { perJobMicroUsd: 0, dailyMicroUsd: 0, monthlyMicroUsd: 0 },
+      } };
+      return {};
+    });
+    await expect(service.routeCapability('fal', 'code', 'old-model')).rejects.toThrow('local provider');
+    expect(calls.filter((call) => call.method === 'provider.configure')).toEqual([]);
   });
 
   it('says a failure in words, keeping what the provider said itself', () => {
