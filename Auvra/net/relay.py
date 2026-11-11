@@ -36,6 +36,8 @@ MAX_EVENT_NAME_LENGTH = 64
 MAX_ENTITIES_PER_STATE = 256
 MAX_VARS_PER_ENTITY = 32
 MAX_MESSAGES_PER_SECOND = 120
+# Control frames never reach the application message limiter. Bound them separately.
+MAX_CONTROL_FRAMES_PER_SECOND = 32
 # Slow readers must not retain unbounded outgoing frames or stall a room.
 MAX_PEER_PENDING_BYTES = 512 * 1024
 PEER_SEND_TIMEOUT_SECONDS = 1.0
@@ -79,11 +81,30 @@ def encode_frame(opcode: int, payload: bytes) -> bytes:
     return bytes(header) + payload
 
 
-async def read_message(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> tuple[int, bytes] | None:
+@dataclass(slots=True)
+class ControlFrameBudget:
+    """One connection's rolling control-frame window, shared across reads and fragments."""
+
+    window_start: float = field(default_factory=time.monotonic)
+    count: int = 0
+
+    def consume(self) -> None:
+        now = time.monotonic()
+        if now - self.window_start >= 1.0:
+            self.window_start, self.count = now, 0
+        self.count += 1
+        if self.count > MAX_CONTROL_FRAMES_PER_SECOND:
+            raise ProtocolError("rate_limited", "too many WebSocket control frames")
+
+
+async def read_message(reader: asyncio.StreamReader, writer: asyncio.StreamWriter,
+                       control_budget: ControlFrameBudget | None = None) -> tuple[int, bytes] | None:
     """The next complete text message (fragments joined), answering pings on the way.
 
     Returns (opcode, payload) for a text message, (close opcode, payload) for a close, and None at end of stream.
     """
+    if control_budget is None:
+        control_budget = ControlFrameBudget()
     fragments: list[bytes] = []
     total = 0
     while True:
@@ -112,9 +133,20 @@ async def read_message(reader: asyncio.StreamReader, writer: asyncio.StreamWrite
             data[index] ^= mask[index & 3]
         payload = bytes(data)
 
+        if opcode in (_OP_PING, _OP_PONG):
+            # This runs even while assembling an unfinished fragmented message.
+            # Neither control opcode returns to Relay._count, so limit them here.
+            control_budget.consume()
         if opcode == _OP_PING:
-            writer.write(encode_frame(_OP_PONG, payload))
-            await writer.drain()
+            pong = encode_frame(_OP_PONG, payload)
+            if writer.transport.get_write_buffer_size() + len(pong) > MAX_PEER_PENDING_BYTES:
+                raise ProtocolError("rate_limited", "control response buffer exceeded")
+            writer.write(pong)
+            # A blocked reader must not hold its connection task here indefinitely.
+            try:
+                await asyncio.wait_for(writer.drain(), PEER_SEND_TIMEOUT_SECONDS)
+            except asyncio.TimeoutError as exc:
+                raise ProtocolError("rate_limited", "control response timed out") from exc
             continue
         if opcode == _OP_PONG:
             continue
@@ -285,11 +317,12 @@ class Relay:
         self._writers.add(writer)
         peer: Peer | None = None
         room: Room | None = None
+        control_budget = ControlFrameBudget()
         try:
             await asyncio.wait_for(handshake(reader, writer, self.allowed_origins), HANDSHAKE_TIMEOUT_SECONDS)
-            peer, room = await asyncio.wait_for(self._join(reader, writer), HELLO_TIMEOUT_SECONDS)
+            peer, room = await asyncio.wait_for(self._join(reader, writer, control_budget), HELLO_TIMEOUT_SECONDS)
             while True:
-                received = await read_message(reader, writer)
+                received = await read_message(reader, writer, control_budget)
                 if received is None or received[0] == _OP_CLOSE:
                     break
                 self._count(peer)
@@ -318,8 +351,9 @@ class Relay:
             raise ProtocolError("bad_message", "messages are JSON objects with a type")
         return message
 
-    async def _join(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> tuple[Peer, Room]:
-        received = await read_message(reader, writer)
+    async def _join(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter,
+                    control_budget: ControlFrameBudget | None = None) -> tuple[Peer, Room]:
+        received = await read_message(reader, writer, control_budget)
         if received is None or received[0] == _OP_CLOSE:
             raise asyncio.IncompleteReadError(b"", None)
         hello = self._decode(received[1])
@@ -417,8 +451,8 @@ class Relay:
             body = json.dumps({"t": "error", "code": error.code, "message": str(error)[:256]}).encode("utf-8")
             writer.write(encode_frame(_OP_TEXT, body))
             writer.write(encode_frame(_OP_CLOSE, struct.pack("!H", 1008)))
-            await writer.drain()
-        except (ConnectionError, RuntimeError):
+            await asyncio.wait_for(writer.drain(), PEER_SEND_TIMEOUT_SECONDS)
+        except (asyncio.TimeoutError, ConnectionError, RuntimeError, OSError):
             pass
 
     def close_connections(self) -> None:
