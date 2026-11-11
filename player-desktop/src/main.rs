@@ -521,9 +521,7 @@ mod tests {
 
     #[test]
     fn resolve_refuses_file_and_directory_links_outside_game_root() {
-        let base = std::env::temp_dir().join(format!(
-            "auvra-player-links-{}", std::process::id()
-        ));
+        let base = std::env::temp_dir().join(format!("auvra-player-links-{}", std::process::id()));
         let root = base.join("exported");
         let outside = base.join("outside");
         std::fs::create_dir_all(&root).unwrap();
@@ -558,11 +556,14 @@ mod tests {
                 panic!("cannot create directory symlink: {error}");
             }
         }
-        assert_eq!(resolve(&root, "/ordinary.txt"), Some(root.join("ordinary.txt")));
+        assert_eq!(
+            resolve(&root, "/ordinary.txt"),
+            Some(root.join("ordinary.txt"))
+        );
         assert_eq!(resolve(&root, "/file.txt"), None);
         assert_eq!(resolve(&root, "/linked/private.txt"), None);
         assert_eq!(resolve(&root, "/linked/%70rivate.txt"), None);
-        // Deny internal links too: the custom protocol serves regular files only.
+        // No linked entries may reach the external fixture via the game origin.
         std::fs::remove_dir_all(&base).unwrap();
     }
 
