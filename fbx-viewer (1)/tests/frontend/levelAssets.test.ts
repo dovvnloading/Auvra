@@ -351,6 +351,25 @@ describe('assets in memory', () => {
         expect(residency.holds('a')).toBe(true);
     });
 
+    it('reactivates A from cache without loading, pins its assets, and drops B grid work', async () => {
+        const fake = fakeLoader(() => 40 * MB);
+        const residency = new LevelAssetResidency(fake.loader, id => LEVELS[id], () => 40 * MB, 130 * MB);
+        await residency.prepare('a');
+        await residency.prepare('b');
+        expect(residency.holds('a')).toBe(true);
+        const loadsBefore = fake.loads.length;
+        const stale = residency.requestCellModels(needing('gun'));
+        residency.activateCached('a');
+        await stale;
+        expect(fake.loads.length).toBe(loadsBefore);
+        expect(fake.models.some(model => model.id === 'gun')).toBe(false);
+
+        await residency.requestCellModels(needing('crate'));
+        expect(fake.released).toEqual(['tree']);
+        expect(fake.models.map(model => model.id).sort()).toEqual(['crate', 'hero', 'rock']);
+        expect(residency.holds('a')).toBe(true);
+    });
+
     it('frees what was used longest ago to stay in budget, and never what the level needs', async () => {
         const fake = fakeLoader(() => 40 * MB);
         const residency = new LevelAssetResidency(fake.loader, id => LEVELS[id], () => 40 * MB, 130 * MB);
