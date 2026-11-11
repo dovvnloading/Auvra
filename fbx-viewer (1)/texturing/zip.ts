@@ -203,7 +203,13 @@ export const openZip = async (archive: Blob | Uint8Array) => {
             data = packed;
         } else {
             if (typeof DecompressionStream === 'undefined') throw new Error('the ZIP compression format is unavailable');
-            const stream = new Blob([packed as BlobPart]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+            // Feed the existing bounded compressed view without creating another Blob copy.
+            const stream = new ReadableStream<Uint8Array>({
+                start(controller) {
+                    controller.enqueue(packed);
+                    controller.close();
+                },
+            }).pipeThrough(new DecompressionStream('deflate-raw'));
             const reader = stream.getReader();
             // Allocate at most the verified expanded size, and abort if the
             // actual stream produces a different count (even if ZIP metadata lies).
