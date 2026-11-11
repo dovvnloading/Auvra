@@ -31,7 +31,7 @@ from Auvra.providers import (
 from Auvra.providers.adapters import MediaJob
 from Auvra.providers.reframe import ReframeAdapter
 from Auvra.providers.credentials import MemoryCredentialStore, WindowsCredentialManager
-from Auvra.providers.fal_catalog import NEW_TEXTURE_SIZE, SKY_SIZE, media_output_url, media_outputs, rough_job_cost
+from Auvra.providers.fal_catalog import NEW_TEXTURE_SIZE, SKY_SIZE, media_output_url, media_outputs
 from Auvra.providers.transport import StdlibTransport
 
 from .previews import PreviewError
@@ -391,8 +391,8 @@ class NativeProviderHost:
                 "capabilities": sorted(cap.value for cap in descriptor.capabilities),
                 "features": sorted(feature.value for feature in descriptor.features),
                 "requiresCredential": bool(descriptor.credential_name),
-                "configured": self._credential_status(descriptor.provider_id) in {"configured", "memoryOnly"},
-                "available": True,
+                "configured": descriptor.kind == "local" and self._credential_status(descriptor.provider_id) in {"configured", "memoryOnly"},
+                "available": descriptor.kind == "local",
             })
         return {"kind": "provider.list", "providers": values}
 
@@ -400,15 +400,23 @@ class NativeProviderHost:
         descriptor = self.registry.get(payload["providerId"])
         settings = self.settings.get(descriptor.provider_id)
         credential = self._credential_status(descriptor.provider_id)
-        configured = credential in {"configured", "memoryOnly", "notRequired"}
+        active = descriptor.kind == "local"
+        configured = active and credential in {"configured", "memoryOnly", "notRequired"}
+        # Preserve stored settings and credentials for safe migration/removal,
+        # but never advertise a retired paid route as active or available.
+        displayed_settings = self._settings_value(settings)
+        if not active:
+            displayed_settings = {**displayed_settings, "enabled": False, "routes": []}
         return {"kind": "provider.status", "providerId": descriptor.provider_id,
-                "configured": configured, "available": True,
-                "healthy": configured, "state": "ready" if configured else "unconfigured",
-                "settings": self._settings_value(settings), "settingsRevision": settings.revision,
+                "configured": configured, "available": active,
+                "healthy": configured, "state": ("ready" if configured else "unconfigured") if active else "unavailable",
+                "settings": displayed_settings, "settingsRevision": settings.revision,
                 "credentialStatus": credential}
 
     def _configure_credential(self, payload: dict[str, Any]) -> dict[str, Any]:
         descriptor = self.registry.get(payload["providerId"])
+        if descriptor.kind == "cloud":
+            raise HostOperationError("endpoint_denied", "Paid cloud providers have been removed; no new keys are accepted")
         if not descriptor.credential_name:
             return {"kind": "provider.credential", "providerId": descriptor.provider_id,
                     "storageMode": payload["storageMode"], "configured": True,
@@ -513,6 +521,8 @@ class NativeProviderHost:
             raise HostOperationError("invalid_request", "Provider settings contain unsupported fields")
         if not isinstance(settings.get("enabled"), bool) or not isinstance(settings.get("routes"), list):
             raise HostOperationError("invalid_request", "Provider settings are invalid")
+        if descriptor.kind == "cloud" and settings["enabled"]:
+            raise HostOperationError("endpoint_denied", "Paid cloud inference has been removed because charges cannot be bounded")
         if settings.get("fallbackPolicy") != "none":
             raise HostOperationError("invalid_request", "Provider fallback policy is invalid")
         if not isinstance(settings.get("requireCostConfirmation"), bool):
@@ -537,7 +547,7 @@ class NativeProviderHost:
             self.route_policy.select(RouteRequest(capability, descriptor.provider_id, model_id, settings.get("endpoint")))
         for capability in route_map if settings["enabled"] else ():
             for other in self.registry.all():
-                if other.provider_id == descriptor.provider_id:
+                if other.provider_id == descriptor.provider_id or other.kind == "cloud":
                     continue
                 other_settings = self.settings.get(other.provider_id)
                 if other_settings.enabled and other_settings.routes.get(capability) is not None:
@@ -556,6 +566,9 @@ class NativeProviderHost:
 
     def _list_models(self, payload: dict[str, Any]) -> dict[str, Any]:
         descriptor = self.registry.get(payload["providerId"])
+        if descriptor.kind == "cloud":
+            return {"kind": "provider.models", "providerId": descriptor.provider_id,
+                    "models": [], "cursor": "", "hasMore": False}
         # Discovery is itself the operation that should instantiate the
         # provider adapter. Do not make it depend on an earlier health call or
         # an injected transport; local providers otherwise remain model-less
@@ -617,6 +630,9 @@ class NativeProviderHost:
 
     def _health(self, payload: dict[str, Any]) -> dict[str, Any]:
         descriptor = self.registry.get(payload["providerId"])
+        if descriptor.kind == "cloud":
+            return {"kind": "provider.health", "providerId": descriptor.provider_id, "healthy": False,
+                    "latencyMs": 0, "message": "Paid cloud inference is removed"}
         started = time.monotonic()
         healthy = False
         if descriptor.provider_id == "fal":
@@ -634,6 +650,11 @@ class NativeProviderHost:
     def _submit(self, payload: dict[str, Any]) -> dict[str, Any]:
         active = self._require_project(payload, expected=True)
         descriptor = self.registry.get(payload["providerId"])
+        # Issue #223: without an upstream-enforced maximum charge a catalog
+        # estimate can never provide a spending boundary. Retire cloud
+        # dispatch entirely rather than claim an unenforceable budget.
+        if descriptor.kind == "cloud":
+            raise HostOperationError("endpoint_denied", "Paid cloud inference has been removed because provider charges cannot be capped")
         capability = Capability(payload["capability"])
         if payload.get("route") != descriptor.kind:
             raise HostOperationError("endpoint_denied", "Provider route does not match explicit request")
@@ -643,12 +664,6 @@ class NativeProviderHost:
         selection = self.route_policy.select(RouteRequest(capability, descriptor.provider_id, payload["modelId"], configured.endpoint))
         if selection.route.provider != descriptor.provider_id or selection.route.model != payload["modelId"]:
             raise HostOperationError("unsupported_capability", "Provider route is not exact")
-        if descriptor.kind == "cloud" and self._credential_status(descriptor.provider_id) not in {"configured", "memoryOnly"}:
-            raise HostOperationError("provider_not_configured", "Provider credential is not configured")
-        if (descriptor.kind == "cloud" and
-                (configured.require_cost_confirmation or payload.get("estimatedCostMicroUsd") is None) and
-                payload.get("consent") != "explicit"):
-            raise HostOperationError("budget_exceeded", "Cloud provider cost requires explicit confirmation")
         prompt = payload.get("input", "")
         if not isinstance(prompt, str) or len(prompt) > 65536:
             raise HostOperationError("invalid_request", "Inference input is invalid")
@@ -682,8 +697,13 @@ class NativeProviderHost:
             retain = getattr(self.project_host, "retain_pending_asset", None)
             if callable(retain):
                 retain(active.project_id, asset_id)
+        # Local inference has no remote provider charge. Reject nonzero cost
+        # hints rather than retaining a fake spending reservation.
+        cost_hint = payload.get("estimatedCostMicroUsd")
+        if cost_hint not in (None, 0) or isinstance(cost_hint, bool):
+            raise HostOperationError("invalid_request", "Local inference cost must be zero")
         with self._lock:
-            estimated_cost = self._check_budget(descriptor.provider_id, configured, self._cost_estimate(descriptor.provider_id, configured, payload))
+            estimated_cost = 0
             job = self.jobs.create(provider=descriptor.provider_id, model=payload["modelId"], capability=capability.value, prompt_hash=prompt_hash,
                                    project_id=active.project_id, cost_micro_usd=estimated_cost,
                                    provenance={"route": descriptor.kind, "provider": descriptor.provider_id, "model": payload["modelId"], "capability": capability.value})
@@ -738,14 +758,13 @@ class NativeProviderHost:
         with self._lock:
             active = self._require_project(payload, expected=True)
             existing = self._require_job_project(payload)
+            if self.registry.get(existing.provider).kind == "cloud":
+                raise HostOperationError("endpoint_denied", "Paid cloud retries have been removed")
             meta = self._meta.get(existing.job_id)
             if meta is None:
                 raise HostOperationError("invalid_job", "Job recovery metadata is unavailable")
-            configured = self.settings.get(existing.provider)
-            retry_cost = self._check_budget(existing.provider, configured, meta.get("estimatedCostMicroUsd"))
             job = self.jobs.retry(payload["jobId"], project_id=active.project_id)
-            if retry_cost:
-                job = self.jobs.add_cost(job.job_id, retry_cost, project_id=active.project_id)
+            # Local retries have zero external provider cost.
             descriptor = self.registry.get(job.provider)
             capability = Capability(job.capability)
             self._futures[job.job_id] = self._executor.submit(self._run_job, job.job_id, job.provider, job.model, capability)
@@ -1044,6 +1063,10 @@ class NativeProviderHost:
         try:
             if self._shutdown_event.is_set():
                 return
+            # Defense in depth: a queued job restored from an older version
+            # cannot bypass _submit/_retry to contact a paid provider.
+            if self.registry.get(provider_id).kind == "cloud":
+                raise ProviderError("budget_exceeded", "Paid cloud inference has been removed", provider_id)
             job = self.jobs.get(job_id)
             if job.state.value == "cancel_requested":
                 job = self.jobs.reconcile(job_id, remote_state="cancelled", project_id=job.project_id)
@@ -1233,43 +1256,6 @@ class NativeProviderHost:
                 except Exception:
                     continue
         return "absent" if self._vault is not None else "unavailable"
-
-    def _cost_estimate(self, provider_id: str, settings: Any, payload: Mapping[str, Any]) -> Any:
-        """What the request says it costs, or with budgets set, what the catalog does: a limit must see every job."""
-        estimate = payload.get("estimatedCostMicroUsd")
-        if estimate is not None or not all((settings.max_job_cost_micro_usd, settings.max_daily_cost_micro_usd, settings.max_monthly_cost_micro_usd)):
-            return estimate
-        try:
-            adapter = self._adapter(provider_id)
-        except Exception:
-            return None
-        details = adapter.model_details(payload["modelId"]) if hasattr(adapter, "model_details") else None
-        return rough_job_cost(details)
-
-    def _check_budget(self, provider_id: str, settings: Any, estimate: Any) -> int:
-        """Validate one reservation against durable provider-specific caps."""
-        if estimate is None:
-            return 0
-        if not isinstance(estimate, int) or isinstance(estimate, bool) or estimate < 0:
-            raise HostOperationError("invalid_request", "Provider cost estimate is invalid")
-        if self.registry.get(provider_id).kind == "local":
-            if estimate != 0:
-                raise HostOperationError("invalid_request", "Local provider cost must be zero")
-            return 0
-        if estimate == 0:
-            return 0
-        limits = (settings.max_job_cost_micro_usd, settings.max_daily_cost_micro_usd,
-                  settings.max_monthly_cost_micro_usd)
-        if any(limit <= 0 for limit in limits):
-            raise HostOperationError("budget_exceeded", "Cloud provider budget is not configured")
-        totals = self.jobs.cost_totals(provider_id)
-        if estimate > limits[0]:
-            raise HostOperationError("budget_exceeded", "Job cost exceeds provider budget")
-        if totals["daily"] + estimate > limits[1]:
-            raise HostOperationError("budget_exceeded", "Daily provider budget is exhausted")
-        if totals["monthly"] + estimate > limits[2]:
-            raise HostOperationError("budget_exceeded", "Monthly provider budget is exhausted")
-        return estimate
 
     def _settings_value(self, settings: Any) -> dict[str, Any]:
         return {
