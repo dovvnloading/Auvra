@@ -291,21 +291,19 @@ class ProviderHostTests(unittest.TestCase):
             finally:
                 host.shutdown()
 
-    def test_exact_route_submission_is_async_and_does_not_change_project_revision(self) -> None:
+    def test_local_route_submission_is_async_and_does_not_change_project_revision(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             project = _Project()
-            host = NativeProviderHost(Path(raw), project_host=project, credential_prompt=_Prompt("key"), adapters={"openai": _Adapter()})
+            host = NativeProviderHost(Path(raw), project_host=project, adapters={"ollama": _Adapter()})
             try:
-                host.handle("provider.configureCredential", {"providerId": "openai", "storageMode": "memoryOnly"})
-                _key_window_outcome(host)
-                host.registry.discover_models("openai", ("gpt-4o-mini",))
-                host.handle("provider.configure", {"providerId": "openai", "expectedSettingsRevision": 0, "settings": {
-                    "enabled": True, "routes": [{"capability": "text", "modelId": "gpt-4o-mini"}],
+                host.registry.discover_models("ollama", ("local-model",))
+                host.handle("provider.configure", {"providerId": "ollama", "expectedSettingsRevision": 0, "settings": {
+                    "enabled": True, "routes": [{"capability": "text", "modelId": "local-model"}],
                     "fallbackPolicy": "none", "requireCostConfirmation": False,
                     "budgets": {"perJobMicroUsd": 0, "dailyMicroUsd": 0, "monthlyMicroUsd": 0}}})
                 submitted = host.handle("inference.submit", {"projectId": "project-1", "expectedRevision": 0,
-                    "providerId": "openai", "modelId": "gpt-4o-mini", "capability": "text", "route": "cloud",
-                    "input": "private prompt", "consent": "explicit"})
+                    "providerId": "ollama", "modelId": "local-model", "capability": "text", "route": "local",
+                    "input": "private prompt"})
                 job_id = submitted["job"]["jobId"]
                 for _ in range(50):
                     current = host.handle("inference.get", {"projectId": "project-1", "jobId": job_id})
@@ -355,25 +353,25 @@ class ProviderHostTests(unittest.TestCase):
 
             def complete(self, **kwargs):
                 self.target = kwargs.get("target_element_id")
-                return TextResult("openai", kwargs["model"], "done")
+                return TextResult("ollama", kwargs["model"], "done")
 
         with tempfile.TemporaryDirectory() as raw:
             adapter = CaptureAdapter()
-            host = NativeProviderHost(Path(raw), project_host=_Project(), adapters={"openai": adapter})
+            host = NativeProviderHost(Path(raw), project_host=_Project(), adapters={"ollama": adapter})
             try:
                 job = host.jobs.create(
-                    project_id="project-1", provider="openai", model="gpt-test",
+                    project_id="project-1", provider="ollama", model="gpt-test",
                     capability=Capability.COMMANDS.value, prompt_hash="a" * 64,
                 )
                 host._meta[job.job_id] = {
                     "projectId": "project-1", "prompt": "update target", "assetIds": [],
-                    "route": "cloud", "providerId": "openai", "modelId": "gpt-test",
+                    "route": "local", "providerId": "ollama", "modelId": "gpt-test",
                     "capability": Capability.COMMANDS.value, "settingsHash": "a" * 64,
                     "createdAt": 0, "promptHash": "a" * 64, "estimatedCostMicroUsd": 0,
                     "projectRevision": 0, "targetElementId": "element-1",
                     "targetElementName": "Target",
                 }
-                host._run_job(job.job_id, "openai", "gpt-test", Capability.COMMANDS)
+                host._run_job(job.job_id, "ollama", "gpt-test", Capability.COMMANDS)
                 self.assertEqual(adapter.target, "Target")
                 self.assertEqual(host.jobs.get(job.job_id).state.value, "succeeded")
             finally:
@@ -489,19 +487,19 @@ class ProviderHostTests(unittest.TestCase):
 
         class Failing:
             def complete(self, **_kwargs):
-                raise ProviderError("authorization", "Exhausted balance", "openai", False, 403)
+                raise ProviderError("authorization", "Exhausted balance", "ollama", False, 403)
 
         class Generic:
             def complete(self, **_kwargs):
-                raise ProviderError("authorization", "provider request failed", "openai", False, 403)
+                raise ProviderError("authorization", "provider request failed", "ollama", False, 403)
 
         for adapter, expected in ((Failing(), "Exhausted balance"), (Generic(), "provider_authorization")):
             with tempfile.TemporaryDirectory() as raw:
-                host = NativeProviderHost(Path(raw), project_host=_Project(), adapters={"openai": adapter})
+                host = NativeProviderHost(Path(raw), project_host=_Project(), adapters={"ollama": adapter})
                 try:
-                    job = host.jobs.create(project_id="project-1", provider="openai", model="gpt-test", capability=Capability.TEXT.value, prompt_hash="a" * 64)
-                    host._meta[job.job_id] = {"projectId": "project-1", "prompt": "x", "assetIds": [], "route": "cloud", "providerId": "openai", "modelId": "gpt-test", "capability": "text"}
-                    host._run_job(job.job_id, "openai", "gpt-test", Capability.TEXT)
+                    job = host.jobs.create(project_id="project-1", provider="ollama", model="gpt-test", capability=Capability.TEXT.value, prompt_hash="a" * 64)
+                    host._meta[job.job_id] = {"projectId": "project-1", "prompt": "x", "assetIds": [], "route": "local", "providerId": "ollama", "modelId": "gpt-test", "capability": "text"}
+                    host._run_job(job.job_id, "ollama", "gpt-test", Capability.TEXT)
                     self.assertEqual(host._job_value(job.job_id)["message"], expected)
                 finally:
                     host.shutdown()
