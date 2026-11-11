@@ -80,6 +80,13 @@ describe('texture graphs cooked by the game', () => {
         const before = graphContent(target);
         materialLibrary.upsert({ ...paintAsset, pictures: { baseColor: 'reapplied-colour', orm: 'paint-orm' } });
         expect(graphContent(target)).not.toBe(before);
+        const direct: MaterialAsset = {
+            ...target,
+            textureGraph: { graph: { ...root, nodes: [{ id: 'direct', type: 'paintStack', x: 0, y: 0, params: { asset: 'painted', folder: '' } }] } },
+        };
+        const directBefore = graphContent(direct);
+        materialLibrary.upsert({ ...paintAsset, pictures: { baseColor: 'third-colour', orm: 'paint-orm' } });
+        expect(graphContent(direct)).not.toBe(directBefore);
     });
 
     it('ask for what a use sets: its graph values, seed and picture size', () => {
