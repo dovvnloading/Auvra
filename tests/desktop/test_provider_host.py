@@ -398,11 +398,11 @@ class ProviderHostTests(unittest.TestCase):
                 return tuple(f"model-{index:03}" for index in range(450))
 
         with tempfile.TemporaryDirectory() as raw:
-            host = NativeProviderHost(Path(raw), project_host=_Project(), adapters={"openrouter": ManyModels()})
+            host = NativeProviderHost(Path(raw), project_host=_Project(), adapters={"ollama": ManyModels()})
             try:
                 seen, cursor = [], ""
                 for _ in range(5):
-                    page = host._list_models({"providerId": "openrouter", **({"cursor": cursor} if cursor else {})})
+                    page = host._list_models({"providerId": "ollama", **({"cursor": cursor} if cursor else {})})
                     seen.extend(item["modelId"] for item in page["models"])
                     self.assertLessEqual(len(page["models"]), 256)
                     if not page["hasMore"]:
@@ -411,45 +411,36 @@ class ProviderHostTests(unittest.TestCase):
                 self.assertEqual(len(seen), 450)
                 self.assertEqual(len(set(seen)), 450)
                 with self.assertRaises(HostOperationError):
-                    host._list_models({"providerId": "openrouter", "cursor": "-1"})
+                    host._list_models({"providerId": "ollama", "cursor": "-1"})
             finally:
                 host.shutdown()
 
-    def test_a_model_is_described_with_its_price_and_prices_arrive_behind_the_list(self) -> None:
-        from Auvra.providers.fal_catalog import CatalogModel
-
+    def test_removed_cloud_catalog_never_fetches_models_or_prices(self) -> None:
         class Catalog:
             prices_stale = True
-
-            def __init__(self) -> None:
+            def __init__(self):
                 self.refreshes = 0
-
-            def refresh_prices(self, _stop) -> bool:
+            def refresh_prices(self, _stop):
                 self.refreshes += 1
-                self.prices_stale = False
-                return True
+                raise AssertionError("retired cloud pricing must not be fetched")
 
-        class Priced:
+        class Cloud:
             catalog = Catalog()
-
+            def __init__(self):
+                self.calls = 0
             def list_models(self):
-                return ("a/b",)
-
-            def model_details(self, _model):
-                return CatalogModel("a/b", "A B", frozenset({Capability.MEDIA_EDIT}), "image-to-image", "Paints.", 3000, "megapixels")
+                self.calls += 1
+                raise AssertionError("retired cloud model list must not be fetched")
 
         with tempfile.TemporaryDirectory() as raw:
-            host = NativeProviderHost(Path(raw), project_host=_Project(), adapters={"fal": Priced()})
+            adapter = Cloud()
+            host = NativeProviderHost(Path(raw), project_host=_Project(), adapters={"fal": adapter})
             try:
-                host.registry.discover_models("fal", ["a/b"], {"a/b": {Capability.MEDIA_EDIT}})
-                model = host._list_models({"providerId": "fal"})["models"][0]
-                self.assertEqual(model, {"modelId": "a/b", "displayName": "A B", "capabilities": ["media.edit"], "category": "image-to-image",
-                                         "description": "Paints.", "priceMicroUsd": 3000, "priceUnit": "megapixels"})
-                host._price_refresh.join(5)
-                self.assertEqual(Priced.catalog.refreshes, 1)
-                self.assertIn(("provider.status", {"providerId": "fal", "status": "ready"}), host.drain_events())
-                host._list_models({"providerId": "fal"})
-                self.assertEqual(Priced.catalog.refreshes, 1)
+                models = host._list_models({"providerId": "fal"})
+                self.assertEqual(models, {"kind": "provider.models", "providerId": "fal",
+                                          "models": [], "cursor": "", "hasMore": False})
+                self.assertEqual(adapter.calls, 0)
+                self.assertEqual(adapter.catalog.refreshes, 0)
             finally:
                 host.shutdown()
 
