@@ -702,7 +702,7 @@ class NativeProviderHost:
         hint = payload.get("estimatedCostMicroUsd")
         if hint is not None and (type(hint) is not int or hint < 0):
             raise HostOperationError("invalid_request", "Provider cost estimate is invalid")
-        with self._lock:
+        with self._lock, self.jobs.reserve_budget():
             ceiling = (self._provider_charge_ceiling(descriptor.provider_id, payload["modelId"])
                        if descriptor.kind == "cloud" else None)
             estimated_cost = self._check_budget(
@@ -764,14 +764,14 @@ class NativeProviderHost:
         return {"kind": "inference.cancel", "job": self._job_value(job.job_id)}
 
     def _retry(self, payload: dict[str, Any]) -> dict[str, Any]:
-        with self._lock:
+        with self._lock, self.jobs.reserve_budget():
             active = self._require_project(payload, expected=True)
             existing = self._require_job_project(payload)
             meta = self._meta.get(existing.job_id)
             if meta is None:
                 raise HostOperationError("invalid_job", "Job recovery metadata is unavailable")
-            if existing.state.value not in {"failed", "cancelled"}:
-                raise HostOperationError("invalid_job", "Only failed or cancelled jobs may be retried")
+            if existing.state.value not in {"failed", "cancelled"} or existing.attempt >= 3:
+                raise HostOperationError("invalid_job", "Job is not eligible for retry")
             configured = self.settings.get(existing.provider)
             if not configured.enabled or configured.routes.get(existing.capability) != existing.model:
                 raise HostOperationError("unsupported_capability", "Provider route is no longer configured")
@@ -784,10 +784,13 @@ class NativeProviderHost:
                 existing.provider, configured,
                 ceiling.max_micro_usd if ceiling is not None else (0 if descriptor.kind == "local" else None),
             )
-            job = self.jobs.retry(payload["jobId"], project_id=active.project_id)
+            # Record the new ceiling before making the retry runnable.
+            # If a retry fails later, retaining an over-reservation is safer
+            # than allowing an unreserved paid dispatch.
             if retry_cost:
-                job = self.jobs.add_cost(job.job_id, retry_cost, project_id=active.project_id,
-                                         cost_source="provider_enforced", cost_reference=ceiling.reference)
+                self.jobs.add_cost(existing.job_id, retry_cost, project_id=active.project_id,
+                                   cost_source="provider_enforced", cost_reference=ceiling.reference)
+            job = self.jobs.retry(payload["jobId"], project_id=active.project_id)
             meta["estimatedCostMicroUsd"] = retry_cost
             meta["costReference"] = ceiling.reference if ceiling is not None else None
             descriptor = self.registry.get(job.provider)
