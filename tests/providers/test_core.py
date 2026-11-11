@@ -1,8 +1,8 @@
 from __future__ import annotations
-import hashlib, io, json, re, sqlite3, sys, tempfile, threading, unittest
+import hashlib, io, json, re, sqlite3, sys, tempfile, threading
 from datetime import datetime, timezone
 from pathlib import Path
-from unittest import mock
+from unittest import TestCase, main, mock, skipUnless
 
 from Auvra.providers import *
 from Auvra.providers.adapters import MediaJob, TextResult, _fal_cdn_url
@@ -37,7 +37,7 @@ class FakeCredentials:
     def read(self, target): return self.value
 
 
-class ProviderCoreTests(unittest.TestCase):
+class ProviderCoreTests(TestCase):
     def test_registry_is_static_and_capability_features_are_separate(self):
         self.assertEqual(set(PROVIDER_REGISTRY), {"fal", "openai", "anthropic", "xai", "openrouter", "ollama", "llama.cpp", "reframe"})
         self.assertIn(ProviderFeature.QUEUE, PROVIDER_REGISTRY["fal"].features)
@@ -49,7 +49,7 @@ class ProviderCoreTests(unittest.TestCase):
         self.assertNotIn("secret-value", repr(store))
         with self.assertRaises(CredentialError): store.write("x", "a" * 1300)
 
-    @unittest.skipUnless(sys.platform == "win32", "Windows Credential Manager is Windows-only")
+    @skipUnless(sys.platform == "win32", "Windows Credential Manager is Windows-only")
     def test_windows_credential_manager_native_boundary_handles_not_found_and_write(self):
         class NativeFunction:
             def __init__(self, result):
@@ -720,4 +720,4 @@ class ProviderCoreTests(unittest.TestCase):
         self.assertIn(f"OPEN_LEVEL_PREFIX = '{OPEN_LEVEL_PREFIX}'", menu_source)
 
 
-if __name__ == "__main__": unittest.main()
+if __name__ == "__main__": main()
