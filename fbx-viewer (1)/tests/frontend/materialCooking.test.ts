@@ -64,6 +64,7 @@ describe('texture graphs cooked by the game', () => {
             nodes: [{ id: 'use', type: 'subgraph', x: 0, y: 0, params: { graph: 'nested' } }],
         };
         const target: MaterialAsset = { ...crate(), textureGraph: { graph: root } };
+        const nestedAsset: MaterialAsset = { ...crate(), id: 'nested', textureGraph: { graph: subgraph } };
         const assetOf = (id: string) => id === 'painted' ? paintAsset : undefined;
         const resolve = (id: string) => id === 'nested'
             ? { id, name: id, graph: subgraph }
@@ -75,7 +76,7 @@ describe('texture graphs cooked by the game', () => {
             [paintBakedKey('painted', 'orm'), 'paint-orm'],
         ]);
 
-        materialLibrary.replaceAll([target, paintAsset]);
+        materialLibrary.replaceAll([target, nestedAsset, paintAsset]);
         const before = graphContent(target);
         materialLibrary.upsert({ ...paintAsset, pictures: { baseColor: 'reapplied-colour', orm: 'paint-orm' } });
         expect(graphContent(target)).not.toBe(before);
