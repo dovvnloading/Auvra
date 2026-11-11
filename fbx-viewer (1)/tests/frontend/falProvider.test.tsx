@@ -121,8 +121,8 @@ describe('the host provider service', () => {
     const { service, calls } = fakeHost((method, payload) => {
       if (method === 'provider.list') return { providers: [{ providerId: 'ollama', route: 'local', capabilities: ['code'] }, { providerId: 'llama.cpp', route: 'local', capabilities: ['code', 'text'] }] };
       if (method === 'provider.getStatus') return payload.providerId === 'ollama'
-        ? { providerId: 'fal', settingsRevision: 2, settings: { ...settings([]), enabled: false } }
-        : { providerId: 'openai', settingsRevision: 5, settings: settings([{ capability: 'code', modelId: 'gpt' }, { capability: 'text', modelId: 'gpt' }]) };
+        ? { providerId: 'ollama', settingsRevision: 2, settings: { ...settings([]), enabled: false } }
+        : { providerId: 'llama.cpp', settingsRevision: 5, settings: settings([{ capability: 'code', modelId: 'gpt' }, { capability: 'text', modelId: 'gpt' }]) };
       return { settingsRevision: 9 };
     });
     await service.routeCapability('ollama', 'code', 'local-model');
