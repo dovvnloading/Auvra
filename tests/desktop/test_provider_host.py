@@ -318,6 +318,27 @@ class ProviderHostTests(unittest.TestCase):
             finally:
                 host.shutdown()
 
+    def test_local_ai_still_runs_without_paid_consent(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            host = NativeProviderHost(Path(raw), project_host=_Project(), adapters={"ollama": _Adapter()})
+            try:
+                host.registry.discover_models("ollama", ["local-model"])
+                host.settings.set("ollama", enabled=True, routes={Capability.TEXT: "local-model"})
+                queued = host._submit({"projectId": "project-1", "expectedRevision": 0,
+                                       "providerId": "ollama", "modelId": "local-model",
+                                       "capability": "text", "route": "local", "input": "local job"})
+                job_id = queued["job"]["jobId"]
+                for _ in range(50):
+                    job = host._get_job({"projectId": "project-1", "jobId": job_id})["job"]
+                    if job["status"] == "succeeded":
+                        break
+                    time.sleep(0.01)
+                self.assertEqual(job["status"], "succeeded")
+                self.assertEqual(job["outputText"], "safe normalized output")
+                self.assertEqual(host.jobs.get(job_id).cost_micro_usd, 0)
+            finally:
+                host.shutdown()
+
     def test_local_cloud_route_mismatch_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             host = NativeProviderHost(Path(raw), project_host=_Project())
