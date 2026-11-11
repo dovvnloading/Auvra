@@ -302,7 +302,7 @@ class CookedPicturesBuildTests(unittest.TestCase):
         self.assertEqual([item["id"] for item in kept["textures"]], ["baked-orm", "library-picture", "other"])
         self.assertIs(without_baked_pictures({"materials": [], "textures": [{"id": "x"}]})["textures"][0]["id"], "x")
 
-    
+
     def test_a_paint_stack_reference_keeps_applied_input_pictures_in_always_cook_builds(self) -> None:
         from Auvra.project.game_build import without_baked_pictures
 
@@ -316,6 +316,7 @@ class CookedPicturesBuildTests(unittest.TestCase):
             "id": "unused", "pictures": {"baseColor": "unused-colour"}, "textureIds": ["unused-colour"],
             "textureGraph": {"graph": {"nodes": []}, "baked": {"textures": {"baseColor": "unused-colour"}}},
         }
+
         def build(consumer_node: dict) -> list[str]:
             content = {
                 "materials": [
