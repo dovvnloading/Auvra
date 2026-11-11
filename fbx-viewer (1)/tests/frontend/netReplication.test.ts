@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
 import { playerVars, REPLICATED_PLAYER_VARS } from '../../runtime/net/RemotePlayers';
-import { applyEntityState, createInterpolationBuffer, entityStateOf, MAX_EXTRAPOLATION_MS, MAX_INTERPOLATION_SAMPLES, slerpEuler } from '../../runtime/net/replication';
+import { applyEntityState, createInterpolationBuffer, entityStateOf, MAX_EXTRAPOLATION_MS, MAX_FUTURE_TIMESTAMP_LEAD_MS, MAX_INTERPOLATION_SAMPLES, slerpEuler } from '../../runtime/net/replication';
 import type { NetEntityState } from '../../runtime/net/protocol';
 
 const at = (x: number, yaw = 0, extra: Partial<NetEntityState> = {}): NetEntityState => ({ id: 'e', position: [x, 0, 0], rotation: [0, yaw, 0], ...extra });
@@ -59,6 +59,18 @@ describe('interpolation buffer', () => {
     expect(buffer.sample(999)!.position[0]).toBe(999);
     buffer.push(Number.POSITIVE_INFINITY, at(12345));
     expect(buffer.newest()).toBe(999);
+  });
+
+  it('rejects far-future finite peer timestamps before they can pin the interpolation timeline', () => {
+    const buffer = createInterpolationBuffer(0);
+    buffer.push(1_000_000_000, at(999), 1000);
+    expect(buffer.sample(1000)).toBeNull();
+    buffer.push(1000, at(0), 1000);
+    buffer.push(1000 + MAX_FUTURE_TIMESTAMP_LEAD_MS + 1, at(999), 1000);
+    expect(buffer.newest()).toBe(1000);
+    buffer.push(1100, at(10), 1100);
+    expect(buffer.sample(1050)!.position[0]).toBeCloseTo(5);
+    expect(buffer.sample(1100)!.position[0]).toBe(10);
   });
 
   it('turns the short way round', () => {
