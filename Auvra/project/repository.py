@@ -138,7 +138,10 @@ class ProjectRepository:
             if pending: self._migrate()
             _validate_project_tree(self.path, allow_internal=True)
         except Exception:
-            if pending: self._descriptor = {}
+            # A failed open must not prune assets from an unvalidated tree.
+            # In particular, an interrupted deletion can still need its
+            # manifest-listed blob restored from staging on the next attempt.
+            self._descriptor = {}
             self.close()
             raise
 
