@@ -34,6 +34,7 @@ export interface ProviderDescriptor {
   name: string;
   route: ProviderRoute;
   capabilities: ProviderCapability[];
+  available?: boolean;
   configured?: boolean;
   credentialStatus?: CredentialStatus;
   requiresCredential?: boolean;
@@ -234,6 +235,7 @@ export class HostProviderService {
   async configure(providerId: string, options: ProviderSettings, expectedSettingsRevision = 0): Promise<unknown> {
     const route = this.providerRoutes.get(providerId);
     if (!route) throw new HostProviderError('Refresh the host provider registry before saving settings.', 'provider_unavailable');
+    if (route === 'cloud' && options.enabled) throw new HostProviderError('Paid cloud AI has been removed because provider charges cannot be capped.', 'endpoint_denied');
     const result = await this.call('provider.configure', { providerId, expectedSettingsRevision, settings: options });
     this.clearConfiguration(providerId);
     if (!options.enabled) return result;
@@ -286,6 +288,10 @@ export class HostProviderService {
    */
   async routeCapability(providerId: string, capability: ProviderCapability, modelId: string): Promise<void> {
     const providers = await this.listProviders();
+    const selected = providers.find((item) => item.id === providerId);
+    if (!selected || selected.route !== 'local' || selected.available === false) {
+      throw new HostProviderError('Paid cloud AI has been removed; choose a local provider.', 'endpoint_denied');
+    }
     const statuses = await Promise.all(providers.map((provider) => this.getProviderStatus(provider.id)));
     const settingsOf = (status: ProviderDescriptor, routes: ProviderSettings['routes'], enabled: boolean): ProviderSettings => ({
       enabled,
@@ -333,7 +339,7 @@ export class HostProviderService {
     await this.ensureConfiguredRoutes();
     const configured = this.configuredModels[capability];
     if (!configured) throw new HostProviderError('Configure a provider and model for this capability in Settings first.', 'provider_not_configured');
-    if (configured.route === 'cloud' && payload.consent !== 'explicit') throw new HostProviderError('Explicit cost consent is required before submitting cloud work.');
+    if (configured.route === 'cloud') throw new HostProviderError('Paid cloud AI has been removed because provider charges cannot be capped.', 'endpoint_denied');
     // Route and model are always sourced from host-backed Settings state. A
     // component cannot silently select a browser-only provider or fallback.
     const effective = { ...payload, providerId: configured.providerId, modelId: configured.modelId, route: configured.route };
@@ -380,7 +386,7 @@ export class HostProviderService {
   getConfiguredRoute(capability: ProviderCapability): { providerId: string; modelId: string; route: ProviderRoute } | null { return this.configuredModels[capability] || null; }
   hydrateConfiguration(providerId: string, route: ProviderRoute, settings?: ProviderSettingsResult | Record<string, unknown>): void {
     this.clearConfiguration(providerId);
-    if (settings?.enabled === false) return;
+    if (route === 'cloud' || settings?.enabled === false) return;
     const routes = Array.isArray(settings?.routes) ? settings.routes as Array<{ capability?: string; modelId?: string }> : [];
     routes.forEach(({ capability, modelId }) => { if (capability && modelId && ['text', 'code', 'commands', 'media.generate', 'media.edit', 'media.maps', 'media.mesh', 'media.material', 'media.sky', 'media.decal', 'media.render'].includes(capability)) this.configuredModels[capability as ProviderCapability] = { providerId, modelId, route }; });
   }
@@ -502,6 +508,7 @@ function normalizeProvider(value: unknown): ProviderDescriptor {
     name: String(row.name || row.displayName || row.providerId || id),
     route,
     capabilities: Array.isArray(row.capabilities) ? row.capabilities as ProviderCapability[] : [],
+    available: row.available !== false,
     configured,
     credentialStatus,
     requiresCredential: typeof row.requiresCredential === 'boolean' ? row.requiresCredential : route !== 'local',
