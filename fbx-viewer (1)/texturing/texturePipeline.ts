@@ -64,13 +64,14 @@ const ask = <T>(message: Record<string, unknown>, transfer: Transferable[]): Pro
         reject(new Error('Texture worker is unavailable'));
         return;
     }
+    const current = active;
     const id = nextId++;
-    const timeout = setTimeout(() => failWorker(new Error('Texture worker timed out'), active), TEXTURE_WORKER_TIMEOUT_MS);
+    const timeout = setTimeout(() => failWorker(new Error('Texture worker timed out'), current), TEXTURE_WORKER_TIMEOUT_MS);
     waiting.set(id, { resolve: resolve as (value: never) => void, reject, timeout });
     try {
-        active.postMessage({ ...message, id }, transfer);
+        current.postMessage({ ...message, id }, transfer);
     } catch {
-        failWorker(new Error('Texture worker could not accept the request'), active);
+        failWorker(new Error('Texture worker could not accept the request'), current);
     }
 });
 
