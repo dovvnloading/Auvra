@@ -623,7 +623,8 @@ class ProviderHostTests(unittest.TestCase):
                                           require_cost_confirmation=False, max_job_cost_micro_usd=100,
                                           max_daily_cost_micro_usd=daily, max_monthly_cost_micro_usd=monthly)
                         before = host.jobs.cost_totals("fal")["aggregate"]
-                        with mock.patch.object(host, "_credential_status", return_value="configured"),                                 mock.patch.object(host._executor, "submit", return_value=mock.Mock()):
+                        with (mock.patch.object(host, "_credential_status", return_value="configured"),
+                              mock.patch.object(host._executor, "submit", return_value=mock.Mock())):
                             if before == 0:
                                 accepted = host._submit(request)
                                 self.assertIsNotNone(accepted["job"]["jobId"])
@@ -653,7 +654,8 @@ class ProviderHostTests(unittest.TestCase):
                 request = {"projectId": "project-1", "expectedRevision": 0, "providerId": "fal",
                            "modelId": "a/b", "capability": Capability.MEDIA_EDIT.value,
                            "route": "cloud", "input": "test", "consent": "explicit"}
-                with mock.patch.object(host, "_credential_status", return_value="configured"),                         mock.patch.object(host._executor, "submit", return_value=mock.Mock()):
+                with (mock.patch.object(host, "_credential_status", return_value="configured"),
+                      mock.patch.object(host._executor, "submit", return_value=mock.Mock())):
                     job_id = host._submit(request)["job"]["jobId"]
                 job = host.jobs.get(job_id)
                 self.assertEqual(job.cost_micro_usd, 100)
