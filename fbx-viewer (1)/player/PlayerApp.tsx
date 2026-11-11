@@ -192,7 +192,8 @@ export const PlayerApp: React.FC = () => {
         gameState.reset();
         gameState.update({ levelId });
         setPaused(false);
-        if (assets.current && !assets.current.residency.holds(levelId)) {
+        const residency = assets.current?.residency;
+        if (residency && !residency.holds(levelId)) {
             // Off the running level first, below: nothing may be drawing what makes way for this one.
             progressShown.current = true;
             setProgress({ value: 0 });
@@ -200,6 +201,9 @@ export const PlayerApp: React.FC = () => {
             setPreparing({ levelId, restore });
             return;
         }
+        // A cache hit still starts a new level: protect its assets and discard
+        // the previous level's queued World Grid work before mounting it.
+        residency?.activateCached(levelId);
         setScreen('playing');
         setSession(previous => ({ levelId, key: (previous?.key ?? 0) + 1, restore }));
     }, []);
