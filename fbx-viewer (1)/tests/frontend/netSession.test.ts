@@ -1,17 +1,21 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { DEFAULT_NETWORK_SETTINGS, normalizeNetworkSettings, type NetworkSettings } from '../../runtime/net/protocol';
+import { DEFAULT_NETWORK_SETTINGS, NET_LIMITS, normalizeNetworkSettings, type NetworkSettings } from '../../runtime/net/protocol';
 import { createNetSession, parseServerMessage, relayName } from '../../runtime/net/session';
 
 class FakeSocket {
   static instances: FakeSocket[] = [];
   readyState = 0;
+  bufferedAmount = 0;
   sent: unknown[] = [];
   onopen: (() => void) | null = null;
   onmessage: ((event: { data: unknown }) => void) | null = null;
   onclose: (() => void) | null = null;
   onerror: (() => void) | null = null;
   constructor(public url: string) { FakeSocket.instances.push(this); }
-  send(text: string) { this.sent.push(JSON.parse(text)); }
+  send(text: string) {
+    this.sent.push(JSON.parse(text));
+    this.bufferedAmount += new TextEncoder().encode(text).byteLength;
+  }
   close() { this.readyState = 3; this.onclose?.(); }
   open() { this.readyState = 1; this.onopen?.(); }
   receive(message: unknown) { this.onmessage?.({ data: JSON.stringify(message) }); }
@@ -125,6 +129,69 @@ describe('net session', () => {
     session.onEvent(events);
     socket.receive({ t: 'event', from: 'bob', name: 'score', payload: 3 });
     expect(events).toHaveBeenCalledWith('bob', 'score', 3);
+  });
+
+  it('enforces exact UTF-8 frame limits for ASCII and emoji payloads', () => {
+    const { session, socket } = connect();
+    welcome(socket);
+    const overhead = new TextEncoder().encode(JSON.stringify({ t: 'event', name: 'chat', payload: '' })).byteLength;
+    const asciiCount = NET_LIMITS.maxMessageBytes - overhead;
+    session.sendEvent('chat', 'x'.repeat(asciiCount));
+    session.sendEvent('chat', 'x'.repeat(asciiCount + 1));
+    const emojiCount = Math.floor((NET_LIMITS.maxMessageBytes - overhead) / 4);
+    session.sendEvent('chat', '😀'.repeat(emojiCount));
+    session.sendEvent('chat', '😀'.repeat(emojiCount + 1));
+    const sent = socket.sent.filter((message: any) => message.t === 'event') as Array<{ payload: string }>;
+    expect(sent.map(message => message.payload.length)).toEqual([asciiCount, emojiCount * 2]);
+    expect(session.status()).toBe('connected');
+  });
+
+  it('rejects incoming oversized UTF-8 JSON before parsing', () => {
+    const raw = JSON.stringify({ t: 'event', from: 'bob', name: 'chat', payload: '😀'.repeat(18000) });
+    expect(raw.length).toBeLessThan(NET_LIMITS.maxMessageBytes);
+    expect(new TextEncoder().encode(raw).byteLength).toBeGreaterThan(NET_LIMITS.maxMessageBytes);
+    expect(parseServerMessage(raw)).toBeNull();
+  });
+
+  it('bounds outstanding bytes when a connected WebSocket never drains', () => {
+    const { session, socket } = connect();
+    welcome(socket);
+    for (let i = 0; i < 500; i++) session.sendEvent('chat', 'x'.repeat(2048));
+    const events = socket.sent.filter((message: any) => message.t === 'event');
+    expect(events.length).toBeGreaterThan(0);
+    expect(events.length).toBeLessThan(500);
+    expect(socket.bufferedAmount).toBeLessThanOrEqual(4 * NET_LIMITS.maxMessageBytes);
+    expect(session.status()).toBe('connected');
+  });
+
+  it('drops state, events and pings under backpressure and resumes on drain', () => {
+    const { session, socket } = connect();
+    welcome(socket);
+    const entity = (x: number) => ({
+      id: 'player:me',
+      position: [x, 0, 0] as [number, number, number],
+      rotation: [0, 0, 0] as [number, number, number],
+    });
+    socket.bufferedAmount = 4 * NET_LIMITS.maxMessageBytes;
+    const sentBefore = socket.sent.length;
+    session.sendState([entity(1)]);
+    session.sendEvent('door', { open: true });
+    vi.advanceTimersByTime(4000);
+    expect(socket.sent).toHaveLength(sentBefore);
+    expect(socket.bufferedAmount).toBe(4 * NET_LIMITS.maxMessageBytes);
+    socket.bufferedAmount = 0;
+    clock += 100;
+    session.sendState([entity(2)]);
+    session.sendEvent('door', { open: false });
+    vi.advanceTimersByTime(2000);
+    const states = socket.sent.filter((message: any) => message.t === 'state') as any[];
+    const events = socket.sent.filter((message: any) => message.t === 'event') as any[];
+    const pings = socket.sent.filter((message: any) => message.t === 'ping');
+    expect(states).toHaveLength(1);
+    expect(states[0].entities[0].position[0]).toBe(2);
+    expect(events).toEqual([{ t: 'event', name: 'door', payload: { open: false } }]);
+    expect(pings).toHaveLength(1);
+    expect(session.status()).toBe('connected');
   });
 
   it('reconnects with backoff after an unexpected close, and stops after close()', () => {
