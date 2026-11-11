@@ -71,7 +71,7 @@ export const graphCookSources = (
                 // A surface's pictures can also come from a texture graph. Only Paint's own
                 // applied maps are valid inputs here; a UDIM atlas is not one UV square.
                 if (!document?.applied || document.udim) continue;
-                for (const channel of [...PAINT_CHANNELS, 'orm']) {
+                for (const channel of [...PAINT_CHANNELS, 'orm'] as const) {
                     const id = document.applied.textures[channel];
                     if (!id) continue;
                     textureIds.add(id);
