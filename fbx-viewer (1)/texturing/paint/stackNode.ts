@@ -210,10 +210,14 @@ export const PAINT_STACK_NODE: TexNodeDef = {
         // A built game has no editor host or live Paint layers. It uses only the pictures the artist
         // last applied to this *whole* set, loaded as read-only external inputs by the graph cooker.
         // A folder needs its own bake and must not silently be replaced by the whole-set pictures.
-        if (!fetchStored) {
+        // An explicit applied snapshot takes precedence over the live editor painter when a
+        // runtime cook is being previewed inside the editor. Ordinary graph editing provides
+        // no snapshot inputs and continues to show the live (possibly unapplied) layers.
+        const baked = (channel: string) => context.external(paintBakedKey(assetId, channel));
+        const hasSnapshot = [...PAINT_CHANNELS, 'orm'].some((channel) => baked(channel));
+        if (!fetchStored || hasSnapshot) {
             if (context.params.folder) throw new Error('A Paint stack folder needs its own baked pictures in the game; whole-set maps cannot stand in for a folder.');
-            const baked = (channel: string) => context.external(paintBakedKey(assetId, channel));
-            if (![...PAINT_CHANNELS, 'orm'].some((channel) => baked(channel))) {
+            if (!hasSnapshot) {
                 throw new Error('This Paint stack has no applied pictures in the game. Apply the painted set and include its pictures in the build.');
             }
             context.note?.('Using the painted set\'s last applied pictures in this game.');
