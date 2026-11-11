@@ -827,9 +827,9 @@ def _referenced_asset_ids(content: Mapping[str, list[dict[str, Any]]]) -> set[st
 
     for documents in content.values():
         collect(documents)
-    # A legacy applied Paint map may have no textureIds list at all. It is still a
-    # packaged dependency when a texture graph consumes the whole painted set.
-    references.update(_applied_paint_input_texture_ids(content))
+    # Paint's applied values are *texture document IDs*, not asset file IDs. Keeping
+    # their texture documents in without_baked_pictures() is what ensures the actual
+    # assetId fields above are included; do not add texture IDs as file IDs here.
     return references
 
 
