@@ -770,7 +770,11 @@ class NativeProviderHost:
             meta = self._meta.get(existing.job_id)
             if meta is None:
                 raise HostOperationError("invalid_job", "Job recovery metadata is unavailable")
+            if existing.state.value not in {"failed", "cancelled"}:
+                raise HostOperationError("invalid_job", "Only failed or cancelled jobs may be retried")
             configured = self.settings.get(existing.provider)
+            if not configured.enabled or configured.routes.get(existing.capability) != existing.model:
+                raise HostOperationError("unsupported_capability", "Provider route is no longer configured")
             # A retry may be billed again: re-authorize with a fresh provider
             # ceiling, never a persisted previous cost reservation.
             descriptor = self.registry.get(existing.provider)
