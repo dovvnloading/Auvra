@@ -308,8 +308,9 @@ class CookedPicturesBuildTests(unittest.TestCase):
 
         source = {
             "id": "paint-source", "pictures": {"baseColor": "paint-colour"},
-            "textureIds": ["paint-colour"],
-            "paint": {"modelId": "model", "layers": [{"id": "layer", "kind": "fill"}]},
+            # A legacy document might not have a textureIds list, so mention counts alone cannot guard the applied map.
+            "paint": {"modelId": "model", "layers": [{"id": "layer", "kind": "fill"}],
+                      "applied": {"textures": {"baseColor": "paint-colour"}, "at": 1}},
             "textureGraph": {"graph": {"nodes": []}, "baked": {"textures": {"baseColor": "paint-colour"}}},
         }
         unrelated = {
