@@ -262,11 +262,12 @@ class AssetStore:
                 values = loaded
             existed = asset_id in values or path.exists()
             staged: Path | None = None
-            if path.exists():
-                staging = self.content / ".incoming"
+            staging = self.content / ".incoming"
+            if path.exists() or asset_id in values:
                 staging.mkdir(parents=True, exist_ok=True)
                 if staging.is_symlink() or _is_reparse(staging):
                     raise ValueError("unsafe asset staging directory")
+            if path.exists():
                 candidate = staging / f".delete-{asset_id}"
                 if candidate.exists() or candidate.is_symlink():
                     raise ValueError("pending asset deletion requires recovery")
@@ -275,10 +276,13 @@ class AssetStore:
                 _forget_verified(path)
                 _sync_directory(self.content)
                 _sync_directory(staging)
+            manifest_published = False
             try:
                 if asset_id in values:
                     values.pop(asset_id)
-                    temporary = manifest.with_name(f"manifest.json.tmp-{os.getpid()}-{uuid.uuid4().hex}")
+                    # Keep even an unremovable temporary manifest out of the
+                    # strict Content/ tree's root. Rename remains atomic.
+                    temporary = staging / f"manifest.json.tmp-{os.getpid()}-{uuid.uuid4().hex}"
                     try:
                         temporary.write_text(
                             json.dumps(values, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n",
@@ -289,13 +293,16 @@ class AssetStore:
                             stream.flush()
                             os.fsync(stream.fileno())
                         os.replace(temporary, manifest)
+                        manifest_published = True
                         _sync_directory(manifest.parent)
+                        _sync_directory(staging)
                     finally:
                         temporary.unlink(missing_ok=True)
             except Exception:
-                # If manifest publication fails, put the old blob back. If
-                # rollback also fails, its staged name allows startup replay.
-                if staged is not None and staged.exists():
+                # Roll back only when the manifest did not commit. An error
+                # cleaning up an already-published temp file must not revive
+                # an orphaned live blob.
+                if not manifest_published and staged is not None and staged.exists():
                     try:
                         os.replace(staged, path)
                         _sync_directory(self.content)
