@@ -415,8 +415,8 @@ class NativeProviderHost:
 
     def _configure_credential(self, payload: dict[str, Any]) -> dict[str, Any]:
         descriptor = self.registry.get(payload["providerId"])
-        if descriptor.kind == "cloud":
-            raise HostOperationError("endpoint_denied", "Paid cloud providers have been removed; no new keys are accepted")
+        # Credential storage remains accessible for compatibility and secure
+        # deletion; it never grants cloud dispatch authority.
         if not descriptor.credential_name:
             return {"kind": "provider.credential", "providerId": descriptor.provider_id,
                     "storageMode": payload["storageMode"], "configured": True,
