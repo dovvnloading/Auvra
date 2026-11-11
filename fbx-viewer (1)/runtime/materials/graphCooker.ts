@@ -84,8 +84,20 @@ export const graphCookSources = (
             }
             const id = node.params.graph;
             if (!GRAPH_USING_TYPES.has(node.type) || typeof id !== 'string' || !id || visited.has(id)) continue;
+            // A missing synthetic Paint graph can otherwise be skipped here, because
+            // paintStackEntry only returns entries for real folders. Always reject folder
+            // references before resolving them, not just when the nested graph exists.
+            if (id.startsWith(PAINT_STACK_PREFIX)) {
+                const [assetId, folderId] = id.slice(PAINT_STACK_PREFIX.length).split(':');
+                if (!assetId) throw new Error('A Paint stack graph is missing its painted-set ID.');
+                if (folderId) throw new Error('A Paint stack folder needs its own baked pictures in a standalone game.');
+                if (!assetOf(assetId)?.paint) throw new Error('Paint stack "' + assetId + '" has no painted set in this game.');
+            }
             visited.add(id);
             const nested = resolve(id);
+            if (!nested && id.startsWith(PAINT_STACK_PREFIX)) {
+                throw new Error('Paint stack "' + id + '" could not be resolved in this game.');
+            }
             if (nested) visit(nested.graph);
         }
     };
