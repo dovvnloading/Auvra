@@ -252,6 +252,74 @@ class RelayTests(unittest.IsolatedAsyncioTestCase):
         await ann.send_raw(0x9, b"hi")
         self.assertEqual(await ann.receive(), {"t": "__pong_frame__", "payload": "hi"})
 
+    async def test_control_frame_flood_is_bounded_across_messages_and_fragments(self) -> None:
+        def frame(opcode: int, body: bytes, *, final: bool = True) -> bytes:
+            self.assertLess(len(body), 126)
+            mask = b"\x01\x02\x03\x04"
+            return (bytes([(0x80 if final else 0) | opcode, 0x80 | len(body)]) + mask
+                    + bytes(value ^ mask[index & 3] for index, value in enumerate(body)))
+
+        for mode in ("plain", "interleaved", "fragmented"):
+            with self.subTest(mode=mode):
+                client = await self.client()
+                await client.hello()
+                frames = []
+                if mode == "fragmented":
+                    # No complete JSON message ever arrives; the control budget
+                    # must be checked inside read_message's fragment loop.
+                    frames.append(frame(0x1, b'{"t":"ping",', final=False))
+                for index in range(relay.MAX_CONTROL_FRAMES_PER_SECOND + 4):
+                    frames.append(frame(0x9, b"ok"))
+                    if mode == "interleaved" and index % 8 == 7:
+                        # The limit must survive multiple read_message calls.
+                        frames.append(frame(0x1, b'{"t":"ping","id":1,"time":0}'))
+                # Send one burst so runner scheduling cannot split it into multiple
+                # one-second accounting windows.
+                client.writer.write(b"".join(frames))
+                await client.writer.drain()
+                pongs = 0
+                while True:
+                    result = await client.receive(timeout=3.0)
+                    self.assertIsNotNone(result)
+                    self.assertNotEqual(result, "close")
+                    if result["t"] == "error":
+                        self.assertEqual(result["code"], "rate_limited")
+                        break
+                    if result["t"] == "__pong_frame__":
+                        pongs += 1
+                self.assertLessEqual(pongs, relay.MAX_CONTROL_FRAMES_PER_SECOND)
+                self.assertEqual(await client.receive(), "close")
+
+        # One attacker's counter must not restrict healthy connections.
+        healthy = await self.client()
+        await healthy.hello()
+        await healthy.send_raw(0x9, b"ok")
+        self.assertEqual(await healthy.receive(), {"t": "__pong_frame__", "payload": "ok"})
+
+    async def test_control_pong_write_has_a_deadline(self) -> None:
+        from unittest import mock
+
+        class SlowWriter:
+            class Transport:
+                def get_write_buffer_size(self):
+                    return 0
+
+            transport = Transport()
+
+            def write(self, _data):
+                pass
+
+            async def drain(self):
+                await asyncio.Event().wait()
+
+        mask = b"\x01\x02\x03\x04"
+        reader = asyncio.StreamReader()
+        reader.feed_data(b"\x89\x81" + mask + bytes([ord("x") ^ mask[0]]))
+        with mock.patch.object(relay, "PEER_SEND_TIMEOUT_SECONDS", 0.01):
+            with self.assertRaises(relay.ProtocolError) as raised:
+                await relay.read_message(reader, SlowWriter())
+        self.assertEqual(raised.exception.code, "rate_limited")
+
     async def test_fragmented_messages_are_joined(self) -> None:
         ann = await self.client()
         body = json.dumps({"t": "hello", "v": 1, "game": "demo", "room": "main", "name": "Ann"}).encode("utf-8")
