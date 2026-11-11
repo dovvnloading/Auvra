@@ -242,8 +242,8 @@ jobs:
       - name: Configure headless software Vulkan
         if: runner.os == 'Linux'
         run: |
-          # The default Ubuntu mirror intermittently fails DNS on GitHub runners.
-          # Keep apt's Ubuntu archive signature verification, use the trusted kernel.org mirror.
+          # The runner image's Azure/Ubuntu DNS mirror pool can fail for minutes.
+          # Mirror indexes are still checked with Ubuntu's archive signing keys.
           test -f /etc/apt/apt-mirrors.txt
           printf '%s\n' 'https://mirrors.edge.kernel.org/ubuntu/' | sudo tee /etc/apt/apt-mirrors.txt >/dev/null
           sudo apt-get -o APT::Update::Error-Mode=any -o Acquire::Retries=2 -o Acquire::https::Timeout=20 update
@@ -312,8 +312,8 @@ jobs:
 
       - name: Install WebKitGTK 4.1 and libsoup 3 development packages
         run: |
-          # The default Ubuntu mirror intermittently fails DNS on GitHub runners.
-          # Keep apt's Ubuntu archive signature verification, use the trusted kernel.org mirror.
+          # The runner image's Azure/Ubuntu DNS mirror pool can fail for minutes.
+          # Mirror indexes are still checked with Ubuntu's archive signing keys.
           test -f /etc/apt/apt-mirrors.txt
           printf '%s\n' 'https://mirrors.edge.kernel.org/ubuntu/' | sudo tee /etc/apt/apt-mirrors.txt >/dev/null
           sudo apt-get -o APT::Update::Error-Mode=any -o Acquire::Retries=2 -o Acquire::https::Timeout=20 update
