@@ -281,6 +281,58 @@ class SQLiteJobStore:
             self._event(job_id, JobState.QUEUED, "retry queued", now); self._db.commit()
         return self.get(job_id)
 
+    def retry_with_cost(self, job_id: str, amount_micro_usd: int, *,
+                        project_id: str,
+                        cost_source: str | None = None,
+                        cost_reference: str | None = None) -> Job:
+        """Atomically record a new billable reservation and queue exactly one retry.
+
+        The host holds reserve_budget() while checking provider/day/month caps.
+        This method combines the single-row retry CAS, increased reservation
+        and cost event in one SQLite transaction. Two host processes must not
+        both turn the same failed job into a separately billed request.
+        """
+        if type(amount_micro_usd) is not int or amount_micro_usd < 0:
+            raise ValueError("invalid retry cost")
+        if amount_micro_usd and (cost_source != "provider_enforced" or
+                not isinstance(cost_reference, str) or
+                re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", cost_reference) is None):
+            raise ValueError("missing provider-enforced retry ceiling")
+        if not amount_micro_usd and (cost_source is not None or cost_reference is not None):
+            raise ValueError("invalid local retry quote")
+        with self._lock:
+            current = self.get(job_id, project_id=project_id)
+            if current.state not in {JobState.FAILED, JobState.CANCELLED} or current.attempt >= 3:
+                raise ValueError("job is not eligible for retry")
+            provenance = dict(current.provenance)
+            if cost_source is not None:
+                provenance.update({"cost_source": cost_source,
+                                   "cost_reference": cost_reference,
+                                   "cost_micro_usd": amount_micro_usd})
+            _safe_json(provenance)
+            now = time.time()
+            cursor = self._db.execute(
+                """UPDATE jobs SET state=?, attempts=attempts+1, remote_id=NULL,
+                      reconcile_json='{}', cost_micro_usd=?,
+                      provenance_json=?, updated_at=?
+                   WHERE job_id=? AND state IN (?,?)""",
+                (JobState.QUEUED.value, current.cost_micro_usd + amount_micro_usd,
+                 json.dumps(provenance, sort_keys=True), now, job_id,
+                 JobState.FAILED.value, JobState.CANCELLED.value),
+            )
+            if cursor.rowcount != 1:
+                self._db.rollback()
+                raise ValueError("retry already reserved")
+            self._event(job_id, JobState.QUEUED, "retry queued", now)
+            if amount_micro_usd:
+                self._db.execute(
+                    "INSERT INTO cost_events (job_id, provider, amount_micro_usd, occurred_at, cost_source, cost_reference) VALUES (?,?,?,?,?,?)",
+                    (job_id, current.provider, amount_micro_usd, now,
+                     cost_source, cost_reference),
+                )
+            self._db.commit()
+        return self.get(job_id, project_id=project_id)
+
     def add_cost(self, job_id: str, amount_micro_usd: int, *, project_id: str | None = None,
                  cost_source: str | None = None, cost_reference: str | None = None) -> Job:
         """Add one retry reservation and its provider-backed pricing provenance atomically."""
