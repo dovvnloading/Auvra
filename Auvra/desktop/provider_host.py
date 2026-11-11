@@ -784,13 +784,16 @@ class NativeProviderHost:
                 existing.provider, configured,
                 ceiling.max_micro_usd if ceiling is not None else (0 if descriptor.kind == "local" else None),
             )
-            # Record the new ceiling before making the retry runnable.
-            # If a retry fails later, retaining an over-reservation is safer
-            # than allowing an unreserved paid dispatch.
-            if retry_cost:
-                self.jobs.add_cost(existing.job_id, retry_cost, project_id=active.project_id,
-                                   cost_source="provider_enforced", cost_reference=ceiling.reference)
-            job = self.jobs.retry(payload["jobId"], project_id=active.project_id)
+            # Change retry lifecycle, cost and cost-event provenance in one
+            # transaction. Concurrent hosts cannot both queue a paid retry.
+            try:
+                job = self.jobs.retry_with_cost(
+                    existing.job_id, retry_cost, project_id=active.project_id,
+                    cost_source="provider_enforced" if ceiling is not None else None,
+                    cost_reference=ceiling.reference if ceiling is not None else None,
+                )
+            except ValueError as exc:
+                raise HostOperationError("invalid_job", "Job retry reservation failed") from exc
             meta["estimatedCostMicroUsd"] = retry_cost
             meta["costReference"] = ceiling.reference if ceiling is not None else None
             descriptor = self.registry.get(job.provider)
