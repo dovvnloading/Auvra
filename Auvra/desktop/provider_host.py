@@ -1063,16 +1063,16 @@ class NativeProviderHost:
         try:
             if self._shutdown_event.is_set():
                 return
-            # Defense in depth: a queued job restored from an older version
-            # cannot bypass _submit/_retry to contact a paid provider.
-            if self.registry.get(provider_id).kind == "cloud":
-                raise ProviderError("budget_exceeded", "Paid cloud inference has been removed", provider_id)
             job = self.jobs.get(job_id)
             if job.state.value == "cancel_requested":
                 job = self.jobs.reconcile(job_id, remote_state="cancelled", project_id=job.project_id)
                 self._queue_job_event(job_id, job.state.value, 1, self.registry.get(provider_id))
                 return
             self.jobs.transition(job_id, "submitting")
+            # An old queued cloud job must fail terminally without ever
+            # contacting the remote adapter, even when resumed directly.
+            if self.registry.get(provider_id).kind == "cloud":
+                raise ProviderError("budget_exceeded", "Paid cloud inference has been removed", provider_id)
             self.jobs.transition(job_id, "running")
             if self._shutdown_event.is_set():
                 return
