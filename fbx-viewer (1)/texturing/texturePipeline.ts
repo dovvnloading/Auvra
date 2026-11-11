@@ -8,32 +8,76 @@ import { encodeMaterialTexture, type EncodedLevel, type MaterialTextureFormat, t
 
 let worker: Worker | null = null;
 let nextId = 1;
-const waiting = new Map<number, { resolve: (value: never) => void; reject: (error: Error) => void }>();
+/** An unresponsive worker must not hold transferred image buffers forever. */
+export const TEXTURE_WORKER_TIMEOUT_MS = 120_000;
+const waiting = new Map<number, {
+    resolve: (value: never) => void;
+    reject: (error: Error) => void;
+    timeout: ReturnType<typeof setTimeout>;
+}>();
+
+const failWorker = (error: Error, source: Worker): void => {
+    if (worker !== source) return;
+    worker = null;
+    try { source.terminate(); } catch { /* A failed worker may already be gone. */ }
+    for (const pending of waiting.values()) {
+        clearTimeout(pending.timeout);
+        pending.reject(error);
+    }
+    waiting.clear();
+};
 
 const workerOf = (): Worker | null => {
     if (typeof Worker === 'undefined') return null;
     if (!worker) {
-        worker = new Worker(new URL('../workers/texturePipeline.worker.ts', import.meta.url), { type: 'module' });
-        worker.onmessage = (event: MessageEvent<{ id: number; error?: string }>) => {
-            const pending = waiting.get(event.data.id);
+        const active = new Worker(new URL('../workers/texturePipeline.worker.ts', import.meta.url), { type: 'module' });
+        worker = active;
+        active.onmessage = (event: MessageEvent<{ id: number; error?: string }>) => {
+            if (worker !== active) return;
+            const reply = event.data;
+            if (!reply || typeof reply.id !== 'number') {
+                failWorker(new Error('Texture worker returned an invalid response'), active);
+                return;
+            }
+            const pending = waiting.get(reply.id);
             if (!pending) return;
-            waiting.delete(event.data.id);
-            if (event.data.error) pending.reject(new Error(event.data.error));
-            else pending.resolve(event.data as never);
+            waiting.delete(reply.id);
+            clearTimeout(pending.timeout);
+            if (reply.error) pending.reject(new Error(reply.error));
+            else pending.resolve(reply as never);
         };
+        active.onerror = () => failWorker(new Error('Texture worker failed'), active);
+        active.onmessageerror = () => failWorker(new Error('Texture worker response could not be read'), active);
     }
     return worker;
 };
 
 const ask = <T>(message: Record<string, unknown>, transfer: Transferable[]): Promise<T> => new Promise<T>((resolve, reject) => {
+    let active: Worker | null;
+    try {
+        active = workerOf();
+    } catch {
+        reject(new Error('Texture worker could not start'));
+        return;
+    }
+    if (!active) {
+        reject(new Error('Texture worker is unavailable'));
+        return;
+    }
+    const current = active;
     const id = nextId++;
-    waiting.set(id, { resolve: resolve as (value: never) => void, reject });
-    workerOf()!.postMessage({ ...message, id }, transfer);
+    const timeout = setTimeout(() => failWorker(new Error('Texture worker timed out'), current), TEXTURE_WORKER_TIMEOUT_MS);
+    waiting.set(id, { resolve: resolve as (value: never) => void, reject, timeout });
+    try {
+        current.postMessage({ ...message, id }, transfer);
+    } catch {
+        failWorker(new Error('Texture worker could not accept the request'), current);
+    }
 });
 
 /** Decodes a picture file at its own depth, off the page. The bytes are handed over. */
 export const decodePictureOffPage = async (bytes: Uint8Array, name = ''): Promise<DecodedPicture> => {
-    if (!workerOf()) return decodePicture(bytes, name);
+    if (typeof Worker === 'undefined') return decodePicture(bytes, name);
     const { picture } = await ask<{ picture: DecodedPicture }>({ op: 'decode', bytes, name }, [bytes.buffer]);
     return picture;
 };
@@ -42,7 +86,7 @@ export const decodePictureOffPage = async (bytes: Uint8Array, name = ''): Promis
 export const encodeTextureOffPage = async (
     rgba: Uint8Array, width: number, height: number, format: MaterialTextureFormat, kind: MaterialTextureKind, mips: boolean,
 ): Promise<EncodedLevel[]> => {
-    if (!workerOf()) return encodeMaterialTexture(rgba, width, height, format, kind, mips);
+    if (typeof Worker === 'undefined') return encodeMaterialTexture(rgba, width, height, format, kind, mips);
     const { levels } = await ask<{ levels: EncodedLevel[] }>({ op: 'encode', rgba, width, height, format, kind, mips }, [rgba.buffer]);
     return levels;
 };

@@ -341,13 +341,27 @@ class Relay:
             raise ProtocolError("full", "the room is full")
         peer = Peer(secrets.token_hex(6), name, writer, time.monotonic())
         room.peers.append(peer)
-        await peer.send({
-            "t": "welcome", "v": PROTOCOL_VERSION, "you": peer.id, "host": room.host.id if room.host else peer.id,
-            "peers": [{"id": other.id, "name": other.name} for other in room.peers if other is not peer],
-            "serverTime": self.server_time(),
-        })
-        await self.broadcast(room, {"t": "joined", "peer": {"id": peer.id, "name": peer.name}}, skip=peer)
-        return peer, room
+        complete = False
+        try:
+            delivered = await peer.send({
+                "t": "welcome", "v": PROTOCOL_VERSION, "you": peer.id, "host": room.host.id if room.host else peer.id,
+                "peers": [{"id": other.id, "name": other.name} for other in room.peers if other is not peer],
+                "serverTime": self.server_time(),
+            })
+            if delivered is False:
+                raise ConnectionError("welcome could not be delivered")
+            await self.broadcast(room, {"t": "joined", "peer": {"id": peer.id, "name": peer.name}}, skip=peer)
+            complete = True
+            return peer, room
+        finally:
+            if not complete:
+                # A timed-out/cancelled join never returns to handle(), whose
+                # cleanup therefore cannot see this provisional room member.
+                # Roll it back synchronously even under task cancellation.
+                if peer in room.peers:
+                    room.peers.remove(peer)
+                if not room.peers and self.rooms.get(room.name) is room:
+                    self.rooms.pop(room.name, None)
 
     def _count(self, peer: Peer) -> None:
         now = time.monotonic()

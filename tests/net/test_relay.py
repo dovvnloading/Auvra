@@ -130,6 +130,44 @@ class RelayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await cat.receive())["t"], "left")
         self.assertEqual(await cat.receive(), {"t": "host", "id": bob_id})
 
+    async def test_cancelled_join_does_not_leave_a_ghost_peer_or_room(self) -> None:
+        from unittest import mock
+
+        hello = json.dumps({"t": "hello", "v": 1, "game": "demo", "room": "main", "name": "Late"}).encode()
+        reader = asyncio.StreamReader()
+        writer = object()
+        relay_instance = relay.Relay(max_players=2)
+
+        async def hang(_peer, _message):
+            await asyncio.Event().wait()
+
+        with mock.patch.object(relay, "read_message", return_value=(relay._OP_TEXT, hello)), \
+             mock.patch.object(relay.Peer, "send", hang):
+            with self.assertRaises(asyncio.TimeoutError):
+                await asyncio.wait_for(relay_instance._join(reader, writer), 0.01)
+        self.assertNotIn("main", relay_instance.rooms)
+
+        # When the welcome succeeds but broadcast stalls, keep the existing
+        # host and make the provisional slot available again.
+        host = relay.Peer("original", "Host", object(), 0.0)
+        room = relay.Room("main", "demo", [host])
+        relay_instance.rooms["main"] = room
+
+        async def delivered(_peer, _message):
+            return None
+
+        async def hang_broadcast(_room, _message, *, skip=None):
+            await asyncio.Event().wait()
+
+        with mock.patch.object(relay, "read_message", return_value=(relay._OP_TEXT, hello)), \
+             mock.patch.object(relay.Peer, "send", delivered), \
+             mock.patch.object(relay_instance, "broadcast", hang_broadcast):
+            with self.assertRaises(asyncio.TimeoutError):
+                await asyncio.wait_for(relay_instance._join(reader, writer), 0.01)
+        self.assertIs(relay_instance.rooms["main"], room)
+        self.assertEqual(room.peers, [host])
+        self.assertIs(room.host, host)
+
     async def test_a_stalled_reader_does_not_delay_healthy_room_peers(self) -> None:
         class FakeTransport:
             def get_write_buffer_size(self):

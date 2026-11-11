@@ -83,6 +83,8 @@ export class LevelAssetResidency {
     private starts = 0;
     /** Bumps as each level is asked for. */
     private level = 0;
+    /** Cached activation invalidates queued earlier prepares, not ordinary sequential prepares. */
+    private cacheGeneration = 0;
     private queue: Promise<unknown> = Promise.resolve();
     /** What the running level needs and what its World Grid is drawing: never freed to make room. */
     private levelNeeds: LevelAssetNeeds | null = null;
@@ -123,10 +125,31 @@ export class LevelAssetResidency {
      */
     prepare(levelId: string): Promise<void> {
         // What the last level's World Grid is still waiting for no longer matters, and must not hold this one up.
-        this.level += 1;
-        const run = this.queue.then(() => this.prepareNow(levelId));
+        const generation = ++this.level;
+        const run = this.queue.then(() => {
+            if (generation < this.cacheGeneration) return;
+            return this.prepareNow(levelId);
+        });
         this.queue = run.catch(() => undefined);
         return run;
+    }
+
+    /** Restart a held level immediately, without loading or a loading screen. */
+    activateCached(levelId: string): void {
+        if (!this.holds(levelId)) throw new Error('level assets are not resident');
+        // Invalidate previous-level cell work before a new World Grid can ask for anything.
+        ++this.level;
+        this.cacheGeneration = this.level;
+        const needs = this.needsOf(levelId);
+        this.levelNeeds = needs;
+        this.cellsInUse = new Set();
+        const start = ++this.starts;
+        for (const kind of HELD_KINDS) {
+            for (const id of needs[kind]) {
+                const held = this.held.get(LevelAssetResidency.key(kind, id));
+                if (held) held.used = start;
+            }
+        }
     }
 
     /** Whether a World Grid's cells in play draw this model. */
