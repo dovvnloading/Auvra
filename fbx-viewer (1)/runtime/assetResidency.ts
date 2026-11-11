@@ -123,10 +123,30 @@ export class LevelAssetResidency {
      */
     prepare(levelId: string): Promise<void> {
         // What the last level's World Grid is still waiting for no longer matters, and must not hold this one up.
-        this.level += 1;
-        const run = this.queue.then(() => this.prepareNow(levelId));
+        const generation = ++this.level;
+        const run = this.queue.then(() => {
+            if (generation !== this.level) return;
+            return this.prepareNow(levelId);
+        });
         this.queue = run.catch(() => undefined);
         return run;
+    }
+
+    /** Restart a held level immediately, without loading or a loading screen. */
+    activateCached(levelId: string): void {
+        if (!this.holds(levelId)) throw new Error('level assets are not resident');
+        // Invalidate previous-level cell work before a new World Grid can ask for anything.
+        ++this.level;
+        const needs = this.needsOf(levelId);
+        this.levelNeeds = needs;
+        this.cellsInUse = new Set();
+        const start = ++this.starts;
+        for (const kind of HELD_KINDS) {
+            for (const id of needs[kind]) {
+                const held = this.held.get(LevelAssetResidency.key(kind, id));
+                if (held) held.used = start;
+            }
+        }
     }
 
     /** Whether a World Grid's cells in play draw this model. */
