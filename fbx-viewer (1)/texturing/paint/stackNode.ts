@@ -216,7 +216,7 @@ export const PAINT_STACK_NODE: TexNodeDef = {
             if (![...PAINT_CHANNELS, 'orm'].some((channel) => baked(channel))) {
                 throw new Error('This Paint stack has no applied pictures in the game. Apply the painted set and include its pictures in the build.');
             }
-            context.note('Using the painted set\'s last applied pictures in this game.');
+            context.note?.('Using the painted set\'s last applied pictures in this game.');
             const outputs: Record<string, GpuImage> = {};
             for (const port of PAINT_STACK_NODE.outputs) {
                 const target = context.image(port.kind === 'color' ? 'color' : 'gray');
