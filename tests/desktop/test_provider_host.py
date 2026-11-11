@@ -453,24 +453,134 @@ class ProviderHostTests(unittest.TestCase):
             finally:
                 host.shutdown()
 
-    def test_a_job_with_budgets_set_is_held_to_them_by_the_catalog_price(self) -> None:
-        from Auvra.providers.fal_catalog import CatalogModel
+    def test_paid_cloud_providers_are_unavailable_and_cannot_be_enabled(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            host = NativeProviderHost(Path(raw), project_host=_Project())
+            try:
+                providers = host._provider_list({})["providers"]
+                self.assertTrue(any(p["providerId"] == "ollama" and p["available"] for p in providers))
+                for provider in providers:
+                    if provider["providerId"] in {"ollama", "llama.cpp", "reframe"}:
+                        continue
+                    with self.subTest(provider=provider["providerId"]):
+                        self.assertFalse(provider["available"])
+                        self.assertEqual(provider["capabilities"], [])
+                        status = host._provider_status({"providerId": provider["providerId"]})
+                        self.assertFalse(status["available"])
+                        self.assertFalse(status["settings"]["enabled"])
+                        self.assertEqual(status["settings"]["routes"], [])
+                        self.assertEqual(host._list_models({"providerId": provider["providerId"]})["models"], [])
+                        self.assertFalse(host._health({"providerId": provider["providerId"]})["healthy"])
+                        with self.assertRaises(HostOperationError) as blocked:
+                            host._configure({"providerId": provider["providerId"],
+                                             "expectedSettingsRevision": status["settingsRevision"],
+                                             "settings": {
+                                                 "enabled": True, "routes": [],
+                                                 "fallbackPolicy": "none", "requireCostConfirmation": False,
+                                                 "budgets": {"perJobMicroUsd": 0, "dailyMicroUsd": 0,
+                                                             "monthlyMicroUsd": 0},
+                                             }})
+                        self.assertEqual(blocked.exception.code, "endpoint_denied")
+            finally:
+                host.shutdown()
 
-        class Priced:
-            def model_details(self, _model):
-                return CatalogModel("a/b", "A B", frozenset({Capability.MEDIA_EDIT}), "image-to-image", "", 40_000, "images")
+    def test_paid_cloud_requests_never_dispatch_even_with_legacy_settings(self) -> None:
+        class Spy:
+            def __init__(self):
+                self.calls = []
+
+            def complete(self, **kwargs):
+                self.calls.append(("complete", kwargs))
+                raise AssertionError("paid cloud execution must never run")
+
+            def submit(self, **kwargs):
+                self.calls.append(("submit", kwargs))
+                raise AssertionError("paid cloud execution must never run")
+
+            def model_details(self, model):
+                self.calls.append(("price", model))
+                return None
 
         with tempfile.TemporaryDirectory() as raw:
-            host = NativeProviderHost(Path(raw), project_host=_Project(), adapters={"fal": Priced()})
+            spies = {p: Spy() for p in ("fal", "openai", "anthropic", "xai", "openrouter")}
+            host = NativeProviderHost(Path(raw), project_host=_Project(), adapters=spies)
             try:
-                unset = SimpleNamespace(max_job_cost_micro_usd=0, max_daily_cost_micro_usd=0, max_monthly_cost_micro_usd=0)
-                self.assertIsNone(host._cost_estimate("fal", unset, {"modelId": "a/b"}))
-                limits = SimpleNamespace(max_job_cost_micro_usd=10_000, max_daily_cost_micro_usd=100_000, max_monthly_cost_micro_usd=100_000)
-                self.assertEqual(host._cost_estimate("fal", limits, {"modelId": "a/b"}), 40_000)
-                self.assertEqual(host._cost_estimate("fal", limits, {"modelId": "a/b", "estimatedCostMicroUsd": 7}), 7)
-                with self.assertRaises(HostOperationError) as raised:
-                    host._check_budget("fal", limits, 40_000)
-                self.assertEqual(raised.exception.code, "budget_exceeded")
+                for provider_id, adapter in spies.items():
+                    capability = Capability.MEDIA_GENERATE if provider_id == "fal" else Capability.TEXT
+                    model = "fal-ai/flux/dev" if provider_id == "fal" else "legacy-model"
+                    host.registry.discover_models(provider_id, [model])
+                    # Simulate a saved route from an older version with budgets and consent.
+                    host.settings.set(provider_id, enabled=True, routes={capability: model},
+                                      max_job_cost_micro_usd=1_000_000,
+                                      max_daily_cost_micro_usd=1_000_000,
+                                      max_monthly_cost_micro_usd=1_000_000)
+                    for hint in (None, 0, 1, 40_000, 1_000_000):
+                        with self.subTest(provider=provider_id, hint=hint):
+                            with self.assertRaises(HostOperationError) as blocked:
+                                host._submit({
+                                    "projectId": "project-1", "expectedRevision": 0,
+                                    "providerId": provider_id, "modelId": model,
+                                    "capability": capability.value, "route": "cloud",
+                                    "input": "test", "estimatedCostMicroUsd": hint,
+                                    "consent": "explicit",
+                                })
+                            self.assertEqual(blocked.exception.code, "endpoint_denied")
+                    old = host.jobs.create(project_id="project-1", provider=provider_id,
+                                           model=model, capability=capability.value,
+                                           prompt_hash="a" * 64)
+                    host.jobs.transition(old.job_id, "submitting")
+                    host.jobs.transition(old.job_id, "failed")
+                    with self.assertRaises(HostOperationError) as blocked:
+                        host._retry({"projectId": "project-1", "expectedRevision": 0,
+                                     "jobId": old.job_id})
+                    self.assertEqual(blocked.exception.code, "endpoint_denied")
+                    self.assertEqual(host.jobs.get(old.job_id).state.value, "failed")
+                    self.assertEqual(host.jobs.cost_totals(provider_id)["aggregate"], 0)
+                    self.assertEqual(adapter.calls, [])
+                self.assertEqual(len(host.jobs.list(project_id="project-1")), len(spies))
+            finally:
+                host.shutdown()
+
+    def test_legacy_queued_paid_job_fails_terminally_without_network(self) -> None:
+        class Spy:
+            def __init__(self):
+                self.calls = []
+
+            def complete(self, **kwargs):
+                self.calls.append(kwargs)
+                raise AssertionError("cloud provider called")
+
+        with tempfile.TemporaryDirectory() as raw:
+            adapter = Spy()
+            host = NativeProviderHost(Path(raw), project_host=_Project(), adapters={"openai": adapter})
+            try:
+                job = host.jobs.create(project_id="project-1", provider="openai",
+                                       model="legacy-model", capability=Capability.TEXT.value,
+                                       prompt_hash="a" * 64)
+                host._run_job(job.job_id, "openai", "legacy-model", Capability.TEXT)
+                self.assertEqual(adapter.calls, [])
+                self.assertEqual(host.jobs.get(job.job_id).state.value, "failed")
+                self.assertEqual(host.jobs.get(job.job_id).cost_micro_usd, 0)
+            finally:
+                host.shutdown()
+
+    def test_legacy_cloud_configuration_cannot_block_local_route_selection(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            host = NativeProviderHost(Path(raw), project_host=_Project())
+            try:
+                host.registry.discover_models("openai", ("old-cloud-model",))
+                host.registry.discover_models("ollama", ("local-model",))
+                host.settings.set("openai", enabled=True, routes={Capability.TEXT: "old-cloud-model"})
+                result = host._configure({
+                    "providerId": "ollama", "expectedSettingsRevision": 0,
+                    "settings": {"enabled": True, "routes": [{"capability": "text", "modelId": "local-model"}],
+                                 "fallbackPolicy": "none", "requireCostConfirmation": False,
+                                 "budgets": {"perJobMicroUsd": 0, "dailyMicroUsd": 0,
+                                             "monthlyMicroUsd": 0}},
+                })
+                self.assertTrue(result["settings"]["enabled"])
+                self.assertEqual(result["settings"]["routes"],
+                                 [{"capability": "text", "modelId": "local-model"}])
             finally:
                 host.shutdown()
 
