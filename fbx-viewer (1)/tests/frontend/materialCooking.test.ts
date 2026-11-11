@@ -81,7 +81,12 @@ describe('texture graphs cooked by the game', () => {
             ? { id, name: id, graph: subgraph }
             : paintStackEntry(id, () => udimAsset);
         expect(() => graphCookSources(root, udimResolver, () => udimAsset)).toThrow(/UDIM tiles/);
-        expect(() => graphCookSources(root, resolve, () => undefined)).toThrow(/no applied pictures/);
+        expect(() => graphCookSources(root, resolve, () => undefined)).toThrow(/no painted set/);
+        const unappliedAsset = { ...paintAsset, paint: { ...document, applied: undefined } as unknown as Record<string, unknown> };
+        const unappliedResolver = (id: string) => id === 'nested'
+            ? { id, name: id, graph: subgraph }
+            : paintStackEntry(id, () => unappliedAsset);
+        expect(() => graphCookSources(root, unappliedResolver, () => unappliedAsset)).toThrow(/no applied pictures/);
         const folderGraph: TextureGraph = {
             ...subgraph, nodes: [{ id: 'folder', type: 'subgraph', x: 0, y: 0,
                 params: { graph: 'paint:painted:' + document.layers[0].id } }],
