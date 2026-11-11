@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { TextureGraphEvaluator } from '../../texturing/graph/evaluator';
 import { GRAPH_USING_TYPES, OUTPUT_NODE_TYPE } from '../../texturing/graph/nodes/io';
 import { PAINT_STACK_NODE_TYPE, paintBakedKey, paintStackEntry, PAINT_STACK_PREFIX } from '../../texturing/paint/stackNode';
-import { PAINT_CHANNELS } from '../../texturing/paint/paintTypes';
+import { PAINT_CHANNELS, readPaintDocument } from '../../texturing/paint/paintTypes';
 import type { TextureGraph } from '../../texturing/graph/types';
 import { flipbookFrameSize, flipbookGrid, frameTime, packFlipbook, readAnimation } from '../../texturing/graph/animation';
 import type { GpuImage } from '../../texturing/gpu/textureGpu';
@@ -67,9 +67,12 @@ export const graphCookSources = (
                 const assetId = String(node.params.asset ?? '');
                 if (!assetId || node.params.folder) continue;
                 const asset = assetOf(assetId);
-                if (!asset?.paint) continue;
+                const document = asset?.paint ? readPaintDocument(asset.paint) : null;
+                // A surface's pictures can also come from a texture graph. Only Paint's own
+                // applied maps are valid inputs here; a UDIM atlas is not one UV square.
+                if (!document?.applied || document.udim) continue;
                 for (const channel of [...PAINT_CHANNELS, 'orm']) {
-                    const id = asset.pictures?.[channel];
+                    const id = document.applied.textures[channel];
                     if (!id) continue;
                     textureIds.add(id);
                     paintInputs.set(paintBakedKey(assetId, channel), id);
