@@ -318,7 +318,7 @@ class CookedPicturesBuildTests(unittest.TestCase):
             "textureGraph": {"graph": {"nodes": []}, "baked": {"textures": {"baseColor": "unused-colour"}}},
         }
 
-        def build(consumer_node: dict) -> list[str]:
+        def build(consumer_node: dict) -> tuple[list[str], set[str]]:
             content = {
                 "materials": [
                     source, unrelated,
@@ -326,13 +326,17 @@ class CookedPicturesBuildTests(unittest.TestCase):
                 ],
                 "textures": [{"id": "paint-colour"}, {"id": "unused-colour"}],
             }
-            return [item["id"] for item in without_baked_pictures(content)["textures"]]
+            packed = without_baked_pictures(content)
+            return ([item["id"] for item in packed["textures"]],
+                    game_build_module._referenced_asset_ids(packed))
 
-        # The consuming graph stores only the source material ID, not the source's texture ID.
-        self.assertEqual(build({"type": "subgraph", "params": {"graph": "paint:paint-source"}}), ["paint-colour"])
-        self.assertEqual(build({"type": "iterate", "params": {"graph": "paint:paint-source"}}), ["paint-colour"])
-        self.assertEqual(build({"type": "paintStack", "params": {"asset": "paint-source", "folder": ""}}), ["paint-colour"])
+        # A legacy source with no textureIds still retains its asset bytes in the
+        # *manifest*, not just its textures domain record.
+        expected = (["paint-colour"], {"paint-colour"})
+        self.assertEqual(build({"type": "subgraph", "params": {"graph": "paint:paint-source"}}), expected)
+        self.assertEqual(build({"type": "iterate", "params": {"graph": "paint:paint-source"}}), expected)
+        self.assertEqual(build({"type": "paintStack", "params": {"asset": "paint-source", "folder": ""}}), expected)
         # A folder has no bundled per-folder output yet; never substitute the whole applied picture.
-        self.assertEqual(build({"type": "subgraph", "params": {"graph": "paint:paint-source:folder"}}), [])
+        self.assertEqual(build({"type": "subgraph", "params": {"graph": "paint:paint-source:folder"}}), ([], set()))
 
 
