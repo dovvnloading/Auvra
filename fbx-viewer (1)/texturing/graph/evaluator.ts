@@ -604,7 +604,8 @@ export class TextureGraphEvaluator {
                 if (!nested) this.nested.set(key, nested = new TextureGraphEvaluator(gpu, this.resolve, this.texture, this.depth + 1, new Set([...this.visiting, graphId])));
                 nested.prune(entry.graph);
                 const given: Record<string, ExternalImage | null> = {};
-                for (const [key, value] of Object.entries(external)) if (key.startsWith('mesh:')) given[key] = value ?? null;
+                // Mesh maps and the game's last applied Paint stack pictures travel through nested graphs.
+                for (const [key, value] of Object.entries(external)) if (key.startsWith('mesh:') || key.startsWith('paint-baked:')) given[key] = value ?? null;
                 for (const [key, value] of Object.entries(inputs)) given[key] = value;
                 const result: Record<string, GpuImage> = {};
                 try {
