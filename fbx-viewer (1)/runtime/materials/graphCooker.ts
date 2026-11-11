@@ -65,18 +65,22 @@ export const graphCookSources = (
         for (const node of part.nodes) {
             if (node.type === PAINT_STACK_NODE_TYPE) {
                 const assetId = String(node.params.asset ?? '');
-                if (!assetId || node.params.folder) continue;
+                if (!assetId) throw new Error('A Paint stack graph is missing its painted-set ID.');
+                if (node.params.folder) throw new Error('A Paint stack folder needs its own baked pictures in a standalone game.');
                 const asset = assetOf(assetId);
                 const document = asset?.paint ? readPaintDocument(asset.paint) : null;
-                // A surface's pictures can also come from a texture graph. Only Paint's own
-                // applied maps are valid inputs here; a UDIM atlas is not one UV square.
-                if (!document?.applied || document.udim) continue;
+                if (!document?.applied) throw new Error('Paint stack "' + assetId + '" has no applied pictures in this game.');
+                // Applied UDIM atlases are not an ordinary 0..1 UV-square picture.
+                if (document.udim) throw new Error('Paint stack "' + assetId + '" uses UDIM tiles and needs atlas-aware runtime cooking.');
+                let found = false;
                 for (const channel of [...PAINT_CHANNELS, 'orm'] as const) {
                     const id = document.applied.textures[channel];
                     if (!id) continue;
+                    found = true;
                     textureIds.add(id);
                     paintInputs.set(paintBakedKey(assetId, channel), id);
                 }
+                if (!found) throw new Error('Paint stack "' + assetId + '" has no saved applied picture texture IDs.');
             }
             const id = node.params.graph;
             if (!GRAPH_USING_TYPES.has(node.type) || typeof id !== 'string' || !id || visited.has(id)) continue;
