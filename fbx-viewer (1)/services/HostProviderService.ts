@@ -129,7 +129,7 @@ const FAILURE_MESSAGES: Record<string, string> = {
   provider_not_found: 'The provider does not have this model any more.',
   provider_failed: 'The provider could not finish this.',
   'provider job failed': 'The provider could not finish this.',
-  budget_exceeded: 'This would go over the budget set in Settings.',
+  budget_exceeded: 'Paid cloud work requires explicit consent. Provider charges are not capped by Auvra.',
 };
 
 /** Says a failure in words: hosts report a code, or the provider's own sentence where it gave one. */
@@ -356,7 +356,9 @@ export class HostProviderService {
   }
 
   async retryInference(jobId: string): Promise<InferenceJob> {
-    return normalizeJob(await this.call('inference.retry', this.withProjectRevision({ jobId, consent: 'same-route' })));
+    // A retry is another potentially billable request. The user invokes
+    // this action explicitly; the host requires consent even for a retry.
+    return normalizeJob(await this.call('inference.retry', this.withProjectRevision({ jobId, consent: 'explicit' })));
   }
 
   async discardMedia(assetId: string, jobId: string): Promise<unknown> {
