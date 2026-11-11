@@ -223,7 +223,8 @@ jobs:
 
   native-engine-build:
     name: Native engine (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
+    # Keep the check name stable while using the established Ubuntu runner image for apt-dependent verification.
+    runs-on: ${{ matrix.os == 'ubuntu-latest' && 'ubuntu-24.04' || matrix.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -241,8 +242,12 @@ jobs:
       - name: Configure headless software Vulkan
         if: runner.os == 'Linux'
         run: |
-          sudo apt-get update
-          sudo apt-get install --yes mesa-vulkan-drivers
+          # The runner image's Azure/Ubuntu DNS mirror pool can fail for minutes.
+          # Mirror indexes are still checked with Ubuntu's archive signing keys.
+          test -f /etc/apt/apt-mirrors.txt
+          printf '%s\n' 'https://mirrors.edge.kernel.org/ubuntu/' | sudo tee /etc/apt/apt-mirrors.txt >/dev/null
+          sudo apt-get -o APT::Update::Error-Mode=any -o Acquire::Retries=2 -o Acquire::https::Timeout=20 update
+          sudo apt-get -o Acquire::Retries=2 -o Acquire::https::Timeout=20 install --yes mesa-vulkan-drivers
           echo "WGPU_BACKEND=vulkan" >> "$GITHUB_ENV"
           echo "AUVRA_WGPU_FORCE_FALLBACK_ADAPTER=1" >> "$GITHUB_ENV"
 
@@ -296,7 +301,8 @@ jobs:
 
   desktop-player-linux:
     name: Desktop game player (ubuntu-latest)
-    runs-on: ubuntu-latest
+    # Match the native-engine runner to avoid unstable rolling-image apt resolution.
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: player-desktop
@@ -306,10 +312,14 @@ jobs:
 
       - name: Install WebKitGTK 4.1 and libsoup 3 development packages
         run: |
-          sudo apt-get update
+          # The runner image's Azure/Ubuntu DNS mirror pool can fail for minutes.
+          # Mirror indexes are still checked with Ubuntu's archive signing keys.
+          test -f /etc/apt/apt-mirrors.txt
+          printf '%s\n' 'https://mirrors.edge.kernel.org/ubuntu/' | sudo tee /etc/apt/apt-mirrors.txt >/dev/null
+          sudo apt-get -o APT::Update::Error-Mode=any -o Acquire::Retries=2 -o Acquire::https::Timeout=20 update
           # Headers and libraries only: the recommended extras (portals, docs, GObject introspection data)
           # add many packages to a download that is slow on some runner mirrors.
-          sudo apt-get install --yes --no-install-recommends pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev libsoup-3.0-dev libdbus-1-dev
+          sudo apt-get -o Acquire::Retries=2 -o Acquire::https::Timeout=20 install --yes --no-install-recommends pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev libsoup-3.0-dev libdbus-1-dev
 
       - name: Select pinned Rust toolchain
         run: rustup toolchain install 1.98.0 --profile minimal --component rustfmt --component clippy

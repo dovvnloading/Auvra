@@ -168,6 +168,61 @@ class RelayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(room.peers, [host])
         self.assertIs(room.host, host)
 
+    async def test_a_stalled_reader_does_not_delay_healthy_room_peers(self) -> None:
+        class FakeTransport:
+            def get_write_buffer_size(self):
+                return 0
+
+        class FakeWriter:
+            def __init__(self, *, stalled=False, pending=0):
+                self.stalled = stalled
+                self.pending = pending
+                self.transport = FakeTransport()
+                self.transport.get_write_buffer_size = lambda: self.pending
+                self.writes = []
+                self.closed = False
+                self.sent = asyncio.Event()
+                self.block = asyncio.Event()
+
+            def write(self, data):
+                self.writes.append(data)
+                self.sent.set()
+
+            async def drain(self):
+                if self.stalled:
+                    await self.block.wait()
+
+            def close(self):
+                self.closed = True
+
+        slow_writer = FakeWriter(stalled=True)
+        fast_writer = FakeWriter()
+        slow = relay.Peer("slow", "Slow", slow_writer, 0.0)
+        fast = relay.Peer("fast", "Fast", fast_writer, 0.0)
+        room = relay.Room("test", "demo", [slow, fast])
+        relay_instance = relay.Relay()
+        from unittest import mock
+        with mock.patch.object(relay, "PEER_SEND_TIMEOUT_SECONDS", 1.0):
+            broadcasting = asyncio.create_task(relay_instance.broadcast(room, {"t": "event", "name": "ping", "payload": 1}))
+            # Give busy Windows CI runners time to schedule the healthy writer,
+            # but require delivery before the slow peer's one-second deadline.
+            await asyncio.wait_for(fast_writer.sent.wait(), 0.5)
+            self.assertFalse(broadcasting.done())
+            await asyncio.wait_for(broadcasting, 2.0)
+        self.assertTrue(slow_writer.closed)
+        self.assertFalse(fast_writer.closed)
+        self.assertEqual(len(fast_writer.writes), 1)
+
+        # A peer already past the outgoing byte cap is dropped before another
+        # frame is queued, without impacting the healthy client.
+        slow_writer.pending = relay.MAX_PEER_PENDING_BYTES
+        slow_writer.closed = False
+        slow_writer.writes.clear()
+        await relay_instance.broadcast(room, {"t": "event", "name": "ping", "payload": 2})
+        self.assertTrue(slow_writer.closed)
+        self.assertEqual(slow_writer.writes, [])
+        self.assertEqual(len(fast_writer.writes), 2)
+
     async def test_state_and_events_reach_the_others_and_events_can_target_one_peer(self) -> None:
         ann, bob, cat = await self.client(), await self.client(), await self.client()
         ann_id = (await ann.hello(name="Ann"))["you"]

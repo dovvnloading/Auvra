@@ -36,6 +36,9 @@ MAX_EVENT_NAME_LENGTH = 64
 MAX_ENTITIES_PER_STATE = 256
 MAX_VARS_PER_ENTITY = 32
 MAX_MESSAGES_PER_SECOND = 120
+# Slow readers must not retain unbounded outgoing frames or stall a room.
+MAX_PEER_PENDING_BYTES = 512 * 1024
+PEER_SEND_TIMEOUT_SECONDS = 1.0
 MAX_HANDSHAKE_BYTES = 8 * 1024
 HANDSHAKE_TIMEOUT_SECONDS = 10.0
 HELLO_TIMEOUT_SECONDS = 10.0
@@ -231,12 +234,19 @@ class Peer:
     window_start: float = 0.0
     window_count: int = 0
 
-    async def send(self, message: dict[str, Any]) -> None:
+    async def send(self, message: dict[str, Any]) -> bool:
+        """Send to one peer without retaining an unbounded backlog on a slow link."""
         try:
-            self.writer.write(encode_frame(_OP_TEXT, json.dumps(message, separators=(",", ":")).encode("utf-8")))
-            await self.writer.drain()
-        except (ConnectionError, RuntimeError):
-            pass
+            frame = encode_frame(_OP_TEXT, json.dumps(message, separators=(",", ":")).encode("utf-8"))
+            if self.writer.transport.get_write_buffer_size() + len(frame) > MAX_PEER_PENDING_BYTES:
+                self.writer.close()
+                return False
+            self.writer.write(frame)
+            await asyncio.wait_for(self.writer.drain(), PEER_SEND_TIMEOUT_SECONDS)
+            return True
+        except (asyncio.TimeoutError, ConnectionError, RuntimeError, OSError):
+            self.writer.close()
+            return False
 
 
 @dataclass(eq=False)
@@ -265,9 +275,11 @@ class Relay:
         return int((time.monotonic() - self._started) * 1000)
 
     async def broadcast(self, room: Room, message: dict[str, Any], *, skip: Peer | None = None) -> None:
-        for peer in list(room.peers):
-            if peer is not skip:
-                await peer.send(message)
+        # Deliver concurrently: a stalled client's drain must not hold up any
+        # healthy recipient. Peer.send enforces its own byte and time budgets.
+        recipients = [peer for peer in list(room.peers) if peer is not skip]
+        if recipients:
+            await asyncio.gather(*(peer.send(message) for peer in recipients))
 
     async def handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         self._writers.add(writer)
