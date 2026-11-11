@@ -46,6 +46,7 @@ describe('texture graphs cooked by the game', () => {
     it('resolves nested Paint stacks, preloads applied picture inputs and invalidates the cooked signature', () => {
         const document = createPaintDocument('model', ['Body'], 8);
         document.layers = [newFillLayer(document, 'Base', { baseColor: { kind: 'value', value: [0.4, 0.3, 0.2] } })];
+        document.applied = { textures: { baseColor: 'paint-colour', orm: 'paint-orm' }, at: 1 };
         const paintAsset: MaterialAsset = {
             ...crate(), id: 'painted', name: 'Painted helmet',
             textureGraph: undefined,
@@ -75,17 +76,24 @@ describe('texture graphs cooked by the game', () => {
             [paintBakedKey('painted', 'baseColor'), 'paint-colour'],
             [paintBakedKey('painted', 'orm'), 'paint-orm'],
         ]);
+        const udimAsset = { ...paintAsset, paint: { ...document, udim: true } as unknown as Record<string, unknown> };
+        const udimResolver = (id: string) => id === 'nested'
+            ? { id, name: id, graph: subgraph }
+            : paintStackEntry(id, () => udimAsset);
+        expect(graphCookSources(root, udimResolver, () => udimAsset).paintInputs.size).toBe(0);
 
         materialLibrary.replaceAll([target, nestedAsset, paintAsset]);
         const before = graphContent(target);
-        materialLibrary.upsert({ ...paintAsset, pictures: { baseColor: 'reapplied-colour', orm: 'paint-orm' } });
+        const repainted = { ...document, applied: { textures: { baseColor: 'reapplied-colour', orm: 'paint-orm' }, at: 2 } };
+        materialLibrary.upsert({ ...paintAsset, paint: repainted as unknown as Record<string, unknown>, pictures: repainted.applied.textures });
         expect(graphContent(target)).not.toBe(before);
         const direct: MaterialAsset = {
             ...target,
             textureGraph: { graph: { ...root, nodes: [{ id: 'direct', type: 'paintStack', x: 0, y: 0, params: { asset: 'painted', folder: '' } }] } },
         };
         const directBefore = graphContent(direct);
-        materialLibrary.upsert({ ...paintAsset, pictures: { baseColor: 'third-colour', orm: 'paint-orm' } });
+        const paintedAgain = { ...document, applied: { textures: { baseColor: 'third-colour', orm: 'paint-orm' }, at: 3 } };
+        materialLibrary.upsert({ ...paintAsset, paint: paintedAgain as unknown as Record<string, unknown>, pictures: paintedAgain.applied.textures });
         expect(graphContent(direct)).not.toBe(directBefore);
     });
 
