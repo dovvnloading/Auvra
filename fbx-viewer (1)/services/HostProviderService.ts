@@ -356,9 +356,9 @@ export class HostProviderService {
   }
 
   async retryInference(jobId: string): Promise<InferenceJob> {
-    // A retry is another potentially billable request. The user invokes
-    // this action explicitly; the host requires consent even for a retry.
-    return normalizeJob(await this.call('inference.retry', this.withProjectRevision({ jobId, consent: 'explicit' })));
+    // 'same-route' is the protocol's explicit retry action; it never
+    // provides a cost ceiling or permission to silently retry.
+    return normalizeJob(await this.call('inference.retry', this.withProjectRevision({ jobId, consent: 'same-route' })));
   }
 
   async discardMedia(assetId: string, jobId: string): Promise<unknown> {
