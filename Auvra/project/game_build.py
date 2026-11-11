@@ -737,15 +737,38 @@ def without_baked_pictures(content: dict[str, list[dict[str, Any]]]) -> dict[str
     pictures those graphs baked, which the game makes itself, so they are not shipped. A picture anything else names (a
     model, a decal, another material) stays."""
 
-    baked: dict[str, int] = {}
+    baked: set[str] = set()
+    own_mentions: dict[str, int] = {}
     for material in content.get("materials", []):
         stored = material.get("textureGraph")
         if not isinstance(stored, Mapping) or stored.get("library") is True or not isinstance(stored.get("graph"), Mapping):
             continue
-        # Its baked pictures are named three times in its own document: as baked, as its pictures and in its texture ids.
-        for texture_id in ((stored.get("baked") or {}).get("textures") or {}).values():
-            if isinstance(texture_id, str) and texture_id:
-                baked[texture_id] = baked.get(texture_id, 0) + 3
+        baked_record = stored.get("baked")
+        outputs = baked_record.get("textures") if isinstance(baked_record, Mapping) else None
+        if not isinstance(outputs, Mapping):
+            continue
+        pictures = material.get("pictures")
+        mirror_pictures = pictures if isinstance(pictures, Mapping) else {}
+        # Count references at actual output locations instead of assuming
+        # every material has both optional mirror fields for every channel.
+        mirrored_ids: dict[str, int] = {}
+        for channel, texture_id in outputs.items():
+            if not isinstance(texture_id, str) or not texture_id:
+                continue
+            baked.add(texture_id)
+            own_mentions[texture_id] = own_mentions.get(texture_id, 0) + 1
+            mirrored_ids[texture_id] = mirrored_ids.get(texture_id, 0) + 1
+            if mirror_pictures.get(channel) == texture_id:
+                own_mentions[texture_id] += 1
+        texture_ids = material.get("textureIds")
+        if isinstance(texture_ids, (list, tuple)):
+            for texture_id in texture_ids:
+                if not isinstance(texture_id, str) or not mirrored_ids.get(texture_id, 0):
+                    continue
+                # A repeated baked output can have multiple channels. Only
+                # exclude as many list entries as there are baked channels.
+                own_mentions[texture_id] += 1
+                mirrored_ids[texture_id] -= 1
     if not baked:
         return content
     mentions: dict[str, int] = {}
@@ -755,7 +778,9 @@ def without_baked_pictures(content: dict[str, list[dict[str, Any]]]) -> dict[str
         for document in documents:
             _texture_mentions(document, mentions)
     protected_pictures = _applied_paint_input_texture_ids(content)
-    dropped = {texture_id for texture_id, own in baked.items() if mentions.get(texture_id, 0) <= own and texture_id not in protected_pictures}
+    dropped = {texture_id for texture_id in baked
+               if mentions.get(texture_id, 0) == own_mentions.get(texture_id, 0)
+               and texture_id not in protected_pictures}
     if not dropped:
         return content
     return {**content, "textures": [item for item in content.get("textures", []) if item.get("id") not in dropped]}
