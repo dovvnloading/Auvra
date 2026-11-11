@@ -30,7 +30,7 @@ export const AiRouteBar: React.FC<AiRouteBarProps> = ({ capability, label, onMod
   const [route, setRoute] = useState<ActiveRoute | null>(null);
   const [open, setOpen] = useState(false);
   const [providers, setProviders] = useState<ProviderDescriptor[]>([]);
-  const [providerId, setProviderId] = useState('fal');
+  const [providerId, setProviderId] = useState('');
   const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const trigger = useRef<HTMLButtonElement>(null);
@@ -57,8 +57,10 @@ export const AiRouteBar: React.FC<AiRouteBarProps> = ({ capability, label, onMod
   const loadProviders = useCallback(async () => {
     try {
       const listed = await hostProviderService.listProviders();
-      const statuses = await Promise.all(listed.filter((provider) => provider.capabilities.includes(capability)).map((provider) => hostProviderService.getProviderStatus(provider.id)));
-      setProviders(statuses.map((status) => ({ ...status, name: listed.find((provider) => provider.id === status.id)?.name || status.id })));
+      const eligible = listed.filter((provider) => provider.route === 'local' && provider.available !== false && provider.capabilities.includes(capability));
+      const statuses = await Promise.all(eligible.map((provider) => hostProviderService.getProviderStatus(provider.id)));
+      setProviders(statuses.map((status) => ({ ...status, name: eligible.find((provider) => provider.id === status.id)?.name || status.id })));
+      setProviderId((current) => statuses.some((status) => status.id === current) ? current : (statuses[0]?.id || ''));
     } catch (cause) {
       setMessage(cause instanceof Error ? cause.message : 'Providers are unavailable until the host is ready.');
     }
@@ -132,7 +134,9 @@ export const AiRouteBar: React.FC<AiRouteBarProps> = ({ capability, label, onMod
         </div>
         {message && <div role="alert" className="shrink-0 px-3 pt-2 text-2xs text-bad">{message}</div>}
         <div className="flex h-[360px] min-h-0 flex-col">
-          <ModelPicker providerId={providerId} capability={capability} value={route?.providerId === providerId ? route.modelId : undefined} onChoose={(model) => void choose(model)} />
+          {provider ? <ModelPicker providerId={providerId} capability={capability} value={route?.providerId === providerId ? route.modelId : undefined} onChoose={(model) => void choose(model)} /> : (
+            <p className="px-3 py-4 text-xs text-ink-3">No local model supports this tool. Paid cloud AI has been removed because provider charges cannot be capped.</p>
+          )}
         </div>
       </Popover>
     </>
