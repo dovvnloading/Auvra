@@ -487,7 +487,7 @@ class ProviderCoreTests(TestCase):
                 try:
                     barrier.wait(timeout=5)
                     with store.reserve_budget():
-                        if store.cost_totals("fal")["daily"] + 80 > 200:
+                        if store.cost_totals("fal")["daily"] + 80 > 500:
                             outcomes.append("budget_exceeded")
                         else:
                             try:
