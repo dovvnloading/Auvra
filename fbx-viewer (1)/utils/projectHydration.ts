@@ -672,6 +672,7 @@ export function createGameContentLoader(
       textureAssetUrls.delete(texture.id);
       materialLibrary.releaseTexture(texture.id);
       revokeOwnedUrl(texture.url);
+      if (texture.sourceUrl && texture.sourceUrl !== texture.url) revokeOwnedUrl(texture.sourceUrl);
     }
     for (const audio of takeOut(audioAssets, selection.audio)) revokeOwnedUrl(audio.url);
     releaseLoadedAssets(takeOut(models, selection.models), takeOut(attachments, selection.attachments), []);
