@@ -62,7 +62,7 @@ export const indexedDbCookCache = (): CookCache | null => {
 };
 
 /** A graph's content for a cooked set's signature, with every graph it uses as a node. */
-const graphContent = (asset: MaterialAsset): string => {
+export const graphContent = (asset: MaterialAsset): string => {
     const seen = new Set<string>();
     const parts: string[] = [];
     const visit = (from: MaterialAsset) => {
@@ -71,8 +71,17 @@ const graphContent = (asset: MaterialAsset): string => {
         const text = parts[parts.length - 1];
         for (const match of text.matchAll(/"graph":"([^"]+)"/g)) {
             const id = match[1];
-            const used = seen.has(id) ? undefined : materialLibrary.get(id);
+            if (seen.has(id)) continue;
             seen.add(id);
+            if (id.startsWith('paint:')) {
+                // A Paint graph is a synthetic subgraph, not a material id. The last applied
+                // pictures and document must change the cooked cache key when the artist reapplies.
+                const assetId = id.slice('paint:'.length).split(':')[0];
+                const painted = materialLibrary.get(assetId);
+                parts.push(JSON.stringify({ paintGraph: id, document: painted?.paint ?? null, pictures: painted?.pictures ?? null }));
+                continue;
+            }
+            const used = materialLibrary.get(id);
             if (used) visit(used);
         }
     };
