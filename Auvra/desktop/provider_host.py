@@ -551,7 +551,7 @@ class NativeProviderHost:
             raise HostOperationError("invalid_request", "Provider endpoint is invalid")
         updated = self.settings.set(
             descriptor.provider_id, enabled=settings["enabled"], routes=route_map,
-            endpoint=endpoint, require_cost_confirmation=True,
+            endpoint=endpoint, require_cost_confirmation=(True if descriptor.kind == "cloud" else settings["requireCostConfirmation"]),
             max_job_cost_micro_usd=0, max_daily_cost_micro_usd=0,
             max_monthly_cost_micro_usd=0, expected_revision=current.revision)
         if descriptor.provider_id not in self._provided_adapters:
@@ -1254,7 +1254,7 @@ class NativeProviderHost:
             "fallbackPolicy": "none",
             # Retired spending caps must not be displayed as active, even for
             # users whose local settings database still has old nonzero values.
-            "requireCostConfirmation": True,
+            "requireCostConfirmation": True if self.registry.get(settings.provider).kind == "cloud" else settings.require_cost_confirmation,
             "budgets": {"perJobMicroUsd": 0, "dailyMicroUsd": 0, "monthlyMicroUsd": 0},
             "endpointConfigured": settings.endpoint is not None,
         }
