@@ -83,7 +83,7 @@ describe('paint stacks as graph nodes', () => {
             [paintBakedKey('helmet', 'baseColor')]: colour,
             [paintBakedKey('helmet', 'orm')]: packed,
         };
-        const drawn = vi.fn(async () => undefined);
+        const drawn = vi.fn(async (_target: unknown, _shader: string, _options: unknown) => undefined);
         const clear = vi.fn();
         const note = vi.fn();
         const context = {
