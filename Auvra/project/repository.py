@@ -126,7 +126,16 @@ class ProjectRepository:
                         raise RecoveryRequiredError("project recovery requires the writer lock")
             else:
                 self._recover()
-                if pending: self._migrate()
+            # Blob deletions use a durable same-volume staging name. Replay
+            # their commit point before the strict manifest/file-set check;
+            # read-only openers may inspect but never repair a missing blob.
+            try:
+                ready = self.assets.recover_pending_deletions(writable=not self.read_only)
+            except ValueError as exc:
+                raise InvalidProjectError(str(exc)) from exc
+            if not ready:
+                raise RecoveryRequiredError("pending asset deletion requires the writer lock")
+            if pending: self._migrate()
             _validate_project_tree(self.path, allow_internal=True)
         except Exception:
             if pending: self._descriptor = {}
