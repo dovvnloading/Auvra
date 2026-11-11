@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+from contextlib import contextmanager
 import re
 from datetime import datetime, timezone
 import sqlite3
@@ -146,6 +147,26 @@ class SQLiteJobStore:
 
     def close(self) -> None:
         with self._lock: self._db.close()
+
+    @contextmanager
+    def reserve_budget(self):
+        """Hold a cross-process SQLite write lock from budget check through its reservation.
+
+        The host must call cost_totals/check and create/add_cost while inside
+        this guard. BEGIN IMMEDIATE prevents other processes using the same
+        state DB from simultaneously approving the same remaining allowance.
+        """
+        with self._lock:
+            self._db.execute("BEGIN IMMEDIATE")
+            try:
+                yield
+            except BaseException:
+                if self._db.in_transaction:
+                    self._db.rollback()
+                raise
+            else:
+                if self._db.in_transaction:
+                    self._db.commit()
 
     def create(self, *, project_id: str, provider: str, model: str, capability: str, prompt_hash: str,
                artifact_hash: str | None = None, cost_micro_usd: int = 0,
