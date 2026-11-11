@@ -223,7 +223,8 @@ jobs:
 
   native-engine-build:
     name: Native engine (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
+    # Keep the check name stable while using the established Ubuntu runner image for apt-dependent verification.
+    runs-on: ${{ matrix.os == 'ubuntu-latest' && 'ubuntu-24.04' || matrix.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -296,7 +297,8 @@ jobs:
 
   desktop-player-linux:
     name: Desktop game player (ubuntu-latest)
-    runs-on: ubuntu-latest
+    # Match the native-engine runner to avoid unstable rolling-image apt resolution.
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: player-desktop
