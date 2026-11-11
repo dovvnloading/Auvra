@@ -302,3 +302,35 @@ class CookedPicturesBuildTests(unittest.TestCase):
         self.assertEqual([item["id"] for item in kept["textures"]], ["baked-orm", "library-picture", "other"])
         self.assertIs(without_baked_pictures({"materials": [], "textures": [{"id": "x"}]})["textures"][0]["id"], "x")
 
+    
+    def test_a_paint_stack_reference_keeps_applied_input_pictures_in_always_cook_builds(self) -> None:
+        from Auvra.project.game_build import without_baked_pictures
+
+        source = {
+            "id": "paint-source", "pictures": {"baseColor": "paint-colour"},
+            "textureIds": ["paint-colour"],
+            "paint": {"modelId": "model", "layers": [{"id": "layer", "kind": "fill"}]},
+            "textureGraph": {"graph": {"nodes": []}, "baked": {"textures": {"baseColor": "paint-colour"}}},
+        }
+        unrelated = {
+            "id": "unused", "pictures": {"baseColor": "unused-colour"}, "textureIds": ["unused-colour"],
+            "textureGraph": {"graph": {"nodes": []}, "baked": {"textures": {"baseColor": "unused-colour"}}},
+        }
+        def build(consumer_node: dict) -> list[str]:
+            content = {
+                "materials": [
+                    source, unrelated,
+                    {"id": "consumer", "textureGraph": {"graph": {"nodes": [consumer_node]}}},
+                ],
+                "textures": [{"id": "paint-colour"}, {"id": "unused-colour"}],
+            }
+            return [item["id"] for item in without_baked_pictures(content)["textures"]]
+
+        # The consuming graph stores only the source material ID, not the source's texture ID.
+        self.assertEqual(build({"type": "subgraph", "params": {"graph": "paint:paint-source"}}), ["paint-colour"])
+        self.assertEqual(build({"type": "iterate", "params": {"graph": "paint:paint-source"}}), ["paint-colour"])
+        self.assertEqual(build({"type": "paintStack", "params": {"asset": "paint-source", "folder": ""}}), ["paint-colour"])
+        # A folder has no bundled per-folder output yet; never substitute the whole applied picture.
+        self.assertEqual(build({"type": "subgraph", "params": {"graph": "paint:paint-source:folder"}}), [])
+
+
