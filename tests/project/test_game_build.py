@@ -324,15 +324,19 @@ class CookedPicturesBuildTests(unittest.TestCase):
                     source, unrelated,
                     {"id": "consumer", "textureGraph": {"graph": {"nodes": [consumer_node]}}},
                 ],
-                "textures": [{"id": "paint-colour"}, {"id": "unused-colour"}],
+                "textures": [
+                    {"id": "paint-colour", "assetId": TEXTURE_ID},
+                    {"id": "unused-colour", "assetId": UNUSED_ID},
+                ],
             }
             packed = without_baked_pictures(content)
             return ([item["id"] for item in packed["textures"]],
                     game_build_module._referenced_asset_ids(packed))
 
-        # A legacy source with no textureIds still retains its asset bytes in the
-        # *manifest*, not just its textures domain record.
-        expected = (["paint-colour"], {"paint-colour"})
+        # A legacy source with no textureIds keeps its texture document AND its
+        # asset file bytes in the manifest; logical IDs must never become asset hashes.
+        # Image asset hashes, not logical texture document IDs, reach the game manifest.
+        expected = (["paint-colour"], {TEXTURE_ID})
         self.assertEqual(build({"type": "subgraph", "params": {"graph": "paint:paint-source"}}), expected)
         self.assertEqual(build({"type": "iterate", "params": {"graph": "paint:paint-source"}}), expected)
         self.assertEqual(build({"type": "paintStack", "params": {"asset": "paint-source", "folder": ""}}), expected)
