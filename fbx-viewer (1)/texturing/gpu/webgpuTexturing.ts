@@ -12,9 +12,10 @@ import { layoutUniforms, packUniforms, type UniformLayout } from './uniformLayou
  * The texturing GPU (texturingGpu.ts) on a WebGPU device, for games that draw with WebGPU: images are
  * textures from a pool, a pass is a render pass of one full-screen triangle whose WGSL is the pass's
  * GLSL translated (glslModule.ts) or a function graph's own, uniforms one struct in a storage buffer,
- * pixels read back through mapped buffers. Rows lie in memory as WebGL keeps them (the first row is
- * v = 0), so pictures read back the same way up. What it cannot do yet (instanced copies, compressed
- * pictures, a pass that does not translate or compile) it refuses with WebGpuUnsupported, saying why,
+ * pixels read back through mapped buffers. Instanced copies use the same placement GLSL translated
+ * into WGSL, with hardware depth for higher-wins and blending for max/add. Rows lie in memory as
+ * WebGL keeps them (the first row is v = 0). What it cannot do yet (compressed pictures, a pass
+ * that does not translate or compile) it refuses with WebGpuUnsupported, saying why,
  * and the caller draws that graph with WebGL2 instead.
  *
  * WebGPU's own types are not needed here: the device is described by the little of it this uses.
@@ -26,7 +27,7 @@ export class WebGpuUnsupported extends Error {}
 // The little of WebGPU used here, so the texturing code does not lean on WebGPU's type package.
 interface WgpuTexture { createView(descriptor?: object): unknown; destroy(): void }
 interface WgpuBuffer { mapAsync(mode: number): Promise<void>; getMappedRange(): ArrayBuffer; unmap(): void; destroy(): void }
-interface WgpuRenderPass { setPipeline(pipeline: unknown): void; setBindGroup(index: number, group: unknown): void; setScissorRect(x: number, y: number, width: number, height: number): void; draw(count: number): void; end(): void }
+interface WgpuRenderPass { setPipeline(pipeline: unknown): void; setBindGroup(index: number, group: unknown): void; setScissorRect(x: number, y: number, width: number, height: number): void; draw(count: number, instanceCount?: number): void; end(): void }
 interface WgpuEncoder {
     beginRenderPass(descriptor: object): WgpuRenderPass;
     copyTextureToBuffer(source: object, destination: object, size: object): void;
@@ -244,25 +245,27 @@ export class WebGpuTexturing implements TexturingGpu {
 
     // ---- passes ----
 
-    private pipelineFor(options: PassOptions, names: readonly string[], formats: readonly string[], target: string): Pipeline {
+    private pipelineFor(options: PassOptions, names: readonly string[], formats: readonly string[], target: string, instances?: InstanceOptions): Pipeline {
         const sampleTypes = formats.map((format) => (isFloat32(format) && !this.float32Filterable ? 'unfilterable-float' : 'float'));
-        const key = `${target}|${options.blend ?? 'none'}|${names.join(',')}|${sampleTypes.join(',')}|${options.wgsl ? `${options.wgsl.functions}|${options.wgsl.result}` : ''}\n${options.fragment}`;
+        const key = `${instances ? `instances:${instances.stack}:${instances.points ? 'points' : 'quads'}:${instances.varyings.join(';')}:${instances.vertex}|` : ''}${target}|${options.blend ?? 'none'}|${names.join(',')}|${sampleTypes.join(',')}|${options.wgsl ? `${options.wgsl.functions}|${options.wgsl.result}` : ''}\n${options.fragment}`;
         const cached = this.pipelines.get(key);
         if (cached) return cached;
         let module: PassModule;
         try {
-            module = translatePass({ fragment: options.fragment, inputs: names, ...(options.wgsl ? { wgsl: options.wgsl } : {}) });
+            module = translatePass({ fragment: options.fragment, inputs: names, ...(options.wgsl ? { wgsl: options.wgsl } : {}), ...(instances ? { instances: { vertex: instances.vertex, varyings: instances.varyings, points: Boolean(instances.points), depth: instances.stack === 'higher' } } : {}) });
         } catch (error) {
             if (error instanceof GlslError) throw new WebGpuUnsupported(`a pass does not translate to WGSL: ${error.message}`);
             throw error;
         }
         const types = module.textures.map((name) => sampleTypes[names.indexOf(name)] ?? 'float');
+        // Placement shaders read packed copy textures and uniforms in the vertex stage as well.
+        const stages = instances ? 1 | FRAGMENT_STAGE : FRAGMENT_STAGE;
         const layout = this.device.createBindGroupLayout({
             entries: [
-                { binding: 0, visibility: FRAGMENT_STAGE, buffer: { type: 'read-only-storage' } },
+                { binding: 0, visibility: stages, buffer: { type: 'read-only-storage' } },
                 ...module.textures.flatMap((_name, index) => [
-                    { binding: 1 + index * 2, visibility: FRAGMENT_STAGE, texture: { sampleType: types[index] } },
-                    { binding: 2 + index * 2, visibility: FRAGMENT_STAGE, sampler: { type: types[index] === 'float' ? 'filtering' : 'non-filtering' } },
+                    { binding: 1 + index * 2, visibility: stages, texture: { sampleType: types[index] } },
+                    { binding: 2 + index * 2, visibility: stages, sampler: { type: types[index] === 'float' ? 'filtering' : 'non-filtering' } },
                 ]),
             ],
         });
@@ -276,7 +279,8 @@ export class WebGpuTexturing implements TexturingGpu {
             layout: this.device.createPipelineLayout({ bindGroupLayouts: [layout] }),
             vertex: { module: shader, entryPoint: 'vs_main' },
             fragment: { module: shader, entryPoint: 'fs_main', targets: [{ format: target, ...(blend ? { blend } : {}) }] },
-            primitive: { topology: 'triangle-list' },
+            primitive: { topology: instances?.points ? 'point-list' : 'triangle-list' },
+            ...(instances?.stack === 'higher' ? { depthStencil: { format: 'depth24plus', depthWriteEnabled: true, depthCompare: 'less' } } : {}),
         });
         const broken = this.device.popErrorScope().then((error) => (error ? error.message : null)).catch(() => null);
         const made: Pipeline = { pipeline, layout, module, uniforms: layoutUniforms(module.uniforms), sampleTypes: types, broken };
@@ -357,10 +361,68 @@ export class WebGpuTexturing implements TexturingGpu {
         done();
     }
 
-    drawInstances(_target: GpuImage, _options: InstanceOptions): Promise<void> {
-        void _target;
-        void _options;
-        return Promise.reject(new WebGpuUnsupported('a node draws copies in an instanced pass (a scatter), which the WebGPU path does not draw yet'));
+    /** Places all square/point copies in one draw, using the same copy index, wrap and overlap rules as WebGL2. */
+    async drawInstances(target: GpuImage, options: InstanceOptions): Promise<void> {
+        const wrap = options.points ? [false, false] : options.wrap ?? [false, false];
+        const copies = Math.max(0, Math.floor(options.count)) * (wrap[0] ? 3 : 1) * (wrap[1] ? 3 : 1);
+        if (!copies) { this.clear(target, options.clear); return; }
+
+        const names = Object.keys(options.inputs ?? {});
+        const handles = names.map((name) => this.inputHandle(options.inputs![name]));
+        const blend = options.stack === 'max' || options.stack === 'add' ? options.stack : 'none';
+        const pipeline = this.pipelineFor({ fragment: options.fragment, blend }, names, handles.map((handle) => handle.format), handleOf(target).format, options);
+        const broken = await pipeline.broken;
+        if (broken) throw new ShaderError(`On WebGPU: ${broken.split('\n').slice(0, 4).join('\n')}`);
+
+        const values = {
+            uSize: [target.width, target.height],
+            uWrap: [wrap[0] ? 1 : 0, wrap[1] ? 1 : 0],
+            ...(options.uniforms ?? {}),
+        };
+        const bytes = packUniforms(pipeline.uniforms, values);
+        const buffer = this.device.createBuffer({ size: bytes.byteLength, usage: BUFFER_USAGE.STORAGE | BUFFER_USAGE.COPY_DST });
+        let depth: WgpuTexture | null = null;
+        try {
+            this.device.queue.writeBuffer(buffer, 0, bytes);
+            const entries: object[] = [{ binding: 0, resource: { buffer } }];
+            pipeline.module.textures.forEach((name, index) => {
+                const at = names.indexOf(name);
+                const input = at >= 0 ? options.inputs![name] : null;
+                const handle = at >= 0 ? handles[at] : this.inputHandle(null);
+                entries.push({ binding: 1 + index * 2, resource: handle.view }, {
+                    binding: 2 + index * 2,
+                    resource: this.sampler(input, pipeline.sampleTypes[index] === 'float'),
+                });
+            });
+            const group = this.device.createBindGroup({ layout: pipeline.layout, entries });
+            const start = options.clear ?? [0, 0, 0, 0];
+            const attachments: Record<string, unknown> = {
+                colorAttachments: [{
+                    view: handleOf(target).view, loadOp: 'clear', storeOp: 'store',
+                    clearValue: { r: start[0], g: start[1], b: start[2], a: start[3] },
+                }],
+            };
+            if (options.stack === 'higher') {
+                depth = this.device.createTexture({
+                    size: [target.width, target.height], format: 'depth24plus', usage: TEXTURE_USAGE.RENDER_ATTACHMENT,
+                });
+                attachments.depthStencilAttachment = {
+                    view: depth.createView(), depthLoadOp: 'clear', depthStoreOp: 'discard', depthClearValue: 1,
+                };
+            }
+            const encoder = this.device.createCommandEncoder();
+            const pass = encoder.beginRenderPass(attachments);
+            pass.setPipeline(pipeline.pipeline);
+            pass.setBindGroup(0, group);
+            pass.draw(options.points ? 1 : 6, copies);
+            pass.end();
+            this.device.queue.submit([encoder.finish()]);
+            this.budget.spend(copies * 256 + target.width * target.height);
+            await this.budget.pace();
+        } finally {
+            buffer.destroy();
+            depth?.destroy();
+        }
     }
 
     clear(target: GpuImage, value: [number, number, number, number] = [0, 0, 0, 0]): void {

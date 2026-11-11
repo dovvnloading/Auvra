@@ -4,7 +4,8 @@ import { useThree } from '@react-three/fiber';
 import { isGpuRenderer } from '../../renderer/gpu/frame';
 import { TextureGraphEvaluator } from '../../texturing/graph/evaluator';
 import { normalizeTextureGraph } from '../../texturing/graph/document';
-import { textureGpu } from '../../texturing/gpu/textureGpu';
+import { textureGpu, type InstanceOptions } from '../../texturing/gpu/textureGpu';
+import { packCopies, SCATTER_VERTEX, SCATTER_VARYINGS, type ScatterCopy } from '../../texturing/graph/scatter';
 import type { TexturingGpu } from '../../texturing/gpu/texturingGpu';
 import { webgpuTexturing, type WgpuDevice } from '../../texturing/gpu/webgpuTexturing';
 import { encodeChannels } from '../../texturing/materialOutput';
@@ -63,6 +64,63 @@ const proofGraph = () => normalizeTextureGraph({
     ],
 });
 
+
+/**
+ * Exercise the real instanced shader on both GPUs without changing the kept scene picture.
+ * It checks overlapping copies, image-edge wrapping and all four stack modes at interior pixels.
+ * A failed comparison marks the WebGPU scene as failed (its green proof ball turns red).
+ */
+const checkScatterParity = async (webgpu: TexturingGpu): Promise<void> => {
+    const makeCopy = (x: number): ScatterCopy => ({
+        x, y: 0.5, halfWidth: 0.22, halfHeight: 0.22,
+        turn: 0, pattern: 0, random: 0.5, mirrorX: false, mirrorY: false,
+        tiltX: 0, tiltY: 0, brightness: 1, lift: 0,
+    });
+    const packed = packCopies([makeCopy(0.47), makeCopy(0.54), makeCopy(0.96)]);
+    const placements = packed.data.map((values) => {
+        const texture = new THREE.DataTexture(values, packed.width, packed.height, THREE.RGBAFormat, THREE.FloatType);
+        texture.minFilter = texture.magFilter = THREE.NearestFilter;
+        texture.needsUpdate = true;
+        return texture;
+    });
+    const fragment = `void main() {
+    vec2 d = abs(vLocal - vec2(0.5));
+    if (max(d.x, d.y) > 0.47) discard;
+    float value = (float(vCopy) + 1.0) / 5.0;
+    gl_FragDepth = 1.0 - value * 0.999;
+    outColor = vec4(value, value * 0.2, 0.1, 1.0);
+}`;
+    const sample = async (gpu: TexturingGpu, stack: InstanceOptions['stack']): Promise<Uint8Array> => {
+        const image = gpu.image(32, 32, 'color', 8);
+        try {
+            await gpu.drawInstances(image, {
+                count: 3, stack, wrap: [true, false], varyings: SCATTER_VARYINGS,
+                vertex: SCATTER_VERTEX, fragment,
+                inputs: { place0: placements[0], place1: placements[1], place2: placements[2] },
+                uniforms: { uPlaceWidth: packed.width },
+            });
+            const pixels = await gpu.readRgba8Later(image);
+            if (!pixels) throw new Error(`Could not read ${stack} scatter pixels`);
+            return pixels;
+        } finally {
+            gpu.release(image);
+        }
+    };
+    try {
+        for (const stack of ['higher', 'over', 'max', 'add'] as const) {
+            const [actual, expected] = await Promise.all([sample(webgpu, stack), sample(textureGpu(), stack)]);
+            for (const [x, y] of [[0, 16], [10, 16], [16, 16], [23, 16], [31, 16]]) {
+                const offset = (y * 32 + x) * 4;
+                if (expected[offset] === 0 || Math.abs(actual[offset] - expected[offset]) > 3) {
+                    throw new Error(`WebGPU ${stack} scatter differs from WebGL2 at (${x}, ${y}): ${actual[offset]} vs ${expected[offset]}`);
+                }
+            }
+        }
+    } finally {
+        placements.forEach((texture) => texture.dispose());
+    }
+};
+
 /** The graph's base colour and normal on `gpu`, as PNG pictures the way a game cooks them. */
 const cook = async (gpu: TexturingGpu): Promise<{ colour: Blob; normal: Blob }> => {
     const evaluator = new TextureGraphEvaluator(gpu, () => undefined, () => null);
@@ -104,6 +162,7 @@ export const TextureGraphScene: React.FC = () => {
             let own = true;
             let pictures: { colour: Blob; normal: Blob };
             try {
+                if (isGpuRenderer(gl)) await checkScatterParity(gpu);
                 pictures = await cook(gpu);
             } catch (error) {
                 // The renderer's own GPU could not: keep why (textureGraphScene.problem), and show WebGL2's cook with the ball red.

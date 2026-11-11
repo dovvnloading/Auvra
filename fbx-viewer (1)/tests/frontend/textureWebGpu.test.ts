@@ -10,6 +10,7 @@ import type { NodeRunContext, TexNodeDef } from '../../texturing/graph/types';
 import { checkWgsl, findingWords } from './wgslChecks';
 import { FN_RESULT_TYPE, FN_REROUTE_TYPE, FN_SAMPLE_TYPE, FN_SETTING_TYPE, FUNCTION_NODE_DEFINITIONS, createFunctionNode, type FnLink, type FnNode, type FunctionGraph } from '../../texturing/graph/functionGraph';
 import { FLIPBOOK_PACK_GLSL } from '../../texturing/graph/animation';
+import { SCATTER_VARYINGS, SCATTER_VERTEX, SHAPE_GLSL } from '../../texturing/graph/scatter';
 
 /** Every pass a node draws with its default settings (or those given) and nothing wired in: its fragment (kit declarations included) and inputs. */
 const passesOf = async (definition: TexNodeDef, given: Record<string, unknown> = {}): Promise<Array<{ fragment: string; inputs: string[]; wgsl?: { functions: string; result: string } }>> => {
@@ -164,7 +165,7 @@ const fakeDevice = () => {
         createCommandEncoder: () => ({
             beginRenderPass: (descriptor) => {
                 calls.push({ what: 'beginRenderPass', descriptor });
-                return { setPipeline: () => undefined, setBindGroup: () => undefined, setScissorRect: (x, y, w, h) => calls.push({ what: 'scissor', descriptor: [x, y, w, h] }), draw: () => calls.push({ what: 'draw' }), end: () => undefined };
+                return { setPipeline: () => undefined, setBindGroup: () => undefined, setScissorRect: (x, y, w, h) => calls.push({ what: 'scissor', descriptor: [x, y, w, h] }), draw: (...args) => calls.push({ what: 'draw', descriptor: args }), end: () => undefined };
             },
             copyTextureToBuffer: (source, destination, size) => {
                 const [width, height] = size as number[];
@@ -201,7 +202,76 @@ describe('the WebGPU texturing GPU', () => {
         expect(device.calls.filter((call) => call.what === 'destroyBuffer').length).toBe(2);
     });
 
-    it('refuses instanced copies and passes that do not translate, saying why', async () => {
+    it('draws instanced squares with wrapped copies, max blending and cached pipelines', async () => {
+        const device = fakeDevice();
+        const gpu = new WebGpuTexturing(device);
+        const image = gpu.image(16, 8, 'color', 16);
+        const options = {
+            count: 5, stack: 'max' as const, wrap: [true, false] as [boolean, boolean],
+            varyings: ['vec2 vLocal', 'flat int vCopy'],
+            vertex: 'void placeCopy(int copy, vec2 corner, vec2 shift) { gl_Position = vec4(corner + shift, 0.0, 1.0); vLocal = corner; vCopy = copy; }',
+            fragment: 'void main() { outColor = vec4(vLocal, float(vCopy), 1.0); }',
+            clear: [0.1, 0.2, 0.3, 0.4] as [number, number, number, number],
+        };
+        await gpu.drawInstances(image, options);
+        await gpu.drawInstances(image, options);
+        expect(device.calls.filter((call) => call.what === 'createRenderPipeline')).toHaveLength(1);
+        const pipeline = device.calls.find((call) => call.what === 'createRenderPipeline')!.descriptor as Record<string, any>;
+        expect(pipeline.primitive.topology).toBe('triangle-list');
+        expect(pipeline.fragment.targets[0].blend.color.operation).toBe('max');
+        expect(device.calls.filter((call) => call.what === 'draw').map((call) => call.descriptor)).toEqual([[6, 15], [6, 15]]);
+        const pass = device.calls.find((call) => call.what === 'beginRenderPass')!.descriptor as Record<string, any>;
+        expect(pass.colorAttachments[0].clearValue).toEqual({ r: 0.1, g: 0.2, b: 0.3, a: 0.4 });
+        const module = device.calls.find((call) => call.what === 'createShaderModule')!.descriptor as { code: string };
+        expect(module.code).toContain('@builtin(instance_index)');
+        expect(module.code).toContain('@interpolate(flat) vCopy: i32');
+    });
+
+    it('draws single-pixel copies with a depth attachment for higher-wins', async () => {
+        const device = fakeDevice();
+        const gpu = new WebGpuTexturing(device);
+        const image = gpu.image(8, 8, 'color', 32);
+        await gpu.drawInstances(image, {
+            count: 4, points: true, wrap: [true, true], stack: 'higher',
+            varyings: ['vec4 vBox'],
+            vertex: 'void placeCopy(int copy, vec2 corner, vec2 shift) { gl_Position = vec4(corner, 0.0, 1.0); vBox = vec4(float(copy)); }',
+            fragment: 'void main() { gl_FragDepth = 0.4; outColor = vBox; }',
+        });
+        const pipeline = device.calls.find((call) => call.what === 'createRenderPipeline')!.descriptor as Record<string, any>;
+        expect(pipeline.primitive.topology).toBe('point-list');
+        expect(pipeline.depthStencil).toMatchObject({ format: 'depth24plus', depthCompare: 'less', depthWriteEnabled: true });
+        const pass = device.calls.find((call) => call.what === 'beginRenderPass')!.descriptor as Record<string, any>;
+        expect(pass.depthStencilAttachment.depthClearValue).toBe(1);
+        expect(device.calls.find((call) => call.what === 'draw')?.descriptor).toEqual([1, 4]);
+        expect(device.calls.some((call) => call.what === 'destroyTexture')).toBe(true);
+        const module = device.calls.find((call) => call.what === 'createShaderModule')!.descriptor as { code: string };
+        expect(module.code).toContain('@builtin(frag_depth)');
+    });
+
+    it('translates the real scatter placement and shape shaders, including all varyings', () => {
+        const fragment = `${SHAPE_GLSL}
+uniform int uShape;
+uniform int uProfile;
+uniform float uBevel;
+float copyHeight(int pattern, vec2 local) { return builtInShape(uShape, local * 2.0 - 1.0, uProfile, uBevel); }
+void main() {
+    float h = copyHeight(vPattern, vLocal) * vBright;
+    if (h <= 0.0005) discard;
+    gl_FragDepth = 1.0 - saturate(h + vLift) * 0.999;
+    outColor = vec4(float(vCopy) + 1.0, vLocal, h);
+}`;
+        const module = translatePass({
+            fragment, inputs: ['place0', 'place1', 'place2'],
+            instances: { vertex: SCATTER_VERTEX, varyings: SCATTER_VARYINGS, points: false, depth: true },
+        });
+        expect(module.code).toContain('fn gf_placeCopy(');
+        expect(module.code).toContain('fn gf_builtInShape(');
+        expect(module.code).toContain('@builtin(frag_depth)');
+        expect(module.uniforms.map((uniform) => uniform.name)).toContain('uPlaceWidth');
+        expect(checkWgsl(module.code)).toEqual([]);
+    });
+
+    it('refuses unsupported GLSL from both instanced and regular passes', async () => {
         const gpu = new WebGpuTexturing(fakeDevice());
         const image = gpu.image(8, 8, 'color', 8);
         await expect(gpu.drawInstances(image, { count: 1, varyings: [], vertex: '', fragment: '', stack: 'max' })).rejects.toBeInstanceOf(WebGpuUnsupported);
