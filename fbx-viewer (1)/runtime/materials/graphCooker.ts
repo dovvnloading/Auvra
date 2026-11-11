@@ -1,6 +1,9 @@
 import * as THREE from 'three';
 import { TextureGraphEvaluator } from '../../texturing/graph/evaluator';
-import { OUTPUT_NODE_TYPE } from '../../texturing/graph/nodes/io';
+import { GRAPH_USING_TYPES, OUTPUT_NODE_TYPE } from '../../texturing/graph/nodes/io';
+import { PAINT_STACK_NODE_TYPE, paintBakedKey, paintStackEntry, PAINT_STACK_PREFIX } from '../../texturing/paint/stackNode';
+import { PAINT_CHANNELS } from '../../texturing/paint/paintTypes';
+import type { TextureGraph } from '../../texturing/graph/types';
 import { flipbookFrameSize, flipbookGrid, frameTime, packFlipbook, readAnimation } from '../../texturing/graph/animation';
 import type { GpuImage } from '../../texturing/gpu/textureGpu';
 import { graphAnimates, type GraphResolver } from '../../texturing/graph/registry';
@@ -22,7 +25,7 @@ import type { MaterialAsset } from './materialLibrary';
  * drawn at the request's time, or (played as a flipbook) at each of its frames, laid out as Update material lays them.
  *
  * A game drawing with WebGPU cooks on its own device (webgpuTexturing.ts). A graph that path cannot draw (a pass that
- * does not translate or compile, a scatter's instanced copies) is drawn with WebGL2 instead, and why is kept
+ * does not translate or compile, or lacks an applied Paint set) is drawn with WebGL2 instead, and why is kept
  * (cookingDevice.ts's webgpuFallbacks) and noted in the diagnostics.
  */
 
@@ -45,6 +48,44 @@ const readTextures = (value: unknown, into: Set<string>, key = ''): void => {
     for (const [childKey, child] of Object.entries(value as Record<string, unknown>)) readTextures(child, into, childKey);
 };
 
+
+/** Find all textures a cook needs, including nested graphs and the last applied whole Paint sets.
+ * Folder-only Paint nodes intentionally receive no whole-set snapshots: they need their own bake.
+ */
+export const graphCookSources = (
+    graph: TextureGraph,
+    resolve: GraphResolver,
+    assetOf: (id: string) => MaterialAsset | undefined,
+): { textureIds: Set<string>; paintInputs: Map<string, string> } => {
+    const textureIds = new Set<string>();
+    const paintInputs = new Map<string, string>();
+    const visited = new Set<string>();
+    const visit = (part: TextureGraph): void => {
+        readTextures(part, textureIds);
+        for (const node of part.nodes) {
+            if (node.type === PAINT_STACK_NODE_TYPE) {
+                const assetId = String(node.params.asset ?? '');
+                if (!assetId || node.params.folder) continue;
+                const asset = assetOf(assetId);
+                if (!asset?.paint) continue;
+                for (const channel of [...PAINT_CHANNELS, 'orm']) {
+                    const id = asset.pictures?.[channel];
+                    if (!id) continue;
+                    textureIds.add(id);
+                    paintInputs.set(paintBakedKey(assetId, channel), id);
+                }
+            }
+            const id = node.params.graph;
+            if (!GRAPH_USING_TYPES.has(node.type) || typeof id !== 'string' || !id || visited.has(id)) continue;
+            visited.add(id);
+            const nested = resolve(id);
+            if (nested) visit(nested.graph);
+        }
+    };
+    visit(graph);
+    return { textureIds, paintInputs };
+};
+
 export interface GraphCookerSource {
     /** A material asset by id (the graphs a graph uses as nodes). */
     material(id: string): MaterialAsset | undefined;
@@ -56,12 +97,12 @@ export const createGraphCooker = (source: GraphCookerSource): Cooker => ({
     async cook(request: CookRequest): Promise<CookedPictures> {
         const stored = readStoredGraph(request.asset.textureGraph);
         const resolve: GraphResolver = (id) => {
+            if (id.startsWith(PAINT_STACK_PREFIX)) return paintStackEntry(id, source.material);
             const asset = source.material(id);
             return asset?.textureGraph ? { id, name: asset.name, graph: readStoredGraph(asset.textureGraph).graph } : undefined;
         };
-        // The pictures its nodes read, loaded before it runs (the evaluator asks for them as it goes).
-        const wanted = new Set<string>();
-        readTextures(stored.graph, wanted);
+        // Load pictures from the graph and all its dependencies, including saved Paint sets.
+        const { textureIds: wanted, paintInputs } = graphCookSources(stored.graph, resolve, source.material);
         const loader = new THREE.TextureLoader();
         const loaded = new Map<string, THREE.Texture>();
         await Promise.all([...wanted].map(async (textureId) => {
@@ -75,7 +116,7 @@ export const createGraphCooker = (source: GraphCookerSource): Cooker => ({
             if (webgpu) {
                 try {
                     webgpu.takeProblems();
-                    const pictures = await cookOn(webgpu, request, stored, resolve, loaded, true);
+                    const pictures = await cookOn(webgpu, request, stored, resolve, loaded, paintInputs, true);
                     // A pass drawn at once that the device refused is heard of only afterwards.
                     const problems = webgpu.takeProblems();
                     if (problems.length) throw new Error(problems[0]);
@@ -87,7 +128,7 @@ export const createGraphCooker = (source: GraphCookerSource): Cooker => ({
                     frontendDiagnostics.failure('texture_graph_webgpu_fallback', new Error(`${request.asset.name}: ${reason}`));
                 }
             }
-            return await cookOn(textureGpu(), request, stored, resolve, loaded);
+            return await cookOn(textureGpu(), request, stored, resolve, loaded, paintInputs);
         } finally {
             for (const texture of loaded.values()) texture.dispose();
         }
@@ -98,8 +139,9 @@ export const createGraphCooker = (source: GraphCookerSource): Cooker => ({
  * The graph's pictures drawn on one texturing GPU, written as Update material writes them. `strict` (the WebGPU
  * attempt) refuses any node that could not be drawn, so the graph is drawn with WebGL2 instead of with a stand-in.
  */
-const cookOn = async (gpu: TexturingGpu, request: CookRequest, stored: ReturnType<typeof readStoredGraph>, resolve: GraphResolver, loaded: ReadonlyMap<string, THREE.Texture>, strict = false): Promise<CookedPictures> => {
+const cookOn = async (gpu: TexturingGpu, request: CookRequest, stored: ReturnType<typeof readStoredGraph>, resolve: GraphResolver, loaded: ReadonlyMap<string, THREE.Texture>, paintInputs: ReadonlyMap<string, string>, strict = false): Promise<CookedPictures> => {
     const evaluator = new TextureGraphEvaluator(gpu, resolve, (textureId) => loaded.get(textureId) ?? null);
+    const external = Object.fromEntries([...paintInputs].map(([key, textureId]) => [key, loaded.get(textureId) ?? null]));
     try {
         const graph = stored.graph;
         // At the size the material bakes at, always, as the editor draws it: a smaller one is read from this.
@@ -109,7 +151,7 @@ const cookOn = async (gpu: TexturingGpu, request: CookRequest, stored: ReturnTyp
         const outputs = graph.nodes.filter((node) => node.type === OUTPUT_NODE_TYPE);
         // Each channel's image at a time (held, so the next drawing does not take it back).
         const draw = async (at: { w: number; h: number }, time: number): Promise<ChannelImages> => {
-            const states = await evaluator.evaluate({ graph, parameters: request.values, targets: outputs.map((node) => node.id), size: at, time, ...(request.seed !== undefined ? { seed: request.seed } : {}) });
+            const states = await evaluator.evaluate({ graph, parameters: request.values, external, targets: outputs.map((node) => node.id), size: at, time, ...(request.seed !== undefined ? { seed: request.seed } : {}) });
             if (strict) {
                 for (const [id, state] of states) {
                     if (state.error) throw new Error(`the node "${graph.nodes.find((node) => node.id === id)?.type ?? id}" could not be drawn: ${state.error}`);
