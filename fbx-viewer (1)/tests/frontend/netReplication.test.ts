@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
 import { playerVars, REPLICATED_PLAYER_VARS } from '../../runtime/net/RemotePlayers';
-import { applyEntityState, createInterpolationBuffer, entityStateOf, MAX_EXTRAPOLATION_MS, slerpEuler } from '../../runtime/net/replication';
+import { applyEntityState, createInterpolationBuffer, entityStateOf, MAX_EXTRAPOLATION_MS, MAX_INTERPOLATION_SAMPLES, slerpEuler } from '../../runtime/net/replication';
 import type { NetEntityState } from '../../runtime/net/protocol';
 
 const at = (x: number, yaw = 0, extra: Partial<NetEntityState> = {}): NetEntityState => ({ id: 'e', position: [x, 0, 0], rotation: [0, yaw, 0], ...extra });
@@ -38,6 +38,27 @@ describe('interpolation buffer', () => {
     const buffer = createInterpolationBuffer(0);
     for (let t = 0; t <= 3000; t += 100) buffer.push(t, at(t));
     expect(buffer.sample(0)!.position[0]).toBeGreaterThanOrEqual(1900);
+  });
+
+  it('collapses duplicate relay timestamps instead of retaining peer-controlled history', () => {
+    const buffer = createInterpolationBuffer(0);
+    for (let n = 0; n < 20_000; n++) buffer.push(1000, at(n));
+    expect(buffer.newest()).toBe(1000);
+    expect(buffer.sample(1000)!.position[0]).toBe(19_999);
+    // A late update to a timestamp already in the middle also replaces it.
+    buffer.push(1100, at(1100));
+    buffer.push(900, at(900));
+    buffer.push(1000, at(42));
+    expect(buffer.sample(1000)!.position[0]).toBe(42);
+  });
+
+  it('caps samples even when timestamps advance less than the retention span', () => {
+    const buffer = createInterpolationBuffer(0);
+    for (let t = 0; t < 1000; t++) buffer.push(t, at(t));
+    expect(buffer.sample(-100)!.position[0]).toBeGreaterThanOrEqual(1000 - MAX_INTERPOLATION_SAMPLES);
+    expect(buffer.sample(999)!.position[0]).toBe(999);
+    buffer.push(Number.POSITIVE_INFINITY, at(12345));
+    expect(buffer.newest()).toBe(999);
   });
 
   it('turns the short way round', () => {
