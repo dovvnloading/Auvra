@@ -14,12 +14,11 @@ import { AiRouteBar } from './AiRouteBar';
 
 interface SettingsModalProps { onClose: () => void; }
 
-type SettingsPage = 'models' | 'keys' | 'spending';
+type SettingsPage = 'models' | 'keys';
 
 const PAGES: readonly { id: SettingsPage; label: string }[] = [
   { id: 'models', label: 'Models' },
   { id: 'keys', label: 'Keys' },
-  { id: 'spending', label: 'Spending' },
 ];
 
 const JOBS: readonly { capability: ProviderCapability; label: string; hint: string }[] = [
@@ -39,32 +38,7 @@ const KEY_WORDS: Record<string, { text: string; good: boolean }> = {
   absent: { text: 'No key', good: false },
 };
 
-const dollarsOf = (microUsd: number | undefined): string => (microUsd ? String(microUsd / 1_000_000) : '');
-const microUsdOf = (dollars: string): number => Math.max(0, Math.round((Number(dollars) || 0) * 1_000_000));
-
-/** An amount in dollars that saves when left. Empty means no limit. */
-const LimitField: React.FC<{ label: string; value: number | undefined; onCommit: (microUsd: number) => void }> = ({ label, value, onCommit }) => {
-  const [text, setText] = useState(dollarsOf(value));
-  useEffect(() => { setText(dollarsOf(value)); }, [value]);
-  return (
-    <div className="relative">
-      <span className="pointer-events-none absolute left-1.5 top-1/2 -translate-y-1/2 text-2xs text-ink-3">$</span>
-      <input
-        type="number"
-        min={0}
-        step={0.01}
-        aria-label={label}
-        placeholder="No limit"
-        value={text}
-        onChange={(event) => setText(event.target.value)}
-        onBlur={() => { if (microUsdOf(text) !== (value ?? 0)) onCommit(microUsdOf(text)); }}
-        className="h-6 w-full rounded border border-line bg-well pl-4 pr-1 text-xs tabular-nums text-ink placeholder:text-ink-3 hover:border-gray-700 focus:border-accent/70 focus:outline-none"
-      />
-    </div>
-  );
-};
-
-/** Which model does which job, the keys that pay for them, and how much they may spend. */
+/** Which model does which job, plus the cloud and local provider keys. */
 export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
   const [page, setPage] = useState<SettingsPage>('models');
   const [providers, setProviders] = useState<ProviderDescriptor[]>([]);
@@ -198,7 +172,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
           <div className="min-h-0 flex-1 overflow-y-auto">
             {page === 'models' && (
               <>
-                <p className="px-4 pb-1 pt-3 text-2xs text-ink-3">Which model does each job. Each tool also has this choice where it is used.</p>
+                <p className="px-4 pb-1 pt-3 text-2xs text-ink-3">Choose cloud or local AI models. Cloud prices are estimates, not guaranteed spending limits.</p>
                 <ul>
                   {JOBS.map((job) => {
                     const route = hostProviderService.getConfiguredRoute(job.capability);
@@ -218,7 +192,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
 
             {page === 'keys' && (
               <>
-                <p className="px-4 pb-1 pt-3 text-2xs text-ink-3">A key goes into a Windows prompt, and never reaches the editor's page or the project.</p>
+                <p className="px-4 pb-1 pt-3 text-2xs text-ink-3">Cloud AI remains available with consent for each paid request and retry. Actual charges can exceed estimated prices, and Auvra has no spending cap. Keys go into a native Windows prompt, not the project.</p>
                 <label className="flex items-center gap-2 px-4 pb-2 text-2xs text-ink-2">
                   <input type="checkbox" className="accent-accent" checked={rememberCredential} onChange={(event) => setRememberCredential(event.target.checked)} />
                   Keep keys in the Windows vault. Off, a new key lasts until the editor closes.
@@ -233,40 +207,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
               </>
             )}
 
-            {page === 'spending' && (
-              <>
-                <p className="px-4 pb-2 pt-3 text-2xs text-ink-3">
-                  Set all three for a provider and each image job is checked against them using the catalog's price before it is sent. Language model jobs are not counted, as their cost depends on the answer.
-                </p>
-                <table className="w-full text-xs">
-                  <thead>
-                    <tr className="border-y border-line text-left text-2xs text-ink-3">
-                      <th className="px-4 py-1.5 font-normal">Provider</th>
-                      <th className="w-24 py-1.5 pr-2 font-normal">Per job</th>
-                      <th className="w-24 py-1.5 pr-2 font-normal">Per day</th>
-                      <th className="w-24 py-1.5 pr-4 font-normal">Per month</th>
-                      <th className="w-20 py-1.5 pr-4 text-center font-normal" title="Each job asks first">Confirm</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {cloudProviders.map((provider) => {
-                      const budgets = provider.settings?.budgets ?? { perJobMicroUsd: 0, dailyMicroUsd: 0, monthlyMicroUsd: 0 };
-                      return (
-                        <tr key={provider.id}>
-                          <td className="px-4 py-1 text-ink">{provider.name || provider.id}</td>
-                          <td className="py-1 pr-2"><LimitField label={`${provider.name} per job`} value={budgets.perJobMicroUsd} onCommit={(value) => void save(provider, { budgets: { ...budgets, perJobMicroUsd: value } })} /></td>
-                          <td className="py-1 pr-2"><LimitField label={`${provider.name} per day`} value={budgets.dailyMicroUsd} onCommit={(value) => void save(provider, { budgets: { ...budgets, dailyMicroUsd: value } })} /></td>
-                          <td className="py-1 pr-4"><LimitField label={`${provider.name} per month`} value={budgets.monthlyMicroUsd} onCommit={(value) => void save(provider, { budgets: { ...budgets, monthlyMicroUsd: value } })} /></td>
-                          <td className="py-1 pr-4 text-center">
-                            <input type="checkbox" className="accent-accent" aria-label={`Confirm the cost of each ${provider.name} job`} checked={provider.settings?.requireCostConfirmation ?? true} onChange={(event) => void save(provider, { requireCostConfirmation: event.target.checked })} />
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </>
-            )}
           </div>
         </div>
         {message && <div role="alert" className="selectable shrink-0 border-t border-line bg-bad/10 px-4 py-1.5 text-2xs text-ink">{message}</div>}

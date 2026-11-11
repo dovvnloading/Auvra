@@ -31,7 +31,7 @@ from Auvra.providers import (
 from Auvra.providers.adapters import MediaJob
 from Auvra.providers.reframe import ReframeAdapter
 from Auvra.providers.credentials import MemoryCredentialStore, WindowsCredentialManager
-from Auvra.providers.fal_catalog import NEW_TEXTURE_SIZE, SKY_SIZE, media_output_url, media_outputs, rough_job_cost
+from Auvra.providers.fal_catalog import NEW_TEXTURE_SIZE, SKY_SIZE, media_output_url, media_outputs
 from Auvra.providers.transport import StdlibTransport
 
 from .previews import PreviewError
@@ -522,6 +522,10 @@ class NativeProviderHost:
             raise HostOperationError("invalid_request", "Provider budgets are invalid")
         if any(not isinstance(value, int) or isinstance(value, bool) or value < 0 for value in budgets.values()):
             raise HostOperationError("invalid_request", "Provider budgets are invalid")
+        # Issue #223: catalog prices are not worst-case provider bills.
+        # Retire fake spending caps rather than accept an unenforceable limit.
+        if any(budgets.values()):
+            raise HostOperationError("invalid_request", "Spending limits were removed: provider charges cannot be capped")
         routes = settings["routes"]
         if any(not isinstance(item, dict) or set(item) != {"capability", "modelId"} for item in routes):
             raise HostOperationError("invalid_request", "Provider routes are invalid")
@@ -547,9 +551,9 @@ class NativeProviderHost:
             raise HostOperationError("invalid_request", "Provider endpoint is invalid")
         updated = self.settings.set(
             descriptor.provider_id, enabled=settings["enabled"], routes=route_map,
-            endpoint=endpoint, require_cost_confirmation=settings["requireCostConfirmation"],
-            max_job_cost_micro_usd=budgets["perJobMicroUsd"], max_daily_cost_micro_usd=budgets["dailyMicroUsd"],
-            max_monthly_cost_micro_usd=budgets["monthlyMicroUsd"], expected_revision=current.revision)
+            endpoint=endpoint, require_cost_confirmation=(True if descriptor.kind == "cloud" else settings["requireCostConfirmation"]),
+            max_job_cost_micro_usd=0, max_daily_cost_micro_usd=0,
+            max_monthly_cost_micro_usd=0, expected_revision=current.revision)
         if descriptor.provider_id not in self._provided_adapters:
             self._adapters.pop(descriptor.provider_id, None)
         return self._provider_status({"providerId": descriptor.provider_id}) | {"settingsRevision": updated.revision}
@@ -645,10 +649,11 @@ class NativeProviderHost:
             raise HostOperationError("unsupported_capability", "Provider route is not exact")
         if descriptor.kind == "cloud" and self._credential_status(descriptor.provider_id) not in {"configured", "memoryOnly"}:
             raise HostOperationError("provider_not_configured", "Provider credential is not configured")
-        if (descriptor.kind == "cloud" and
-                (configured.require_cost_confirmation or payload.get("estimatedCostMicroUsd") is None) and
-                payload.get("consent") != "explicit"):
-            raise HostOperationError("budget_exceeded", "Cloud provider cost requires explicit confirmation")
+        # This is paid inference with NO effective host-side cost ceiling.
+        # Require explicit consent for every cloud request, regardless of a
+        # client-supplied hint or legacy "require confirmation" setting.
+        if descriptor.kind == "cloud" and payload.get("consent") != "explicit":
+            raise HostOperationError("budget_exceeded", "Cloud work has uncapped provider charges and requires explicit consent")
         prompt = payload.get("input", "")
         if not isinstance(prompt, str) or len(prompt) > 65536:
             raise HostOperationError("invalid_request", "Inference input is invalid")
@@ -682,15 +687,20 @@ class NativeProviderHost:
             retain = getattr(self.project_host, "retain_pending_asset", None)
             if callable(retain):
                 retain(active.project_id, asset_id)
+        # A client price is display-only. Do not turn it into a reservation,
+        # or imply zero recorded cost means the provider bills nothing.
+        hint = payload.get("estimatedCostMicroUsd")
+        if hint is not None and (type(hint) is not int or hint < 0):
+            raise HostOperationError("invalid_request", "Provider cost hint is invalid")
+        if descriptor.kind == "local" and hint not in (None, 0):
+            raise HostOperationError("invalid_request", "Local provider cost must be zero")
         with self._lock:
-            estimated_cost = self._check_budget(descriptor.provider_id, configured, self._cost_estimate(descriptor.provider_id, configured, payload))
             job = self.jobs.create(provider=descriptor.provider_id, model=payload["modelId"], capability=capability.value, prompt_hash=prompt_hash,
-                                   project_id=active.project_id, cost_micro_usd=estimated_cost,
+                                   project_id=active.project_id, cost_micro_usd=0,
                                    provenance={"route": descriptor.kind, "provider": descriptor.provider_id, "model": payload["modelId"], "capability": capability.value})
             self._meta[job.job_id] = {"projectId": active.project_id, "prompt": prompt, "assetIds": asset_ids, "route": descriptor.kind,
                                        "providerId": descriptor.provider_id, "modelId": payload["modelId"], "capability": capability.value,
                                        "settingsHash": self._settings_hash(configured), "createdAt": self._now(), "promptHash": prompt_hash,
-                                       "estimatedCostMicroUsd": estimated_cost,
                                        "projectRevision": active.revision, "targetElementId": target,
                                        "targetElementName": selected.get("name") if selected is not None else None}
             self._queue_job_event(job.job_id, "queued", 0, descriptor)
@@ -742,10 +752,13 @@ class NativeProviderHost:
             if meta is None:
                 raise HostOperationError("invalid_job", "Job recovery metadata is unavailable")
             configured = self.settings.get(existing.provider)
-            retry_cost = self._check_budget(existing.provider, configured, meta.get("estimatedCostMicroUsd"))
+            if not configured.enabled or configured.routes.get(existing.capability) != existing.model:
+                raise HostOperationError("unsupported_capability", "Provider route is no longer enabled")
+            if self.registry.get(existing.provider).kind == "cloud" and payload.get("consent") != "same-route":
+                raise HostOperationError("budget_exceeded", "Paid cloud retry has uncapped charges and requires a deliberate retry request")
+            # A retry may generate a second provider charge. It is never
+            # protected by a host price estimate or an old budget reservation.
             job = self.jobs.retry(payload["jobId"], project_id=active.project_id)
-            if retry_cost:
-                job = self.jobs.add_cost(job.job_id, retry_cost, project_id=active.project_id)
             descriptor = self.registry.get(job.provider)
             capability = Capability(job.capability)
             self._futures[job.job_id] = self._executor.submit(self._run_job, job.job_id, job.provider, job.model, capability)
@@ -1234,54 +1247,15 @@ class NativeProviderHost:
                     continue
         return "absent" if self._vault is not None else "unavailable"
 
-    def _cost_estimate(self, provider_id: str, settings: Any, payload: Mapping[str, Any]) -> Any:
-        """What the request says it costs, or with budgets set, what the catalog does: a limit must see every job."""
-        estimate = payload.get("estimatedCostMicroUsd")
-        if estimate is not None or not all((settings.max_job_cost_micro_usd, settings.max_daily_cost_micro_usd, settings.max_monthly_cost_micro_usd)):
-            return estimate
-        try:
-            adapter = self._adapter(provider_id)
-        except Exception:
-            return None
-        details = adapter.model_details(payload["modelId"]) if hasattr(adapter, "model_details") else None
-        return rough_job_cost(details)
-
-    def _check_budget(self, provider_id: str, settings: Any, estimate: Any) -> int:
-        """Validate one reservation against durable provider-specific caps."""
-        if estimate is None:
-            return 0
-        if not isinstance(estimate, int) or isinstance(estimate, bool) or estimate < 0:
-            raise HostOperationError("invalid_request", "Provider cost estimate is invalid")
-        if self.registry.get(provider_id).kind == "local":
-            if estimate != 0:
-                raise HostOperationError("invalid_request", "Local provider cost must be zero")
-            return 0
-        if estimate == 0:
-            return 0
-        limits = (settings.max_job_cost_micro_usd, settings.max_daily_cost_micro_usd,
-                  settings.max_monthly_cost_micro_usd)
-        if any(limit <= 0 for limit in limits):
-            raise HostOperationError("budget_exceeded", "Cloud provider budget is not configured")
-        totals = self.jobs.cost_totals(provider_id)
-        if estimate > limits[0]:
-            raise HostOperationError("budget_exceeded", "Job cost exceeds provider budget")
-        if totals["daily"] + estimate > limits[1]:
-            raise HostOperationError("budget_exceeded", "Daily provider budget is exhausted")
-        if totals["monthly"] + estimate > limits[2]:
-            raise HostOperationError("budget_exceeded", "Monthly provider budget is exhausted")
-        return estimate
-
     def _settings_value(self, settings: Any) -> dict[str, Any]:
         return {
             "enabled": settings.enabled,
             "routes": [{"capability": capability, "modelId": model} for capability, model in sorted(settings.routes.items())],
             "fallbackPolicy": "none",
-            "requireCostConfirmation": settings.require_cost_confirmation,
-            "budgets": {
-                "perJobMicroUsd": settings.max_job_cost_micro_usd,
-                "dailyMicroUsd": settings.max_daily_cost_micro_usd,
-                "monthlyMicroUsd": settings.max_monthly_cost_micro_usd,
-            },
+            # Retired spending caps must not be displayed as active, even for
+            # users whose local settings database still has old nonzero values.
+            "requireCostConfirmation": True if self.registry.get(settings.provider).kind == "cloud" else settings.require_cost_confirmation,
+            "budgets": {"perJobMicroUsd": 0, "dailyMicroUsd": 0, "monthlyMicroUsd": 0},
             "endpointConfigured": settings.endpoint is not None,
         }
 
