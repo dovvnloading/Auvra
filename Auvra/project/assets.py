@@ -308,6 +308,8 @@ class AssetStore:
                         _sync_directory(self.content)
                         _sync_directory(staged.parent)
                     except OSError:
+                        # The staged blob remains intact for verified replay
+                        # by the next writable project opener.
                         pass
                 raise
             if staged is not None:
@@ -375,6 +377,8 @@ class AssetStore:
                         entry.unlink()
                         _sync_directory(staging)
                     except OSError:
+                        # Locked staging is outside the validated asset set;
+                        # retry its removal on a later writable open.
                         pass
             return True
 
