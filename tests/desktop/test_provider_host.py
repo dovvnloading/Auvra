@@ -507,7 +507,7 @@ class ProviderHostTests(unittest.TestCase):
                         with self.subTest(hint=hint), self.assertRaises(HostOperationError) as raised:
                             host._submit({**request, "estimatedCostMicroUsd": hint})
                         self.assertEqual(raised.exception.code, "budget_exceeded")
-                self.assertEqual(host.jobs.list(project_id="project-1"), [])
+                self.assertEqual(host.jobs.list(project_id="project-1"), ())
             finally:
                 host.shutdown()
 
