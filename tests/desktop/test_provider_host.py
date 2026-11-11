@@ -469,10 +469,63 @@ class ProviderHostTests(unittest.TestCase):
                 self.assertIsNone(host._cost_estimate("fal", unset, {"modelId": "a/b"}))
                 limits = SimpleNamespace(max_job_cost_micro_usd=10_000, max_daily_cost_micro_usd=100_000, max_monthly_cost_micro_usd=100_000)
                 self.assertEqual(host._cost_estimate("fal", limits, {"modelId": "a/b"}), 40_000)
-                self.assertEqual(host._cost_estimate("fal", limits, {"modelId": "a/b", "estimatedCostMicroUsd": 7}), 7)
+                for hint in (None, 0, 7, 40_000):
+                    estimate = host._cost_estimate("fal", limits, {"modelId": "a/b", "estimatedCostMicroUsd": hint})
+                    self.assertEqual(estimate, 40_000)
+                    with self.assertRaises(HostOperationError) as raised:
+                        host._check_budget("fal", limits, estimate)
+                    self.assertEqual(raised.exception.code, "budget_exceeded")
+                bigger = host._cost_estimate("fal", limits, {"modelId": "a/b", "estimatedCostMicroUsd": 45_000})
+                self.assertEqual(bigger, 45_000)
+                enough = SimpleNamespace(max_job_cost_micro_usd=50_000, max_daily_cost_micro_usd=100_000, max_monthly_cost_micro_usd=100_000)
+                self.assertEqual(host._check_budget("fal", enough, bigger), 45_000)
                 with self.assertRaises(HostOperationError) as raised:
-                    host._check_budget("fal", limits, 40_000)
-                self.assertEqual(raised.exception.code, "budget_exceeded")
+                    host._cost_estimate("fal", limits, {"modelId": "a/b", "estimatedCostMicroUsd": -1})
+                self.assertEqual(raised.exception.code, "invalid_request")
+            finally:
+                host.shutdown()
+
+    def test_understated_cloud_prices_do_not_dispatch_a_paid_job(self) -> None:
+        from Auvra.providers.fal_catalog import CatalogModel
+
+        class Priced:
+            def model_details(self, _model):
+                return CatalogModel("a/b", "A B", frozenset({Capability.MEDIA_EDIT}), "image-to-image", "", 40_000, "images")
+
+        with tempfile.TemporaryDirectory() as raw:
+            host = NativeProviderHost(Path(raw), project_host=_Project(), adapters={"fal": Priced()})
+            try:
+                host.registry.discover_models("fal", ["a/b"], {"a/b": {Capability.MEDIA_EDIT}})
+                host.settings.set("fal", enabled=True, routes={Capability.MEDIA_EDIT: "a/b"},
+                                  require_cost_confirmation=False, max_job_cost_micro_usd=10_000,
+                                  max_daily_cost_micro_usd=100_000, max_monthly_cost_micro_usd=100_000)
+                request = {"projectId": "project-1", "expectedRevision": 0,
+                           "providerId": "fal", "modelId": "a/b", "capability": Capability.MEDIA_EDIT.value,
+                           "route": "cloud", "input": "test", "consent": "explicit"}
+                with mock.patch.object(host, "_credential_status", return_value="configured"):
+                    for hint in (None, 0, 7):
+                        with self.subTest(hint=hint), self.assertRaises(HostOperationError) as raised:
+                            host._submit({**request, "estimatedCostMicroUsd": hint})
+                        self.assertEqual(raised.exception.code, "budget_exceeded")
+                self.assertEqual(host.jobs.list(project_id="project-1"), [])
+            finally:
+                host.shutdown()
+
+    def test_unknown_cloud_prices_fail_closed_when_budgets_are_set(self) -> None:
+        class Unpriced:
+            def model_details(self, _model):
+                return None
+
+        with tempfile.TemporaryDirectory() as raw:
+            host = NativeProviderHost(Path(raw), project_host=_Project(), adapters={"fal": Unpriced()})
+            try:
+                limits = SimpleNamespace(max_job_cost_micro_usd=10_000, max_daily_cost_micro_usd=100_000, max_monthly_cost_micro_usd=100_000)
+                for hint in (None, 0, 5_000):
+                    estimate = host._cost_estimate("fal", limits, {"modelId": "a/b", "estimatedCostMicroUsd": hint})
+                    self.assertIsNone(estimate)
+                    with self.assertRaises(HostOperationError) as raised:
+                        host._check_budget("fal", limits, estimate)
+                    self.assertEqual(raised.exception.code, "budget_exceeded")
             finally:
                 host.shutdown()
 
