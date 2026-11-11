@@ -303,6 +303,62 @@ class CookedPicturesBuildTests(unittest.TestCase):
         self.assertIs(without_baked_pictures({"materials": [], "textures": [{"id": "x"}]})["textures"][0]["id"], "x")
 
 
+    def test_optional_baked_mirrors_never_hide_an_independent_model_texture(self) -> None:
+        from Auvra.project.game_build import without_baked_pictures
+
+        graph = {"nodes": [], "links": []}
+        for mirrors in (
+            {},
+            {"pictures": {"baseColor": "shared-image"}},
+            {"textureIds": ["shared-image"]},
+            {"pictures": {"baseColor": "shared-image"}, "textureIds": ["shared-image"]},
+        ):
+            with self.subTest(mirrors=mirrors):
+                content = {
+                    "materials": [{"id": "generator", **mirrors,
+                                   "textureGraph": {"graph": graph, "baked": {"textures": {"baseColor": "shared-image"}}}}],
+                    "models": [{"id": "body", "materialOverrides": {"Body": {"mapTextureId": "shared-image"}}}],
+                    "textures": [{"id": "shared-image", "assetId": TEXTURE_ID}],
+                }
+                kept = without_baked_pictures(content)
+                self.assertEqual([item["id"] for item in kept["textures"]], ["shared-image"])
+                self.assertEqual(game_build_module._referenced_asset_ids(kept), {TEXTURE_ID})
+
+                # With only the generator's *actual* internal references, the
+                # standalone build can regenerate the picture rather than ship it.
+                self.assertEqual(without_baked_pictures({**content, "models": []})["textures"], [])
+
+    def test_shared_baked_channels_and_graph_consumers_are_counted_exactly(self) -> None:
+        from Auvra.project.game_build import without_baked_pictures
+
+        material = {
+            "id": "generator",
+            "pictures": {"baseColor": "shared-image", "normal": "shared-image"},
+            "textureIds": ["shared-image", "shared-image"],
+            "textureGraph": {
+                "graph": {"nodes": [], "links": []},
+                "baked": {"textures": {"baseColor": "shared-image", "normal": "shared-image"}},
+            },
+        }
+        content = {"materials": [material], "textures": [{"id": "shared-image", "assetId": TEXTURE_ID}]}
+        self.assertEqual(without_baked_pictures(content)["textures"], [])
+
+        # A graph input or a distinct picture slot is not an output mirror.
+        graph_input = {
+            **material, "textureGraph": {
+                **material["textureGraph"],
+                "graph": {"nodes": [{"type": "picture", "params": {"textureId": "shared-image"}}], "links": []},
+            },
+        }
+        kept = without_baked_pictures({**content, "materials": [graph_input]})
+        self.assertEqual([item["id"] for item in kept["textures"]], ["shared-image"])
+        self.assertEqual(game_build_module._referenced_asset_ids(kept), {TEXTURE_ID})
+
+        another_slot = {**material, "pictures": {**material["pictures"], "height": "shared-image"}}
+        self.assertEqual([item["id"] for item in without_baked_pictures(
+            {**content, "materials": [another_slot]}
+        )["textures"]], ["shared-image"])
+
     def test_a_paint_stack_reference_keeps_applied_input_pictures_in_always_cook_builds(self) -> None:
         from Auvra.project.game_build import without_baked_pictures
 
