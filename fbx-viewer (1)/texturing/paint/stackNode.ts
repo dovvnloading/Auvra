@@ -28,6 +28,9 @@ export const setPaintStackPictureFetcher = (fetcher: (assetId: string) => Promis
 export const PAINT_STACK_NODE_TYPE = 'paintStack';
 /** Graph ids paint stacks are offered under: `paint:<asset id>` or `paint:<asset id>:<folder layer id>`. */
 export const PAINT_STACK_PREFIX = 'paint:';
+/** Read-only applied pictures passed from a built game's cooker to a Paint stack node. */
+export const PAINT_BAKED_PREFIX = 'paint-baked:';
+export const paintBakedKey = (assetId: string, channel: string): string => `${PAINT_BAKED_PREFIX}${assetId}:${channel}`;
 
 /** A steady short hash of a text (the document's revision). */
 const hashOf = (text: string): string => {
@@ -204,9 +207,35 @@ export const PAINT_STACK_NODE: TexNodeDef = {
         if (!assetId) throw new Error('Pick a paint stack from the graph list: each painted set and each folder of one is there.');
         if (running.has(assetId)) throw new Error('A paint stack cannot use itself (through a fill or mask graph).');
         const fetchStored = storedPictureFetcher;
-        if (!fetchStored) throw new Error('A paint stack draws only in the editor, where its painted pictures can be read.');
-        // It is put together by the WebGL2 painting code: on another GPU the graph is drawn with WebGL2 instead.
-        if (!('renderer' in context.gpu)) throw new Error('A paint stack is drawn with WebGL2 only.');
+        // A built game has no editor host or live Paint layers. It uses only the pictures the artist
+        // last applied to this *whole* set, loaded as read-only external inputs by the graph cooker.
+        // A folder needs its own bake and must not silently be replaced by the whole-set pictures.
+        if (!fetchStored) {
+            if (context.params.folder) throw new Error('A Paint stack folder needs its own baked pictures in the game; whole-set maps cannot stand in for a folder.');
+            const baked = (channel: string) => context.external(paintBakedKey(assetId, channel));
+            if (![...PAINT_CHANNELS, 'orm'].some((channel) => baked(channel))) {
+                throw new Error('This Paint stack has no applied pictures in the game. Apply the painted set and include its pictures in the build.');
+            }
+            context.note('Using the painted set\'s last applied pictures in this game.');
+            const outputs: Record<string, GpuImage> = {};
+            for (const port of PAINT_STACK_NODE.outputs) {
+                const target = context.image(port.kind === 'color' ? 'color' : 'gray');
+                const source = baked(port.key);
+                const packed = baked('orm');
+                if (source) {
+                    await context.pass(target, 'void main() { outColor = texture(painted, vUv); }', { inputs: { painted: source } });
+                } else if (packed && (port.key === 'roughness' || port.key === 'metallic')) {
+                    const component = port.key === 'roughness' ? 'g' : 'b';
+                    await context.pass(target, `void main() { float v = texture(painted, vUv).${component}; outColor = vec4(v, v, v, 1.0); }`, { inputs: { painted: packed } });
+                } else {
+                    context.gpu.clear(target, port.key === 'normal' ? [0.5, 0.5, 1, 1] : port.key === 'opacity' ? [1, 1, 1, 1] : [0, 0, 0, 1]);
+                }
+                outputs[port.key] = target;
+            }
+            return outputs;
+        }
+        // The live editor painter still composes Paint layers on WebGL2, including folders and mesh maps.
+        if (!('renderer' in context.gpu)) throw new Error('A live Paint stack is drawn with WebGL2 only.');
         const gpu = context.gpu as TextureGpu;
         const [{ materialLibrary }, { PaintStack }, { BUILTIN_GRAPHS }, { readStoredGraph }] = await Promise.all([
             import('../../runtime/materials/materialLibrary'),
