@@ -115,7 +115,7 @@ class SQLiteJobStore:
               event_id INTEGER PRIMARY KEY AUTOINCREMENT,
               job_id TEXT NOT NULL REFERENCES jobs(job_id), provider TEXT NOT NULL,
               amount_micro_usd INTEGER NOT NULL CHECK (amount_micro_usd >= 0),
-              occurred_at REAL NOT NULL
+              occurred_at REAL NOT NULL, cost_source TEXT, cost_reference TEXT
             );
         """)
         columns = {row[1] for row in self._db.execute("PRAGMA table_info(jobs)").fetchall()}
@@ -125,6 +125,14 @@ class SQLiteJobStore:
             # fails closed instead of attaching work to whichever project is
             # open next.
             self._db.execute("ALTER TABLE jobs ADD COLUMN project_id TEXT")
+        # Existing ledgers were created before quote provenance was retained.
+        # Leave historical entries unknown; never retroactively label a rough
+        # estimate as a provider-backed ceiling.
+        event_columns = {row[1] for row in self._db.execute("PRAGMA table_info(cost_events)").fetchall()}
+        if "cost_source" not in event_columns:
+            self._db.execute("ALTER TABLE cost_events ADD COLUMN cost_source TEXT")
+        if "cost_reference" not in event_columns:
+            self._db.execute("ALTER TABLE cost_events ADD COLUMN cost_reference TEXT")
         # Backfill one reservation event for legacy rows. Future retries are
         # recorded separately at their actual reservation time.
         self._db.execute("""
@@ -167,8 +175,9 @@ class SQLiteJobStore:
                 self._event(identifier, JobState.QUEUED, None, now)
                 if cost_micro_usd:
                     self._db.execute(
-                        "INSERT INTO cost_events (job_id, provider, amount_micro_usd, occurred_at) VALUES (?,?,?,?)",
-                        (identifier, provider, cost_micro_usd, now),
+                        "INSERT INTO cost_events (job_id, provider, amount_micro_usd, occurred_at, cost_source, cost_reference) VALUES (?,?,?,?,?,?)",
+                        (identifier, provider, cost_micro_usd, now,
+                         (provenance or {}).get("cost_source"), (provenance or {}).get("cost_reference")),
                     )
                 self._db.commit()
             except sqlite3.IntegrityError as exc: raise ValueError("job id already exists") from exc
@@ -251,19 +260,32 @@ class SQLiteJobStore:
             self._event(job_id, JobState.QUEUED, "retry queued", now); self._db.commit()
         return self.get(job_id)
 
-    def add_cost(self, job_id: str, amount_micro_usd: int, *, project_id: str | None = None) -> Job:
-        """Add one explicitly approved retry reservation to a durable job."""
+    def add_cost(self, job_id: str, amount_micro_usd: int, *, project_id: str | None = None,
+                 cost_source: str | None = None, cost_reference: str | None = None) -> Job:
+        """Add one retry reservation and its provider-backed pricing provenance atomically."""
         if not isinstance(amount_micro_usd, int) or isinstance(amount_micro_usd, bool) or amount_micro_usd < 0:
             raise ValueError("invalid cost")
+        if (cost_source is None) != (cost_reference is None):
+            raise ValueError("incomplete cost provenance")
+        if cost_source is not None and (cost_source != "provider_enforced" or
+                not isinstance(cost_reference, str) or
+                re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", cost_reference) is None):
+            raise ValueError("invalid cost provenance")
         with self._lock:
             current = self.get(job_id, project_id=project_id)
             now = time.time()
-            self._db.execute("UPDATE jobs SET cost_micro_usd=?, updated_at=? WHERE job_id=?",
-                             (current.cost_micro_usd + amount_micro_usd, now, job_id))
+            provenance = dict(current.provenance)
+            if cost_source is not None:
+                provenance.update({"cost_source": cost_source, "cost_reference": cost_reference,
+                                   "cost_micro_usd": amount_micro_usd})
+            _safe_json(provenance)
+            self._db.execute("UPDATE jobs SET cost_micro_usd=?, provenance_json=?, updated_at=? WHERE job_id=?",
+                             (current.cost_micro_usd + amount_micro_usd,
+                              json.dumps(provenance, sort_keys=True), now, job_id))
             if amount_micro_usd:
                 self._db.execute(
-                    "INSERT INTO cost_events (job_id, provider, amount_micro_usd, occurred_at) VALUES (?,?,?,?)",
-                    (job_id, current.provider, amount_micro_usd, now),
+                    "INSERT INTO cost_events (job_id, provider, amount_micro_usd, occurred_at, cost_source, cost_reference) VALUES (?,?,?,?,?,?)",
+                    (job_id, current.provider, amount_micro_usd, now, cost_source, cost_reference),
                 )
             self._db.commit()
         return self.get(job_id, project_id=project_id)
@@ -381,9 +403,18 @@ def _is_project_id(value: str) -> bool:
 
 def _safe_json(value: Mapping[str, Any]) -> None:
     if not isinstance(value, Mapping): raise ValueError("metadata must be an object")
-    allowed = {"durable", "restart_pending", "remote_state", "progress", "route", "provider", "model", "capability", "route_consent", "content_hash", "prompt_hash", "remote_request_id", "remote_root", "cost_micro_usd", "error_code", "retryable"}
+    allowed = {"durable", "restart_pending", "remote_state", "progress", "route", "provider", "model", "capability", "route_consent", "content_hash", "prompt_hash", "remote_request_id", "remote_root", "cost_micro_usd", "cost_source", "cost_reference", "error_code", "retryable"}
     if any(not isinstance(key, str) or key not in allowed for key in value): raise ValueError("metadata key is not allowlisted")
     if any(not isinstance(item, (str, int, float, bool, type(None))) or (isinstance(item, str) and (len(item) > 512 or "://" in item or "\\" in item)) or (isinstance(item, float) and not math.isfinite(item)) for item in value.values()): raise ValueError("metadata value is not a bounded primitive")
+    if "cost_source" in value and value["cost_source"] != "provider_enforced":
+        raise ValueError("cost authority is not trusted")
+    if "cost_reference" in value and (
+            not isinstance(value["cost_reference"], str) or
+            re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", value["cost_reference"]) is None):
+        raise ValueError("cost reference is invalid")
+    if "cost_micro_usd" in value and (
+            type(value["cost_micro_usd"]) is not int or value["cost_micro_usd"] < 0):
+        raise ValueError("cost reservation is invalid")
     # An error code is one of ours, and "provider_authorization" is not a secret: refusing it would leave the job running for ever.
     if any(isinstance(item, str) and key != "error_code" and any(token in item.lower() for token in ("api_key", "apikey", "authorization", "bearer ", "credential", "password", "secret", "token=")) for key, item in value.items()):
         raise ValueError("metadata value contains sensitive data")
