@@ -684,6 +684,14 @@ class ProviderHostTests(unittest.TestCase):
                     host._retry({"projectId": "project-1", "expectedRevision": 0, "jobId": job_id})
                 self.assertEqual(over.exception.code, "budget_exceeded")
                 self.assertEqual(host.jobs.get(job_id).cost_micro_usd, 300)
+                adapter.ceiling = 100
+                host.settings.set("fal", enabled=False, routes={Capability.MEDIA_EDIT: "a/b"},
+                                  max_job_cost_micro_usd=250, max_daily_cost_micro_usd=450,
+                                  max_monthly_cost_micro_usd=450)
+                with self.assertRaises(HostOperationError) as disabled:
+                    host._retry({"projectId": "project-1", "expectedRevision": 0, "jobId": job_id})
+                self.assertEqual(disabled.exception.code, "unsupported_capability")
+                self.assertEqual(host.jobs.get(job_id).state.value, "failed")
             finally:
                 host.shutdown()
 
