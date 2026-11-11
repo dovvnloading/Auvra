@@ -121,6 +121,51 @@ const checkScatterParity = async (webgpu: TexturingGpu): Promise<void> => {
     }
 };
 
+/** Compare a real compressed BC1 input read through the texturing pass on both backends.
+ * This leaves the visual reference unchanged, and runs only if both adapters expose BC/S3TC.
+ */
+const checkCompressedParity = async (webgpu: TexturingGpu): Promise<void> => {
+    const glgpu = textureGpu();
+    if (!glgpu.renderer.getContext().getExtension('WEBGL_compressed_texture_s3tc')) return;
+    const blocks = new Uint8Array(32);
+    for (let i = 0; i < 4; i++) {
+        // Two vertical stripes, each a solid RGB565 colour: red or green.
+        const value = i % 2 === 0 ? 0xf800 : 0x07e0;
+        blocks[i * 8] = value & 255;
+        blocks[i * 8 + 1] = value >> 8;
+    }
+    const compressed = new THREE.CompressedTexture([
+        { data: blocks, width: 8, height: 8 },
+    ] as unknown as ImageData[], 8, 8, THREE.RGB_S3TC_DXT1_Format);
+    compressed.minFilter = compressed.magFilter = THREE.NearestFilter;
+    compressed.colorSpace = THREE.NoColorSpace;
+    compressed.needsUpdate = true;
+    const sample = async (gpu: TexturingGpu): Promise<Uint8Array> => {
+        const result = gpu.image(8, 8, 'color', 8);
+        try {
+            await gpu.pass(result, { fragment: 'void main() { outColor = texture(picture, vUv); }', inputs: { picture: compressed } });
+            const pixels = await gpu.readRgba8Later(result);
+            if (!pixels) throw new Error('Could not read compressed texture pixels');
+            return pixels;
+        } finally {
+            gpu.release(result);
+        }
+    };
+    try {
+        const [actual, expected] = await Promise.all([sample(webgpu), sample(glgpu)]);
+        for (const x of [1, 6]) for (const y of [1, 6]) {
+            const at = (y * 8 + x) * 4;
+            for (let channel = 0; channel < 3; channel++) {
+                if (Math.abs(actual[at + channel] - expected[at + channel]) > 4) {
+                    throw new Error('Compressed BC1 differs between WebGPU and WebGL2 at (' + x + ', ' + y + ') channel ' + channel);
+                }
+            }
+        }
+    } finally {
+        compressed.dispose();
+    }
+};
+
 /** The graph's base colour and normal on `gpu`, as PNG pictures the way a game cooks them. */
 const cook = async (gpu: TexturingGpu): Promise<{ colour: Blob; normal: Blob }> => {
     const evaluator = new TextureGraphEvaluator(gpu, () => undefined, () => null);
@@ -162,7 +207,10 @@ export const TextureGraphScene: React.FC = () => {
             let own = true;
             let pictures: { colour: Blob; normal: Blob };
             try {
-                if (isGpuRenderer(gl)) await checkScatterParity(gpu);
+                if (isGpuRenderer(gl)) {
+                    await checkScatterParity(gpu);
+                    if (gl.core.device.features.has('texture-compression-bc')) await checkCompressedParity(gpu);
+                }
                 pictures = await cook(gpu);
             } catch (error) {
                 // The renderer's own GPU could not: keep why (textureGraphScene.problem), and show WebGL2's cook with the ball red.
