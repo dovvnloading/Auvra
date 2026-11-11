@@ -466,6 +466,69 @@ class ProviderCoreTests(unittest.TestCase):
                 first.close()
                 second.close()
 
+    def test_retry_and_charge_are_one_cross_process_transition(self):
+        with tempfile.TemporaryDirectory() as folder:
+            db = str(Path(folder) / "retry-shared.sqlite")
+            first, second = SQLiteJobStore(db), SQLiteJobStore(db)
+            job = first.create(
+                project_id="project-1", provider="fal", model="fal-ai/flux/dev",
+                capability="media.generate", prompt_hash="a" * 64,
+                cost_micro_usd=50, provenance={"route": "cloud", "provider": "fal",
+                                              "cost_source": "provider_enforced",
+                                              "cost_reference": "initial-50",
+                                              "cost_micro_usd": 50},
+            )
+            first.transition(job.job_id, JobState.SUBMITTING)
+            first.transition(job.job_id, JobState.FAILED)
+            barrier = threading.Barrier(3)
+            outcomes, errors = [], []
+
+            def retry(store):
+                try:
+                    barrier.wait(timeout=5)
+                    with store.reserve_budget():
+                        if store.cost_totals("fal")["daily"] + 80 > 200:
+                            outcomes.append("budget_exceeded")
+                        else:
+                            try:
+                                store.retry_with_cost(
+                                    job.job_id, 80, project_id="project-1",
+                                    cost_source="provider_enforced",
+                                    cost_reference="fixture-retry-80",
+                                )
+                            except ValueError:
+                                outcomes.append("already_queued")
+                            else:
+                                outcomes.append("queued")
+                except Exception as exc:
+                    errors.append(exc)
+
+            workers = [threading.Thread(target=retry, args=(store,), daemon=True)
+                       for store in (first, second)]
+            try:
+                for worker in workers:
+                    worker.start()
+                barrier.wait(timeout=5)
+                for worker in workers:
+                    worker.join(8)
+                self.assertFalse(any(worker.is_alive() for worker in workers))
+                self.assertEqual(errors, [])
+                self.assertCountEqual(outcomes, ["queued", "already_queued"])
+                final = first.get(job.job_id)
+                self.assertEqual(final.state, JobState.QUEUED)
+                self.assertEqual(final.attempt, 2)
+                self.assertEqual(final.cost_micro_usd, 130)
+                self.assertEqual(final.provenance["cost_reference"], "fixture-retry-80")
+                self.assertEqual(first.cost_totals("fal")["aggregate"], 130)
+                events = first._db.execute(
+                    "SELECT amount_micro_usd, cost_reference FROM cost_events ORDER BY event_id"
+                ).fetchall()
+                self.assertEqual([tuple(row) for row in events],
+                                 [(50, "initial-50"), (80, "fixture-retry-80")])
+            finally:
+                first.close()
+                second.close()
+
     def test_jobs_are_project_scoped_and_sensitive_events_never_persist(self):
         store = SQLiteJobStore()
         job = store.create(project_id="project-a", provider="fal", model="fal-ai/flux/dev", capability="media.generate", prompt_hash="a" * 64)
