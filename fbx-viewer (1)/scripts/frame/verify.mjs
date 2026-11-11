@@ -107,7 +107,126 @@ check(source.bootstrap.includes("isDevelopment") && source.bootstrap.includes("F
 check(source.bootstrap.includes("requires the packaged WebView2 host"), "production fallback does not fail closed");
 check(source.vite.includes("hud-frame.html") && !source.vite.includes("@tailwindcss/vite"), "Vite still uses the rejected Tailwind 4 plugin");
 check(source.styles.includes("@tailwind base") && source.styles.includes("@tailwind utilities"), "local Tailwind 3 directives are missing");
-check(source.packageJson.includes('"tailwindcss": "3.4.17"') && source.packageJson.includes('"postcss": "8.5.26"') && source.packageJson.includes('"autoprefixer": "10.4.21"'), "pinned Tailwind 3/PostCSS pipeline is missing");
+// Keep Tailwind on v3 and PostCSS on v8, but do not freeze their security/patch versions here.
+// package-lock is the authority for the exact installed versions.
+const pipelineDeps = JSON.parse(source.packageJson).devDependencies ?? {};
+const pipelineLock = JSON.parse(source.packageLock).packages ?? {};
+const pinnedMajor = (name, major) => {
+  const declared = pipelineDeps[name];
+  return typeof declared === "string"
+    && new RegExp(`^${major}\\.\\d+\\.\\d+import { readFile } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
+import { resolve, join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { tmpdir } from "node:os";
+import { spawnSync } from "node:child_process";
+
+const root = resolve(fileURLToPath(new URL("../..", import.meta.url)));
+const files = {
+  index: resolve(root, "index.html"),
+  player: resolve(root, "player.html"),
+  hud: resolve(root, "hud-frame.html"),
+  hudScript: resolve(root, "hud-frame.tsx"),
+  script: resolve(root, "script-frame.html"),
+  scriptFrame: resolve(root, "script-frame.ts"),
+  scriptApi: resolve(root, "runtime/scripting/scriptApi.ts"),
+  dynamic: resolve(root, "components/HUDEditor/DynamicHUDComponent.tsx"),
+  transport: resolve(root, "host/nativeTransport.ts"),
+  protocol: resolve(root, "host/protocol.ts"),
+  bootstrap: resolve(root, "host/bootstrap.ts"),
+  vite: resolve(root, "vite.config.ts"),
+  styles: resolve(root, "styles.css"),
+  scope: resolve(root, "components/HUDEditor/assets/ScopeReticle.tsx"),
+  texture: resolve(root, "components/UI/Browser/TextureCard.tsx"),
+  localEnvironment: resolve(root, "components/Scene/LocalEnvironment.tsx"),
+  localEnvironmentCapture: resolve(root, "components/Scene/localEnvironmentCapture.ts"),
+  viewerScene: resolve(root, "components/Scene/ViewerScene.tsx"),
+  graphPreview: resolve(root, "components/AnimationGraph/GraphPreview.tsx"),
+  retextureEditor: resolve(root, "components/Tools/Retexture/RetextureStage.tsx"),
+  thumbnailTooltip: resolve(root, "components/UI/ThumbnailTooltip.tsx"),
+  skySystem: resolve(root, "components/Environment/SkySystem.tsx"),
+  packageJson: resolve(root, "package.json"),
+  packageLock: resolve(root, "package-lock.json"),
+  postcss: resolve(root, "postcss.config.cjs"),
+  tailwind: resolve(root, "tailwind.config.cjs"),
+  desktopController: resolve(root, "../Auvra/desktop/controller.py"),
+  desktopProjectHost: resolve(root, "../Auvra/desktop/project_host.py"),
+  desktopWebView: resolve(root, "../Auvra/desktop/webview2.py"),
+};
+
+const source = Object.fromEntries(await Promise.all(Object.entries(files).map(async ([name, file]) => [
+  name,
+  (await readFile(file, "utf8")).replace(/\r\n/g, "\n"),
+] )));
+const failures = [];
+const check = (condition, message) => { if (!condition) failures.push(message); };
+
+for (const [name, text] of Object.entries(source)) {
+  if (!["packageLock", "desktopController", "desktopProjectHost", "desktopWebView"].includes(name)) {
+    check(!/https?:\/\/(?!(?:127\.0\.0\.1|assets\.auvra\.local)(?:[:/;\s]|$))/i.test(text), `${name} contains an unapproved remote URL`);
+  }
+}
+check(!source.index.includes("cdn.tailwindcss.com"), "editor still references Tailwind CDN");
+check(source.index.includes("__AUVRA_EDITOR_CSP__"), "editor CSP placeholder missing");
+check(source.hud.includes("__AUVRA_HUD_CSP__"), "HUD CSP placeholder missing");
+check(source.script.includes("__AUVRA_SCRIPT_CSP__"), "script CSP placeholder missing");
+check(source.player.includes("__AUVRA_PLAYER_CSP__") && !source.player.includes("cdn.tailwindcss.com"), "player CSP placeholder missing");
+const playerCsp = source.vite.match(/const playerPackagedCsp\s*=\s*`([^`]+)`;/)?.[1] ?? "";
+// 'wasm-unsafe-eval' only allows compiling WebAssembly (the physics engine), not eval of script text.
+check(/script-src 'self'(?: 'wasm-unsafe-eval')?;/.test(playerCsp) && !/'unsafe-eval'|'nonce-/.test(playerCsp) && /form-action 'none'/.test(playerCsp), "player CSP does not confine script execution");
+check(/connect-src 'self' blob:;/.test(playerCsp) && !playerCsp.includes("assets.auvra.local"), "player CSP grants editor-only network access");
+check(source.vite.includes("'unsafe-eval'") && source.vite.includes("connect-src 'none'"), "HUD CSP does not confine evaluation and network access");
+// The HUD and gameplay script sandboxes share one policy: evaluation is allowed, so nothing else is.
+const sandboxCsp = source.vite.match(/const hudPackagedCsp\s*=\s*`([^`]+)`;/)?.[1] ?? "";
+check(/(?:^|;\s*)default-src 'none';/.test(sandboxCsp) && /(?:^|;\s*)connect-src 'none';/.test(sandboxCsp) &&
+  /(?:^|;\s*)script-src 'self' 'unsafe-eval';/.test(sandboxCsp) && !/(?:frame|child|worker)-src/.test(sandboxCsp), "sandbox frame CSP does not confine evaluation and network access");
+check(/\.replace\('__AUVRA_SCRIPT_CSP__', hudCsp\)/.test(source.vite), "script frame CSP placeholder is not replaced with the sandbox policy");
+const buildInputs = ["editorInput", "playerInput"].map((name) => source.vite.match(new RegExp(`const ${name}[^=]*=\\s*\\{([^}]*)\\}`))?.[1] ?? "");
+check(buildInputs.every((input) => input.includes("'hud-frame.html'") && input.includes("'script-frame.html'")), "sandbox frames are missing from the editor or player build");
+// An opaque-origin frame's module scripts are CORS loads every host refuses; the frames load classic bundles.
+check(source.vite.includes("classicSandboxFrames({ root: __dirname, frameCsp: hudCsp })"), "sandbox frames do not load their code as classic scripts");
+const editorCspDefinitions = {
+  development: source.vite.match(/const editorDevCsp[^`]+`([^`]+)`;/)?.[1],
+  packaged: source.vite.match(/const editorPackagedCsp\s*=\s*`([^`]+)`;/)?.[1],
+};
+for (const [mode, policy] of Object.entries(editorCspDefinitions)) {
+  const connectSources = policy?.match(/(?:^|;\s*)connect-src\s+([^;]+);/)?.[1].split(/\s+/) ?? [];
+  const mediaSources = policy?.match(/(?:^|;\s*)media-src\s+([^;]+);/)?.[1].split(/\s+/) ?? [];
+  check(connectSources.includes("blob:"), `${mode} editor CSP blocks blob-backed model imports`);
+  check(connectSources.includes("https://assets.auvra.local"), `${mode} editor CSP blocks native project asset transfers`);
+  check(mediaSources.includes("'self'") && mediaSources.includes("blob:"), `${mode} editor CSP blocks blob-backed audio imports`);
+}
+check(source.vite.includes("cspNonce"), "Vite CSP nonce integration is missing");
+check(!/127\.0\.0\.1:\*/.test(source.vite), "development CSP grants unrelated loopback ports");
+check(source.vite.includes("httpServer?.address()") && source.vite.includes("editorDevCsp(address.port, developmentNonce)"), "development CSP is not bound to the actual Vite listener");
+check(source.dynamic.includes('sandbox="allow-scripts"'), "HUD iframe is not sandboxed");
+check(!/sandbox\s*=\s*["'][^"']*allow-same-origin/i.test(source.dynamic), "HUD iframe grants same-origin access");
+check(!source.dynamic.includes("srcDoc"), "HUD iframe still uses srcDoc");
+check(source.dynamic.includes("MessageChannel"), "HUD iframe does not use MessageChannel");
+check((source.dynamic.match(/postMessage\([^;]+,\s*["']\*["']/g) ?? []).length === 1, "HUD transfer is not one-shot");
+check(source.dynamic.includes("[channel.port2]"), "HUD transfer does not transfer a MessagePort");
+check(source.hudScript.includes("event.source !== window.parent"), "HUD bootstrap lacks source check");
+check(source.hudScript.includes("window.removeEventListener(\"message\", receiveMessage)"), "HUD bootstrap listener is not torn down");
+check(source.transport.includes("isValidMessage"), "native transport does not validate inbound messages");
+check(source.transport.includes("assertRequest") && source.transport.includes("MAX_PENDING"), "native transport lacks outbound validation/bounds");
+check(source.transport.includes("setTimeout") && source.transport.includes("clearTimeout"), "native transport lacks timeout cleanup");
+check(source.transport.includes("LONG_RUNNING_METHODS") && source.transport.includes("LONG_REQUEST_TIMEOUT_MS"), "long native operations retain the interactive timeout");
+check(source.transport.includes("postMessage"), "native transport lacks native postMessage");
+check(!source.transport.includes("eval(") && !source.transport.includes("new Function"), "native transport exposes dynamic evaluation");
+check(!/\b(eval|Function|require)\s*\(/.test(source.protocol), "browser protocol validator exposes dynamic evaluation or require");
+check(source.desktopController.includes('ThreadPoolExecutor(max_workers=1') && source.desktopController.includes('_dispatcher_lock'), "desktop protocol work is not serialized off the WebView callback");
+check(source.desktopWebView.includes('GetDeferral') && source.desktopWebView.includes('ThreadPoolExecutor(max_workers=2'), "asset resource work is not deferred to a bounded background owner");
+check(source.desktopWebView.includes('CoreWebView2CreationProperties') && source.desktopWebView.includes('control.EnsureCoreWebView2Async()'), "WebView2 startup does not use non-blocking WinForms initialization");
+check(!source.desktopWebView.includes('CreateAsync(\n                    str(browser_folder)') && !source.desktopWebView.includes('.GetAwaiter().GetResult()'), "WebView2 startup synchronously blocks its STA message pump");
+check(source.desktopProjectHost.includes('"project.progress"') && source.desktopProjectHost.includes('set_event_sink'), "project progress cannot stream while a host operation is active");
+check(source.bootstrap.includes("isDevelopment") && source.bootstrap.includes("FakeHost"), "development FakeHost fallback is not explicit");
+check(source.bootstrap.includes("requires the packaged WebView2 host"), "production fallback does not fail closed");
+check(source.vite.includes("hud-frame.html") && !source.vite.includes("@tailwindcss/vite"), "Vite still uses the rejected Tailwind 4 plugin");
+check(source.styles.includes("@tailwind base") && source.styles.includes("@tailwind utilities"), "local Tailwind 3 directives are missing");
+).test(declared)
+    && pipelineLock[`node_modules/${name}`]?.version === declared;
+};
+check(pinnedMajor("tailwindcss", 3) && pinnedMajor("postcss", 8) && pinnedMajor("autoprefixer", 10), "pinned Tailwind 3/PostCSS pipeline is missing");
 check(!source.packageJson.includes("@tailwindcss/vite") && !source.packageLock.includes('"node_modules/@tailwindcss/'), "rejected Tailwind 4 packages remain");
 check(!source.packageLock.includes('"node_modules/lightningcss":') && !source.packageLock.includes('"node_modules/@tailwindcss/oxide'), "rejected MPL/native Tailwind closure remains");
 check(source.postcss.includes("tailwindcss") && source.postcss.includes("autoprefixer"), "PostCSS config is incomplete");
