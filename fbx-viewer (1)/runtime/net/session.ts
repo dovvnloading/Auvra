@@ -18,6 +18,9 @@ const PING_INTERVAL_MS = 2000;
 const CLOCK_SAMPLES = 5;
 const RECONNECT_MIN_MS = 1000;
 const RECONNECT_MAX_MS = 15000;
+/** Maximum bytes the client allows to queue on a stalled WebSocket. */
+const MAX_SOCKET_BUFFERED_BYTES = 4 * NET_LIMITS.maxMessageBytes;
+const textEncoder = new TextEncoder();
 
 const isRecord = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
 const isFiniteNumber = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
@@ -36,7 +39,9 @@ const isEntity = (value: unknown): value is NetEntityState => isRecord(value) &&
 
 /** A relay message, checked field by field; null for anything malformed. */
 export const parseServerMessage = (raw: unknown): NetServerMessage | null => {
-    if (typeof raw !== 'string' || raw.length > NET_LIMITS.maxMessageBytes) return null;
+    // The relay's limit applies to encoded UTF-8, not UTF-16 code units.
+    if (typeof raw !== 'string' || raw.length > NET_LIMITS.maxMessageBytes
+        || textEncoder.encode(raw).byteLength > NET_LIMITS.maxMessageBytes) return null;
     let message: unknown;
     try {
         message = JSON.parse(raw);
@@ -107,6 +112,7 @@ export const createNetSession = (options: NetSessionOptions): NetSession => {
     let lastStateSent = -Infinity;
     let seq = 0;
     let pingId = 0;
+    let backpressureWarned = false;
     // A relay that rejects this build for good (other protocol version or game) is not retried.
     let rejected = false;
 
@@ -133,10 +139,24 @@ export const createNetSession = (options: NetSessionOptions): NetSession => {
     const send = (message: unknown): boolean => {
         if (!socket || status !== 'connected' || socket.readyState !== 1) return false;
         const text = JSON.stringify(message);
+        // A frame can fit in UTF-16 code units but exceed the relay's UTF-8 byte limit.
         if (text.length > NET_LIMITS.maxMessageBytes) {
             frontendDiagnostics.warning('net_message_too_large');
             return false;
         }
+        const bytes = textEncoder.encode(text).byteLength;
+        if (bytes > NET_LIMITS.maxMessageBytes) {
+            frontendDiagnostics.warning('net_message_too_large');
+            return false;
+        }
+        // Never build an unbounded browser send queue. State and pings are dropped
+        // under pressure; events are best-effort, not queued for unbounded replay.
+        if (socket.bufferedAmount + bytes > MAX_SOCKET_BUFFERED_BYTES) {
+            if (!backpressureWarned) frontendDiagnostics.warning('net_send_backpressure');
+            backpressureWarned = true;
+            return false;
+        }
+        backpressureWarned = false;
         socket.send(text);
         return true;
     };
@@ -216,6 +236,7 @@ export const createNetSession = (options: NetSessionOptions): NetSession => {
             setStatus('error', 'The multiplayer server address must start with ws:// or wss://.');
             return;
         }
+        backpressureWarned = false;
         setStatus('connecting');
         let current: WebSocket;
         try {
