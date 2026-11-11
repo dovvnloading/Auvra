@@ -741,10 +741,10 @@ def without_baked_pictures(content: dict[str, list[dict[str, Any]]]) -> dict[str
     for material in content.get("materials", []):
         if material.get("id") not in paint_sources:
             continue
-        applied = (material.get("paint") or {}).get("applied")
-        pictures = material.get("pictures")
-        if not isinstance(pictures, Mapping) and isinstance(applied, Mapping):
-            pictures = applied.get("textures")
+        paint = material.get("paint")
+        applied = paint.get("applied") if isinstance(paint, Mapping) else None
+        pictures = applied.get("textures") if isinstance(applied, Mapping) else None
+        # The material's general pictures may be from a procedural graph, not its last painting.
         if isinstance(pictures, Mapping):
             protected_pictures.update(value for value in pictures.values() if isinstance(value, str) and value)
     dropped = {texture_id for texture_id, own in baked.items() if mentions.get(texture_id, 0) <= own and texture_id not in protected_pictures}
