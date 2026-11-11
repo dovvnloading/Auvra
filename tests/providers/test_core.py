@@ -1,5 +1,5 @@
 from __future__ import annotations
-import hashlib, io, json, re, sqlite3, sys, tempfile, unittest
+import hashlib, io, json, re, sqlite3, sys, tempfile, threading, unittest
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
@@ -421,6 +421,50 @@ class ProviderCoreTests(unittest.TestCase):
                 self.assertEqual(reopened.cost_totals("fal")["aggregate"], 60)
             finally:
                 reopened.close()
+
+    def test_budget_reservations_are_serialized_across_host_processes(self):
+        with tempfile.TemporaryDirectory() as folder:
+            db = str(Path(folder) / "shared-cost-ledger.sqlite")
+            first, second = SQLiteJobStore(db), SQLiteJobStore(db)
+            start = threading.Barrier(3)
+            outcomes, errors = [], []
+
+            def submit(store, number):
+                try:
+                    start.wait(timeout=5)
+                    with store.reserve_budget():
+                        # The check and durable charge use the same SQLite lock.
+                        if store.cost_totals("fal")["daily"] + 80 > 100:
+                            outcomes.append("blocked")
+                        else:
+                            store.create(
+                                project_id="project-1", provider="fal", model="fal-ai/flux/dev",
+                                capability="media.generate", prompt_hash="a" * 64,
+                                cost_micro_usd=80, job_id=f"job-shared-{number}",
+                                provenance={"route": "cloud", "provider": "fal",
+                                            "cost_source": "provider_enforced",
+                                            "cost_reference": f"fixture-{number}",
+                                            "cost_micro_usd": 80},
+                            )
+                            outcomes.append("reserved")
+                except Exception as exc:
+                    errors.append(exc)
+
+            threads = [threading.Thread(target=submit, args=(store, index), daemon=True)
+                       for index, store in enumerate((first, second), start=1)]
+            try:
+                for thread in threads:
+                    thread.start()
+                start.wait(timeout=5)
+                for thread in threads:
+                    thread.join(8)
+                self.assertFalse(any(thread.is_alive() for thread in threads))
+                self.assertEqual(errors, [])
+                self.assertCountEqual(outcomes, ["reserved", "blocked"])
+                self.assertEqual(first.cost_totals("fal")["daily"], 80)
+            finally:
+                first.close()
+                second.close()
 
     def test_jobs_are_project_scoped_and_sensitive_events_never_persist(self):
         store = SQLiteJobStore()
