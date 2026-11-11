@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { deflateRawSync } from 'node:zlib';
 import { OUTPUT_NODE_TYPE, defaultParams, normalizeMaterialGraph } from '../../runtime/materials/materialGraph';
 import { cookable, graphParameterNames } from '../../runtime/materials/materialCooking';
 import { withMaterialPictures } from '../../runtime/materials/materialGraph';
@@ -6,7 +7,7 @@ import { graphTextures, materialAssetDocument, type MaterialAsset } from '../../
 import { rewriteMaterialPictures } from '../../texturing/materialOutput';
 import { normalizeTextureGraph } from '../../texturing/graph/document';
 import { readStoredGraph, withParameterPictures, type StoredTextureGraph } from '../../texturing/graph/stored';
-import { makeZip, readZip } from '../../texturing/zip';
+import { crc32, makeZip, openZip, readZip } from '../../texturing/zip';
 import type { TextureData } from '../../types';
 import {
     MaterialPackageError, PACKAGE_FORMAT, PACKAGE_VERSION, packageFromLibrary, packageFromProject, packageIntoLibrary, readMaterialPackage, writeMaterialPackage,
@@ -253,5 +254,117 @@ describe('Material packages (.auvramat)', () => {
         const at = new TextDecoder('latin1').decode(good).indexOf('bytes of blob:paint');
         good[at] ^= 0xff;
         await expect(readMaterialPackage(new Blob([good]))).rejects.toThrow('damaged');
+    });
+});
+
+
+/** Build tiny ZIP fixtures with arbitrary declared sizes, methods and CRCs. */
+const zipFixture = (members: Array<{ name: string; data: Uint8Array; method?: 0 | 8; declaredSize?: number; corruptCrc?: boolean }>): Uint8Array => {
+    const encoder = new TextEncoder();
+    const localParts: Uint8Array[] = [];
+    const centralParts: Uint8Array[] = [];
+    let offset = 0;
+    for (const member of members) {
+        const name = encoder.encode(member.name);
+        const method = member.method ?? 0;
+        const data = method === 8 ? new Uint8Array(deflateRawSync(member.data)) : member.data;
+        const size = member.declaredSize ?? member.data.byteLength;
+        const checksum = member.corruptCrc ? 0 : crc32(member.data);
+        const local = new DataView(new ArrayBuffer(30));
+        local.setUint32(0, 0x04034b50, true);
+        local.setUint16(4, 20, true);
+        local.setUint16(6, 0x0800, true);
+        local.setUint16(8, method, true);
+        local.setUint32(14, checksum, true);
+        local.setUint32(18, data.length, true);
+        local.setUint32(22, size, true);
+        local.setUint16(26, name.length, true);
+        localParts.push(new Uint8Array(local.buffer), name, data);
+        const central = new DataView(new ArrayBuffer(46));
+        central.setUint32(0, 0x02014b50, true);
+        central.setUint16(4, 20, true);
+        central.setUint16(6, 20, true);
+        central.setUint16(8, 0x0800, true);
+        central.setUint16(10, method, true);
+        central.setUint32(16, checksum, true);
+        central.setUint32(20, data.length, true);
+        central.setUint32(24, size, true);
+        central.setUint16(28, name.length, true);
+        central.setUint32(42, offset, true);
+        centralParts.push(new Uint8Array(central.buffer), name);
+        offset += 30 + name.length + data.length;
+    }
+    const centralLength = centralParts.reduce((sum, part) => sum + part.length, 0);
+    const end = new DataView(new ArrayBuffer(22));
+    end.setUint32(0, 0x06054b50, true);
+    end.setUint16(8, members.length, true);
+    end.setUint16(10, members.length, true);
+    end.setUint32(12, centralLength, true);
+    end.setUint32(16, offset, true);
+    const parts = [...localParts, ...centralParts, new Uint8Array(end.buffer)];
+    const result = new Uint8Array(parts.reduce((sum, part) => sum + part.length, 0));
+    let written = 0;
+    for (const part of parts) {
+        result.set(part, written);
+        written += part.length;
+    }
+    return result;
+};
+
+describe('bounded material ZIP import', () => {
+    it('refuses archives with too many files before inflating them', async () => {
+        const files = Array.from({ length: 257 }, (_, i) => ({ name: 'pictures/' + i + '.bin', data: new Uint8Array(1) }));
+        await expect(readMaterialPackage(await makeZip(files))).rejects.toThrow('too many files');
+    });
+
+    it('rejects the declared expansion of an unused highly compressed picture before allocation', async () => {
+        const archive = zipFixture([
+            { name: 'auvramat.json', data: new TextEncoder().encode('{}') },
+            { name: 'pictures/unused.bin', data: new Uint8Array(1024), method: 8, declaredSize: 129 * 1024 * 1024 },
+        ]);
+        await expect(readMaterialPackage(new Blob([archive as BlobPart]))).rejects.toThrow('decompression budget');
+    });
+
+    it('stops streaming inflation if the actual output exceeds the declared size', async () => {
+        // Incompressible enough to pass the metadata compression-ratio budget,
+        // while the output is much larger than the deliberately false header.
+        const data = Uint8Array.from({ length: 4096 }, (_, i) => (i * 73 + (i >>> 4)) % 256);
+        const archive = zipFixture([{ name: 'pictures/lying.bin', data, method: 8, declaredSize: 64 }]);
+        const zip = await openZip(archive);
+        await expect(zip.read('pictures/lying.bin')).rejects.toThrow('declared decompressed size');
+    });
+
+    it('does not inflate or retain unreferenced corrupt members in a valid package', async () => {
+        const good = await writeMaterialPackage({
+            name: 'Simple', material: paintedPlanks(), nodeGraphs: [], pictures: [],
+        });
+        const manifest = (await readZip(good)).get('auvramat.json')!;
+        const archive = zipFixture([
+            { name: 'auvramat.json', data: manifest },
+            { name: 'pictures/unused.bin', data: new Uint8Array([1, 2, 3]), corruptCrc: true },
+        ]);
+        await expect(readZip(archive)).rejects.toThrow('damaged');
+        const imported = await readMaterialPackage(new Blob([archive as BlobPart]));
+        expect(imported.name).toBe('Simple');
+        expect(imported.pictures).toHaveLength(0);
+    });
+
+    it('rejects overlapping offsets and ZIP64 sentinel metadata', async () => {
+        const archive = zipFixture([
+            { name: 'a', data: new Uint8Array([1]) },
+            { name: 'b', data: new Uint8Array([2]) },
+        ]);
+        // Enlarge the first stored member into the second local header.
+        // All size fields agree, but the two members' spans now overlap.
+        const view = new DataView(archive.buffer);
+        const centralStart = archive.length - 22 - (46 + 1) * 2;
+        view.setUint32(18, 16, true);
+        view.setUint32(22, 16, true);
+        view.setUint32(centralStart + 20, 16, true);
+        view.setUint32(centralStart + 24, 16, true);
+        await expect(openZip(archive)).rejects.toThrow('overlapping members');
+        const zip64 = zipFixture([{ name: 'one', data: new Uint8Array([1]) }]);
+        new DataView(zip64.buffer).setUint32(zip64.length - 22 + 16, 0xffffffff, true);
+        await expect(openZip(zip64)).rejects.toThrow('ZIP64');
     });
 });

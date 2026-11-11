@@ -70,44 +70,183 @@ export const makeZip = async (files: ReadonlyArray<{ name: string; data: Blob | 
     return new Blob([...parts, ...central, new Uint8Array(end.buffer)] as BlobPart[], { type: 'application/zip' });
 };
 
-/** A ZIP archive's files by name, read back: stored ones as they are, deflated ones where the browser can inflate them. */
-export const readZip = async (archive: Blob | Uint8Array): Promise<Map<string, Uint8Array>> => {
-    const bytes = ArrayBuffer.isView(archive) ? archive as Uint8Array : new Uint8Array(await (archive as Blob).arrayBuffer());
+/** Conservative limits for an imported, untrusted material package. */
+const MAX_ZIP_ARCHIVE_BYTES = 256 * 1024 * 1024;
+const MAX_ZIP_MEMBERS = 256;
+const MAX_ZIP_MEMBER_BYTES = 128 * 1024 * 1024;
+const MAX_ZIP_TOTAL_BYTES = 256 * 1024 * 1024;
+const MAX_ZIP_EXPANSION_RATIO = 256;
+
+interface ZipEntry {
+    name: string;
+    method: number;
+    crc: number;
+    start: number;
+    packedSize: number;
+    size: number;
+}
+
+/**
+ * Validate the entire central directory before inflating a single member.
+ * Call read(name) only for files the consuming format actually references.
+ */
+export const openZip = async (archive: Blob | Uint8Array) => {
+    const archiveSize = ArrayBuffer.isView(archive) ? archive.byteLength : archive.size;
+    if (archiveSize > MAX_ZIP_ARCHIVE_BYTES) throw new Error('the ZIP archive exceeds the size limit');
+    const bytes = ArrayBuffer.isView(archive) ? archive as Uint8Array : new Uint8Array(await archive.arrayBuffer());
     const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-    // The end record sits in the last 22 bytes, or before a comment of up to 64 KB.
+    const decoder = new TextDecoder('utf-8', { fatal: true });
+
+    // Require the end record to end at the archive boundary (including any comment).
     let end = -1;
     for (let at = bytes.length - 22; at >= Math.max(0, bytes.length - 22 - 0xffff); at--) {
-        if (view.getUint32(at, true) === 0x06054b50) { end = at; break; }
+        if (view.getUint32(at, true) === 0x06054b50 && at + 22 + view.getUint16(at + 20, true) === bytes.length) {
+            end = at;
+            break;
+        }
     }
     if (end < 0) throw new Error('not a ZIP archive');
+
     const count = view.getUint16(end + 10, true);
-    let at = view.getUint32(end + 16, true);
-    const decoder = new TextDecoder();
-    const files = new Map<string, Uint8Array>();
+    const centralSize = view.getUint32(end + 12, true);
+    const centralStart = view.getUint32(end + 16, true);
+    if (view.getUint16(end + 4, true) !== 0 || view.getUint16(end + 6, true) !== 0
+        || view.getUint16(end + 8, true) !== count || count === 0xffff
+        || centralSize === 0xffffffff || centralStart === 0xffffffff) {
+        throw new Error('the ZIP archive has an unsupported multipart or ZIP64 layout');
+    }
+    if (count > MAX_ZIP_MEMBERS) throw new Error('the ZIP archive contains too many files');
+    if (centralStart + centralSize !== end) throw new Error('the ZIP archive has a damaged directory');
+
+    const entries = new Map<string, ZipEntry>();
+    const intervals: Array<{ start: number; end: number }> = [];
+    let at = centralStart;
+    let totalBytes = 0;
     for (let index = 0; index < count; index++) {
-        if (at + 46 > bytes.length || view.getUint32(at, true) !== 0x02014b50) throw new Error('the ZIP archive is damaged');
+        if (at + 46 > end || view.getUint32(at, true) !== 0x02014b50) {
+            throw new Error('the ZIP archive has a damaged directory');
+        }
+        const flags = view.getUint16(at + 8, true);
         const method = view.getUint16(at + 10, true);
         const crc = view.getUint32(at + 16, true);
         const packedSize = view.getUint32(at + 20, true);
+        const size = view.getUint32(at + 24, true);
         const nameLength = view.getUint16(at + 28, true);
         const extraLength = view.getUint16(at + 30, true);
         const commentLength = view.getUint16(at + 32, true);
+        const disk = view.getUint16(at + 34, true);
         const local = view.getUint32(at + 42, true);
+        const next = at + 46 + nameLength + extraLength + commentLength;
+        if (next > end || nameLength === 0 || disk !== 0 || (flags & 1)
+            || packedSize === 0xffffffff || size === 0xffffffff || local === 0xffffffff) {
+            throw new Error('the ZIP archive has unsafe or unsupported entries');
+        }
+        if (method !== 0 && method !== 8) throw new Error('the ZIP archive uses an unsupported compression method');
         const name = decoder.decode(bytes.subarray(at + 46, at + 46 + nameLength));
-        at += 46 + nameLength + extraLength + commentLength;
+        const parts = name.split('/');
+        if (name.startsWith('/') || name.includes('\\') || /^[A-Za-z]:/.test(name)
+            || /[\u0000-\u001f\u007f]/.test(name)
+            || parts.some((part, i) => part === '.' || part === '..' || (!part && i !== parts.length - 1))) {
+            throw new Error('the ZIP archive contains an unsafe filename');
+        }
+        if (entries.has(name)) throw new Error('the ZIP archive contains duplicate filenames');
+        for (let offset = at + 46 + nameLength; offset < at + 46 + nameLength + extraLength;) {
+            if (offset + 4 > at + 46 + nameLength + extraLength) throw new Error('the ZIP archive has damaged extra metadata');
+            const tag = view.getUint16(offset, true);
+            const length = view.getUint16(offset + 2, true);
+            offset += 4 + length;
+            if (tag === 0x0001) throw new Error('ZIP64 material packages are not supported');
+            if (offset > at + 46 + nameLength + extraLength) throw new Error('the ZIP archive has damaged extra metadata');
+        }
+        at = next;
         if (name.endsWith('/')) continue;
-        if (local + 30 > bytes.length || view.getUint32(local, true) !== 0x04034b50) throw new Error('the ZIP archive is damaged');
-        const start = local + 30 + view.getUint16(local + 26, true) + view.getUint16(local + 28, true);
-        if (start + packedSize > bytes.length) throw new Error('the ZIP archive is damaged');
-        const packed = bytes.subarray(start, start + packedSize);
+        if (size > MAX_ZIP_MEMBER_BYTES || (size > 0 && (packedSize === 0 || size > packedSize * MAX_ZIP_EXPANSION_RATIO))) {
+            throw new Error('a ZIP member exceeds the decompression budget');
+        }
+        totalBytes += size;
+        if (totalBytes > MAX_ZIP_TOTAL_BYTES) throw new Error('the ZIP archive exceeds the total decompression budget');
+        if (method === 0 && packedSize !== size) throw new Error('the ZIP archive has a damaged stored member');
+
+        if (local + 30 > centralStart || view.getUint32(local, true) !== 0x04034b50
+            || view.getUint16(local + 6, true) !== flags || view.getUint16(local + 8, true) !== method) {
+            throw new Error('the ZIP archive has a damaged local header');
+        }
+        const localNameLength = view.getUint16(local + 26, true);
+        const localExtraLength = view.getUint16(local + 28, true);
+        const start = local + 30 + localNameLength + localExtraLength;
+        if (start + packedSize > centralStart || decoder.decode(bytes.subarray(local + 30, local + 30 + localNameLength)) !== name) {
+            throw new Error('the ZIP archive has a damaged member offset');
+        }
+        if (!(flags & 0x0008) && (view.getUint32(local + 14, true) !== crc
+            || view.getUint32(local + 18, true) !== packedSize
+            || view.getUint32(local + 22, true) !== size)) {
+            throw new Error('the ZIP archive has mismatched member metadata');
+        }
+        intervals.push({ start: local, end: start + packedSize });
+        entries.set(name, { name, method, crc, start, packedSize, size });
+    }
+    if (at !== end) throw new Error('the ZIP archive has a damaged directory');
+    intervals.sort((a, b) => a.start - b.start);
+    for (let i = 1; i < intervals.length; i++) {
+        if (intervals[i].start < intervals[i - 1].end) throw new Error('the ZIP archive has overlapping members');
+    }
+
+    const cache = new Map<string, Uint8Array>();
+    const read = async (name: string): Promise<Uint8Array | undefined> => {
+        const entry = entries.get(name);
+        if (!entry) return undefined;
+        const cached = cache.get(name);
+        if (cached) return cached;
+        const packed = bytes.subarray(entry.start, entry.start + entry.packedSize);
         let data: Uint8Array;
-        if (method === 0) data = packed;
-        else if (method === 8 && typeof DecompressionStream !== 'undefined') {
-            const stream = new Blob([packed as BlobPart]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
-            data = new Uint8Array(await new Response(stream).arrayBuffer());
-        } else throw new Error(`"${name}" is packed in a way this editor does not read`);
-        if (crc32(data) !== crc) throw new Error(`"${name}" in the ZIP archive is damaged`);
-        files.set(name, data);
+        if (entry.method === 0) {
+            data = packed;
+        } else {
+            if (typeof DecompressionStream === 'undefined') throw new Error('the ZIP compression format is unavailable');
+            // Feed the existing bounded compressed view without creating another Blob copy.
+            const stream = new ReadableStream<Uint8Array>({
+                start(controller) {
+                    controller.enqueue(packed);
+                    controller.close();
+                },
+            }).pipeThrough(new DecompressionStream('deflate-raw'));
+            const reader = stream.getReader();
+            // Allocate at most the verified expanded size, and abort if the
+            // actual stream produces a different count (even if ZIP metadata lies).
+            data = new Uint8Array(entry.size);
+            let written = 0;
+            try {
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    if (written + value.byteLength > entry.size) {
+                        throw new Error('a ZIP member exceeds its declared decompressed size');
+                    }
+                    data.set(value, written);
+                    written += value.byteLength;
+                }
+            } catch (error) {
+                try { await reader.cancel(); } catch { /* The original failure is authoritative. */ }
+                throw error;
+            } finally {
+                reader.releaseLock();
+            }
+            if (written !== entry.size) throw new Error('a ZIP member is truncated');
+        }
+        if (crc32(data) !== entry.crc) throw new Error('"' + name + '" in the ZIP archive is damaged');
+        cache.set(name, data);
+        return data;
+    };
+    return { names: () => [...entries.keys()], read };
+};
+
+/** Read every ZIP member when explicitly requested (material imports use openZip to read only referenced names). */
+export const readZip = async (archive: Blob | Uint8Array): Promise<Map<string, Uint8Array>> => {
+    const zip = await openZip(archive);
+    const files = new Map<string, Uint8Array>();
+    for (const name of zip.names()) {
+        const data = await zip.read(name);
+        if (data) files.set(name, data);
     }
     return files;
 };
