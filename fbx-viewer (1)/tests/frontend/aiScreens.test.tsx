@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { applyKeptChanges, changesIn, diffScript, withEndingOf } from '../../components/Scripting/scriptDiff';
 import { ScriptChanges } from '../../components/Scripting/ScriptChanges';
 import { describeHudChange } from '../../components/HUDEditor/AIChatPanel';
@@ -83,46 +83,41 @@ describe('reviewing a proposed script', () => {
   });
 });
 
-describe('adding a key', () => {
-  const FAL = { id: 'fal', name: 'fal.ai', route: 'cloud' };
+describe('retired paid cloud provider settings', () => {
+  const FAL = { id: 'fal', name: 'fal.ai', route: 'cloud', available: false };
 
-  const openKeysPage = async () => {
-    let tell: (event: { event: string; payload: unknown }) => void = () => undefined;
+  const openKeysPage = async (credentialStatus: 'absent' | 'configured' = 'absent') => {
     vi.spyOn(hostProviderService, 'listProviders').mockResolvedValue([FAL] as never);
-    vi.spyOn(hostProviderService, 'getProviderStatus').mockResolvedValue({ id: 'fal', credentialStatus: 'absent' } as never);
-    vi.spyOn(hostProviderService, 'subscribeProviderEvents').mockImplementation((listener) => { tell = listener; return () => undefined; });
+    vi.spyOn(hostProviderService, 'getProviderStatus').mockResolvedValue({
+      id: 'fal', route: 'cloud', available: false, credentialStatus,
+      settingsRevision: 1,
+      settings: {
+        enabled: false, routes: [], fallbackPolicy: 'none',
+        requireCostConfirmation: true,
+        budgets: { perJobMicroUsd: 0, dailyMicroUsd: 0, monthlyMicroUsd: 0 },
+      },
+    } as never);
     render(<SettingsModal onClose={() => undefined} />);
+    expect(screen.queryByRole('button', { name: 'Spending' })).toBeNull();
     fireEvent.click(await screen.findByRole('button', { name: 'Keys' }));
-    return (event: { event: string; payload: unknown }) => tell(event);
+    await screen.findByText(/Cloud AI and spending budgets have been removed/);
   };
 
-  it('points at the key window until it closes', async () => {
-    const tell = await openKeysPage();
-    vi.spyOn(hostProviderService, 'configureCredential').mockResolvedValue({ waiting: true });
-    fireEvent.click(await screen.findByRole('button', { name: 'Add key' }));
-    expect(await screen.findByText('Paste the key in the window that opened')).toBeTruthy();
-    expect((screen.getByRole('button', { name: 'Add key' }) as HTMLButtonElement).disabled).toBe(true);
-    act(() => tell({ event: 'provider.status', payload: { providerId: 'fal', status: 'unconfigured', operation: 'key.cancelled' } }));
-    expect(await screen.findByText('No key')).toBeTruthy();
-    expect(screen.queryByRole('alert')).toBeNull();
-  });
-
-  it('says what went wrong when the key could not be kept', async () => {
-    const tell = await openKeysPage();
-    vi.spyOn(hostProviderService, 'configureCredential').mockResolvedValue({ waiting: true });
-    fireEvent.click(await screen.findByRole('button', { name: 'Add key' }));
-    await screen.findByText('Paste the key in the window that opened');
-    act(() => tell({ event: 'provider.status', payload: { providerId: 'fal', status: 'unconfigured', operation: 'key.failed', message: 'The key could not be saved on this computer.' } }));
-    expect(await screen.findByText('The key could not be saved on this computer.')).toBeTruthy();
-    expect(screen.queryByText('Paste the key in the window that opened')).toBeNull();
-  });
-
-  it('has nothing to wait for when a host answers at once', async () => {
+  it('does not let a user add keys, enable cloud, or configure an unenforceable spending cap', async () => {
     await openKeysPage();
-    vi.spyOn(hostProviderService, 'configureCredential').mockResolvedValue({});
-    fireEvent.click(await screen.findByRole('button', { name: 'Add key' }));
-    expect(await screen.findByText('No key')).toBeTruthy();
-    expect(screen.queryByText('Paste the key in the window that opened')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Add key' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Spending' })).toBeNull();
+    const enabled = screen.getByRole('checkbox', { name: 'On' }) as HTMLInputElement;
+    expect(enabled.disabled).toBe(true);
+    expect(enabled.checked).toBe(false);
+  });
+
+  it('still allows safely deleting a cloud key from older installations', async () => {
+    const deleteKey = vi.spyOn(hostProviderService, 'deleteCredential').mockResolvedValue({});
+    await openKeysPage('configured');
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove' }));
+    await waitFor(() => expect(deleteKey).toHaveBeenCalledWith('fal'));
+    expect(screen.queryByRole('button', { name: 'Add key' })).toBeNull();
   });
 });
 
