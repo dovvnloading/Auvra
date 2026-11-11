@@ -710,7 +710,44 @@ def without_baked_pictures(content: dict[str, list[dict[str, Any]]]) -> dict[str
             continue
         for document in documents:
             _texture_mentions(document, mentions)
-    dropped = {texture_id for texture_id, own in baked.items() if mentions.get(texture_id, 0) <= own}
+    # A whole Paint stack used as a graph node reads the painted material's last applied pictures.
+    # Those texture IDs are not written in the consuming graph (which names paint:<material-id>),
+    # so counting string mentions alone would discard them in an always-cook game.
+    paint_sources: set[str] = set()
+    for material in content.get("materials", []):
+        stored = material.get("textureGraph")
+        graph = stored.get("graph") if isinstance(stored, Mapping) else None
+        nodes = graph.get("nodes") if isinstance(graph, Mapping) else None
+        if not isinstance(nodes, list):
+            continue
+        for node in nodes:
+            if not isinstance(node, Mapping):
+                continue
+            params = node.get("params")
+            if not isinstance(params, Mapping):
+                continue
+            if node.get("type") in ("subgraph", "iterate"):
+                used = params.get("graph")
+                if isinstance(used, str) and used.startswith("paint:"):
+                    source, _, folder = used[len("paint:"):].partition(":")
+                    if source and not folder:
+                        paint_sources.add(source)
+            if node.get("type") == "paintStack" and not params.get("folder"):
+                source = params.get("asset")
+                if isinstance(source, str) and source:
+                    paint_sources.add(source)
+
+    protected_pictures: set[str] = set()
+    for material in content.get("materials", []):
+        if material.get("id") not in paint_sources:
+            continue
+        applied = (material.get("paint") or {}).get("applied")
+        pictures = material.get("pictures")
+        if not isinstance(pictures, Mapping) and isinstance(applied, Mapping):
+            pictures = applied.get("textures")
+        if isinstance(pictures, Mapping):
+            protected_pictures.update(value for value in pictures.values() if isinstance(value, str) and value)
+    dropped = {texture_id for texture_id, own in baked.items() if mentions.get(texture_id, 0) <= own and texture_id not in protected_pictures}
     if not dropped:
         return content
     return {**content, "textures": [item for item in content.get("textures", []) if item.get("id") not in dropped]}
