@@ -453,7 +453,9 @@ class Relay:
             writer.write(encode_frame(_OP_CLOSE, struct.pack("!H", 1008)))
             await asyncio.wait_for(writer.drain(), PEER_SEND_TIMEOUT_SECONDS)
         except (asyncio.TimeoutError, ConnectionError, RuntimeError, OSError):
-            pass
+            # The peer cannot receive an error frame; handle() closes its
+            # transport in finally, so there is no further recovery to do.
+            return
 
     def close_connections(self) -> None:
         for writer in list(self._writers):
