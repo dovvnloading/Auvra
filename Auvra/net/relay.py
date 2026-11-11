@@ -331,11 +331,13 @@ class Relay:
         room.peers.append(peer)
         complete = False
         try:
-            await peer.send({
+            delivered = await peer.send({
                 "t": "welcome", "v": PROTOCOL_VERSION, "you": peer.id, "host": room.host.id if room.host else peer.id,
                 "peers": [{"id": other.id, "name": other.name} for other in room.peers if other is not peer],
                 "serverTime": self.server_time(),
             })
+            if delivered is False:
+                raise ConnectionError("welcome could not be delivered")
             await self.broadcast(room, {"t": "joined", "peer": {"id": peer.id, "name": peer.name}}, skip=peer)
             complete = True
             return peer, room
