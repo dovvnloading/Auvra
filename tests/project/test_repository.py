@@ -65,6 +65,35 @@ class ProjectTests(unittest.TestCase):
         self.repo.prune_unreferenced_assets()
         self.assertTrue(self.repo.assets.path_for(source.asset_id).exists())
 
+    def test_nested_animation_assets_survive_prune_close_and_reopen(self):
+        animated = self.repo.assets.put_stream(io.BytesIO(b"animation-bytes"), mime="application/octet-stream")
+        unused = self.repo.assets.put_stream(io.BytesIO(b"unused-bytes"), mime="application/octet-stream")
+        self.repo.apply_changes({
+            "levels": [{"id": "level", "name": "Level"}],
+            "objects": [{
+                "id": "actor", "levelId": "level", "name": "Actor", "type": "prop",
+                "position": [0, 0, 0], "rotation": [0, 0, 0], "scale": [1, 1, 1],
+                "components": [{
+                    "id": "animation", "type": "custom", "enabled": True,
+                    "props": {"nested": [{"animationAssetIds": [animated.asset_id]}]},
+                }],
+            }],
+        }, expected_revision=0)
+        self.assertIn(animated.asset_id, self.repo.referenced_asset_ids())
+        self.assertFalse(self.repo.discard_asset_if_unreferenced(animated.asset_id))
+        self.repo.prune_unreferenced_assets()
+        self.assertFalse(self.repo.assets.path_for(unused.asset_id).exists())
+        self.assertTrue(self.repo.assets.verify(animated.asset_id))
+
+        self.repo.close()
+        self.repo = ProjectRepository(self.root)
+        self.assertTrue(self.repo.assets.verify(animated.asset_id))
+        self.assertEqual(self.repo.get_domain("objects")["documents"][0]["id"], "actor")
+
+        self.repo.apply_changes({"objects": []}, expected_revision=1)
+        self.repo.prune_unreferenced_assets()
+        self.assertFalse(self.repo.assets.path_for(animated.asset_id).exists())
+
     def test_a_lost_source_picture_does_not_stop_a_project_being_edited(self):
         artifact = self.repo.assets.put_stream(io.BytesIO(b"painted"), mime="application/octet-stream")
         self.repo.apply_changes({"textures": [self._generated_texture(artifact.asset_id, "a" * 64)]}, expected_revision=0)
