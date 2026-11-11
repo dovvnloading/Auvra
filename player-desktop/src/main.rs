@@ -230,7 +230,26 @@ fn mime_for(path: &Path) -> &'static str {
     }
 }
 
-/// Maps a request path onto a file inside the content root, refusing anything that escapes it.
+/// Refuse links and Windows reparse points inside an exported game. Those
+/// entries could redirect the custom protocol into unrelated user files.
+fn is_linked_entry(metadata: &std::fs::Metadata) -> bool {
+    if metadata.file_type().is_symlink() {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        return metadata.file_attributes() & 0x400 != 0;
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
+/// Maps a request path onto a regular file below the canonical game root.
+/// A valid textual path alone is insufficient: a bundled symlink or junction
+/// can otherwise make game JavaScript read arbitrary local files.
 fn resolve(root: &Path, request_path: &str) -> Option<PathBuf> {
     let trimmed = request_path.trim_start_matches('/');
     let relative = if trimmed.is_empty() {
@@ -246,8 +265,27 @@ fn resolve(root: &Path, request_path: &str) -> Option<PathBuf> {
     {
         return None;
     }
-    let full = root.join(candidate);
-    full.is_file().then_some(full)
+
+    let canonical_root = root.canonicalize().ok()?;
+    let mut current = canonical_root.clone();
+    let mut is_regular_file = false;
+    for component in candidate.components() {
+        let Component::Normal(name) = component else {
+            return None;
+        };
+        current.push(name);
+        // Inspect each path component without following it, including linked
+        // parent directories. On Windows, also refuse junctions/reparse points.
+        let metadata = std::fs::symlink_metadata(&current).ok()?;
+        if is_linked_entry(&metadata) {
+            return None;
+        }
+        is_regular_file = metadata.file_type().is_file();
+    }
+    if !is_regular_file || !current.canonicalize().ok()?.starts_with(&canonical_root) {
+        return None;
+    }
+    Some(root.join(candidate))
 }
 
 fn percent_decode(value: &str) -> Option<String> {
@@ -479,6 +517,53 @@ mod tests {
         assert_eq!(resolve(&root, "/game/%2e%2e/%2e%2e/x"), None);
         assert_eq!(resolve(&root, "/missing.js"), None);
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn resolve_refuses_file_and_directory_links_outside_game_root() {
+        let base = std::env::temp_dir().join(format!(
+            "auvra-player-links-{}", std::process::id()
+        ));
+        let root = base.join("exported");
+        let outside = base.join("outside");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(root.join("ordinary.txt"), b"allowed").unwrap();
+        std::fs::write(outside.join("private.txt"), b"private").unwrap();
+
+        let file_link = root.join("file.txt");
+        let directory_link = root.join("linked");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            symlink(outside.join("private.txt"), &file_link).unwrap();
+            symlink(&outside, &directory_link).unwrap();
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::{symlink_dir, symlink_file};
+            // Some Windows runners do not grant the symlink creation privilege.
+            if let Err(error) = symlink_file(outside.join("private.txt"), &file_link) {
+                if error.kind() == std::io::ErrorKind::PermissionDenied {
+                    std::fs::remove_dir_all(&base).ok();
+                    return;
+                }
+                panic!("cannot create file symlink: {error}");
+            }
+            if let Err(error) = symlink_dir(&outside, &directory_link) {
+                if error.kind() == std::io::ErrorKind::PermissionDenied {
+                    std::fs::remove_dir_all(&base).ok();
+                    return;
+                }
+                panic!("cannot create directory symlink: {error}");
+            }
+        }
+        assert_eq!(resolve(&root, "/ordinary.txt"), Some(root.join("ordinary.txt")));
+        assert_eq!(resolve(&root, "/file.txt"), None);
+        assert_eq!(resolve(&root, "/linked/private.txt"), None);
+        assert_eq!(resolve(&root, "/linked/%70rivate.txt"), None);
+        // Deny internal links too: the custom protocol serves regular files only.
+        std::fs::remove_dir_all(&base).unwrap();
     }
 
     #[test]
