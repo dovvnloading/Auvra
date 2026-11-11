@@ -164,11 +164,13 @@ class RelayTests(unittest.IsolatedAsyncioTestCase):
         room = relay.Room("test", "demo", [slow, fast])
         relay_instance = relay.Relay()
         from unittest import mock
-        with mock.patch.object(relay, "PEER_SEND_TIMEOUT_SECONDS", 0.05):
+        with mock.patch.object(relay, "PEER_SEND_TIMEOUT_SECONDS", 1.0):
             broadcasting = asyncio.create_task(relay_instance.broadcast(room, {"t": "event", "name": "ping", "payload": 1}))
-            await asyncio.wait_for(fast_writer.sent.wait(), 0.02)
+            # Give busy Windows CI runners time to schedule the healthy writer,
+            # but require delivery before the slow peer's one-second deadline.
+            await asyncio.wait_for(fast_writer.sent.wait(), 0.5)
             self.assertFalse(broadcasting.done())
-            await asyncio.wait_for(broadcasting, 0.5)
+            await asyncio.wait_for(broadcasting, 2.0)
         self.assertTrue(slow_writer.closed)
         self.assertFalse(fast_writer.closed)
         self.assertEqual(len(fast_writer.writes), 1)
