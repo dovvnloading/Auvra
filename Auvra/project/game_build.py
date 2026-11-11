@@ -749,8 +749,12 @@ def without_baked_pictures(content: dict[str, list[dict[str, Any]]]) -> dict[str
             continue
         pictures = material.get("pictures")
         mirror_pictures = pictures if isinstance(pictures, Mapping) else {}
+        paint = material.get("paint")
+        applied = paint.get("applied") if isinstance(paint, Mapping) else None
+        applied_textures = applied.get("textures") if isinstance(applied, Mapping) else None
+        applied_pictures = applied_textures if isinstance(applied_textures, Mapping) else {}
         # Count references at actual output locations instead of assuming
-        # every material has both optional mirror fields for every channel.
+        # every material has the same optional mirrors for every channel.
         mirrored_ids: dict[str, int] = {}
         for channel, texture_id in outputs.items():
             if not isinstance(texture_id, str) or not texture_id:
@@ -759,6 +763,10 @@ def without_baked_pictures(content: dict[str, list[dict[str, Any]]]) -> dict[str
             own_mentions[texture_id] = own_mentions.get(texture_id, 0) + 1
             mirrored_ids[texture_id] = mirrored_ids.get(texture_id, 0) + 1
             if mirror_pictures.get(channel) == texture_id:
+                own_mentions[texture_id] += 1
+            # A paint-applied image can be this material's own baked output.
+            # Whole Paint stack consumers still protect it explicitly below.
+            if applied_pictures.get(channel) == texture_id:
                 own_mentions[texture_id] += 1
         texture_ids = material.get("textureIds")
         if isinstance(texture_ids, (list, tuple)):
