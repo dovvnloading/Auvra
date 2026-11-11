@@ -10,11 +10,11 @@ The editor can use AI models for texturing and for code. Nothing here is needed 
 | **AI Coder** | HUD/UI tab, right-hand panel | Proposes HUD elements and changes, shown dashed on the canvas until you apply them. Applied changes can be undone |
 | **AI** | Script editor, top right | Writes or changes a script. Its changes appear in the code for you to keep or leave out one by one, and the editor's undo takes them back |
 
-Each tool shows the model it will use and what that model costs. Click it to change the model there and then, or use **Settings: AI providers** to see everything together: which model does each job, the keys, and spending limits.
+Each tool shows the model it will use and the provider's price units (estimates, not maximum charges). Click to change the model, or use **Settings: AI providers** to manage model selection and keys. Paid cloud requests require explicit consent; Auvra does not enforce a spending cap.
 
 ## Retexture
 
-Pick a model, then the part to paint: click it on the model, or choose it under **Parts**. Pointing at a part names it and lights it up. Describe the change and press **Generate**, or Ctrl+Enter. The cost of the run is shown beside the button, and you can ask for up to four results at once.
+Pick a model, then the part to paint: click it on the model, or choose it under **Parts**. Pointing at a part names it and lights it up. Describe the change and press **Generate**, or Ctrl+Enter. The estimated price is shown beside the button, and you can ask for up to four results at once. Actual provider charges can vary and are not capped by Auvra.
 
 A texture is always changed, never replaced. The tool draws the model as it looks now from six sides, a model edits that picture, and the change is put back on the map through the same views, so that the layout, seams, folds, print and cut-outs stay exactly where the model's UVs expect them. What the model does not use of the map is left untouched. It starts from whichever result is on the model, so changes can be built up. **All parts** changes every texture on the model at once, each from its own map. The views are laid out by the shape of the object, so a long one lies along the picture and gets more of it. All of a model's answer goes back at the size it came, and a map smaller than 2048 pixels grows to that, laid out as it was, to hold it.
 
@@ -71,6 +71,8 @@ Prices are fal's and are shown as it bills them: per image, per megapixel, per s
 
 Of fal's models that take a whole mesh, the Meshy retexture models are offered for **Whole model**: they paint from a description and keep the model's own texture layout, so what they make fits the model as it is. The others need a reference picture, or give back a different mesh.
 
-## Budgets
+## Cloud billing and consent
 
-The **Spending** page in Settings can limit what a provider spends per job, per day and per month. Once all three are set, each image job is checked against them using the catalog's price before it is sent. Language model jobs are not counted, as their cost depends on the length of the answer.
+The old **Spending** page and host-side budget enforcement have been removed because the catalog's representative pricing cannot enforce maximum provider bills. **All AI tools remain available**: use a cloud provider when configured and explicitly approved, or a local provider that runs on your computer. Model price displays are for comparison only. They are not reserved amounts, guaranteed quotes, provider spending caps, or an audit of actual bills.
+
+Each new paid cloud request and retry must be explicitly consented to. They can incur additional charges even when the estimate is missing or is zero. Manage real charges, available credit, and any spending limits directly with the provider. Auvra does not claim to stop provider charges at any per-job, daily or monthly threshold.
