@@ -76,7 +76,7 @@ const ask = <T>(message: Record<string, unknown>, transfer: Transferable[]): Pro
 
 /** Decodes a picture file at its own depth, off the page. The bytes are handed over. */
 export const decodePictureOffPage = async (bytes: Uint8Array, name = ''): Promise<DecodedPicture> => {
-    if (!workerOf()) return decodePicture(bytes, name);
+    if (typeof Worker === 'undefined') return decodePicture(bytes, name);
     const { picture } = await ask<{ picture: DecodedPicture }>({ op: 'decode', bytes, name }, [bytes.buffer]);
     return picture;
 };
@@ -85,7 +85,7 @@ export const decodePictureOffPage = async (bytes: Uint8Array, name = ''): Promis
 export const encodeTextureOffPage = async (
     rgba: Uint8Array, width: number, height: number, format: MaterialTextureFormat, kind: MaterialTextureKind, mips: boolean,
 ): Promise<EncodedLevel[]> => {
-    if (!workerOf()) return encodeMaterialTexture(rgba, width, height, format, kind, mips);
+    if (typeof Worker === 'undefined') return encodeMaterialTexture(rgba, width, height, format, kind, mips);
     const { levels } = await ask<{ levels: EncodedLevel[] }>({ op: 'encode', rgba, width, height, format, kind, mips }, [rgba.buffer]);
     return levels;
 };
