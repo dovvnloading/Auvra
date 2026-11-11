@@ -140,6 +140,113 @@ class ProjectTests(unittest.TestCase):
             ProjectRepository(self.root)
         self.assertEqual(journal.read_bytes(), before)
         journal.unlink()
+    def test_asset_removal_move_failure_keeps_blob_and_manifest(self):
+        ref = self.repo.assets.put_stream(io.BytesIO(b"locked-asset"))
+        blob = self.repo.assets.path_for(ref.asset_id)
+        manifest = self.root / "Content" / "manifest.json"
+        staged = blob.parent / ".incoming" / f".delete-{ref.asset_id}"
+        original = os.replace
+
+        def refuse_move(source, target):
+            if Path(source) == blob and Path(target) == staged:
+                raise PermissionError("sharing violation")
+            return original(source, target)
+
+        with mock.patch("Auvra.project.assets.os.replace", side_effect=refuse_move):
+            with self.assertRaises(PermissionError):
+                self.repo.assets.remove(ref.asset_id)
+        self.assertTrue(self.repo.assets.verify(ref.asset_id))
+        self.assertIn(ref.asset_id, json.loads(manifest.read_text(encoding="utf-8")))
+        self.assertFalse(staged.exists())
+
+    def test_asset_removal_manifest_failure_rolls_back_staged_blob(self):
+        ref = self.repo.assets.put_stream(io.BytesIO(b"asset-before-failure"))
+        blob = self.repo.assets.path_for(ref.asset_id)
+        manifest = self.root / "Content" / "manifest.json"
+        staged = blob.parent / ".incoming" / f".delete-{ref.asset_id}"
+        original = os.replace
+
+        def refuse_manifest(source, target):
+            if Path(target) == manifest:
+                raise OSError("disk full before commit")
+            return original(source, target)
+
+        with mock.patch("Auvra.project.assets.os.replace", side_effect=refuse_manifest):
+            with self.assertRaises(OSError):
+                self.repo.assets.remove(ref.asset_id)
+        self.assertTrue(self.repo.assets.verify(ref.asset_id))
+        self.assertFalse(staged.exists())
+        self.assertIn(ref.asset_id, json.loads(manifest.read_text(encoding="utf-8")))
+
+    def test_locked_staged_unlink_does_not_orphan_project_on_reopen(self):
+        ref = self.repo.assets.put_stream(io.BytesIO(b"asset-to-delete"))
+        blob = self.repo.assets.path_for(ref.asset_id)
+        manifest = self.root / "Content" / "manifest.json"
+        staged = blob.parent / ".incoming" / f".delete-{ref.asset_id}"
+        original_unlink = Path.unlink
+
+        def refuse_staged_unlink(path, *args, **kwargs):
+            if Path(path) == staged:
+                raise PermissionError("locked staged blob")
+            return original_unlink(path, *args, **kwargs)
+
+        with mock.patch.object(Path, "unlink", new=refuse_staged_unlink):
+            with self.assertRaises(PermissionError):
+                self.repo.assets.remove(ref.asset_id)
+        self.assertFalse(blob.exists())
+        self.assertTrue(staged.is_file())
+        self.assertNotIn(ref.asset_id, json.loads(manifest.read_text(encoding="utf-8")))
+        self.repo.close()
+        self.repo = ProjectRepository(self.root)
+        self.assertFalse(blob.exists())
+        self.assertFalse(staged.exists())
+        self.assertEqual(json.loads(manifest.read_text(encoding="utf-8")), {})
+
+    def test_interrupted_asset_remove_restores_manifest_blob_before_validation(self):
+        ref = self.repo.assets.put_stream(io.BytesIO(b"keep-on-crash"))
+        self.repo.apply_changes({
+            "models": [{"id": "model", "name": "Model", "assetId": ref.asset_id}],
+        }, expected_revision=0)
+        blob = self.repo.assets.path_for(ref.asset_id)
+        staged = blob.parent / ".incoming" / f".delete-{ref.asset_id}"
+        os.replace(blob, staged)  # Simulate crash after stage rename, before manifest commit.
+        with self.assertRaises(RecoveryRequiredError):
+            ProjectRepository(self.root)  # The existing writer lock makes this read-only.
+        self.assertTrue(staged.is_file())
+        with mock.patch.object(self.repo, "prune_unreferenced_assets", return_value=set()):
+            self.repo.close()
+        self.repo = ProjectRepository(self.root)
+        self.assertTrue(self.repo.assets.verify(ref.asset_id))
+        self.assertFalse(staged.exists())
+        self.assertEqual(self.repo.get_domain("models")["documents"][0]["assetId"], ref.asset_id)
+        self.repo.close()
+        self.repo = ProjectRepository(self.root)
+        self.assertTrue(self.repo.assets.verify(ref.asset_id))
+
+    def test_asset_manifest_error_and_failed_rollback_replay_on_next_open(self):
+        ref = self.repo.assets.put_stream(io.BytesIO(b"replay-after-crash"))
+        blob = self.repo.assets.path_for(ref.asset_id)
+        staged = blob.parent / ".incoming" / f".delete-{ref.asset_id}"
+        manifest = self.root / "Content" / "manifest.json"
+        original = os.replace
+
+        def fail_both(source, target):
+            if Path(target) == manifest or (Path(source) == staged and Path(target) == blob):
+                raise OSError("interrupted replacement")
+            return original(source, target)
+
+        with mock.patch("Auvra.project.assets.os.replace", side_effect=fail_both):
+            with self.assertRaises(OSError):
+                self.repo.assets.remove(ref.asset_id)
+        self.assertTrue(staged.is_file())
+        self.assertFalse(blob.exists())
+        with mock.patch.object(self.repo, "prune_unreferenced_assets", return_value=set()):
+            self.repo.close()
+        self.repo = ProjectRepository(self.root)
+        self.assertTrue(self.repo.assets.verify(ref.asset_id))
+        self.assertFalse(staged.exists())
+        self.assertIn(ref.asset_id, json.loads(manifest.read_text(encoding="utf-8")))
+
     def test_streaming_asset_address_and_verification(self):
         store = self.repo.assets; data = b"abc" * 10000
         ref = store.put_stream(io.BytesIO(data), size=len(data), chunk_size=7, mime="model/gltf")
