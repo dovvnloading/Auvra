@@ -754,8 +754,8 @@ class NativeProviderHost:
             configured = self.settings.get(existing.provider)
             if not configured.enabled or configured.routes.get(existing.capability) != existing.model:
                 raise HostOperationError("unsupported_capability", "Provider route is no longer enabled")
-            if self.registry.get(existing.provider).kind == "cloud" and payload.get("consent") != "explicit":
-                raise HostOperationError("budget_exceeded", "Cloud retry has uncapped provider charges and requires explicit consent")
+            if self.registry.get(existing.provider).kind == "cloud" and payload.get("consent") != "same-route":
+                raise HostOperationError("budget_exceeded", "Paid cloud retry has uncapped charges and requires a deliberate retry request")
             # A retry may generate a second provider charge. It is never
             # protected by a host price estimate or an old budget reservation.
             job = self.jobs.retry(payload["jobId"], project_id=active.project_id)
