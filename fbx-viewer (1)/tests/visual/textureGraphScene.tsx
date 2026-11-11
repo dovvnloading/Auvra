@@ -9,6 +9,7 @@ import { packCopies, SCATTER_VERTEX, SCATTER_VARYINGS, type ScatterCopy } from '
 import type { TexturingGpu } from '../../texturing/gpu/texturingGpu';
 import { webgpuTexturing, type WgpuDevice } from '../../texturing/gpu/webgpuTexturing';
 import { encodeChannels } from '../../texturing/materialOutput';
+import { paintBakedKey } from '../../texturing/paint/stackNode';
 
 /**
  * ONE TEXTURE GRAPH COOKED ON THE RENDERER'S OWN GPU
@@ -183,6 +184,74 @@ const cook = async (gpu: TexturingGpu): Promise<{ colour: Blob; normal: Blob }> 
     }
 };
 
+
+/** Read the last-applied Paint set on real WebGPU and WebGL2 texture graph evaluators.
+ * No visible reference image changes: a mismatch fails the existing WebGPU scene.
+ */
+const checkPaintSnapshotParity = async (webgpu: TexturingGpu): Promise<void> => {
+    const source = new THREE.DataTexture(new Uint8Array([181, 47, 21, 255]), 1, 1, THREE.RGBAFormat, THREE.UnsignedByteType);
+    const orm = new THREE.DataTexture(new Uint8Array([245, 158, 31, 255]), 1, 1, THREE.RGBAFormat, THREE.UnsignedByteType);
+    source.needsUpdate = true;
+    orm.needsUpdate = true;
+    source.minFilter = source.magFilter = orm.minFilter = orm.magFilter = THREE.NearestFilter;
+    const graph = normalizeTextureGraph({
+        version: 1, size: { w: 5, h: 5 }, seed: 0, parameters: [],
+        nodes: [
+            { id: 'paint', type: 'paintStack', x: 0, y: 0, params: { asset: 'paint-proof', folder: '', revision: 'applied' } },
+            { id: 'colour', type: 'output', x: 100, y: 0, params: { channel: 'baseColor' } },
+            { id: 'rough', type: 'output', x: 100, y: 100, params: { channel: 'roughness' } },
+            { id: 'metal', type: 'output', x: 100, y: 200, params: { channel: 'metallic' } },
+        ],
+        links: [
+            { from: 'paint', fromOutput: 'baseColor', to: 'colour', toInput: 'in' },
+            { from: 'paint', fromOutput: 'roughness', to: 'rough', toInput: 'in' },
+            { from: 'paint', fromOutput: 'metallic', to: 'metal', toInput: 'in' },
+        ],
+    });
+    const snapshot = {
+        [paintBakedKey('paint-proof', 'baseColor')]: source,
+        [paintBakedKey('paint-proof', 'orm')]: orm,
+    };
+    const channels = ['colour', 'rough', 'metal'] as const;
+    const evaluate = async (gpu: TexturingGpu): Promise<Record<string, Uint8Array>> => {
+        const evaluator = new TextureGraphEvaluator(gpu, () => undefined, () => null);
+        try {
+            const states = await evaluator.evaluate({ graph, targets: [...channels], external: snapshot });
+            for (const [id, state] of states) if (state.error) throw new Error('Paint snapshot node ' + id + ': ' + state.error);
+            const output: Record<string, Uint8Array> = {};
+            for (const id of channels) {
+                const image = states.get(id)?.outputs.out;
+                if (!image) throw new Error('Paint snapshot ' + id + ' produced no image');
+                const rgba = await gpu.readRgba8Later(image);
+                if (!rgba) throw new Error('Paint snapshot ' + id + ' could not be read');
+                output[id] = rgba;
+            }
+            return output;
+        } finally {
+            evaluator.dispose();
+        }
+    };
+    try {
+        const [actual, expected] = await Promise.all([evaluate(webgpu), evaluate(textureGpu())]);
+        const wanted = { colour: [181, 47, 21], rough: [158, 158, 158], metal: [31, 31, 31] };
+        for (const id of channels) {
+            for (const [x, y] of [[4, 4], [16, 16], [27, 27]]) {
+                const at = (y * 32 + x) * 4;
+                for (let channel = 0; channel < 3; channel++) {
+                    if (Math.abs(actual[id][at + channel] - expected[id][at + channel]) > 3 ||
+                        Math.abs(actual[id][at + channel] - wanted[id][channel]) > 3) {
+                        throw new Error('Paint snapshot ' + id + ' differs on WebGPU at (' + x + ', ' + y + ') channel ' + channel +
+                            ': ' + actual[id][at + channel] + ' vs ' + expected[id][at + channel]);
+                    }
+                }
+            }
+        }
+    } finally {
+        source.dispose();
+        orm.dispose();
+    }
+};
+
 const load = async (blob: Blob, srgb: boolean): Promise<THREE.Texture> => {
     const url = URL.createObjectURL(blob);
     try {
@@ -210,6 +279,7 @@ export const TextureGraphScene: React.FC = () => {
                 if (isGpuRenderer(gl)) {
                     await checkScatterParity(gpu);
                     if (gl.core.device.features.has('texture-compression-bc')) await checkCompressedParity(gpu);
+                    await checkPaintSnapshotParity(gpu);
                 }
                 pictures = await cook(gpu);
             } catch (error) {
