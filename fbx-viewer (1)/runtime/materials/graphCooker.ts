@@ -114,6 +114,11 @@ export const createGraphCooker = (source: GraphCookerSource): Cooker => ({
             try { loaded.set(textureId, await loader.loadAsync(url)); } catch { /* drawn without it */ }
         }));
         try {
+            // A missing applied picture is not a blank channel. Fail the cook so the game keeps
+            // its previously baked fallback rather than baking a subtly damaged material.
+            for (const [key, textureId] of paintInputs) if (!loaded.has(textureId)) {
+                throw new Error(`Applied Paint stack image "${key}" (${textureId}) could not be loaded in this game.`);
+            }
             const device = cookingDevice();
             const webgpu = device ? webgpuTexturing(device as WgpuDevice) : null;
             if (webgpu) {
