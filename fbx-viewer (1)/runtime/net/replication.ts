@@ -13,6 +13,8 @@ export const DEFAULT_INTERPOLATION_DELAY_MS = 100;
 export const MAX_EXTRAPOLATION_MS = 200;
 /** States older than this behind the newest are dropped. */
 export const BUFFER_SPAN_MS = 1000;
+/** A hard count cap also bounds equal-time or extremely high-rate peer streams. */
+export const MAX_INTERPOLATION_SAMPLES = 64;
 
 interface Sample {
     time: number;
@@ -47,11 +49,18 @@ export const createInterpolationBuffer = (delayMs: number = DEFAULT_INTERPOLATIO
     const samples: Sample[] = [];
     return {
         push(time, state) {
+            if (!Number.isFinite(time)) return;
             let index = samples.length;
             while (index > 0 && samples[index - 1].time > time) index--;
-            samples.splice(index, 0, { time, state });
+            if (index > 0 && samples[index - 1].time === time) {
+                // A peer can send repeated times without progressing the clock.
+                // Only the latest state for a timestamp can contribute to interpolation.
+                samples[index - 1] = { time, state };
+            } else {
+                samples.splice(index, 0, { time, state });
+            }
             const cutoff = samples[samples.length - 1].time - BUFFER_SPAN_MS;
-            while (samples.length > 2 && samples[0].time < cutoff) samples.shift();
+            while (samples.length > 2 && (samples[0].time < cutoff || samples.length > MAX_INTERPOLATION_SAMPLES)) samples.shift();
         },
         newest: () => (samples.length ? samples[samples.length - 1].time : -Infinity),
         sample(renderTime) {
