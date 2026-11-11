@@ -171,4 +171,34 @@ describe('texture pictures', () => {
         expect([limited.width, limited.height]).toEqual([2, 1]);
         expect(limitPictureSize(picture, undefined)).toBe(picture);
     });
+
+    it('downscales narrow images even after one dimension reaches one pixel', () => {
+        const cases = [
+            [1, 8192, 1, 256],
+            [8192, 1, 256, 1],
+            [2, 8192, 1, 256],
+            [8192, 2, 256, 1],
+        ];
+        for (const [width, height, expectedWidth, expectedHeight] of cases) {
+            const picture = {
+                width, height, depth: 8 as const, channels: 4 as const, hdr: false,
+                rgba: new Float32Array(width * height * 4),
+            };
+            const result = limitPictureSize(picture, 256);
+            expect([result.width, result.height]).toEqual([expectedWidth, expectedHeight]);
+            expect(result.rgba).toHaveLength(expectedWidth * expectedHeight * 4);
+        }
+    });
+
+    it('averages pixels on the non-singleton axis of a strip', () => {
+        for (const [width, height] of [[1, 4], [4, 1]]) {
+            const rgba = new Float32Array(width * height * 4);
+            for (let i = 0; i < 4; i++) rgba[i * 4] = i * 2;
+            const result = limitPictureSize({
+                width, height, depth: 8, channels: 4, hdr: false, rgba,
+            }, 2);
+            expect([result.width, result.height]).toEqual(width === 1 ? [1, 2] : [2, 1]);
+            expect([result.rgba[0], result.rgba[4]]).toEqual([1, 5]);
+        }
+    });
 });

@@ -316,7 +316,7 @@ export const pictureToHalf = (picture: DecodedPicture): Uint16Array => {
 /** The picture scaled down (by halves, averaging) until neither side is over `limit`; the same picture within it. */
 export const limitPictureSize = (picture: DecodedPicture, limit: number | undefined): DecodedPicture => {
     let current = picture;
-    while (limit && limit > 0 && (current.width > limit || current.height > limit) && current.width > 1 && current.height > 1) {
+    while (limit && limit > 0 && (current.width > limit || current.height > limit) && (current.width > 1 || current.height > 1)) {
         const width = Math.max(1, current.width >> 1);
         const height = Math.max(1, current.height >> 1);
         const rgba = new Float32Array(width * height * 4);
