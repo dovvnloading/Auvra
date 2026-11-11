@@ -551,7 +551,7 @@ class ProviderHostTests(unittest.TestCase):
                     self.assertEqual(blocked.exception.code, "budget_exceeded")
                     self.assertEqual(host.jobs.get(job_id).state.value, "failed")
                     retried = host._retry({"projectId": "project-1", "expectedRevision": 0,
-                                           "jobId": job_id, "consent": "explicit"})
+                                           "jobId": job_id, "consent": "same-route"})
                     self.assertEqual(retried["job"]["status"], "queued")
                     self.assertEqual(host.jobs.get(job_id).attempt, 2)
                     self.assertEqual(host.jobs.cost_totals("openai")["aggregate"], 0)
