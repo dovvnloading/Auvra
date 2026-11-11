@@ -14,7 +14,7 @@ from .errors import (ArchiveValidationError, InvalidProjectError, ReadOnlyError,
 from .legacy import LegacyArchive
 from .locking import ProjectLock
 from . import migrations as _migrations
-from .schemas import (DOMAIN_NAMES, domain_document, validate_domain,
+from .schemas import (DOMAIN_NAMES, _asset_handles, domain_document, validate_domain,
                       validate_project_descriptor, validate_project_references)
 from .serialization import atomic_dump_json, dump_json, load_json
 
@@ -241,26 +241,18 @@ class ProjectRepository:
         return validate_domain(domain, load_json(path))
 
     def referenced_asset_ids(self, domains: dict[str, Any] | None = None) -> set[str]:
-        """Return the content hashes reachable from the live project documents."""
+        """Return every asset needed by live documents, including source provenance."""
 
-        references: set[str] = set()
-
-        def collect(value: Any) -> None:
-            if isinstance(value, dict):
-                for key, child in value.items():
-                    if key == "assetId" and isinstance(child, str):
-                        references.add(child)
-                    elif key in {"assetIds", "inputAssetIds"} and isinstance(child, list):
-                        references.update(item for item in child if isinstance(item, str))
-                    collect(child)
-            elif isinstance(value, list):
-                for child in value:
-                    collect(child)
-
-        selected = domains or {domain: self.get_domain(domain) for domain in DOMAIN_NAMES}
-        for document in selected.values():
-            collect(document)
-        return references
+        # Share the schema validator's recursive handle traversal so cleanup
+        # cannot discard a valid animationAssetIds (or other nested) reference.
+        # Keep inputAssetIds provenance even though playback does not require it.
+        selected = domains if domains is not None else {
+            domain: self.get_domain(domain) for domain in DOMAIN_NAMES
+        }
+        return {
+            asset_id for document in selected.values()
+            for asset_id in _asset_handles(document, history=True)
+        }
 
     def prune_unreferenced_assets(self, candidates: Iterable[str] | None = None) -> set[str]:
         """Delete blobs no longer reachable from the live project."""
