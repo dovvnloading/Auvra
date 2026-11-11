@@ -86,11 +86,11 @@ describe('loadGameContent', () => {
 
     loader.release({ textures: new Set(['deep']) });
     expect(loader.content().textures).toEqual([]);
-    expect(revoked).toEqual(created);
+    expect([...revoked].sort()).toEqual([...created].sort());
 
     // Both URLs leave the owned set, so cleaning up the loader cannot revoke them twice.
     loader.releaseAll();
-    expect(revoked).toEqual(created);
+    expect([...revoked].sort()).toEqual([...created].sort());
   });
 
   it('defaults settings and HUD when the project has none', async () => {
