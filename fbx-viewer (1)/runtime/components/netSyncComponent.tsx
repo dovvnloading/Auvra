@@ -29,7 +29,7 @@ const NetSyncRuntime: React.FC<ComponentRenderProps> = ({ object, component }) =
         return session.onState((from, frame) => {
             if (from !== session.hostId()) return;
             const state = frame.entities.find(entity => entity.id === object.id);
-            if (state) buffer.push(frame.time, state);
+            if (state) buffer.push(frame.time, state, session.serverTime());
         });
     }, [buffer, isHost, object.id, session]);
 

@@ -111,7 +111,7 @@ export const RemotePlayers: React.FC<{ player: PlayerAssets; allClips: THREE.Ani
                 buffers.current.set(from, buffer);
                 setVersion(version => version + 1);
             }
-            buffer.push(frame.time, own);
+            buffer.push(frame.time, own, session.serverTime());
         });
     }, [session]);
 

@@ -13,6 +13,10 @@ export const DEFAULT_INTERPOLATION_DELAY_MS = 100;
 export const MAX_EXTRAPOLATION_MS = 200;
 /** States older than this behind the newest are dropped. */
 export const BUFFER_SPAN_MS = 1000;
+/** A hard count cap also bounds equal-time or extremely high-rate peer streams. */
+export const MAX_INTERPOLATION_SAMPLES = 64;
+/** Allow clock-sync jitter, but not peer timestamps far ahead of the relay clock. */
+export const MAX_FUTURE_TIMESTAMP_LEAD_MS = 5000;
 
 interface Sample {
     time: number;
@@ -20,8 +24,8 @@ interface Sample {
 }
 
 export interface InterpolationBuffer {
-    /** Adds a state taken at `time` (relay clock, ms); out-of-order states are put in place. */
-    push(time: number, state: NetEntityState): void;
+    /** Adds a relay-clock state; pass the local relay-clock estimate to reject far-future peer timestamps. */
+    push(time: number, state: NetEntityState, receivedServerTime?: number): void;
     /** The entity as it was at `renderTime - delay`, or null before the first state. */
     sample(renderTime: number): NetEntityState | null;
     /** Relay time of the newest state, or -Infinity. */
@@ -46,12 +50,23 @@ export const slerpEuler = (a: NetVec3, b: NetVec3, t: number): NetVec3 => {
 export const createInterpolationBuffer = (delayMs: number = DEFAULT_INTERPOLATION_DELAY_MS): InterpolationBuffer => {
     const samples: Sample[] = [];
     return {
-        push(time, state) {
+        push(time, state, receivedServerTime) {
+            if (!Number.isFinite(time)) return;
+            // Do not let a malicious peer's enormous finite timestamp displace
+            // genuine updates or pin the interpolation timeline far in the future.
+            if (receivedServerTime !== undefined && Number.isFinite(receivedServerTime)
+                && time > receivedServerTime + MAX_FUTURE_TIMESTAMP_LEAD_MS) return;
             let index = samples.length;
             while (index > 0 && samples[index - 1].time > time) index--;
-            samples.splice(index, 0, { time, state });
+            if (index > 0 && samples[index - 1].time === time) {
+                // A peer can send repeated times without progressing the clock.
+                // Only the latest state for a timestamp can contribute to interpolation.
+                samples[index - 1] = { time, state };
+            } else {
+                samples.splice(index, 0, { time, state });
+            }
             const cutoff = samples[samples.length - 1].time - BUFFER_SPAN_MS;
-            while (samples.length > 2 && samples[0].time < cutoff) samples.shift();
+            while (samples.length > 2 && (samples[0].time < cutoff || samples.length > MAX_INTERPOLATION_SAMPLES)) samples.shift();
         },
         newest: () => (samples.length ? samples[samples.length - 1].time : -Infinity),
         sample(renderTime) {
