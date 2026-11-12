@@ -209,7 +209,8 @@ const keepMissingPhoneVersionsOnCacheHit = (
         pending = new Map();
         pendingPhoneCacheHits.set(cache, pending);
     }
-    const existing = pending.get(key);
+    const migrations = pending;
+    const existing = migrations.get(key);
     if (existing) return existing;
 
     // Queue the cheap signature checks before reading the source. When all
@@ -226,8 +227,8 @@ const keepMissingPhoneVersionsOnCacheHit = (
         }
     }).catch(() => undefined);
     phoneQueue = job;
-    pending.set(key, job);
-    void job.then(() => { if (pending.get(key) === job) pending.delete(key); });
+    migrations.set(key, job);
+    void job.then(() => { if (migrations.get(key) === job) migrations.delete(key); });
     return job;
 };
 
