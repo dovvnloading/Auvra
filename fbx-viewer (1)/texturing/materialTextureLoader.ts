@@ -161,6 +161,23 @@ let phoneQueue: Promise<void> = Promise.resolve();
 type KeepingCache = CompressedTextureCache & { keep: NonNullable<CompressedTextureCache['keep']> };
 
 /**
+ * Write one missing device-format variant from a picture sized for its settings.
+ * Both the regular load path and desktop cache-hit migration share this check.
+ */
+const keepVersion = async (
+    sized: DecodedPicture, request: MaterialTextureRequest, source: string, device: CompressionSupport,
+    cache: KeepingCache, settings: TextureSettings | undefined, role: TextureRole, mips: boolean,
+): Promise<void> => {
+    const format = keptFormat(role, settings, device, sized);
+    if (format === 'rgba8' || format === 'half') return;
+    const signature = compressionSignature(source, role, settings, request.flipY, device);
+    if (await cache.find(request.textureId, signature).catch(() => null)) return;
+    const levels = await encodeTextureOffPage(preparedBytes(sized, request, role, settings?.flipGreen === true),
+        sized.width, sized.height, format, role === 'colour' ? 'colour' : role, mips);
+    await cache.keep(request.textureId, signature, packCompressed({ format, width: sized.width, height: sized.height, levels }));
+};
+
+/**
  * Keeps a texture's versions for other graphics cards (phones: ASTC, ETC2) under their own signatures, where
  * none is kept yet, so built games carry the format each device needs. Made one at a time, in the background.
  */
@@ -169,17 +186,50 @@ const keepOtherVersions = (picture: DecodedPicture, request: MaterialTextureRequ
     const role = textureRole(request.slot, settings);
     const sized = limitPictureSize(picture, settings?.maxSize);
     const mips = settings?.mips !== false;
-    for (const support of supports) {
-        phoneQueue = phoneQueue.then(async () => {
-            const format = keptFormat(role, settings, support, sized);
-            if (format === 'rgba8' || format === 'half') return;
-            const signature = compressionSignature(source, role, settings, request.flipY, support);
-            if (await cache.find(request.textureId, signature).catch(() => null)) return;
-            const levels = await encodeTextureOffPage(preparedBytes(sized, request, role, settings?.flipGreen === true), sized.width, sized.height, format, role === 'colour' ? 'colour' : role, mips);
-            await cache.keep(request.textureId, signature, packCompressed({ format, width: sized.width, height: sized.height, levels }));
-        }).catch(() => undefined);
+    for (const device of supports) {
+        phoneQueue = phoneQueue.then(() => keepVersion(sized, request, source, device, cache, settings, role, mips)).catch(() => undefined);
     }
     return phoneQueue;
+};
+
+// Cache-hit migrations need not retain any decoded pixels while waiting for
+// earlier phone jobs. Coalesce repeated hits for the same cache/signatures.
+const pendingPhoneCacheHits = new WeakMap<KeepingCache, Map<string, Promise<void>>>();
+
+const keepMissingPhoneVersionsOnCacheHit = (
+    url: string, request: MaterialTextureRequest, source: string,
+    supports: readonly CompressionSupport[], cache: KeepingCache,
+): Promise<void> => {
+    const settings = textureSettingsOf(request.textureId);
+    const role = textureRole(request.slot, settings);
+    const signatures = supports.map(device => compressionSignature(source, role, settings, request.flipY, device));
+    const key = JSON.stringify([request.textureId, ...signatures]);
+    let pending = pendingPhoneCacheHits.get(cache);
+    if (!pending) {
+        pending = new Map();
+        pendingPhoneCacheHits.set(cache, pending);
+    }
+    const migrations = pending;
+    const existing = migrations.get(key);
+    if (existing) return existing;
+
+    // Queue the cheap signature checks before reading the source. When all
+    // variants exist, the cached desktop texture never fetches or decodes it.
+    const job = phoneQueue.then(async () => {
+        const present = await Promise.all(signatures.map(signature =>
+            cache.find(request.textureId, signature).then(found => !!found).catch(() => false)));
+        if (present.every(Boolean)) return;
+        const bytes = new Uint8Array(await (await fetch(url)).arrayBuffer());
+        const picture = await decodePictureOffPage(bytes);
+        const sized = limitPictureSize(picture, settings?.maxSize);
+        for (const device of supports) {
+            await keepVersion(sized, request, source, device, cache, settings, role, settings?.mips !== false);
+        }
+    }).catch(() => undefined);
+    phoneQueue = job;
+    migrations.set(key, job);
+    void job.then(() => { if (migrations.get(key) === job) migrations.delete(key); });
+    return job;
 };
 
 /** Settles once every phone version asked for so far is kept (tests). */
@@ -195,7 +245,14 @@ export const createMaterialTextureLoader = (options: { compress: boolean; cache?
     if (signature) {
         const kept = await options.cache!.find(asked.textureId, signature).catch(() => null);
         const picture = kept ? unpackCompressed(kept) : null;
-        if (picture) return textureFromCompressed(picture, role, settings);
+        if (picture) {
+            // A desktop hit may predate phone versions. Prepare only missing
+            // variants in the background without delaying the cached texture.
+            if (options.compress && options.alsoKeepFor?.length && options.cache?.keep && source) {
+                void keepMissingPhoneVersionsOnCacheHit(url, asked, source, options.alsoKeepFor, options.cache as KeepingCache);
+            }
+            return textureFromCompressed(picture, role, settings);
+        }
     }
     const bytes = new Uint8Array(await (await fetch(url)).arrayBuffer());
     const picture = await decodePictureOffPage(bytes);

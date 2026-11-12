@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as THREE from 'three';
 import { decodeAstcBlock, encodeAstcBlock } from '../../utils/textureCompression/astcEncoder';
 import { decodeEtc2Block, encodeEtc2Block } from '../../utils/textureCompression/etc2Encoder';
@@ -18,7 +18,7 @@ if (!('stream' in Blob.prototype)) {
     });
 }
 
-afterEach(() => clearTextureSettings());
+afterEach(() => { clearTextureSettings(); vi.restoreAllMocks(); });
 
 /** A picture with smooth gradients and some detail, as textures have: RGBA rows. */
 const picture = (width: number, height: number, alpha: boolean): Uint8Array => {
@@ -235,4 +235,54 @@ describe('phones and devices without BC', () => {
         await phoneVersionsKept();
         expect([...kept.entries()].every(([signature, packed]) => before.get(signature) === packed)).toBe(true);
     });
+    it('backfills phone variants on a desktop-only cache hit without redecoding complete variants', async () => {
+        const samples = new Uint16Array(8 * 8 * 4).map((_, i) => (i * 997) % 65535);
+        const bytes = new Uint8Array(await (await encodePng16(samples, 8, 8, 4)).arrayBuffer());
+        const url = `data:image/png;base64,${btoa(String.fromCharCode(...bytes))}`;
+        const source = 'c'.repeat(64);
+        const textureId = 'cached-desktop-only';
+        const request = { textureId, slot: 'map' as const, flipY: true };
+        const desktop = { bptc: true, rgtc: true };
+        setTextureSourceAsset(textureId, source);
+        const kept = new Map<string, Uint8Array>();
+        const cache: CompressedTextureCache = {
+            find: async (_id, signature) => kept.get(signature) ?? null,
+            keep: async (_id, signature, packed) => { kept.set(signature, packed); },
+        };
+        const desktopSignature = compressionSignature(source, 'colour', undefined, true, desktop);
+        const initialLoad = createMaterialTextureLoader({ compress: true, cache, support: desktop });
+        await initialLoad(url, request);
+        expect([...kept.keys()]).toEqual([desktopSignature]);
+
+        const fetchSpy = vi.spyOn(globalThis, 'fetch');
+        const loadWithPhones = createMaterialTextureLoader({ compress: true, cache, support: desktop, alsoKeepFor: PHONE_SUPPORTS });
+        const cachedTexture = await loadWithPhones(url, request);
+        expect(cachedTexture.format).toBe(THREE.RGBA_BPTC_Format);
+        await phoneVersionsKept();
+        expect(fetchSpy).toHaveBeenCalledTimes(1);
+        expect([...kept.values()].map(packed => unpackCompressed(packed)?.format).sort())
+            .toEqual(['astc', 'bc7', 'etc2a']);
+
+        // Every requested phone signature exists: no source fetch/decode and no new encoding.
+        fetchSpy.mockClear();
+        const completed = new Map(kept);
+        await loadWithPhones(url, request);
+        await phoneVersionsKept();
+        expect(fetchSpy).not.toHaveBeenCalled();
+        expect([...kept.entries()].every(([signature, packed]) => completed.get(signature) === packed)).toBe(true);
+
+        // Several simultaneous hits with one missing format share one migration.
+        const astcSignature = compressionSignature(source, 'colour', undefined, true, PHONE_SUPPORTS[0]);
+        const etcSignature = compressionSignature(source, 'colour', undefined, true, PHONE_SUPPORTS[1]);
+        const previousAstc = kept.get(astcSignature);
+        kept.delete(etcSignature);
+        fetchSpy.mockClear();
+        const textures = await Promise.all(Array.from({ length: 6 }, () => loadWithPhones(url, request)));
+        expect(textures.every(texture => texture.format === THREE.RGBA_BPTC_Format)).toBe(true);
+        await phoneVersionsKept();
+        expect(fetchSpy).toHaveBeenCalledTimes(1);
+        expect(kept.get(astcSignature)).toBe(previousAstc);
+        expect(unpackCompressed(kept.get(etcSignature)!)?.format).toBe('etc2a');
+    });
+
 });
