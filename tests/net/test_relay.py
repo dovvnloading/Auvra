@@ -54,7 +54,7 @@ class Client:
     async def send(self, message: dict) -> None:
         await self.send_raw(0x1, json.dumps(message).encode("utf-8"))
 
-    async def receive(self, timeout: float = 2.0):
+    async def receive(self, timeout: float = 2.0, *, max_payload_bytes: int | None = None):
         """The next text message as a dict, 'close' for a close frame, or None at end of stream."""
         async def read():
             try:
@@ -66,6 +66,8 @@ class Client:
                 (length,) = struct.unpack("!H", await self.reader.readexactly(2))
             elif length == 127:
                 (length,) = struct.unpack("!Q", await self.reader.readexactly(8))
+            if max_payload_bytes is not None and length > max_payload_bytes:
+                raise AssertionError(f"relay sent {length} bytes, receiver limit is {max_payload_bytes}")
             payload = await self.reader.readexactly(length)
             opcode = first & 0x0F
             if opcode == 0x8:
@@ -241,6 +243,53 @@ class RelayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await cat.receive())["name"], "score")
         with self.assertRaises(asyncio.TimeoutError):
             await ann.receive(timeout=0.2)
+
+    async def test_large_unicode_and_ascii_events_reach_all_peers_within_wire_budget(self) -> None:
+        ann, bob, cat = await self.client(), await self.client(), await self.client()
+        ann_id = (await ann.hello(name="Ann"))["you"]
+        await bob.hello(name="Bob")
+        await ann.receive()
+        await cat.hello(name="Cat")
+        await ann.receive()
+        await bob.receive()
+
+        # Default Python json.dumps would expand each emoji into 12 ASCII bytes,
+        # making this accepted 32-KiB inbound event exceed the browser's limit.
+        for text in ("\U0001f600" * 8000, "a" * (relay.MAX_MESSAGE_BYTES - 128)):
+            with self.subTest(text_size=len(text)):
+                event = {"t": "event", "name": "large", "payload": text}
+                wire = json.dumps(event, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+                self.assertLessEqual(len(wire), relay.MAX_MESSAGE_BYTES)
+                await ann.send_raw(0x1, wire)
+                expected = {"t": "event", "from": ann_id, "name": "large", "payload": text}
+                for recipient in (bob, cat):
+                    self.assertEqual(
+                        await recipient.receive(max_payload_bytes=relay.MAX_MESSAGE_BYTES), expected,
+                    )
+
+    async def test_event_that_grows_beyond_wire_limit_is_rejected_at_sender(self) -> None:
+        ann, bob = await self.client(), await self.client()
+        await ann.hello(name="Ann")
+        await bob.hello(name="Bob")
+        await ann.receive()
+        minimal = {"t": "event", "name": "edge", "payload": ""}
+        overhead = len(json.dumps(minimal, separators=(",", ":")).encode("utf-8"))
+        minimal["payload"] = "x" * (relay.MAX_MESSAGE_BYTES - overhead)
+        wire = json.dumps(minimal, separators=(",", ":")).encode("utf-8")
+        self.assertEqual(len(wire), relay.MAX_MESSAGE_BYTES)
+        await ann.send_raw(0x1, wire)
+        await self.assertRejected(ann, "bad_message")
+        # It must not be broadcast silently as an oversized, unreadable event.
+        self.assertEqual((await bob.receive(max_payload_bytes=relay.MAX_MESSAGE_BYTES))["t"], "left")
+
+    async def test_escaped_unpaired_surrogate_remains_json_safe(self) -> None:
+        ann, bob = await self.client(), await self.client()
+        await ann.hello(name="Ann")
+        await bob.hello(name="Bob")
+        await ann.receive()
+        await ann.send({"t": "event", "name": "edge", "payload": "\ud800"})
+        delivered = await bob.receive(max_payload_bytes=relay.MAX_MESSAGE_BYTES)
+        self.assertEqual(delivered["payload"], "\ud800")
 
     async def test_ping_returns_server_time_and_control_pings_get_pongs(self) -> None:
         ann = await self.client()
