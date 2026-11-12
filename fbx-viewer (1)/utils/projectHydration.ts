@@ -32,7 +32,7 @@ import { applyLayout, decodeLayout } from '../texturing/uv/uvLayout';
 import { setLightVolumeSource } from '../runtime/lighting/lightVolumeLoader';
 import { setUpMaterialCooking } from '../runtime/materials/materialCookingSetup';
 import { PHONE_SUPPORTS, normalizeTextureSettings, setTextureSettings, setTextureSourceAsset, textureSettingsOf } from '../texturing/textureSettings';
-import { createMaterialTextureLoader, setProjectCompressedCache, setProjectTextureLoader, type CompressedTextureCache } from '../texturing/materialTextureLoader';
+import { cancelPhoneVersionsForLoader, createMaterialTextureLoader, setProjectCompressedCache, setProjectTextureLoader, type CompressedTextureCache } from '../texturing/materialTextureLoader';
 
 /** The HUD document in the project 'hud' domain. */
 export const HUD_DOCUMENT_ID = 'hud-main';
@@ -326,7 +326,7 @@ export function createGameContentLoader(
         keep: options.keepCompressedTexture,
       };
       // Where compressed textures can be kept (the editor), their phone versions are kept too, for built games.
-      projectTextureLoader = createMaterialTextureLoader({ compress: compressTextures, cache, ...(options.keepCompressedTexture ? { alsoKeepFor: PHONE_SUPPORTS } : {}) });
+      projectTextureLoader = createMaterialTextureLoader({ compress: compressTextures, cache, signal, ...(options.keepCompressedTexture ? { alsoKeepFor: PHONE_SUPPORTS } : {}) });
       // Terrain arrays keep their compressed slices there too (terrainLayerTextures.ts).
       setProjectCompressedCache(compressTextures ? cache : null);
       setProjectTextureLoader(projectTextureLoader);
@@ -703,6 +703,9 @@ export function createGameContentLoader(
     load,
     release,
     releaseAll: () => {
+      // Retired textures' blob URLs are about to be revoked: do not decode or
+      // persist queued phone variants after their owning project is released.
+      if (projectTextureLoader) cancelPhoneVersionsForLoader(projectTextureLoader);
       releaseLoadedAssets(models.splice(0), attachments.splice(0), ownedUrls.splice(0));
       textures.length = 0;
       audioAssets.length = 0;

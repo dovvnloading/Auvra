@@ -4,7 +4,7 @@ import { decodeAstcBlock, encodeAstcBlock } from '../../utils/textureCompression
 import { decodeEtc2Block, encodeEtc2Block } from '../../utils/textureCompression/etc2Encoder';
 import { decodeLevel, encodeLevel, textureMemoryBytes, type MaterialTextureFormat } from '../../utils/textureCompression/materialTextureEncoder';
 import { compressionSignature, unpackCompressed } from '../../texturing/compressedContainer';
-import { createMaterialTextureLoader, phoneVersionsKept, textureFromCompressed, type CompressedTextureCache } from '../../texturing/materialTextureLoader';
+import { createMaterialTextureLoader, phoneVersionsKept, setProjectTextureLoader, textureFromCompressed, type CompressedTextureCache } from '../../texturing/materialTextureLoader';
 import { PHONE_SUPPORTS, clearTextureSettings, keptFormat, setTextureSourceAsset } from '../../texturing/textureSettings';
 import { encodePng16 } from '../../texturing/png';
 
@@ -283,6 +283,67 @@ describe('phones and devices without BC', () => {
         expect(fetchSpy).toHaveBeenCalledTimes(1);
         expect(kept.get(astcSignature)).toBe(previousAstc);
         expect(unpackCompressed(kept.get(etcSignature)!)?.format).toBe('etc2a');
+    });
+
+    it('bounds queued decoded images and drops deferred phone work when a project changes', async () => {
+        const samples = new Uint16Array(8 * 8 * 4).map((_, i) => (i * 997) % 65535);
+        const bytes = new Uint8Array(await (await encodePng16(samples, 8, 8, 4)).arrayBuffer());
+        const url = `data:image/png;base64,${btoa(String.fromCharCode(...bytes))}`;
+        const source = 'e'.repeat(64);
+        const astc = compressionSignature(source, 'colour', undefined, true, PHONE_SUPPORTS[0]);
+        const writes: Array<{ id: string; signature: string }> = [];
+        let resume!: () => void;
+        let entered!: () => void;
+        const blocked = new Promise<void>(resolve => { resume = resolve; });
+        const firstJobEntered = new Promise<void>(resolve => { entered = resolve; });
+        const cache: CompressedTextureCache = {
+            find: async (id, signature) => {
+                if (id === 'queued-0' && signature === astc) {
+                    entered();
+                    await blocked;
+                }
+                return null;
+            },
+            keep: async (id, signature) => { writes.push({ id, signature }); },
+        };
+        const desktop = { bptc: true, rgtc: true };
+        const projectAbort = new AbortController();
+        const loader = createMaterialTextureLoader({ compress: true, cache, support: desktop, alsoKeepFor: PHONE_SUPPORTS, signal: projectAbort.signal });
+        const fetchSpy = vi.spyOn(globalThis, 'fetch');
+        try {
+            setProjectTextureLoader(loader);
+            setTextureSourceAsset('queued-0', source);
+            await loader(url, { textureId: 'queued-0', slot: 'map', flipY: true });
+            await firstJobEntered; // A cache lookup stalls the first phone job, before its decode.
+            // More jobs than the admission limit: drawing should finish even
+            // though all queued background work is stalled behind the first job.
+            await Promise.all(Array.from({ length: 12 }, (_, i) => {
+                const id = `queued-${i + 1}`;
+                setTextureSourceAsset(id, source);
+                return loader(url, { textureId: id, slot: 'map', flipY: true });
+            }));
+            // 13 foreground fetches; no job waiting behind the stalled one may
+            // refetch/decode a large image ahead of its turn.
+            expect(fetchSpy).toHaveBeenCalledTimes(13);
+            projectAbort.abort(); // Closing a project cancels work even before its loader is replaced.
+            resume();
+            await phoneVersionsKept();
+            setProjectTextureLoader(null);
+            expect(fetchSpy).toHaveBeenCalledTimes(13);
+            expect(writes.some(write => write.signature === astc)).toBe(false);
+
+            // A fresh project's tasks still run after all canceled waiters drain.
+            const next = createMaterialTextureLoader({ compress: true, cache, support: desktop, alsoKeepFor: PHONE_SUPPORTS });
+            setProjectTextureLoader(next);
+            setTextureSourceAsset('new-project', source);
+            await next(url, { textureId: 'new-project', slot: 'map', flipY: true });
+            await phoneVersionsKept();
+            expect(writes.some(write => write.id === 'new-project' && write.signature === astc)).toBe(true);
+        } finally {
+            resume();
+            setProjectTextureLoader(null);
+            await phoneVersionsKept();
+        }
     });
 
 });
