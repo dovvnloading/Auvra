@@ -4,8 +4,7 @@ import { EXRLoader } from 'three/examples/jsm/loaders/EXRLoader.js';
 import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js';
 import { TGALoader } from 'three/examples/jsm/loaders/TGALoader.js';
 import UTIF from 'three/examples/jsm/libs/utif.module.js';
-import { readPng16 } from './png';
-import { checkedTexturePixels, MAX_TEXTURE_IMPORT_DECODED_BYTES, MAX_TEXTURE_IMPORT_SOURCE_BYTES } from './textureLimits';
+import { readPng16, checkedTexturePixels, MAX_TEXTURE_IMPORT_DECODED_BYTES, MAX_TEXTURE_IMPORT_SOURCE_BYTES } from './png';
 
 /**
  * TEXTURE DECODING
