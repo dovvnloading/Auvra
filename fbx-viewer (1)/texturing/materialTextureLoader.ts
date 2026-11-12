@@ -267,8 +267,11 @@ const schedulePhoneVersions = (
 /** Settles once every phone version asked for so far is kept (tests). */
 export const phoneVersionsKept = async (): Promise<void> => { await Promise.all([...phoneTasks]); };
 
-export const createMaterialTextureLoader = (options: { compress: boolean; cache?: CompressedTextureCache; support?: CompressionSupport; alsoKeepFor?: readonly CompressionSupport[] }) => {
+export const createMaterialTextureLoader = (options: { compress: boolean; cache?: CompressedTextureCache; support?: CompressionSupport; alsoKeepFor?: readonly CompressionSupport[]; signal?: AbortSignal }) => {
     const cancellation = new AbortController();
+    // Project hydration's abort signal also retires work before blob URLs go away.
+    if (options.signal?.aborted) cancellation.abort();
+    else options.signal?.addEventListener('abort', () => { cancellation.abort(); }, { once: true });
     const pending = new Map<string, Promise<void>>();
     const load = async (url: string, request?: MaterialTextureRequest): Promise<THREE.Texture> => {
     const support = options.support ?? compressionSupport();
