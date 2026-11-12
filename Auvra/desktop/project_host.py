@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections import defaultdict
 from dataclasses import asdict
 import errno
-import hashlib
 import json
 import math
 from pathlib import Path
@@ -14,7 +13,7 @@ import secrets
 import sys
 import threading
 import time
-from typing import Any, Callable, Sequence
+from typing import Any, BinaryIO, Callable, Sequence
 from Auvra.diagnostics import trace_public_class
 from Auvra.diagnostics.core import active_diagnostics
 
@@ -1069,16 +1068,12 @@ class NativeProjectHost:
         store = active.assets
         prepared = payload.get("prepared")
 
-        def read_asset(asset_id: str) -> tuple[bytes, str]:
-            # ValueError (bad id, missing metadata or corrupt content) becomes invalid_project.
-            mime = store.reference(asset_id).mime or "application/octet-stream"
-            with store.open(asset_id) as stream:
-                data = stream.read()
-            # Check the exact bytes we package; verifying the file before opening
-            # it would leave a race if the blob changed between those operations.
-            if hashlib.sha256(data).hexdigest() != asset_id:
-                raise ValueError("asset digest does not match its id")
-            return data, mime
+        def read_asset(asset_id: str) -> tuple[BinaryIO, str, int]:
+            # The builder owns this file handle and closes it even on failure.
+            # Hashing during the bounded copy verifies the exact bytes packaged,
+            # rather than verifying first and risking a source-file race.
+            reference = store.reference(asset_id)
+            return store.open(asset_id), reference.mime or "application/octet-stream", reference.size
 
         self._progress("buildGame", 0.0)
         try:

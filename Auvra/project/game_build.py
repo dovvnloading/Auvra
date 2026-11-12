@@ -15,6 +15,7 @@ Windows, in a ``game`` folder beside the executable on Linux, and in
 from __future__ import annotations
 
 import copy
+from contextlib import closing, contextmanager
 import hashlib
 import json
 import math
@@ -26,7 +27,7 @@ import tempfile
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Literal, Mapping, Sequence
+from typing import Any, BinaryIO, Callable, Iterator, Literal, Mapping, Sequence
 
 from .schemas import DOMAIN_NAMES, SCHEMA_VERSION
 from .serialization import canonical_json
@@ -124,6 +125,12 @@ _SAFE_ASSET_ID = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ
 _HEX = frozenset("0123456789abcdef")
 _RESERVED_ROOTS = ("game", BUILD_MARKER)
 _CHUNK = 1024 * 1024
+# Keep the game builder's boundary aligned with AssetStore's default 2 GiB limit.
+_MAX_ASSET_BYTES = 2 * 1024**3
+
+# Legacy byte readers remain accepted for small callers/tests; the native host
+# returns (open binary stream, MIME, declared byte length) for bounded copying.
+AssetReader = Callable[[str], tuple[bytes | bytearray | memoryview, str] | tuple[BinaryIO, str, int]]
 _BUNDLE_VERSION = re.compile(r"^[0-9]{1,9}(?:\.[0-9]{1,9}){0,2}$")
 _MISSING_PLAYER = {
     "windows": "the Windows game player is not built; run cargo build --release in player-desktop on Windows "
@@ -175,7 +182,7 @@ class BuildReport:
 def build_game(
     *,
     domains: Mapping[str, Sequence[Mapping[str, Any]]],
-    read_asset: Callable[[str], tuple[bytes, str]],
+    read_asset: AssetReader,
     template_root: Path,
     destination: Path,
     target: Literal["web", "windows", "linux", "macos"],
@@ -188,8 +195,10 @@ def build_game(
     """Write a playable build into ``destination`` and publish it atomically.
 
     ``domains`` maps project domain names to their documents (a plain list or a
-    ``{schemaVersion, documents}`` wrapper).  ``read_asset`` returns the bytes
-    and MIME type of one referenced asset id.  ``destination`` is only ever
+    ``{schemaVersion, documents}`` wrapper).  ``read_asset`` returns either
+    legacy (bytes, MIME) or (open binary stream, MIME, declared size). Streamed
+    assets are copied in bounded chunks and checked against their SHA-256 id.
+    ``destination`` is only ever
     replaced when it is absent or already holds a marked Auvra build.
     A desktop build (``windows``, ``linux``, ``macos``) also needs that OS's
     ``player_executable`` (auvra-player), copied in as ``<Game Name>.exe`` next to
@@ -281,13 +290,19 @@ def build_game(
             _write(staging, f"{web}game/content/{domain}.json", canonical_json(document).encode("utf-8"), records)
         shipped: list[dict[str, Any]] = []
         for asset_id in asset_ids:
-            data, mime = _load_asset(read_asset, asset_id)
-            extension = _MIME_EXTENSIONS.get(mime, "bin")
-            if extension == "bin" and mime != _GENERIC_MIME:
-                warnings.append(f"asset {asset_id} has unrecognised type {mime or 'unknown'}; shipped as .bin")
-            file_name = f"{asset_id}.{extension}"
-            _write(staging, f"{web}game/assets/{file_name}", data, records)
-            shipped.append({"id": asset_id, "file": file_name, "mime": mime or _GENERIC_MIME, "size": len(data)})
+            with _load_asset(read_asset, asset_id) as (data, mime, declared_size):
+                extension = _MIME_EXTENSIONS.get(mime, "bin")
+                if extension == "bin" and mime != _GENERIC_MIME:
+                    warnings.append(f"asset {asset_id} has unrecognised type {mime or 'unknown'}; shipped as .bin")
+                file_name = f"{asset_id}.{extension}"
+                relative = f"{web}game/assets/{file_name}"
+                if declared_size is None:
+                    # Backwards compatibility for byte-returning test/extension readers.
+                    _write(staging, relative, data, records)
+                    size = len(data)
+                else:
+                    size = _write_asset_stream(staging, relative, data, declared_size, asset_id, records)
+                shipped.append({"id": asset_id, "file": file_name, "mime": mime or _GENERIC_MIME, "size": size})
         prepared_manifest = _write_prepared(staging, web, prepared, read_prepared, asset_ids, shipped, records, warnings)
         manifest = {
             "format": GAME_PACK_FORMAT,
@@ -586,7 +601,10 @@ def _append_notices(staging: Path, notices: bytes, records: list[dict[str, Any]]
     _write(staging, relative, combined, records)
 
 
-def _load_asset(read_asset: Callable[[str], tuple[bytes, str]], asset_id: str) -> tuple[bytes, str]:
+@contextmanager
+def _load_asset(read_asset: AssetReader, asset_id: str) -> Iterator[tuple[bytes | BinaryIO, str, int | None]]:
+    """Own/close an asset stream, including when validation or staging fails."""
+
     try:
         result = read_asset(asset_id)
     except GameBuildError:
@@ -595,13 +613,80 @@ def _load_asset(read_asset: Callable[[str], tuple[bytes, str]], asset_id: str) -
         raise GameBuildError("locking", f"asset {asset_id} is locked: {error}") from error
     except (LookupError, OSError, ValueError) as error:
         raise GameBuildError("invalid_project", f"asset {asset_id} could not be read") from error
-    if not isinstance(result, (tuple, list)) or len(result) != 2:
+    if not isinstance(result, (tuple, list)) or len(result) not in (2, 3):
+        # Even a malformed tuple may transfer ownership of an opened stream.
+        # Close it before rejecting the shape, just as for invalid sizes.
+        data = result[0] if isinstance(result, (tuple, list)) and result else None
+        close = getattr(data, "close", None)
+        if callable(close):
+            close()
         raise GameBuildError("invalid_project", f"asset {asset_id} could not be read")
-    data, mime = result
-    if not isinstance(data, (bytes, bytearray, memoryview)):
-        raise GameBuildError("invalid_project", f"asset {asset_id} could not be read")
+
+    data, mime = result[:2]
     essence = mime.split(";", 1)[0].strip().lower() if isinstance(mime, str) else ""
-    return bytes(data), essence
+    if len(result) == 2 and isinstance(data, (bytes, bytearray, memoryview)):
+        # Reject oversized legacy buffers before making another whole-size
+        # allocation. For typed/multidimensional views len() is not byte size.
+        byte_count = data.nbytes if isinstance(data, memoryview) else len(data)
+        if byte_count > _MAX_ASSET_BYTES:
+            raise GameBuildError("invalid_project", f"asset {asset_id} exceeds the build size limit")
+        payload = bytes(data)
+        if len(payload) > _MAX_ASSET_BYTES:
+            raise GameBuildError("invalid_project", f"asset {asset_id} exceeds the build size limit")
+        yield payload, essence, None
+        return
+
+    if len(result) == 3 and callable(getattr(data, "read", None)) and callable(getattr(data, "close", None)):
+        with closing(data):
+            size = result[2]
+            if type(size) is not int or not 0 <= size <= _MAX_ASSET_BYTES:
+                raise GameBuildError("invalid_project", f"asset {asset_id} has an invalid size")
+            yield data, essence, size
+        return
+
+    # The callback hands ownership of an opened stream to the builder, even if
+    # it provided an invalid result shape. Don't leak its file descriptor.
+    close = getattr(data, "close", None)
+    if callable(close):
+        close()
+    raise GameBuildError("invalid_project", f"asset {asset_id} could not be read")
+
+
+def _write_asset_stream(
+    staging: Path,
+    relative: str,
+    stream: BinaryIO,
+    expected_size: int,
+    asset_id: str,
+    records: list[dict[str, Any]],
+) -> int:
+    """Copy one project asset with a fixed-size buffer, validating bytes and SHA-256."""
+
+    target = staging.joinpath(*relative.split("/"))
+    target.parent.mkdir(parents=True, exist_ok=True)
+    digest = hashlib.sha256()
+    written = 0
+    with target.open("wb") as writer:
+        while True:
+            try:
+                chunk = stream.read(_CHUNK)
+            except PermissionError as error:
+                raise GameBuildError("locking", f"asset {asset_id} is locked: {error}") from error
+            except (LookupError, OSError, ValueError, TypeError) as error:
+                raise GameBuildError("invalid_project", f"asset {asset_id} could not be read") from error
+            if not isinstance(chunk, (bytes, bytearray, memoryview)):
+                raise GameBuildError("invalid_project", f"asset {asset_id} returned invalid binary data")
+            if not chunk:
+                break
+            if len(chunk) > _CHUNK or written + len(chunk) > expected_size:
+                raise GameBuildError("invalid_project", f"asset {asset_id} exceeds its declared size")
+            digest.update(chunk)
+            writer.write(chunk)
+            written += len(chunk)
+    if written != expected_size or digest.hexdigest() != asset_id:
+        raise GameBuildError("invalid_project", f"asset {asset_id} does not match its declared size or SHA-256")
+    records.append({"path": relative, "size": written, "sha256": digest.hexdigest()})
+    return written
 
 
 def _write_prepared(
