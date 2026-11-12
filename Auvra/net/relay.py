@@ -259,7 +259,8 @@ def _payload(value: Any) -> bool:
 
 def _wire_bytes(message: dict[str, Any]) -> bytes:
     """Encode the UTF-8 JSON sent to browsers without expanding Unicode to ASCII escapes."""
-    return json.dumps(message, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    # Escape isolated UTF-16 surrogates rather than writing invalid UTF-8.
+    return json.dumps(message, separators=(",", ":"), ensure_ascii=False).encode("utf-8", errors="backslashreplace")
 
 
 @dataclass(eq=False)
