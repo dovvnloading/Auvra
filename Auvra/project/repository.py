@@ -135,6 +135,7 @@ class ProjectRepository:
                 raise InvalidProjectError(str(exc)) from exc
             if not ready:
                 raise RecoveryRequiredError("pending asset deletion requires the writer lock")
+            self._reconcile_recovery_assets(writable=not self.read_only)
             if pending: self._migrate()
             _validate_project_tree(self.path, allow_internal=True)
         except Exception:
@@ -144,6 +145,93 @@ class ProjectRepository:
             self._descriptor = {}
             self.close()
             raise
+
+    def _reconcile_recovery_assets(self, *, writable: bool) -> None:
+        """Finish an interrupted restore before validating the live asset set.
+
+        The ready marker is durable before the first live blob is installed.
+        Incomplete staging is never published; prepared staging is replayable
+        whether the document transaction kept its old or new generation.
+        """
+        internal = self.path / ".auvra"
+        for staging in sorted(internal.glob(".recovery-assets-*")):
+            if not staging.is_dir() or _is_reparse(staging):
+                raise RecoveryRequiredError("unsafe pending recovery assets")
+            ready = staging / ".ready"
+            if not ready.exists():
+                if writable:
+                    shutil.rmtree(staging)
+                continue
+            if not ready.is_file() or _is_reparse(ready) or ready.read_text(encoding="ascii") != "ready\n":
+                raise RecoveryRequiredError("damaged pending recovery assets")
+            if not writable:
+                raise RecoveryRequiredError("asset recovery requires the writer lock")
+            self._publish_recovery_assets(staging)
+
+    def _publish_recovery_assets(self, staging: Path) -> None:
+        """Replay a prepared union manifest and its verified snapshot blobs."""
+        manifest_file = staging / "manifest.json"
+        if not manifest_file.is_file() or _is_reparse(manifest_file):
+            raise RecoveryRequiredError("pending recovery manifest is missing")
+        try:
+            desired = load_json(manifest_file)
+        except (OSError, ValueError) as exc:
+            raise RecoveryRequiredError("pending recovery manifest is invalid") from exc
+        if not isinstance(desired, dict):
+            raise RecoveryRequiredError("pending recovery manifest is invalid")
+        live_content = self.path / "Content" / "sha256"
+        staged: dict[str, Path] = {}
+        for source in staging.iterdir():
+            if source.name in (".ready", "manifest.json"):
+                continue
+            if (not source.is_file() or _is_reparse(source)
+                    or not re.fullmatch(r"[0-9a-f]{64}", source.name)
+                    or source.name not in desired):
+                raise RecoveryRequiredError("pending recovery contains unsafe content")
+            digest = hashlib.sha256()
+            with source.open("rb") as stream:
+                for block in iter(lambda: stream.read(1024 * 1024), b""):
+                    digest.update(block)
+            if digest.hexdigest() != source.name:
+                raise RecoveryRequiredError("pending recovery asset hash mismatch")
+            staged[source.name] = source
+        for asset_id, metadata in desired.items():
+            if (not isinstance(asset_id, str) or not re.fullmatch(r"[0-9a-f]{64}", asset_id)
+                    or not isinstance(metadata, dict) or set(metadata) != {"size", "mime", "name"}
+                    or not isinstance(metadata["size"], int) or isinstance(metadata["size"], bool)
+                    or metadata["size"] < 0 or not isinstance(metadata["mime"], str)
+                    or (metadata["name"] is not None and not isinstance(metadata["name"], str))):
+                raise RecoveryRequiredError("pending recovery asset metadata is invalid")
+            if asset_id not in staged and not self.assets.verify(asset_id, expected_size=metadata["size"]):
+                raise RecoveryRequiredError("pending recovery is missing an existing asset")
+        incoming = live_content / ".incoming"
+        incoming.mkdir(parents=True, exist_ok=True)
+        if _is_reparse(incoming):
+            raise RecoveryRequiredError("unsafe recovery asset staging directory")
+        for asset_id, source in staged.items():
+            target = live_content / asset_id
+            if target.exists() and _is_reparse(target):
+                raise RecoveryRequiredError("unsafe existing recovery asset")
+            if self.assets.verify(asset_id, expected_size=desired[asset_id]["size"]):
+                continue
+            temporary = incoming / f"restore-{uuid.uuid4().hex}"
+            try:
+                shutil.copy2(source, temporary)
+                _fsync_file(temporary)
+                os.replace(temporary, target)
+                _fsync_directory(live_content)
+            finally:
+                temporary.unlink(missing_ok=True)
+        temporary = incoming / f"restore-manifest-{uuid.uuid4().hex}"
+        try:
+            shutil.copy2(manifest_file, temporary)
+            _fsync_file(temporary)
+            os.replace(temporary, self.path / "Content" / "manifest.json")
+            _fsync_directory(self.path / "Content")
+        finally:
+            temporary.unlink(missing_ok=True)
+        shutil.rmtree(staging)
+        _fsync_directory(staging.parent)
 
     def _migrate(self) -> None:
         """Upgrade an older project format in one recoverable transaction."""
@@ -561,7 +649,9 @@ class ProjectRepository:
             raise InvalidProjectError("recovery point asset manifest is invalid") from exc
         if not isinstance(manifest, dict):
             raise InvalidProjectError("recovery point asset manifest is invalid")
+        snapshot_ids: set[str] = set()
         for asset in snapshot_content.iterdir():
+            snapshot_ids.add(asset.name)
             if not asset.is_file() or _is_reparse(asset) or not re.fullmatch(r"[0-9a-f]{64}", asset.name):
                 raise InvalidProjectError("recovery point contains unsafe asset")
             digest = hashlib.sha256()
@@ -575,50 +665,58 @@ class ProjectRepository:
                 raise InvalidProjectError("recovery point asset manifest is invalid")
             if not (snapshot_content / asset_id).is_file():
                 raise InvalidProjectError("recovery point asset manifest is incomplete")
+        if set(manifest) != snapshot_ids:
+            raise InvalidProjectError("recovery point asset manifest does not match stored content")
 
-        # Stage captured assets under the project authority before the document
-        # transaction validates cross-domain references. If the transaction
-        # fails, restore the previous manifest; extra immutable blobs are safe.
-        asset_staging = Path(tempfile.mkdtemp(prefix=".recovery-assets-", dir=self.path / ".auvra"))
-        live_content = self.path / "Content" / "sha256"
+        # Retain the current content records alongside the snapshot's. A
+        # successful restore can later prune extras, but replacing the manifest
+        # while keeping post-snapshot blobs would make the project unopenable.
         live_manifest = self.path / "Content" / "manifest.json"
-        previous_manifest = asset_staging / "manifest.previous.json"
-        manifest_existed = live_manifest.is_file()
+        if live_manifest.exists() and _is_reparse(live_manifest):
+            raise InvalidProjectError("project asset manifest is unsafe")
+        try:
+            live_entries = load_json(live_manifest) if live_manifest.is_file() else {}
+        except (OSError, ValueError) as exc:
+            raise InvalidProjectError("project asset manifest is invalid") from exc
+        if not isinstance(live_entries, dict):
+            raise InvalidProjectError("project asset manifest is invalid")
+        merged = {**live_entries, **manifest}
+
+        # Prepare a durable replay plan before altering live content. It
+        # remains in .auvra if copying a blob, publishing the manifest or
+        # committing the document generation is interrupted.
+        asset_staging = Path(tempfile.mkdtemp(prefix=".recovery-assets-", dir=self.path / ".auvra"))
+        prepared = False
         try:
             for source in snapshot_content.iterdir():
                 shutil.copy2(source, asset_staging / source.name)
-            shutil.copy2(snapshot_manifest, asset_staging / "manifest.json")
+            dump_json(asset_staging / "manifest.json", merged)
             _fsync_tree(asset_staging)
-            for source in snapshot_content.iterdir():
-                staged = asset_staging / source.name
-                target = live_content / source.name
-                if target.exists() and _is_reparse(target):
-                    raise InvalidProjectError("project asset store contains a linked entry")
-                if target.exists() and self.assets.verify(source.name):
-                    staged.unlink(missing_ok=True)
-                else:
-                    os.replace(staged, target)
-            if live_manifest.exists() and _is_reparse(live_manifest):
-                raise InvalidProjectError("project asset manifest is unsafe")
-            if manifest_existed:
-                shutil.copy2(live_manifest, previous_manifest)
-            os.replace(asset_staging / "manifest.json", live_manifest)
+            (asset_staging / ".ready").write_text("ready\n", encoding="ascii", newline="\n")
+            _fsync_file(asset_staging / ".ready")
+            _fsync_directory(asset_staging)
+            prepared = True
 
-            revision = self.revision + 1
-            self._transaction(docs, revision)
+            try:
+                self._publish_recovery_assets(asset_staging)
+                revision = self.revision + 1
+                self._transaction(docs, revision)
+            except Exception:
+                # A journal may finish the NEW document revision on reopen.
+                # Never prune snapshot blobs based on the old documents while
+                # that decision remains unresolved.
+                self.__dict__["_skip_asset_prune"] = True
+                raise
             self._dirty = True
+            try:
+                self.prune_unreferenced_assets()
+            except (OSError, ValueError):
+                # Two-phase deletion keeps even locked extras recoverable.
+                pass
             return revision
-        except Exception:
-            if previous_manifest.is_file():
-                try:
-                    os.replace(previous_manifest, live_manifest)
-                except OSError:
-                    pass
-            elif not manifest_existed:
-                live_manifest.unlink(missing_ok=True)
-            raise
         finally:
-            shutil.rmtree(asset_staging, ignore_errors=True)
+            if not prepared:
+                shutil.rmtree(asset_staging, ignore_errors=True)
     def export_pack(self, destination: str | os.PathLike[str]) -> None:
         if _destination_is_inside(self.path, Path(destination)):
             raise InvalidProjectError("export destination must be outside the source project")
@@ -662,7 +760,7 @@ class ProjectRepository:
     @staticmethod
     def import_legacy(source: str | os.PathLike[str]) -> tuple[dict[str, Any], Any]: return LegacyArchive(source).migrate()
     def close(self) -> None:
-        if not self.read_only and self._descriptor:
+        if not self.read_only and self._descriptor and not self.__dict__.get("_skip_asset_prune", False):
             try:
                 self.prune_unreferenced_assets()
             except (OSError, ValueError):
