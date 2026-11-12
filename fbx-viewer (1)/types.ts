@@ -833,7 +833,7 @@ export interface SceneContextType {
   saveProject: () => Promise<void>;
   saveProjectAs: () => Promise<void>;
   exportProject: () => Promise<void>;
-  buildGame: (target?: 'web' | 'windows') => Promise<void>;
+  buildGame: (target?: 'web' | 'windows') => Promise<{ handle?: string; report?: Record<string, unknown> } | null>;
   importProject: () => Promise<void>;
   importLegacyProject: () => Promise<void>;
   migrateLegacyBrowserProject: () => Promise<number>;
