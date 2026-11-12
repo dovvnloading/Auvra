@@ -492,6 +492,133 @@ class ProjectTests(unittest.TestCase):
         import shutil
         shutil.rmtree(incomplete)
 
+    def _checkpoint_then_change_asset(self):
+        old = self.repo.assets.put_stream(io.BytesIO(b"asset-from-checkpoint"), name="old.bin")
+        self.repo.apply_changes(
+            {"models": [{"id": "old", "name": "Old", "assetId": old.asset_id}]},
+            expected_revision=0,
+        )
+        self.repo.save()
+        point = self.repo.recovery_points("manual")[0]["name"]
+        new = self.repo.assets.put_stream(io.BytesIO(b"asset-created-after-checkpoint"), name="new.bin")
+        self.repo.apply_changes(
+            {"models": [{"id": "new", "name": "New", "assetId": new.asset_id}]},
+            expected_revision=1,
+        )
+        return point, old, new
+
+    def test_restore_recovery_reconciles_post_snapshot_assets_and_reopens(self):
+        point, old, new = self._checkpoint_then_change_asset()
+        revision = self.repo.restore_recovery("manual", point)
+        self.assertEqual(revision, 3)
+        self.assertEqual(self.repo.get_domain("models")["documents"][0]["id"], "old")
+        self.assertTrue(self.repo.assets.verify(old.asset_id))
+        self.assertFalse(self.repo.assets.path_for(new.asset_id).exists())
+        manifest = self.root / "Content" / "manifest.json"
+        self.assertEqual(set(json.loads(manifest.read_text(encoding="utf-8"))), {old.asset_id})
+        self.repo.close()
+        self.repo = ProjectRepository(self.root)
+        self.assertEqual(self.repo.revision, 3)
+        self.assertEqual(self.repo.get_domain("models")["documents"][0]["assetId"], old.asset_id)
+        self.assertTrue(self.repo.assets.verify(old.asset_id))
+
+    def test_failed_restore_document_transaction_preserves_old_generation(self):
+        point, old, new = self._checkpoint_then_change_asset()
+        with mock.patch.object(self.repo, "_transaction", side_effect=OSError("document transaction interrupted")):
+            with self.assertRaisesRegex(OSError, "document transaction"):
+                self.repo.restore_recovery("manual", point)
+        # A failed document commit must not prune snapshot blobs if a
+        # transaction journal might still choose the restored generation.
+        self.repo.close()
+        self.repo = ProjectRepository(self.root)
+        self.assertEqual(self.repo.revision, 2)
+        self.assertEqual(self.repo.get_domain("models")["documents"][0]["assetId"], new.asset_id)
+        self.assertTrue(self.repo.assets.verify(old.asset_id))
+        self.assertTrue(self.repo.assets.verify(new.asset_id))
+        manifest = json.loads((self.root / "Content" / "manifest.json").read_text(encoding="utf-8"))
+        self.assertEqual(set(manifest), {old.asset_id, new.asset_id})
+
+    def test_interrupted_restore_manifest_publication_recovers_on_reopen(self):
+        point, old, new = self._checkpoint_then_change_asset()
+        manifest = self.root / "Content" / "manifest.json"
+        replace = repository_module.os.replace
+        failed = False
+
+        def fail_once(source, target):
+            nonlocal failed
+            if Path(target) == manifest and not failed:
+                failed = True
+                raise PermissionError("manifest replacement interrupted")
+            return replace(source, target)
+
+        with mock.patch.object(repository_module.os, "replace", side_effect=fail_once):
+            with self.assertRaises(PermissionError):
+                self.repo.restore_recovery("manual", point)
+        self.assertTrue(failed)
+        self.assertTrue(list((self.root / ".auvra").glob(".recovery-assets-*")))
+        self.repo.close()
+        self.repo = ProjectRepository(self.root)
+        self.assertEqual(self.repo.revision, 2)
+        self.assertEqual(self.repo.get_domain("models")["documents"][0]["assetId"], new.asset_id)
+        self.assertTrue(self.repo.assets.verify(old.asset_id))
+        self.assertTrue(self.repo.assets.verify(new.asset_id))
+        self.assertFalse(list((self.root / ".auvra").glob(".recovery-assets-*")))
+        self.assertEqual(set(json.loads(manifest.read_text(encoding="utf-8"))),
+                         {old.asset_id, new.asset_id})
+
+    def test_interrupted_restore_blob_copy_recovers_on_reopen(self):
+        point, old, new = self._checkpoint_then_change_asset()
+        # Force the old snapshot asset to be absent from the live store.
+        # An interrupted copy must leave the prepared plan for a writer.
+        self.repo.assets.remove(old.asset_id)
+        copy = repository_module.shutil.copy2
+        failed = False
+
+        def fail_once(source, target, *args, **kwargs):
+            nonlocal failed
+            if (Path(source).parent.name.startswith(".recovery-assets-")
+                    and Path(target).parent.name == ".incoming" and not failed):
+                failed = True
+                raise OSError("copy interrupted")
+            return copy(source, target, *args, **kwargs)
+
+        with mock.patch.object(repository_module.shutil, "copy2", side_effect=fail_once):
+            with self.assertRaisesRegex(OSError, "copy interrupted"):
+                self.repo.restore_recovery("manual", point)
+        self.assertTrue(failed)
+        with self.assertRaises(RecoveryRequiredError):
+            ProjectRepository(self.root, read_only=True)
+        self.repo.close()
+        self.repo = ProjectRepository(self.root)
+        self.assertEqual(self.repo.revision, 2)
+        self.assertTrue(self.repo.assets.verify(old.asset_id))
+        self.assertTrue(self.repo.assets.verify(new.asset_id))
+        self.assertFalse(list((self.root / ".auvra").glob(".recovery-assets-*")))
+
+    def test_restore_rejects_snapshot_orphans_before_mutating_live_assets(self):
+        point, _, new = self._checkpoint_then_change_asset()
+        extra = b"unlisted-snapshot-blob"
+        import hashlib
+        extra_id = hashlib.sha256(extra).hexdigest()
+        source = self.root / ".auvra" / "backups" / point / "Content" / "sha256" / extra_id
+        source.write_bytes(extra)
+        with self.assertRaisesRegex(InvalidProjectError, "manifest does not match"):
+            self.repo.restore_recovery("manual", point)
+        self.assertEqual(self.repo.revision, 2)
+        self.assertTrue(self.repo.assets.verify(new.asset_id))
+
+    def test_restore_rejects_invalid_snapshot_asset_metadata_before_publication(self):
+        point, _, new = self._checkpoint_then_change_asset()
+        manifest = self.root / ".auvra" / "backups" / point / "Content" / "manifest.json"
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+        next(iter(data.values()))["size"] += 1
+        manifest.write_text(json.dumps(data), encoding="utf-8")
+        with self.assertRaisesRegex(InvalidProjectError, "asset metadata is invalid"):
+            self.repo.restore_recovery("manual", point)
+        self.assertEqual(self.repo.revision, 2)
+        self.assertTrue(self.repo.assets.verify(new.asset_id))
+        self.assertFalse(list((self.root / ".auvra").glob(".recovery-assets-*")))
+
     def test_malicious_journal_path_fails_closed(self):
         journal = self.root / ".auvra" / "transactions" / "malicious.json"
         journal.write_text(json.dumps({"state":"prepared","newRevision":1,"files":[{"target":"../../escape.json","backup":"staging/x/old","staged":"staging/x/new"}]}), encoding="utf-8")
