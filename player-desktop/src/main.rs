@@ -702,8 +702,8 @@ mod tests {
             format!("bytes 4096-{}/{len}", len - 1)
         );
         assert_eq!(
-            &suffix.body()[MAX_PROTOCOL_RESPONSE_BYTES as usize - 4096..][..4],
-            &[0, 0, 0, 0]
+            &suffix.body()[MAX_PROTOCOL_RESPONSE_BYTES as usize - 4100..][..4],
+            b"END!"
         );
 
         // Independent concurrent requests each obey the same per-response cap.
