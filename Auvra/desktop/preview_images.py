@@ -2,7 +2,7 @@
 
 This module checks complete image containers, not just their dimension headers.
 PNG compressed scanlines are inflated with an output budget; JPEG/WebP image
-payloads must have complete enclosing structures. No image decoder is invoked.
+payloads must have complete enclosing structures and be fully decoded under a pixel budget.
 """
 
 from __future__ import annotations
@@ -11,6 +11,8 @@ import io
 from pathlib import Path
 import struct
 import zlib
+
+from PIL import Image
 
 # 16 megapixels is a 64-MiB RGBA8 surface, before decoder overhead.
 MAX_PREVIEW_PIXELS = 16_777_216
@@ -24,14 +26,36 @@ class InvalidPreviewImage(ValueError):
 
 
 def dimensions(path: Path, mime: str) -> tuple[int, int]:
+    # First check the complete container and enforce bounds without allocating pixels.
     with path.open("rb") as stream:
         if mime == "image/png":
-            return _png(stream)
-        if mime == "image/jpeg":
-            return _jpeg(stream)
-        if mime == "image/webp":
-            return _webp(stream)
-    raise InvalidPreviewImage("generated image type is unsupported")
+            parsed = _png(stream)
+        elif mime == "image/jpeg":
+            parsed = _jpeg(stream)
+        elif mime == "image/webp":
+            parsed = _webp(stream)
+        else:
+            raise InvalidPreviewImage("generated image type is unsupported")
+    # Container validation alone cannot detect corrupt JPEG/WebP entropy payloads,
+    # missing JPEG Huffman tables, or invalid PNG palette data.
+    _decode_pixels(path, mime, parsed)
+    return parsed
+
+
+def _decode_pixels(path: Path, mime: str, expected_size: tuple[int, int]) -> None:
+    """Decode one bounded frame using a restricted, maintained image codec."""
+    expected_format = {"image/png": "PNG", "image/jpeg": "JPEG", "image/webp": "WEBP"}[mime]
+    try:
+        # Restrict plugin dispatch to the claimed image type; do not allow Pillow
+        # to sniff unrelated formats such as EPS, TIFF or multi-page documents.
+        with Image.open(path, formats=[expected_format]) as image:
+            if image.format != expected_format or _bounds(*image.size) != expected_size:
+                raise InvalidPreviewImage("generated image dimensions disagree")
+            if getattr(image, "n_frames", 1) != 1:
+                raise InvalidPreviewImage("generated preview must be a single frame")
+            image.load()
+    except (OSError, ValueError, SyntaxError, OverflowError, struct.error) as exc:
+        raise InvalidPreviewImage("generated image could not be fully decoded") from exc
 
 
 def _bounds(width: int, height: int) -> tuple[int, int]:
