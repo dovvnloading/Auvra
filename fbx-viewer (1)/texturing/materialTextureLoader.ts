@@ -130,13 +130,18 @@ export const textureFromCompressed = (picture: CompressedPicture, role: TextureR
 
 let projectLoader: ((url: string, request?: MaterialTextureRequest) => Promise<THREE.Texture>) | null = null;
 let projectCache: CompressedTextureCache | null = null;
+// A project switch invalidates deferred encodes that belong to its previous loader.
+const phoneLoaderCancellations = new WeakMap<NonNullable<typeof projectLoader>, () => void>();
 
 /** The open project's store of compressed blocks (set as it loads), for what compresses outside material textures: terrain arrays. */
 export const setProjectCompressedCache = (cache: CompressedTextureCache | null): void => { projectCache = cache; };
 export const projectCompressedCache = (): CompressedTextureCache | null => projectCache;
 
 /** The open project's texture loader (set as it loads), for textures outside material assets: decals. */
-export const setProjectTextureLoader = (loader: typeof projectLoader): void => { projectLoader = loader; };
+export const setProjectTextureLoader = (loader: typeof projectLoader): void => {
+    if (projectLoader && projectLoader !== loader) phoneLoaderCancellations.get(projectLoader)?.();
+    projectLoader = loader;
+};
 
 /** Loads a project texture the way the open project does, or as a plain picture before one has opened. */
 export const loadProjectTexture = (url: string, request: MaterialTextureRequest): Promise<THREE.Texture> =>
@@ -155,87 +160,113 @@ export interface CompressedTextureCache {
  * The material library's loader: `compress` off (the game's quality settings) keeps every texture whole.
  * With a cache, a texture compressed before loads its kept blocks instead of being compressed again.
  */
-/** Phone versions waiting to be made, one at a time, behind what is being drawn. */
+/** Only one background decode/encode may own full floating-point pixels at a time. */
 let phoneQueue: Promise<void> = Promise.resolve();
+// Back-pressure limits admitted work, while overflow waits with only small URLs
+// and signatures (never a DecodedPicture or its Float32Array) in its closure.
+const MAX_ADMITTED_PHONE_JOBS = 8;
+let admittedPhoneJobs = 0;
+const phoneSlotWaiters: Array<() => void> = [];
+const phoneTasks = new Set<Promise<void>>();
 
 type KeepingCache = CompressedTextureCache & { keep: NonNullable<CompressedTextureCache['keep']> };
 
-/**
- * Write one missing device-format variant from a picture sized for its settings.
- * Both the regular load path and desktop cache-hit migration share this check.
- */
+const takePhoneSlot = async (): Promise<void> => {
+    if (admittedPhoneJobs < MAX_ADMITTED_PHONE_JOBS) {
+        admittedPhoneJobs++;
+        return;
+    }
+    // A releasing job transfers its reserved slot directly to one waiter.
+    await new Promise<void>(resolve => { phoneSlotWaiters.push(resolve); });
+};
+
+const releasePhoneSlot = (): void => {
+    const next = phoneSlotWaiters.shift();
+    if (next) next();
+    else admittedPhoneJobs--;
+};
+
+const queuePhoneJob = (run: () => Promise<void>, active: () => boolean): Promise<void> => {
+    const task = (async () => {
+        await takePhoneSlot();
+        try {
+            if (!active()) return;
+            const serial = phoneQueue.then(() => active() ? run() : undefined).catch(() => undefined);
+            phoneQueue = serial;
+            await serial;
+        } finally {
+            releasePhoneSlot();
+        }
+    })();
+    phoneTasks.add(task);
+    void task.then(() => { phoneTasks.delete(task); }, () => { phoneTasks.delete(task); });
+    return task;
+};
+
+/** Write one missing device-format variant, stopping before persistence if the project closed. */
 const keepVersion = async (
     sized: DecodedPicture, request: MaterialTextureRequest, source: string, device: CompressionSupport,
     cache: KeepingCache, settings: TextureSettings | undefined, role: TextureRole, mips: boolean,
+    active: () => boolean,
 ): Promise<void> => {
+    if (!active()) return;
     const format = keptFormat(role, settings, device, sized);
     if (format === 'rgba8' || format === 'half') return;
     const signature = compressionSignature(source, role, settings, request.flipY, device);
     if (await cache.find(request.textureId, signature).catch(() => null)) return;
+    if (!active()) return;
     const levels = await encodeTextureOffPage(preparedBytes(sized, request, role, settings?.flipGreen === true),
         sized.width, sized.height, format, role === 'colour' ? 'colour' : role, mips);
+    if (!active()) return;
     await cache.keep(request.textureId, signature, packCompressed({ format, width: sized.width, height: sized.height, levels }));
 };
 
 /**
- * Keeps a texture's versions for other graphics cards (phones: ASTC, ETC2) under their own signatures, where
- * none is kept yet, so built games carry the format each device needs. Made one at a time, in the background.
+ * Recheck signatures and decode the source only when the background job reaches
+ * the front of the queue. Crucially neither initial loads nor cache hits close
+ * over their already-decoded float images while waiting for an encoder.
  */
-const keepOtherVersions = (picture: DecodedPicture, request: MaterialTextureRequest, source: string, supports: readonly CompressionSupport[], cache: KeepingCache): Promise<void> => {
-    const settings = textureSettingsOf(request.textureId);
-    const role = textureRole(request.slot, settings);
-    const sized = limitPictureSize(picture, settings?.maxSize);
-    const mips = settings?.mips !== false;
-    for (const device of supports) {
-        phoneQueue = phoneQueue.then(() => keepVersion(sized, request, source, device, cache, settings, role, mips)).catch(() => undefined);
-    }
-    return phoneQueue;
-};
-
-// Cache-hit migrations need not retain any decoded pixels while waiting for
-// earlier phone jobs. Coalesce repeated hits for the same cache/signatures.
-const pendingPhoneCacheHits = new WeakMap<KeepingCache, Map<string, Promise<void>>>();
-
-const keepMissingPhoneVersionsOnCacheHit = (
+const schedulePhoneVersions = (
     url: string, request: MaterialTextureRequest, source: string,
-    supports: readonly CompressionSupport[], cache: KeepingCache,
+    supports: readonly CompressionSupport[], cache: KeepingCache, signal: AbortSignal,
+    pending: Map<string, Promise<void>>,
 ): Promise<void> => {
     const settings = textureSettingsOf(request.textureId);
     const role = textureRole(request.slot, settings);
-    const signatures = supports.map(device => compressionSignature(source, role, settings, request.flipY, device));
-    const key = JSON.stringify([request.textureId, ...signatures]);
-    let pending = pendingPhoneCacheHits.get(cache);
-    if (!pending) {
-        pending = new Map();
-        pendingPhoneCacheHits.set(cache, pending);
-    }
-    const migrations = pending;
-    const existing = migrations.get(key);
+    const devices = [...supports];
+    const signatures = devices.map(device => compressionSignature(source, role, settings, request.flipY, device));
+    const key = JSON.stringify([request.textureId, request.slot, request.flipY, source, url, ...signatures]);
+    const existing = pending.get(key);
     if (existing) return existing;
-
-    // Queue the cheap signature checks before reading the source. When all
-    // variants exist, the cached desktop texture never fetches or decodes it.
-    const job = phoneQueue.then(async () => {
+    const asked = { ...request };
+    const active = () => !signal.aborted;
+    const job = queuePhoneJob(async () => {
         const present = await Promise.all(signatures.map(signature =>
-            cache.find(request.textureId, signature).then(found => !!found).catch(() => false)));
-        if (present.every(Boolean)) return;
-        const bytes = new Uint8Array(await (await fetch(url)).arrayBuffer());
+            cache.find(asked.textureId, signature).then(found => !!found).catch(() => false)));
+        if (!active() || present.every(Boolean)) return;
+        const bytes = new Uint8Array(await (await fetch(url, { signal })).arrayBuffer());
+        if (!active()) return;
         const picture = await decodePictureOffPage(bytes);
+        if (!active()) return;
         const sized = limitPictureSize(picture, settings?.maxSize);
-        for (const device of supports) {
-            await keepVersion(sized, request, source, device, cache, settings, role, settings?.mips !== false);
+        for (let i = 0; i < devices.length; i++) {
+            if (!active()) return;
+            if (present[i]) continue;
+            await keepVersion(sized, asked, source, devices[i], cache, settings, role, settings?.mips !== false, active);
         }
-    }).catch(() => undefined);
-    phoneQueue = job;
-    migrations.set(key, job);
-    void job.then(() => { if (migrations.get(key) === job) migrations.delete(key); });
+    }, active);
+    pending.set(key, job);
+    void job.then(() => { if (pending.get(key) === job) pending.delete(key); });
     return job;
 };
 
 /** Settles once every phone version asked for so far is kept (tests). */
-export const phoneVersionsKept = (): Promise<void> => phoneQueue;
+export const phoneVersionsKept = async (): Promise<void> => { await Promise.all([...phoneTasks]); };
 
-export const createMaterialTextureLoader = (options: { compress: boolean; cache?: CompressedTextureCache; support?: CompressionSupport; alsoKeepFor?: readonly CompressionSupport[] }) => async (url: string, request?: MaterialTextureRequest): Promise<THREE.Texture> => {
+export const createMaterialTextureLoader = (options: { compress: boolean; cache?: CompressedTextureCache; support?: CompressionSupport; alsoKeepFor?: readonly CompressionSupport[] }) => {
+    const cancellation = new AbortController();
+    const pending = new Map<string, Promise<void>>();
+    const load = async (url: string, request?: MaterialTextureRequest): Promise<THREE.Texture> => {
     const support = options.support ?? compressionSupport();
     const asked = request ?? { textureId: '', slot: 'map' as const, flipY: true };
     const settings = textureSettingsOf(asked.textureId);
@@ -249,7 +280,7 @@ export const createMaterialTextureLoader = (options: { compress: boolean; cache?
             // A desktop hit may predate phone versions. Prepare only missing
             // variants in the background without delaying the cached texture.
             if (options.compress && options.alsoKeepFor?.length && options.cache?.keep && source) {
-                void keepMissingPhoneVersionsOnCacheHit(url, asked, source, options.alsoKeepFor, options.cache as KeepingCache);
+                void schedulePhoneVersions(url, asked, source, options.alsoKeepFor, options.cache as KeepingCache, cancellation.signal, pending);
             }
             return textureFromCompressed(picture, role, settings);
         }
@@ -265,7 +296,10 @@ export const createMaterialTextureLoader = (options: { compress: boolean; cache?
     }
     // Its versions for phones are kept as well (in the editor), behind what is being drawn.
     if (options.compress && options.alsoKeepFor?.length && options.cache?.keep && source) {
-        void keepOtherVersions(picture, asked, source, options.alsoKeepFor, options.cache as KeepingCache);
+        void schedulePhoneVersions(url, asked, source, options.alsoKeepFor, options.cache as KeepingCache, cancellation.signal, pending);
     }
     return texture;
+    };
+    phoneLoaderCancellations.set(load, () => { cancellation.abort(); });
+    return load;
 };
