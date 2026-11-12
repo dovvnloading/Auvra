@@ -150,12 +150,20 @@ class DiagnosticsCoreTests(unittest.TestCase):
     def test_close_retains_marker_until_stalled_writer_exits(self) -> None:
         gate = threading.Event()
         entered = threading.Event()
+        close_started = threading.Event()
+        close_release = threading.Event()
 
         class BlockingSession(DiagnosticsSession):
             def _write_record(self, record):
                 entered.set()
                 gate.wait(5)
                 super()._write_record(record)
+
+            def _close_stream(self, *, durable: bool) -> None:
+                if durable:
+                    close_started.set()
+                    close_release.wait(10)
+                super()._close_stream(durable=durable)
 
         with _temporary_root() as raw:
             root = Path(raw) / "diagnostics"
@@ -175,6 +183,12 @@ class DiagnosticsCoreTests(unittest.TestCase):
             self.assertIsNotNone(session._stream, "the writer-owned stream must remain open")
 
             gate.set()
+            try:
+                self.assertTrue(close_started.wait(30), "deferred finalizer did not start stream closure")
+                self.assertTrue(marker.exists(), "marker must remain while durable close is stalled")
+                self.assertIsNotNone(session._stream, "stream must remain open until close is released")
+            finally:
+                close_release.set()
             deadline = time.monotonic() + 30
             while time.monotonic() < deadline and (marker.exists() or session._writer.is_alive()):
                 time.sleep(0.02)
