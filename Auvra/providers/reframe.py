@@ -37,6 +37,10 @@ _MAX_HEADER_BYTES = 16 * 1024 * 1024
 _MAX_MESHES = 4096
 _MAX_LIGHTS = 256
 _MAX_SIZE = 8192
+# Material pictures are embedded as base64 and copied again into config.json.
+# Bound both an individual picture and all pictures in one render before reading.
+_MAX_MATERIAL_PICTURE_BYTES = 8 * 1024 * 1024
+_MAX_SCENE_MATERIAL_PICTURE_BYTES = 32 * 1024 * 1024
 _MAX_SAMPLES = 65536
 _MAX_BOUNCES = 64
 _CHUNK = 1024 * 1024
@@ -117,6 +121,7 @@ class _Blobs:
     def __init__(self, stream: BinaryIO, start: int, total: int, folder: Path) -> None:
         self.stream, self.start, self.total, self.folder = stream, start, total, folder
         self.count = 0
+        self.picture_bytes = 0
 
     def _span(self, reference: Any) -> tuple[int, int]:
         if not isinstance(reference, Mapping):
@@ -144,8 +149,15 @@ class _Blobs:
 
     def picture(self, reference: Any) -> str:
         offset, length = self._span(reference)
+        if (length > _MAX_MATERIAL_PICTURE_BYTES
+                or length > _MAX_SCENE_MATERIAL_PICTURE_BYTES - self.picture_bytes):
+            raise ProviderError(ErrorCode.INVALID_REQUEST, "render material pictures exceed the size budget", "reframe")
         self.stream.seek(self.start + offset)
-        return "data:image/png;base64," + base64.b64encode(self.stream.read(length)).decode("ascii")
+        raw = self.stream.read(length)
+        if len(raw) != length:
+            raise ProviderError(ErrorCode.INVALID_REQUEST, "the scene could not be read", "reframe")
+        self.picture_bytes += length
+        return "data:image/png;base64," + base64.b64encode(raw).decode("ascii")
 
 
 def _material(raw: Any, blobs: _Blobs) -> dict[str, Any]:
