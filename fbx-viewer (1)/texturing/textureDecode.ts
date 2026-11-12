@@ -312,7 +312,17 @@ export const decodePicture = async (bytes: Uint8Array, name = ''): Promise<Decod
     const format = sniffPictureFormat(bytes, name);
     switch (format) {
         case 'png': {
-            // Palette and interlaced PNGs are 8-bit pictures the browser reads.
+            // Even palette and interlaced PNGs, which use the browser decoder,
+            // must pass the byte and pixel budgets BEFORE bitmap creation.
+            if (bytes.byteLength > MAX_TEXTURE_IMPORT_SOURCE_BYTES) {
+                throw new Error('PNG exceeds the texture import file budget.');
+            }
+            if (bytes.byteLength < 29 || bytes[12] !== 0x49 || bytes[13] !== 0x48
+                || bytes[14] !== 0x44 || bytes[15] !== 0x52) {
+                throw new Error('The PNG header is malformed.');
+            }
+            const header = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+            checkedTexturePixels(header.getUint32(16), header.getUint32(20));
             const interlaced = bytes[28] === 1;
             return bytes[25] === 3 || interlaced ? decodeWithBrowser(bytes) : decodePng(bytes);
         }
