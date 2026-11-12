@@ -3,6 +3,7 @@ import type { GpuImage, TextureGpu } from '../gpu/textureGpu';
 import type { GraphResolver } from '../graph/registry';
 import { OUTPUT_NODE_TYPE } from '../graph/nodes/io';
 import { graphContentKey } from '../graph/document';
+import { sourceTextureKey } from '../graph/sourceTextureKey';
 import { OUTPUT_CHANNEL_LABELS, type OutputChannel } from '../graph/types';
 
 /**
@@ -60,8 +61,14 @@ class GraphStamps {
     get(stamp: GraphStamp, gpu: TextureGpu, resolve: GraphResolver, texture: (textureId: string) => THREE.Texture | null): { texture: THREE.Texture | null; error: string | null } {
         const entry = resolve(stamp.graphId);
         if (!entry) return { texture: null, error: 'The brush\'s graph is no longer in the project.' };
-        // The graph (and those it uses, and their pictures loading) changing draws it again.
-        const key = JSON.stringify([stamp.graphId, stamp.output, stamp.values, graphContentKey(entry.graph, resolve, (id) => Boolean(texture(id)))]);
+        // Track both graph defaults and brush overrides: replacing a picture, or editing its
+        // pixels in place, must redraw the stamp even when the picture ID is unchanged.
+        const pictureOverrides = entry.graph.parameters.filter(param => param.kind === 'texture').map(param => {
+            const selected = stamp.values[param.name] ?? param.default;
+            return [param.name, typeof selected === 'string' ? sourceTextureKey(texture(selected)) : null];
+        });
+        const key = JSON.stringify([stamp.graphId, stamp.output, stamp.values,
+            graphContentKey(entry.graph, resolve, id => sourceTextureKey(texture(id))), pictureOverrides]);
         const known = this.drawn.get(key);
         if (known) return { texture: known.image?.target.texture ?? null, error: known.error };
         const drawn: Drawn = { key, image: null, error: null };
