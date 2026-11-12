@@ -6,6 +6,7 @@ import type { TextureGraph } from '../../texturing/graph/types';
 import { DataUtils } from 'three';
 import { encodePng, encodePng16, pngBitDepth, readPng16, readPng16Half, toHalf } from '../../texturing/png';
 import { crc32 } from '../../texturing/zip';
+import { decodePicture } from '../../texturing/textureDecode';
 
 // The test page's Blob cannot be read as a stream; Node's can, as a browser's can.
 globalThis.Blob = NodeBlob as unknown as typeof Blob;
@@ -110,6 +111,9 @@ describe('PNG pictures', () => {
         expect(half.channels).toBe(4);
         expect([half.data[3], half.data[7], half.data[11]]).toEqual([toHalf(0), toHalf(1), toHalf(0)]);
         expect(DataUtils.fromHalfFloat(half.data[4])).toBeCloseTo(31 / 255, 3);
+        const decoded = await decodePicture(new Uint8Array(await file.arrayBuffer()));
+        expect([decoded.depth, decoded.channels]).toEqual([8, 4]);
+        expect([decoded.rgba[3], decoded.rgba[7], decoded.rgba[11]]).toEqual([0, 1, 0]);
     });
 
     it('matches 16-bit RGB tRNS keys at full source precision', async () => {
@@ -137,6 +141,9 @@ describe('PNG pictures', () => {
         expect([half.data[3], half.data[7], half.data[11]]).toEqual([0x3c00, 0, 0x3c00]);
         expect(half.data[4]).toBe(half.data[5]);
         expect(half.data[5]).toBe(half.data[6]);
+        const decoded = await decodePicture(new Uint8Array(await file.arrayBuffer()));
+        expect(decoded.channels).toBe(2);
+        expect([decoded.rgba[3], decoded.rgba[7], decoded.rgba[11]]).toEqual([1, 0, 1]);
     });
 
     it('keeps unkeyed RGB and grayscale pictures opaque', async () => {
