@@ -669,18 +669,21 @@ mod tests {
         assert_eq!(whole.status(), StatusCode::PAYLOAD_TOO_LARGE);
         assert!(whole.body().len() < 256);
         assert_eq!(whole.headers()[ACCEPT_RANGES], "bytes");
-        assert_eq!(read_span(&path, Some("bytes=bad")).unwrap().status(), StatusCode::PAYLOAD_TOO_LARGE);
+        assert_eq!(
+            read_span(&path, Some("bytes=bad")).unwrap().status(),
+            StatusCode::PAYLOAD_TOO_LARGE
+        );
 
         // Open-ended and oversized explicit spans have truthful 206 headers.
         let first = read_span(&path, Some("bytes=0-")).unwrap();
         assert_eq!(first.status(), StatusCode::PARTIAL_CONTENT);
         assert_eq!(first.body().len() as u64, MAX_PROTOCOL_RESPONSE_BYTES);
         assert_eq!(
-            first.headers()[CONTENT_RANGE],
+            first.headers()[CONTENT_RANGE].to_str().unwrap(),
             format!("bytes 0-{}/{len}", MAX_PROTOCOL_RESPONSE_BYTES - 1)
         );
         assert_eq!(
-            first.headers()[CONTENT_LENGTH],
+            first.headers()[CONTENT_LENGTH].to_str().unwrap(),
             MAX_PROTOCOL_RESPONSE_BYTES.to_string()
         );
         let next = read_span(
@@ -695,18 +698,21 @@ mod tests {
         let suffix = read_span(&path, Some(&format!("bytes=-{len}"))).unwrap();
         assert_eq!(suffix.body().len() as u64, MAX_PROTOCOL_RESPONSE_BYTES);
         assert_eq!(
-            suffix.headers()[CONTENT_RANGE],
+            suffix.headers()[CONTENT_RANGE].to_str().unwrap(),
             format!("bytes 4096-{}/{len}", len - 1)
         );
-        assert_eq!(&suffix.body()[MAX_PROTOCOL_RESPONSE_BYTES as usize - 4096..][..4], &[0, 0, 0, 0]);
+        assert_eq!(
+            &suffix.body()[MAX_PROTOCOL_RESPONSE_BYTES as usize - 4096..][..4],
+            &[0, 0, 0, 0]
+        );
 
         // Independent concurrent requests each obey the same per-response cap.
         let handles: Vec<_> = (0..3)
             .map(|_| {
                 let path = path.clone();
                 std::thread::spawn(move || {
-                    let response = read_span(&path, Some("bytes=0-18446744073709551615"))
-                        .unwrap();
+                    let response =
+                        read_span(&path, Some("bytes=0-18446744073709551615")).unwrap();
                     assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
                     response.body().len() as u64
                 })
@@ -730,10 +736,7 @@ mod tests {
             bounded_range(Some("bytes=-209715200"), len - 209715200, len - 1),
             (len - MAX_PROTOCOL_RESPONSE_BYTES, len - 1)
         );
-        assert_eq!(
-            bounded_range(Some("bytes=17-20"), 17, 20),
-            (17, 20)
-        );
+        assert_eq!(bounded_range(Some("bytes=17-20"), 17, 20), (17, 20));
         assert_eq!(
             bounded_range(Some("bytes=100-"), 100, len - 1),
             (100, 100 + MAX_PROTOCOL_RESPONSE_BYTES - 1)
