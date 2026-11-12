@@ -451,11 +451,12 @@ export class TextureGraphEvaluator {
                 if (Object.keys(curves).length) state.curves = curves;
             } catch (error) {
                 state.outputs = {};
-                leftovers();
                 if (error instanceof AbortedError || (error as Error)?.name === 'AbortError') throw error;
                 state.error = error instanceof Error ? error.message : 'This node could not be drawn.';
+            } finally {
+                // Always release each unkept image exactly once, including on cancellation.
+                leftovers();
             }
-            leftovers();
             // A newer evaluation began while this node drew: its picture is out of date, and must not
             // replace what the newer one keeps.
             if (generation !== this.generation || request.signal?.aborted) {
