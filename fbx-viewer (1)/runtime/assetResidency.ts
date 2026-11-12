@@ -40,8 +40,7 @@ const dimension = (value: number | undefined): number =>
 const texturePixelBytes = (texture: THREE.Texture): number => {
     // Packed 16-bit RGB(A) and 24+8 depth/stencil occupy one word per pixel.
     if (texture.type === THREE.UnsignedShort4444Type
-        || texture.type === THREE.UnsignedShort5551Type
-) return 2;
+        || texture.type === THREE.UnsignedShort5551Type) return 2;
     if (texture.type === THREE.UnsignedInt248Type || texture.format === THREE.DepthStencilFormat) return 4;
 
     const channels = texture.format === THREE.RedFormat || texture.format === THREE.DepthFormat ? 1
