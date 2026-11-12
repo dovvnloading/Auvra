@@ -69,13 +69,13 @@ export const useProjectManager = ({
     return unsubscribe;
   }, []);
 
-  const run = useCallback(async (
+  const run = useCallback(async <T,>(
     kind: string,
     label: string,
-    operation: (handle: OperationHandle, transition: EditorSessionTransition | null) => Promise<unknown>,
+    operation: (handle: OperationHandle, transition: EditorSessionTransition | null) => Promise<T>,
     success: string,
     transitionKind?: 'replace' | 'close',
-  ) => {
+  ): Promise<T> => {
     const handle = startOperation({
       kind,
       phase: 'host_request',
@@ -100,7 +100,7 @@ export const useProjectManager = ({
       // delayed writes.
       previous = transitionKind ? editorSession.captureReady() : null;
       transition = transitionKind ? editorSession.beginTransition() : null;
-      await operation(handle, transition);
+      const result = await operation(handle, transition);
       if (transition) {
         const status = projectService.getStatus();
         if (transitionKind === 'close') {
@@ -115,6 +115,7 @@ export const useProjectManager = ({
         }
       }
       addNotification({ message: success, type: 'success' });
+      return result;
     } catch (error) {
       outcome = 'failure';
       failure = error;
@@ -183,7 +184,7 @@ export const useProjectManager = ({
   }, [contextFor, run]);
 
   const buildGame = useCallback(async (target: 'web' | 'windows' = 'web') => {
-    await run('project.buildGame', target === 'web' ? 'Building web game' : 'Building Windows game',
+    return run('project.buildGame', target === 'web' ? 'Building web game' : 'Building Windows game',
       async (handle) => {
         // Before the build's request: the host holds its lock through it, so nothing can be uploaded during one.
         const preparation = await prepareModelsForBuild({
@@ -195,6 +196,20 @@ export const useProjectManager = ({
         const result = await projectService.buildGame(target, 'dialog', contextFor(handle), preparation.prepared);
         const notice = unpreparedNotice(preparation, result?.report);
         if (notice) addNotification({ message: notice, type: 'info' });
+        const warnings = result?.report?.warnings;
+        if (Array.isArray(warnings)) {
+          // Builds also start from the header, where Game Settings is not mounted.
+          // Surface the warning contents here, not only inside that panel.
+          const messages = warnings.filter((entry): entry is { message: string } =>
+            Boolean(entry) && typeof entry === 'object' &&
+            typeof entry.message === 'string' && entry.message.length <= 180)
+            .map((entry) => entry.message).slice(0, 12);
+          if (messages.length) addNotification({
+            message: `Game built with warnings: ${messages.join(' ')}`,
+            type: 'info', duration: 30000,
+          });
+        }
+        return result;
       },
       target === 'web' ? 'Web game built. Serve the folder over http(s) to play it.' : 'Windows game built.');
   }, [addNotification, contextFor, run]);

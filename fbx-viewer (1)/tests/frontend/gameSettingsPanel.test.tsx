@@ -32,7 +32,7 @@ const { project, scene, refreshStatus } = vi.hoisted(() => {
             blueprints: [] as unknown[],
             projectStatus: { projectId: 'project-1', readOnly: false } as { projectId: string | null; readOnly: boolean; buildTargets?: unknown },
             isLoading: false,
-            buildGame: vi.fn(async (_target?: string): Promise<void> => undefined),
+            buildGame: vi.fn(async (_target?: string): Promise<{ report?: Record<string, unknown> } | null> => null),
         },
         refreshStatus: vi.fn(async () => undefined),
     };
@@ -103,7 +103,7 @@ beforeEach(() => {
     scene.projectStatus = { projectId: 'project-1', readOnly: false };
     scene.isLoading = false;
     scene.buildGame.mockReset();
-    scene.buildGame.mockResolvedValue(undefined);
+    scene.buildGame.mockResolvedValue(null);
     refreshStatus.mockClear();
 });
 
@@ -227,6 +227,33 @@ describe('Game settings panel build', () => {
         await act(async () => { fireEvent.click(buildButton()); });
         expect(scene.buildGame).toHaveBeenCalledWith('windows');
         expect(screen.getByText('Windows build finished.')).toBeInTheDocument();
+    });
+
+    it('keeps degraded build warnings visible and provides a copyable report', async () => {
+        const report = {
+            target: 'web', files: 4, sizeBytes: 1234, assets: 1, levels: 1,
+            warnings: [
+                { code: 'multiplayer_offline', message: 'The multiplayer server URL is invalid; the game will play offline.' },
+                { code: 'player_blueprint_missing', message: 'The selected player blueprint is missing; the default player was used.' },
+            ],
+        };
+        scene.buildGame.mockResolvedValueOnce({ report });
+        const writeText = vi.fn(async (_value: string) => undefined);
+        Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+        render(<GameSettingsPanel onClose={() => undefined} />);
+
+        await act(async () => { fireEvent.click(buildButton()); });
+        expect(screen.getByRole('alert')).toHaveTextContent('Build warnings (2)');
+        expect(screen.getByText(report.warnings[0].message)).toBeInTheDocument();
+        expect(screen.getByText(report.warnings[1].message)).toBeInTheDocument();
+        await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Copy build report' })); });
+        expect(writeText).toHaveBeenCalledWith(JSON.stringify(report, null, 2));
+        expect(screen.getByText('Build report copied.')).toBeInTheDocument();
+
+        scene.buildGame.mockRejectedValueOnce(new Error('Build failed'));
+        await act(async () => { fireEvent.click(buildButton()); });
+        expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: 'Copy build report' })).not.toBeInTheDocument();
     });
 
     it('builds the new desktop targets when the host has their players', async () => {
