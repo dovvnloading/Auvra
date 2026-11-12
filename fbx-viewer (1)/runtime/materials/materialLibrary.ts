@@ -314,6 +314,8 @@ class MaterialLibrary {
 
     /** Where texture images come from (the open project), and how they load (texturing/materialTextureLoader.ts; tests). */
     setTextureSource(resolveUrl: TextureUrlResolver, load?: TextureLoad): void {
+        // The previous source's pending loads must not populate this project's cache.
+        this.clearTextures();
         this.resolveUrl = resolveUrl;
         this.addedUrls.clear();
         if (load) this.loadTexture = load;
@@ -340,6 +342,8 @@ class MaterialLibrary {
     /** Replaces every asset (a project opened). */
     replaceAll(assets: readonly MaterialAsset[]): void {
         this.generation++;
+        // Project switches may reuse texture ids, but their pixels and URLs are different.
+        this.clearTextures();
         this.assets.clear();
         for (const asset of assets) this.assets.set(asset.id, asset);
         this.rebindAll();
@@ -377,7 +381,16 @@ class MaterialLibrary {
             if (!key.endsWith(`:${textureId}`)) continue;
             texture?.dispose();
             this.textures.delete(key);
+            // The old promise can still finish, but it no longer owns this key.
+            this.loading.delete(key);
         }
+    }
+
+    /** Discards cached and pending textures whenever the open project/source changes. */
+    private clearTextures(): void {
+        for (const texture of this.textures.values()) texture?.dispose();
+        this.textures.clear();
+        this.loading.clear();
     }
 
     /** Loads a texture again (its settings changed): every graph sampling it draws the new one once it is ready. */
@@ -389,11 +402,7 @@ class MaterialLibrary {
 
     /** Clears a deleted texture from every graph sampling it (the project has already). */
     forgetTexture(textureId: string): void {
-        for (const [key, texture] of [...this.textures]) {
-            if (!key.endsWith(`:${textureId}`)) continue;
-            texture?.dispose();
-            this.textures.delete(key);
-        }
+        this.releaseTexture(textureId);
         for (const asset of [...this.assets.values()]) {
             const next = withoutAssetTexture(asset, textureId);
             if (next !== asset) this.upsert(next);
@@ -455,6 +464,11 @@ class MaterialLibrary {
         const url = this.addedUrls.get(textureId) ?? this.resolveUrl(textureId);
         if (!url) return null;
         const loading = this.loadTexture(url, { textureId, slot, flipY }).then((texture) => {
+            if (this.loading.get(key) !== loading) {
+                // A reload, release or project switch superseded this request.
+                texture.dispose();
+                return;
+            }
             // A texture its loader set up from its settings (and laid the right way up) is left as it is.
             if (texture.userData?.auvraTextureSettings !== true) {
                 // Only colour is decoded from sRGB; normals and data are read as stored.
@@ -472,8 +486,10 @@ class MaterialLibrary {
             this.rebindAll();
             this.emit();
         }, () => {
-            this.textures.delete(key);
-        }).finally(() => { this.loading.delete(key); });
+            if (this.loading.get(key) === loading) this.textures.delete(key);
+        }).finally(() => {
+            if (this.loading.get(key) === loading) this.loading.delete(key);
+        });
         this.loading.set(key, loading);
         return null;
     }
