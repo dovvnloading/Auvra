@@ -154,6 +154,7 @@ export const GameSettingsPanel: React.FC<GameSettingsPanelProps> = ({ onClose })
   draftRef.current = draft;
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [buildReport, setBuildReport] = useState<Record<string, unknown> | null>(null);
 
   // JSON of the stored settings the draft was last synced to. The draft is unedited while it matches.
   const baselineRef = useRef(JSON.stringify(stored));
@@ -176,6 +177,7 @@ export const GameSettingsPanel: React.FC<GameSettingsPanelProps> = ({ onClose })
   useEffect(() => {
     baselineRef.current = JSON.stringify(stored);
     setDraft(stored);
+    setBuildReport(null);
   }, [projectStatus.projectId]);
 
   const revert = () => {
@@ -219,14 +221,31 @@ export const GameSettingsPanel: React.FC<GameSettingsPanelProps> = ({ onClose })
 
   const build = async () => {
     const { target } = selectedBuild;
-    setBuilding(true); setMessage(null);
+    setBuilding(true); setMessage(null); setBuildReport(null);
     try {
       // project.buildGame accepts every GameBuildTarget; the scene action forwards it unchanged.
-      await (buildGame as (target: GameBuildTarget) => Promise<void>)(target);
+      const result = await (buildGame as (target: GameBuildTarget) => Promise<{ report?: Record<string, unknown> } | null>)(target);
+      setBuildReport(result?.report ?? null);
       setMessage(`${BUILD_TARGET_COPY[target].label} build finished.`);
     } catch (cause) {
       setMessage(cause instanceof Error ? cause.message : 'The game could not be built.');
     } finally { setBuilding(false); }
+  };
+
+  const buildWarnings = Array.isArray(buildReport?.warnings)
+    ? buildReport.warnings.filter((item): item is { code: string; message: string } =>
+        Boolean(item) && typeof item === 'object' && typeof item.code === 'string' &&
+        typeof item.message === 'string' && item.message.length <= 180).slice(0, 12)
+    : [];
+  const reportText = buildReport ? JSON.stringify(buildReport, null, 2) : null;
+  const copyBuildReport = async () => {
+    if (!reportText) return;
+    try {
+      await navigator.clipboard.writeText(reportText);
+      setMessage('Build report copied.');
+    } catch {
+      setMessage('Could not copy the build report.');
+    }
   };
 
   const save = async () => {
@@ -384,6 +403,23 @@ export const GameSettingsPanel: React.FC<GameSettingsPanelProps> = ({ onClose })
           </div>
 
           {(message || error) && <div className="rounded border border-gray-700 bg-gray-950 p-3 text-xs text-gray-300">{message || error?.message}</div>}
+          {reportText && (
+            <section aria-label="Build report" className="rounded border border-gray-700 bg-gray-950 p-3 text-xs text-gray-300 space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <strong>Build report</strong>
+                <button type="button" onClick={() => void copyBuildReport()} className="rounded border border-gray-600 px-2 py-1 hover:bg-gray-800">Copy build report</button>
+              </div>
+              {buildWarnings.length > 0 && (
+                <div role="alert">
+                  <strong>Build warnings ({buildWarnings.length})</strong>
+                  <ul className="mt-1 list-disc pl-4 space-y-1">
+                    {buildWarnings.map((warning) => <li key={warning.code}>{warning.message}</li>)}
+                  </ul>
+                </div>
+              )}
+              <pre className="max-h-32 overflow-auto whitespace-pre-wrap break-all text-2xs text-gray-500">{reportText}</pre>
+            </section>
+          )}
         </div>
         <div className="flex items-center justify-between gap-2 border-t border-gray-800 bg-gray-950 px-5 py-3">
           <button type="button" disabled={disabled || !dirty} onClick={revert} className="flex items-center gap-2 rounded border border-gray-700 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-800 disabled:opacity-50"><ResetIcon size={13} /> Revert</button>
