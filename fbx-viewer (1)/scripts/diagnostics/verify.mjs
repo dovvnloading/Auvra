@@ -135,6 +135,7 @@ const EXEMPT = new Map(Object.entries({
   'texturing/gpu/texturingGpu.ts': 'data-model',
   'texturing/gpu/webgpuTexturing.ts': 'hot-loop',
   'texturing/graph/document.ts': 'data-model',
+  'texturing/graph/sourceTextureKey.ts': 'pure-utility',
   'texturing/graph/evaluator.ts': 'hot-loop',
   'texturing/graph/expressions.ts': 'pure-utility',
   'texturing/graph/nodeKit.ts': 'pure-utility',
