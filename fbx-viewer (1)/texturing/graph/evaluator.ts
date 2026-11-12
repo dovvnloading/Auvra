@@ -4,6 +4,7 @@ import type { TexturingGpu } from '../gpu/texturingGpu';
 import { readAnimation, timeAt, type GraphTime } from './animation';
 import { coerceParam, formulaScope, graphContentKey, hashText, mixSeeds, parameterValues, resolveNodeParams, subgraphRunSeed, MAX_SIZE_LOG2 } from './document';
 import { MATERIAL_CHANNELS, materialKey, materialOf, materialResults, type MaterialImages } from './material';
+import { sourceTextureKey } from './sourceTextureKey';
 import { withNamedLinks } from './namedLinks';
 import { resolvePrecision, resolveSeed, resolveSize, resolveTiling, tilingAxes } from './inherit';
 import { nodeBindings, valuePinKey } from './nodeKit';
@@ -266,7 +267,7 @@ export class TextureGraphEvaluator {
         const external = request.external ?? {};
         const externalToken = (key: string): string => {
             const value = external[key];
-            return value ? `${identityOf(value)}:${request.externalVersion ?? ''}` : '-';
+            return value ? `${(value as THREE.Texture).isTexture ? sourceTextureKey(value as THREE.Texture) : identityOf(value)}:${request.externalVersion ?? ''}` : '-';
         };
 
         const info = new Map<string, NodeDetails>();
@@ -332,7 +333,7 @@ export class TextureGraphEvaluator {
             if (GRAPH_USING_TYPES.has(node.type)) {
                 const entry = typeof params.graph === 'string' ? this.resolve(params.graph) : undefined;
                 // The used graph and those it uses in turn, and their pictures loading: any of them changing draws it again.
-                extras.push(entry ? graphContentKey(entry.graph, this.resolve, (id) => Boolean(this.texture(id))) : 'missing');
+                extras.push(entry ? graphContentKey(entry.graph, this.resolve, (id) => sourceTextureKey(this.texture(id))) : 'missing');
                 for (const key of Object.keys(external)) if (key.startsWith('mesh:')) extras.push(`${key}=${externalToken(key)}`);
                 // Each copy runs the graph inside with a seed of its own, from this graph's seed and the copy
                 // itself, unless the copy is set to take its look from its seed alone.
@@ -342,9 +343,9 @@ export class TextureGraphEvaluator {
             for (const param of definition.params) {
                 if (param.kind !== 'texture') continue;
                 const id = params[param.key];
-                // Ready, and at which depth: a picture read again at its own depth draws again.
+                // A changed texture object or revised image must redraw, even at the same ID and depth.
                 const picture = typeof id === 'string' && id ? this.texture(id) : null;
-                extras.push(picture ? `${id}:ready:${Number(picture.userData?.auvraDepth) || 8}` : `${String(id)}:waiting`);
+                extras.push(picture ? `${id}:ready:${sourceTextureKey(picture)}` : `${String(id)}:waiting`);
             }
             if (main) extras.push(`bypass:${main}`);
             if (world[0] !== 1 || world[1] !== 1) extras.push(`world:${world[0]}x${world[1]}`);
