@@ -311,7 +311,7 @@ class SQLiteJobStore:
         return self.list(states={JobState.SUBMITTING, JobState.RUNNING, JobState.CANCEL_REQUESTED, JobState.RECOVERING}, project_id=project_id)
 
     def reconcile_restart(self) -> tuple[Job, ...]:
-        """Fail non-durable in-flight work cleanly; durable work is returned for polling."""
+        """Recover only remotely pollable Fal work; terminalize interrupted local work."""
         pending = self.pending_reconciliation(); durable = []
         for job in pending:
             # A pre-project-ownership database may contain in-flight rows with
@@ -320,11 +320,18 @@ class SQLiteJobStore:
                 try: self.transition(job.job_id, JobState.FAILED, message="restart requires project ownership", reconcile={"restart_pending": True})
                 except ValueError: pass
                 continue
-            if bool(job.reconcile.get("durable", False)):
+            # Reframe owns a local child process, not a remotely resumable job.
+            # Older versions incorrectly stored durable=True for it. Fal also
+            # needs a remote request ID before polling can resume.
+            if job.provider == "fal" and job.remote_id and bool(job.reconcile.get("durable", False)):
                 try: durable.append(self.transition(job.job_id, JobState.RECOVERING, message="restart requires remote reconciliation", reconcile={"durable": True, "restart_pending": True}))
                 except ValueError: durable.append(job)
             else:
-                try: self.transition(job.job_id, JobState.FAILED, message="restart requires reconciliation", reconcile={"restart_pending": True})
+                try:
+                    self.transition(
+                        job.job_id, JobState.FAILED, message="job interrupted by restart",
+                        reconcile={"restart_pending": True, "error_code": "restart_interrupted", "retryable": False},
+                    )
                 except ValueError: pass
         return tuple(durable)
 
