@@ -170,7 +170,7 @@ const meshOf = (bytes: number): THREE.Object3D => {
 };
 
 /** A loader that keeps lists as the real one does, and records what it was told to free. */
-const fakeLoader = (bytesOf: (id: string) => number) => {
+const fakeLoader = (bytesOf: (id: string) => number, modelOf: (id: string) => THREE.Object3D = id => meshOf(bytesOf(id))) => {
     const models: { id: string; object: THREE.Object3D }[] = [];
     const released: string[] = [];
     const loads: string[][] = [];
@@ -178,7 +178,7 @@ const fakeLoader = (bytesOf: (id: string) => number) => {
         load: async (selection?: AssetSelection) => {
             const fresh = [...(selection?.models ?? [])].filter(id => !models.some(model => model.id === id));
             loads.push(fresh);
-            for (const id of fresh) models.push({ id, object: meshOf(bytesOf(id)) });
+            for (const id of fresh) models.push({ id, object: modelOf(id) });
         },
         release: (selection: AssetSelection) => {
             for (const id of selection.models ?? []) {
@@ -435,5 +435,72 @@ describe('assets in memory', () => {
         const mesh = meshOf(MB) as THREE.Mesh;
         group.add(mesh, new THREE.Mesh(mesh.geometry));
         expect(objectMemoryBytes(group)).toBe(MB);
+    });
+});
+
+/** A model with only one texture, so objectMemoryBytes measures GPU storage directly. */
+const texturedModel = (texture: THREE.Texture): THREE.Object3D => {
+    const material = new THREE.MeshBasicMaterial();
+    material.map = texture;
+    return new THREE.Mesh(new THREE.BufferGeometry(), material);
+};
+
+describe('resident texture GPU bytes', () => {
+    it('counts RGBA8, half-float and float storage with and without generated mips', () => {
+        const rgba = new THREE.DataTexture(new Uint8Array(0), 4, 4, THREE.RGBAFormat, THREE.UnsignedByteType);
+        rgba.generateMipmaps = false;
+        expect(objectMemoryBytes(texturedModel(rgba))).toBe(64);
+        rgba.generateMipmaps = true;
+        expect(objectMemoryBytes(texturedModel(rgba))).toBe(64 + 16 + 4);
+
+        const half = new THREE.DataTexture(new Uint16Array(0), 4, 4, THREE.RGBAFormat, THREE.HalfFloatType);
+        half.generateMipmaps = false;
+        expect(objectMemoryBytes(texturedModel(half))).toBe(128);
+        half.generateMipmaps = true;
+        expect(objectMemoryBytes(texturedModel(half))).toBe(128 + 32 + 8);
+
+        const full = new THREE.DataTexture(new Float32Array(0), 4, 4, THREE.RGBAFormat, THREE.FloatType);
+        full.generateMipmaps = false;
+        expect(objectMemoryBytes(texturedModel(full))).toBe(256);
+    });
+
+    it('counts depth, packed formats, array layers and compressed block mip chains', () => {
+        const depth = new THREE.DepthTexture(4, 4, THREE.UnsignedShortType);
+        depth.generateMipmaps = false;
+        expect(objectMemoryBytes(texturedModel(depth))).toBe(32);
+
+        const packed = new THREE.DataTexture(new Uint16Array(0), 4, 4, THREE.RGBAFormat, THREE.UnsignedShort4444Type);
+        packed.generateMipmaps = false;
+        expect(objectMemoryBytes(texturedModel(packed))).toBe(32);
+
+        const array = new THREE.DataArrayTexture(new Uint8Array(0), 4, 4, 3);
+        array.generateMipmaps = false;
+        expect(objectMemoryBytes(texturedModel(array))).toBe(4 * 4 * 3 * 4);
+
+        const compressed = new THREE.CompressedTexture([
+            { data: new Uint8Array(64), width: 4, height: 4 },
+            { data: new Uint8Array(16), width: 2, height: 2 },
+        ] as unknown as ImageData[], 4, 4, THREE.RGBA_S3TC_DXT5_Format);
+        expect(objectMemoryBytes(texturedModel(compressed))).toBe(80);
+
+        const group = new THREE.Group();
+        group.add(texturedModel(compressed), texturedModel(compressed));
+        expect(objectMemoryBytes(group)).toBe(80);
+    });
+
+    it('evicts old high-precision models before loading another level that exceeds the budget', async () => {
+        // 2048² RGBA16F occupies 32 MiB, not the old RGBA8-with-mips estimate of ~21.3 MiB.
+        const half = new THREE.DataTexture(new Uint16Array(0), 2048, 2048, THREE.RGBAFormat, THREE.HalfFloatType);
+        half.generateMipmaps = false;
+        const rgba = new THREE.DataTexture(new Uint8Array(0), 2048, 2048, THREE.RGBAFormat, THREE.UnsignedByteType);
+        rgba.generateMipmaps = false;
+        const fake = fakeLoader(() => 0, id => texturedModel(id === 'rock' ? half : rgba));
+        const residency = new LevelAssetResidency(fake.loader, level => needing(level === 'a' ? 'rock' : 'tree'), () => 2 * MB, 45 * MB);
+        await residency.prepare('a');
+        expect(residency.heldBytes()).toBe(32 * MB);
+        await residency.prepare('b');
+        expect(fake.released).toEqual(['rock']);
+        expect(fake.models.map(model => model.id)).toEqual(['tree']);
+        expect(residency.heldBytes()).toBe(16 * MB);
     });
 });

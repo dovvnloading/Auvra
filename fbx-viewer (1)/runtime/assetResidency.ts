@@ -1,4 +1,4 @@
-import type * as THREE from 'three';
+import * as THREE from 'three';
 import type { LevelObject, LoadedModelData } from '../types';
 import type { AssetSelection, GameContentLoader } from '../utils/projectHydration';
 import type { LevelAssetNeeds } from './levelAssets';
@@ -32,14 +32,62 @@ interface Held {
     used: number;
 }
 
+type TextureImageSize = { width?: number; height?: number; depth?: number };
+const dimension = (value: number | undefined): number =>
+    typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
+
+/** GPU storage per pixel, not the byte width of a decoded JavaScript image. */
+const texturePixelBytes = (texture: THREE.Texture): number => {
+    // Packed 16-bit RGB(A) and 24+8 depth/stencil occupy one word per pixel.
+    if (texture.type === THREE.UnsignedShort4444Type
+        || texture.type === THREE.UnsignedShort5551Type) return 2;
+    if (texture.type === THREE.UnsignedInt248Type || texture.format === THREE.DepthStencilFormat) return 4;
+
+    const channels = texture.format === THREE.RedFormat || texture.format === THREE.DepthFormat ? 1
+        : texture.format === THREE.RGFormat ? 2
+            : texture.format === THREE.RGBFormat ? 3 : 4;
+    const channelBytes = texture.type === THREE.UnsignedByteType || texture.type === THREE.ByteType ? 1
+        : texture.type === THREE.HalfFloatType || texture.type === THREE.ShortType || texture.type === THREE.UnsignedShortType ? 2
+            : 4; // Float32, 32-bit integers, and unknown types: conservative fallback.
+    return channels * channelBytes;
+};
+
 const textureBytes = (texture: THREE.Texture): number => {
     const compressed = texture as THREE.CompressedTexture;
     if (compressed.isCompressedTexture) {
-        return (compressed.mipmaps ?? []).reduce((sum, level) => sum + ((level.data as ArrayBufferView | undefined)?.byteLength ?? 0), 0);
+        // These levels are already GPU-ready blocks; do not multiply them by a pixel guess.
+        const exact = (compressed.mipmaps ?? []).reduce(
+            (sum, level) => sum + ((level.data as ArrayBufferView | undefined)?.byteLength ?? 0), 0,
+        );
+        if (exact) return exact;
     }
-    const image = texture.image as { width?: number; height?: number } | undefined;
-    // Four bytes a pixel and a third more for the mips.
-    return (image?.width ?? 0) * (image?.height ?? 0) * 4 * (4 / 3);
+    const faces = Array.isArray(texture.image) ? texture.image as TextureImageSize[] : null;
+    const image = faces?.[0] ?? texture.image as TextureImageSize | undefined;
+    const width = dimension(image?.width);
+    const height = dimension(image?.height);
+    const layers = faces ? faces.length : (dimension(image?.depth) || 1);
+    if (!width || !height) return 0;
+    const pixelBytes = compressed.isCompressedTexture ? 4 : texturePixelBytes(texture);
+    const baseBytes = width * height * layers * pixelBytes;
+
+    // Explicit mipmaps describe actual allocated levels (including level zero), even if
+    // generateMipmaps is false. Compressed mipmaps were counted by their exact block lengths.
+    if (texture.mipmaps.length) {
+        const explicit = (texture.mipmaps as TextureImageSize[]).reduce((sum, level) =>
+            sum + dimension(level.width) * dimension(level.height) * layers * pixelBytes, 0);
+        if (explicit) return Math.max(baseBytes, explicit);
+    }
+    if (!texture.generateMipmaps) return baseBytes;
+    let total = 0;
+    let w = width;
+    let h = height;
+    // Count each generated level through 1x1; 4/3 is inaccurate for small textures.
+    while (true) {
+        total += w * h * layers * pixelBytes;
+        if (w === 1 && h === 1) return total;
+        w = Math.max(1, Math.floor(w / 2));
+        h = Math.max(1, Math.floor(h / 2));
+    }
 };
 
 /** About what an object's meshes and textures hold in memory, each counted once. */
