@@ -104,7 +104,7 @@ export const pngBitDepth = async (blob: Blob): Promise<number> => {
 };
 
 /** A PNG's rows, unfiltered in place: each row is a filter byte, then `row` bytes of samples. */
-interface PngRows { width: number; height: number; depth: 8 | 16; channels: 1 | 2 | 3 | 4; raw: Uint8Array; row: number }
+interface PngRows { width: number; height: number; depth: 8 | 16; channels: 1 | 2 | 3 | 4; raw: Uint8Array; row: number; transparent: readonly number[] | null }
 
 /** Reads a PNG (grey, grey and alpha, RGB or RGBA, 8 or 16 bits, not interlaced) to its rows of samples. */
 const readRows = async (blob: Blob): Promise<PngRows> => {
@@ -121,6 +121,8 @@ const readRows = async (blob: Blob): Promise<PngRows> => {
     let width = 0, height = 0, depth = 0, colourType = 0;
     let row = 0, rawSize = 0;
     let sawHeader = false, sawImage = false, sawEnd = false;
+    // tRNS holds one raw greyscale or three raw RGB samples, at the source bit depth.
+    let transparent: number[] | null = null;
     const parts: Uint8Array[] = [];
     while (at < bytes.length) {
         if (at + 12 > bytes.length) throw new Error('The PNG has a truncated chunk.');
@@ -152,6 +154,21 @@ const readRows = async (blob: Blob): Promise<PngRows> => {
                 throw new Error('PNG scanlines exceed the texture import decompression budget.');
             }
             sawHeader = true;
+        } else if (type === 'PLTE') {
+            // A palette, when present, must precede transparency and image data.
+            if (sawImage || transparent !== null) throw new Error('The PNG palette is misplaced.');
+        } else if (type === 'tRNS') {
+            if (sawImage || transparent !== null || (colourType !== 0 && colourType !== 2)
+                || length !== (colourType === 0 ? 2 : 6)) {
+                throw new Error('The PNG has an invalid or misplaced transparency chunk.');
+            }
+            const key: number[] = [];
+            for (let i = 0; i < length; i += 2) {
+                const value = (data[i] << 8) | data[i + 1];
+                if (depth === 8 && value > 255) throw new Error('The PNG transparency key exceeds its bit depth.');
+                key.push(value);
+            }
+            transparent = key;
         } else if (type === 'IDAT') {
             // The IEND branch breaks the loop, so no IDAT can follow it.
             sawImage = true;
@@ -222,15 +239,26 @@ const readRows = async (blob: Blob): Promise<PngRows> => {
             raw[line + i] = value & 255;
         }
     }
-    return { width, height, depth: depth as 8 | 16, channels, raw, row };
+    return { width, height, depth: depth as 8 | 16, channels, raw, row, transparent };
 };
+
+/** Matches unscaled source samples, not rounded 8-bit or half-float values. */
+const isTransparent = (raw: Uint8Array, offset: number, depth: 8 | 16, key: readonly number[] | null): boolean => {
+    if (!key) return false;
+    const size = depth / 8;
+    return key.every((value, channel) => {
+        const at = offset + channel * size;
+        return (depth === 16 ? (raw[at] << 8) | raw[at + 1] : raw[at]) === value;
+    });
+};
+
 /**
  * Reads a PNG (grey, grey and alpha, RGB or RGBA, 8 or 16 bits, not interlaced) to floats 0..1, four
  * per pixel (grey repeated, alpha 1 when absent), rows in the order of the file. Four bytes a value:
  * prefer readPng16Half, which the GPU's 16-bit images take as they are.
  */
-export const readPng16 = async (blob: Blob): Promise<{ width: number; height: number; data: Float32Array }> => {
-    const { width, height, depth, channels, raw, row } = await readRows(blob);
+export const readPng16 = async (blob: Blob): Promise<{ width: number; height: number; channels: 1 | 2 | 3 | 4; data: Float32Array }> => {
+    const { width, height, depth, channels, raw, row, transparent } = await readRows(blob);
     const data = new Float32Array(width * height * 4);
     const scale = depth === 16 ? 1 / 65535 : 1 / 255;
     const size = depth / 8;
@@ -242,16 +270,18 @@ export const readPng16 = async (blob: Blob): Promise<{ width: number; height: nu
                 data[o] = v;
                 data[o + 1] = v;
                 data[o + 2] = v;
-                data[o + 3] = channels === 2 ? sample(base + size) : 1;
+                data[o + 3] = channels === 2 ? sample(base + size) : isTransparent(raw, base, depth, transparent) ? 0 : 1;
             } else {
                 data[o] = sample(base);
                 data[o + 1] = sample(base + size);
                 data[o + 2] = sample(base + 2 * size);
-                data[o + 3] = channels === 4 ? sample(base + 3 * size) : 1;
+                data[o + 3] = channels === 4 ? sample(base + 3 * size) : isTransparent(raw, base, depth, transparent) ? 0 : 1;
             }
         }
     }
-    return { width, height, data };
+    // A tRNS key supplies effective alpha even though the PNG stores no alpha sample.
+    const effectiveChannels = transparent ? (channels === 1 ? 2 : 4) : channels;
+    return { width, height, channels: effectiveChannels as 1 | 2 | 3 | 4, data };
 };
 
 /** The bits of the half float nearest `value` (0..1): 10 bits of fraction, rounded, small values kept as subnormals. */
@@ -288,26 +318,26 @@ const halfTable = (depth: 8 | 16): Uint16Array => {
  * for readPng16: a 4K colour picture takes 128 MB instead of 256, and no full copy is made on the way.
  */
 export const readPng16Half = async (blob: Blob): Promise<{ width: number; height: number; channels: 1 | 4; data: Uint16Array }> => {
-    const { width, height, depth, channels, raw, row } = await readRows(blob);
+    const { width, height, depth, channels, raw, row, transparent } = await readRows(blob);
     const table = halfTable(depth);
     const size = depth / 8;
-    const out = channels === 1 ? 1 : 4;
+    const out = channels === 1 && !transparent ? 1 : 4;
     const data = new Uint16Array(width * height * out);
     const sample = depth === 16 ? (offset: number) => table[(raw[offset] << 8) | raw[offset + 1]] : (offset: number) => table[raw[offset]];
     for (let y = 0, o = 0; y < height; y++) {
         for (let x = 0, base = y * (row + 1) + 1; x < width; x++, base += size * channels, o += out) {
-            if (channels === 1) data[o] = sample(base);
-            else if (channels === 2) {
+            if (out === 1) data[o] = sample(base);
+            else if (channels <= 2) {
                 const v = sample(base);
                 data[o] = v;
                 data[o + 1] = v;
                 data[o + 2] = v;
-                data[o + 3] = sample(base + size);
+                data[o + 3] = channels === 2 ? sample(base + size) : isTransparent(raw, base, depth, transparent) ? 0 : HALF_ONE;
             } else {
                 data[o] = sample(base);
                 data[o + 1] = sample(base + size);
                 data[o + 2] = sample(base + 2 * size);
-                data[o + 3] = channels === 4 ? sample(base + 3 * size) : HALF_ONE;
+                data[o + 3] = channels === 4 ? sample(base + 3 * size) : isTransparent(raw, base, depth, transparent) ? 0 : HALF_ONE;
             }
         }
     }
