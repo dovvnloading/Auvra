@@ -25,6 +25,7 @@ PYTHON_EXEMPTIONS = {
     "Auvra/providers/reframe_worker.py": "standalone-child-process",
     "Auvra/Auvra.py": "entrypoint",
     "Auvra/desktop/contracts.py": "data-model",
+    "Auvra/desktop/preview_images.py": "preview-ingest-validation-child",
     "Auvra/desktop/policy.py": "webview-policy-child",
     "Auvra/desktop/sdk.py": "startup-child",
     "Auvra/host/fake.py": "development-host",
