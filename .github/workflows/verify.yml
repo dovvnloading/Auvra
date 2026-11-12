@@ -16,6 +16,43 @@ permissions:
   contents: read
 
 jobs:
+  changes:
+    # Decides whether the browser tests need to run for this change. A job
+    # skipped by its `if` reports success, so required checks never hang.
+    name: Detect browser-relevant changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      browser: ${{ steps.filter.outputs.browser }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 2
+      - name: Classify the changed files
+        id: filter
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+          RUN_IF: '^(fbx-viewer \(1\)/|\.github/workflows/verify\.yml$)'
+        run: |
+          browser=true
+          changed=""
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            changed=$(git diff --name-only HEAD^1 HEAD)
+          elif [ "$EVENT_NAME" = "push" ] && [ -n "$BEFORE" ] && [ "$BEFORE" != "0000000000000000000000000000000000000000" ]; then
+            if git fetch -q --depth=1 origin "$BEFORE"; then changed=$(git diff --name-only "$BEFORE" HEAD); fi
+          fi
+          if [ -n "$changed" ]; then
+            if [ -n "${RUN_IF:-}" ]; then
+              echo "$changed" | grep -qE "$RUN_IF" || browser=false
+            else
+              echo "$changed" | grep -qvE "$SKIP_IF" || browser=false
+            fi
+          fi
+          echo "Changed files:"
+          echo "$changed"
+          echo "browser=$browser" | tee -a "$GITHUB_OUTPUT"
+
   editor-build:
     name: Editor build (Node ${{ matrix.node-version }})
     runs-on: ubuntu-latest
@@ -77,6 +114,8 @@ jobs:
         run: npm run build
 
   rendering:
+    needs: changes
+    if: needs.changes.outputs.browser == 'true'
     name: Rendering pictures
     runs-on: ubuntu-latest
     defaults:
@@ -117,6 +156,8 @@ jobs:
   # The WebGPU pictures are drawn on Windows: a headless Linux browser loses its software WebGPU device before the first
   # frame, while the same software device on Windows draws them as they were kept.
   rendering-webgpu:
+    needs: changes
+    if: needs.changes.outputs.browser == 'true'
     name: Rendering pictures on WebGPU
     runs-on: windows-latest
     defaults:
