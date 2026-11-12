@@ -502,11 +502,12 @@ export const graphReadsMeshMaps = (graph: TextureGraph, resolve: (id: string) =>
 
 /**
  * A key for everything a graph draws from: its nodes and wires (not where they sit), every graph it
- * uses at any depth, and which of their pictures have loaded. It changes whenever any of them would
- * draw differently.
+ * uses at any depth, and the identity/revision of each picture it reads. It changes whenever
+ * any of them would draw differently.
  */
-export const graphContentKey = (graph: TextureGraph, resolve: (id: string) => { graph: TextureGraph } | undefined, loaded: (textureId: string) => boolean): string => {
-    const shape = (g: TextureGraph) => [g.size, g.seed, g.parameters, g.nodes.map(drawnPart), g.links, graphTextureIds(g).filter(loaded)];
+export const graphContentKey = (graph: TextureGraph, resolve: (id: string) => { graph: TextureGraph } | undefined, textureState: (textureId: string) => boolean | string | null | undefined): string => {
+    const shape = (g: TextureGraph) => [g.size, g.seed, g.parameters, g.nodes.map(drawnPart), g.links,
+        graphTextureIds(g).map(id => [id, textureState(id)] as const).filter(([, state]) => Boolean(state))];
     const used: unknown[] = [];
     const seen = new Set<string>();
     const visit = (g: TextureGraph) => {
