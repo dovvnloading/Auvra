@@ -200,6 +200,27 @@ class BuildGameHostTests(unittest.TestCase):
         self.project_id, self.revision = self._create_game_project(levels=False)
         self._assert_error("invalid_project", target="windows")
 
+    def test_corrupt_asset_cannot_replace_a_successful_build(self) -> None:
+        first = self._build()
+        destination = self.builds / "Demo Game-Web"
+        marker = (destination / BUILD_MARKER).read_bytes()
+        packaged = destination / "game" / "assets" / f"{self._source_id()}.fbx"
+        self.assertEqual(packaged.read_bytes(), MODEL_BYTES)
+
+        store = self.host.service.active.assets
+        source = store.path_for(self._source_id())
+        corrupt = b"!" * len(MODEL_BYTES)
+        self.assertNotEqual(corrupt, MODEL_BYTES)
+        source.write_bytes(corrupt)
+        # A same-size replacement still passes manifest metadata validation.
+        self.assertEqual(store.reference(self._source_id()).size, len(corrupt))
+
+        error = self._assert_error("invalid_project", destinationHandle=first["handle"])
+        self.assertIn("asset", str(error))
+        self.assertEqual((destination / BUILD_MARKER).read_bytes(), marker)
+        self.assertEqual(packaged.read_bytes(), MODEL_BYTES)
+        self.assertEqual(list(self.builds.glob(".Demo Game-Web.staging-*")), [])
+
     def test_missing_template_fails_before_the_dialog(self) -> None:
         self.host.player_template_root = self.root / "missing-template"
         self._assert_error("unsupported_capability")
