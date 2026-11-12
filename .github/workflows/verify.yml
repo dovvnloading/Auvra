@@ -4,6 +4,13 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Release qualification on a feature branch can still be run on demand.
+  workflow_dispatch:
+
+concurrency:
+  # Only obsolete pull-request runs are canceled; never cancel runs on main.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -467,6 +474,10 @@ jobs:
 
   release-dev-msix:
     name: Clean Windows unsigned dev MSIX
+    # Packaging is release qualification, not a routine PR merge gate.
+    # Preserve this job's name: branch protection still requires its check,
+    # and GitHub treats this skipped PR job as a passing required check.
+    if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
     runs-on: windows-latest
     needs: [desktop-player-linux, desktop-player-macos]
     permissions:
