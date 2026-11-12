@@ -186,6 +186,47 @@ class DiagnosticsCoreTests(unittest.TestCase):
             assert summary is not None
             self.assertFalse(summary["drainIncomplete"])
 
+    def test_run_marker_stays_until_log_stream_has_closed(self) -> None:
+        """A completed marker must not be visible while the stream is open."""
+        closing_stream = threading.Event()
+        allow_stream_close = threading.Event()
+
+        class SlowStreamCloseSession(DiagnosticsSession):
+            def _close_stream(self, *, durable: bool) -> None:
+                if durable and self._closing:
+                    closing_stream.set()
+                    allow_stream_close.wait(5)
+                super()._close_stream(durable=durable)
+
+        with _temporary_root() as raw:
+            root = Path(raw) / "diagnostics"
+            session = SlowStreamCloseSession(root, run_id="run-close-marker", mode="test")
+            session.start()
+            session.emit("launcher", "startup.phase_started",
+                         attributes={"phase": "marker-order"}, deduplicate=False)
+            errors: list[BaseException] = []
+
+            def close_session() -> None:
+                try:
+                    session.close(outcome="success")
+                except BaseException as exc:
+                    errors.append(exc)
+
+            closer = threading.Thread(target=close_session)
+            closer.start()
+            try:
+                self.assertTrue(closing_stream.wait(5), "stream closing was not reached")
+                self.assertTrue((root / RUN_MARKER_NAME).exists(),
+                                "the marker must survive until the stream has closed")
+                self.assertIsNotNone(session._stream)
+            finally:
+                allow_stream_close.set()
+                closer.join(10)
+            self.assertFalse(closer.is_alive())
+            self.assertFalse(errors, f"close() raised: {errors}")
+            self.assertIsNone(session._stream)
+            self.assertFalse((root / RUN_MARKER_NAME).exists())
+
     def test_segments_and_run_retention_are_bounded(self) -> None:
         with _temporary_root() as raw, \
              patch("Auvra.diagnostics.core.SEGMENT_MAX_BYTES", 2048), \
