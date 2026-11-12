@@ -197,8 +197,17 @@ export const useProjectManager = ({
         const notice = unpreparedNotice(preparation, result?.report);
         if (notice) addNotification({ message: notice, type: 'info' });
         const warnings = result?.report?.warnings;
-        if (Array.isArray(warnings) && warnings.length) {
-          addNotification({ message: `Game built with ${warnings.length} warning(s). Open Game Settings to review and copy the report.`, type: 'info', duration: 20000 });
+        if (Array.isArray(warnings)) {
+          // Builds also start from the header, where Game Settings is not mounted.
+          // Surface the warning contents here, not only inside that panel.
+          const messages = warnings.filter((entry): entry is { message: string } =>
+            Boolean(entry) && typeof entry === 'object' &&
+            typeof entry.message === 'string' && entry.message.length <= 180)
+            .map((entry) => entry.message).slice(0, 12);
+          if (messages.length) addNotification({
+            message: `Game built with warnings: ${messages.join(' ')}`,
+            type: 'info', duration: 30000,
+          });
         }
         return result;
       },
