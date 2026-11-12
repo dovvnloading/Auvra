@@ -1,4 +1,5 @@
 import { crc32 } from './zip';
+import { checkedTexturePixels, MAX_TEXTURE_IMPORT_DECODED_BYTES, MAX_TEXTURE_IMPORT_SOURCE_BYTES } from './textureLimits';
 
 /**
  * PNG pictures written and read exactly. A canvas multiplies colour by alpha before it writes a PNG,
@@ -90,35 +91,102 @@ interface PngRows { width: number; height: number; depth: 8 | 16; channels: 1 | 
 
 /** Reads a PNG (grey, grey and alpha, RGB or RGBA, 8 or 16 bits, not interlaced) to its rows of samples. */
 const readRows = async (blob: Blob): Promise<PngRows> => {
+    // Bound the file before buffering it. No dimension from an untrusted header
+    // may drive an allocation until the pixel and scanline budgets pass.
+    if (blob.size > MAX_TEXTURE_IMPORT_SOURCE_BYTES) throw new Error('PNG exceeds the texture import file budget.');
     const bytes = new Uint8Array(await blob.arrayBuffer());
+    const signature = [137, 80, 78, 71, 13, 10, 26, 10];
+    if (bytes.length < 8 || !signature.every((value, i) => bytes[i] === value)) {
+        throw new Error('The PNG signature is invalid.');
+    }
     const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
     let at = 8;
     let width = 0, height = 0, depth = 0, colourType = 0;
+    let row = 0, rawSize = 0;
+    let sawHeader = false, sawImage = false, sawEnd = false;
     const parts: Uint8Array[] = [];
-    while (at + 8 <= bytes.length) {
+    while (at < bytes.length) {
+        if (at + 12 > bytes.length) throw new Error('The PNG has a truncated chunk.');
         const length = view.getUint32(at);
+        if (length > bytes.length - at - 12) throw new Error('The PNG has an invalid chunk length.');
         const type = String.fromCharCode(...bytes.subarray(at + 4, at + 8));
         const data = bytes.subarray(at + 8, at + 8 + length);
+        if (crc32(bytes.subarray(at + 4, at + 8 + length)) !== view.getUint32(at + 8 + length)) {
+            throw new Error('The PNG has a damaged chunk checksum.');
+        }
+        if (!sawHeader && type !== 'IHDR') throw new Error('The PNG header is missing.');
         if (type === 'IHDR') {
+            if (sawHeader || at !== 8 || length !== 13) throw new Error('The PNG header is malformed.');
             width = view.getUint32(at + 8);
             height = view.getUint32(at + 12);
             depth = data[8];
             colourType = data[9];
-            if (data[12] !== 0) throw new Error('Interlaced PNG pictures are not read here.');
-        } else if (type === 'IDAT') parts.push(data);
-        else if (type === 'IEND') break;
+            const channels = ({ 0: 1, 2: 3, 4: 2, 6: 4 } as Record<number, number>)[colourType];
+            if (!channels || (depth !== 8 && depth !== 16)) {
+                throw new Error('This PNG picture is of a kind not read here.');
+            }
+            if (data[10] !== 0 || data[11] !== 0 || data[12] !== 0) {
+                throw new Error('Interlaced or unsupported PNG pictures are not read here.');
+            }
+            checkedTexturePixels(width, height);
+            row = width * channels * (depth / 8);
+            rawSize = (row + 1) * height;
+            if (rawSize > MAX_TEXTURE_IMPORT_DECODED_BYTES) {
+                throw new Error('PNG scanlines exceed the texture import decompression budget.');
+            }
+            sawHeader = true;
+        } else if (type === 'IDAT') {
+            if (sawEnd) throw new Error('The PNG has image data after its end.');
+            sawImage = true;
+            parts.push(data);
+        } else if (type === 'IEND') {
+            if (length !== 0 || !sawImage) throw new Error('The PNG has an invalid end marker.');
+            sawEnd = true;
+            at += 12 + length;
+            if (at !== bytes.length) throw new Error('The PNG has data after its end marker.');
+            break;
+        } else if (type !== 'PLTE' && (type.charCodeAt(0) & 0x20) === 0) {
+            throw new Error('The PNG uses an unsupported critical chunk.');
+        }
         at += 12 + length;
     }
-    const channels = ({ 0: 1, 2: 3, 4: 2, 6: 4 } as const)[colourType as 0 | 2 | 4 | 6];
-    if (!channels || (depth !== 8 && depth !== 16)) throw new Error('This PNG picture is of a kind not read here.');
-    const stream = new Blob(parts as BlobPart[]).stream().pipeThrough(new DecompressionStream('deflate'));
-    const raw = new Uint8Array(await new Response(stream).arrayBuffer());
+    if (!sawEnd || !sawImage) throw new Error('The PNG is missing image data or its end marker.');
+    const channels = ({ 0: 1, 2: 3, 4: 2, 6: 4 } as const)[colourType as 0 | 2 | 4 | 6] as 1 | 2 | 3 | 4;
+    // Inflate into one pre-budgeted buffer. Never use Response.arrayBuffer():
+    // the stream can expand beyond what the IHDR claims.
+    let nextPart = 0;
+    const compressed = new ReadableStream<Uint8Array>({
+        pull(controller) {
+            if (nextPart < parts.length) controller.enqueue(parts[nextPart++]);
+            else controller.close();
+        },
+    });
+    const reader = compressed.pipeThrough(new DecompressionStream('deflate')).getReader();
+    const raw = new Uint8Array(rawSize);
+    let written = 0;
+    try {
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            if (value.byteLength > rawSize - written) {
+                throw new Error('PNG exceeds its declared decoded scanline size.');
+            }
+            raw.set(value, written);
+            written += value.byteLength;
+        }
+    } catch (error) {
+        try { await reader.cancel(); } catch { /* Keep the original decode error. */ }
+        throw error;
+    } finally {
+        reader.releaseLock();
+    }
+    if (written !== rawSize) throw new Error('The PNG has truncated decoded scanlines.');
     const stride = depth / 8 * channels;
-    const row = width * stride;
-    // Unfiltered where it lies (the row above is already unfiltered when a row needs it): no second copy.
+    // Unfilter each row in place, after verifying the exact decompressed length.
     for (let y = 0; y < height; y++) {
         const start = y * (row + 1);
         const filter = raw[start];
+        if (filter > 4) throw new Error('The PNG has an invalid row filter.');
         const line = start + 1;
         const above = start + 1 - (row + 1);
         for (let i = 0; i < row; i++) {
@@ -137,9 +205,8 @@ const readRows = async (blob: Blob): Promise<PngRows> => {
             raw[line + i] = value & 255;
         }
     }
-    return { width, height, depth, channels, raw, row };
+    return { width, height, depth: depth as 8 | 16, channels, raw, row };
 };
-
 /**
  * Reads a PNG (grey, grey and alpha, RGB or RGBA, 8 or 16 bits, not interlaced) to floats 0..1, four
  * per pixel (grey repeated, alpha 1 when absent), rows in the order of the file. Four bytes a value:
