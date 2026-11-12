@@ -32,7 +32,7 @@ use tao::window::{Fullscreen, Window, WindowBuilder};
 use wry::WebViewBuilderExtDarwin;
 #[cfg(target_os = "windows")]
 use wry::WebViewBuilderExtWindows;
-use wry::http::header::{ACCEPT_RANGES, CONTENT_RANGE, CONTENT_TYPE, RANGE};
+use wry::http::header::{ACCEPT_RANGES, CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE, RANGE};
 use wry::http::{Request, Response, StatusCode};
 use wry::{WebContext, WebView, WebViewBuilder};
 
@@ -305,6 +305,11 @@ fn percent_decode(value: &str) -> Option<String> {
     String::from_utf8(out).ok()
 }
 
+// Wry 0.57 custom protocols require a fully buffered response body; until they
+// support streaming, keep each individual allocation bounded. Unranged assets
+// above this limit cannot be served and receive HTTP 413 instead.
+const MAX_PROTOCOL_RESPONSE_BYTES: u64 = 16 * 1024 * 1024;
+
 /// The part of a file a request's `Range` header selects.
 #[derive(Debug, PartialEq)]
 enum Span {
@@ -352,27 +357,61 @@ fn requested_span(range: Option<&str>, len: u64) -> Span {
     }
 }
 
+/// Restrict a satisfiable range to one buffered chunk. Preserve the end of a
+/// suffix request (bytes=-N); all other ranges start at the requested offset.
+/// Content-Range reports the actual returned subsection so media clients can
+/// request later chunks. Arithmetic stays bounded even for multi-GiB files.
+fn bounded_range(range: Option<&str>, start: u64, end: u64) -> (u64, u64) {
+    if end - start + 1 <= MAX_PROTOCOL_RESPONSE_BYTES {
+        return (start, end);
+    }
+    if range.is_some_and(|header| header.trim().starts_with("bytes=-")) {
+        (end - MAX_PROTOCOL_RESPONSE_BYTES + 1, end)
+    } else {
+        (start, start + MAX_PROTOCOL_RESPONSE_BYTES - 1)
+    }
+}
+
 /// Serves `path`, or the part of it `range` selects; `None` when it cannot be read.
+/// A non-range GET larger than the buffer limit is explicitly rejected rather
+/// than returning a truncated 200 body or allocating the entire asset.
 fn read_span(path: &Path, range: Option<&str>) -> Option<Response<Cow<'static, [u8]>>> {
     let mut file = File::open(path).ok()?;
     let len = file.metadata().ok()?.len();
+    let span = requested_span(range, len);
+    if matches!(span, Span::Whole) && len > MAX_PROTOCOL_RESPONSE_BYTES {
+        return Response::builder()
+            .status(StatusCode::PAYLOAD_TOO_LARGE)
+            .header(CONTENT_TYPE, "text/plain; charset=utf-8")
+            .header(ACCEPT_RANGES, "bytes")
+            .header("Cache-Control", "no-cache")
+            .body(Cow::Borrowed(
+                &b"Asset exceeds the desktop player's 16 MiB response limit; use byte ranges"[..],
+            ))
+            .ok();
+    }
     let builder = Response::builder()
         .header(CONTENT_TYPE, mime_for(path))
         .header(ACCEPT_RANGES, "bytes")
         .header("Cache-Control", "no-cache");
-    let response = match requested_span(range, len) {
+    let response = match span {
         Span::Whole => {
-            let mut bytes = Vec::with_capacity(usize::try_from(len).ok()?);
-            file.read_to_end(&mut bytes).ok()?;
-            builder.status(StatusCode::OK).body(Cow::Owned(bytes))
+            let mut bytes = vec![0; usize::try_from(len).ok()?];
+            file.read_exact(&mut bytes).ok()?;
+            builder
+                .status(StatusCode::OK)
+                .header(CONTENT_LENGTH, bytes.len().to_string())
+                .body(Cow::Owned(bytes))
         }
         Span::Part(start, end) => {
+            let (start, end) = bounded_range(range, start, end);
             let mut bytes = vec![0; usize::try_from(end - start + 1).ok()?];
             file.seek(SeekFrom::Start(start)).ok()?;
             file.read_exact(&mut bytes).ok()?;
             builder
                 .status(StatusCode::PARTIAL_CONTENT)
                 .header(CONTENT_RANGE, format!("bytes {start}-{end}/{len}"))
+                .header(CONTENT_LENGTH, bytes.len().to_string())
                 .body(Cow::Owned(bytes))
         }
         Span::Unsatisfiable => builder
@@ -604,6 +643,101 @@ mod tests {
         assert_eq!(beyond.headers()[CONTENT_RANGE], "bytes */10");
         assert!(read_span(&root.join("missing.mp3"), None).is_none());
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn large_protocol_assets_are_bounded_without_truncating_successful_whole_responses() {
+        use std::io::Write;
+
+        let root = std::env::temp_dir().join(format!(
+            "auvra-player-response-bounds-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("big.mp3");
+        let len = MAX_PROTOCOL_RESPONSE_BYTES + 4096;
+        let mut file = File::create(&path).unwrap();
+        file.set_len(len).unwrap();
+        file.seek(SeekFrom::Start(MAX_PROTOCOL_RESPONSE_BYTES - 4))
+            .unwrap();
+        file.write_all(b"END!").unwrap();
+        drop(file);
+
+        // A whole request must never allocate the file size and return a
+        // misleading 200 with only its first chunk.
+        let whole = read_span(&path, None).unwrap();
+        assert_eq!(whole.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        assert!(whole.body().len() < 256);
+        assert_eq!(whole.headers()[ACCEPT_RANGES], "bytes");
+        assert_eq!(read_span(&path, Some("bytes=bad")).unwrap().status(), StatusCode::PAYLOAD_TOO_LARGE);
+
+        // Open-ended and oversized explicit spans have truthful 206 headers.
+        let first = read_span(&path, Some("bytes=0-")).unwrap();
+        assert_eq!(first.status(), StatusCode::PARTIAL_CONTENT);
+        assert_eq!(first.body().len() as u64, MAX_PROTOCOL_RESPONSE_BYTES);
+        assert_eq!(
+            first.headers()[CONTENT_RANGE],
+            format!("bytes 0-{}/{len}", MAX_PROTOCOL_RESPONSE_BYTES - 1)
+        );
+        assert_eq!(
+            first.headers()[CONTENT_LENGTH],
+            MAX_PROTOCOL_RESPONSE_BYTES.to_string()
+        );
+        let next = read_span(
+            &path,
+            Some(&format!("bytes={}-", MAX_PROTOCOL_RESPONSE_BYTES - 4)),
+        )
+        .unwrap();
+        assert_eq!(next.status(), StatusCode::PARTIAL_CONTENT);
+        assert_eq!(&next.body()[..4], b"END!");
+        assert_eq!(next.body().len() as u64, 4100);
+
+        let suffix = read_span(&path, Some(&format!("bytes=-{len}"))).unwrap();
+        assert_eq!(suffix.body().len() as u64, MAX_PROTOCOL_RESPONSE_BYTES);
+        assert_eq!(
+            suffix.headers()[CONTENT_RANGE],
+            format!("bytes 4096-{}/{len}", len - 1)
+        );
+        assert_eq!(&suffix.body()[MAX_PROTOCOL_RESPONSE_BYTES as usize - 4096..][..4], &[0, 0, 0, 0]);
+
+        // Independent concurrent requests each obey the same per-response cap.
+        let handles: Vec<_> = (0..3)
+            .map(|_| {
+                let path = path.clone();
+                std::thread::spawn(move || {
+                    let response = read_span(&path, Some("bytes=0-18446744073709551615"))
+                        .unwrap();
+                    assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
+                    response.body().len() as u64
+                })
+            })
+            .collect();
+        for handle in handles {
+            assert_eq!(handle.join().unwrap(), MAX_PROTOCOL_RESPONSE_BYTES);
+        }
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn large_range_arithmetic_is_bounded_without_allocating_the_span() {
+        let len = 2 * 1024 * 1024 * 1024u64;
+        assert_eq!(
+            bounded_range(Some("bytes=0-"), 0, len - 1),
+            (0, MAX_PROTOCOL_RESPONSE_BYTES - 1)
+        );
+        assert_eq!(
+            bounded_range(Some("bytes=-209715200"), len - 209715200, len - 1),
+            (len - MAX_PROTOCOL_RESPONSE_BYTES, len - 1)
+        );
+        assert_eq!(
+            bounded_range(Some("bytes=17-20"), 17, 20),
+            (17, 20)
+        );
+        assert_eq!(
+            bounded_range(Some("bytes=100-"), 100, len - 1),
+            (100, 100 + MAX_PROTOCOL_RESPONSE_BYTES - 1)
+        );
     }
 
     #[test]
