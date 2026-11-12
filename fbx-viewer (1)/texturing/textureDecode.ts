@@ -5,6 +5,7 @@ import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js';
 import { TGALoader } from 'three/examples/jsm/loaders/TGALoader.js';
 import UTIF from 'three/examples/jsm/libs/utif.module.js';
 import { readPng16 } from './png';
+import { checkedTexturePixels, MAX_TEXTURE_IMPORT_DECODED_BYTES, MAX_TEXTURE_IMPORT_SOURCE_BYTES } from './textureLimits';
 
 /**
  * TEXTURE DECODING
@@ -151,22 +152,28 @@ const decodeTiff = (bytes: Uint8Array): DecodedPicture => {
 
 // --- PSD -----------------------------------------------------------------------------------------
 
-/** Unpacks one PackBits run-length row of `length` bytes from `source` at `at`, into `out` at `to`. */
+/** Read a PackBits row without accepting short or overflowing runs. */
 const unpackBits = (source: Uint8Array, at: number, end: number, out: Uint8Array, to: number, length: number): void => {
     let written = 0;
     while (at < end && written < length) {
         const header = (source[at++] << 24) >> 24;
         if (header >= 0) {
-            const run = Math.min(header + 1, length - written);
+            const run = header + 1;
+            if (run > length - written || run > end - at) throw new Error('The PSD has a damaged packed row.');
             out.set(source.subarray(at, at + run), to + written);
-            at += header + 1;
+            at += run;
             written += run;
         } else if (header !== -128) {
-            const run = Math.min(1 - header, length - written);
+            const run = 1 - header;
+            if (run > length - written || at >= end) throw new Error('The PSD has a damaged packed row.');
             out.fill(source[at++], to + written, to + written + run);
             written += run;
         }
     }
+    // A trailing -128 is a legal PackBits no-op; other surplus or missing
+    // payload is an invalid row rather than implicit transparent pixels.
+    while (at < end && source[at] === 0x80) at++;
+    if (written !== length || at !== end) throw new Error('The PSD has a truncated or excessive packed row.');
 };
 
 /**
@@ -174,8 +181,14 @@ const unpackBits = (source: Uint8Array, at: number, end: number, out: Uint8Array
  * compatibility"), RGB or greyscale, raw or run-length packed, at 8, 16 or 32 bits.
  */
 export const decodePsd = (bytes: Uint8Array): DecodedPicture => {
+    if (bytes.byteLength > MAX_TEXTURE_IMPORT_SOURCE_BYTES) throw new Error('PSD exceeds the texture import file budget.');
+    if (bytes.byteLength < 40 || bytes[0] !== 0x38 || bytes[1] !== 0x42
+        || bytes[2] !== 0x50 || bytes[3] !== 0x53) {
+        throw new Error('The PSD header is malformed.');
+    }
     const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
     const version = view.getUint16(4);
+    if (version !== 1 && version !== 2) throw new Error('The PSD version is unsupported.');
     const planes = view.getUint16(12);
     const height = view.getUint32(14);
     const width = view.getUint32(18);
@@ -183,30 +196,57 @@ export const decodePsd = (bytes: Uint8Array): DecodedPicture => {
     const mode = view.getUint16(24);
     if (mode !== 3 && mode !== 1) throw new Error('This PSD file is not RGB or greyscale: save it as RGB to import it.');
     if (depth !== 8 && depth !== 16 && depth !== 32) throw new Error('This PSD file has a bit depth that is not read here.');
+    const colour = mode === 3 ? 3 : 1;
+    if (planes < colour || planes > 16) throw new Error('The PSD has an unsupported channel count.');
+    const pixels = checkedTexturePixels(width, height);
     const wide = version === 2;
-    let at = 26;
-    at += 4 + view.getUint32(at);
-    at += 4 + view.getUint32(at);
-    at += (wide ? 8 : 4) + (wide ? Number(view.getBigUint64(at)) : view.getUint32(at));
-    const compression = view.getUint16(at);
-    at += 2;
     const size = depth / 8;
     const rowBytes = width * size;
     const planeBytes = rowBytes * height;
-    const colour = mode === 3 ? 3 : 1;
     const kept = Math.min(planes, colour + 1);
+    if (planes * planeBytes > MAX_TEXTURE_IMPORT_DECODED_BYTES) {
+        throw new Error('PSD planes exceed the texture import decompression budget.');
+    }
+
+    let at = 26;
+    const skipSection = (lengthBytes: 4 | 8): void => {
+        if (at + lengthBytes > bytes.byteLength) throw new Error('The PSD has truncated metadata.');
+        const length = lengthBytes === 8 ? Number(view.getBigUint64(at)) : view.getUint32(at);
+        if (!Number.isSafeInteger(length) || length > bytes.byteLength - at - lengthBytes) {
+            throw new Error('The PSD has a damaged section length.');
+        }
+        at += lengthBytes + length;
+    };
+    skipSection(4); // Colour mode data
+    skipSection(4); // Image resources
+    skipSection(wide ? 8 : 4); // Layer/mask info
+    if (at + 2 > bytes.byteLength) throw new Error('The PSD is missing its flattened image.');
+    const compression = view.getUint16(at);
+    at += 2;
+
     const data = new Uint8Array(kept * planeBytes);
     if (compression === 0) {
-        for (let plane = 0; plane < kept; plane++) data.set(bytes.subarray(at + plane * planeBytes, at + (plane + 1) * planeBytes), plane * planeBytes);
+        if (planes * planeBytes > bytes.byteLength - at) throw new Error('The PSD has truncated raw image data.');
+        for (let plane = 0; plane < kept; plane++) {
+            data.set(bytes.subarray(at + plane * planeBytes, at + (plane + 1) * planeBytes), plane * planeBytes);
+        }
     } else if (compression === 1) {
-        // A table of each row's packed length, every plane's rows in turn, then the rows themselves.
+        // Validate the complete lengths table and all row boundaries before
+        // decoding. A malformed PackBits run must never silently fill a row.
         const counts = planes * height;
         const countBytes = wide ? 4 : 2;
+        if (counts > Math.floor((bytes.byteLength - at) / countBytes)) {
+            throw new Error('The PSD has a truncated packed-row table.');
+        }
         let rowAt = at + counts * countBytes;
-        for (let row = 0; row < counts; row++) {
-            const length = wide ? view.getUint32(at + row * 4) : view.getUint16(at + row * 2);
-            const plane = Math.floor(row / height);
-            if (plane < kept) unpackBits(bytes, rowAt, rowAt + length, data, plane * planeBytes + (row % height) * rowBytes, rowBytes);
+        for (let index = 0; index < counts; index++) {
+            const length = wide ? view.getUint32(at + index * 4) : view.getUint16(at + index * 2);
+            if (length > bytes.byteLength - rowAt) throw new Error('The PSD has a truncated packed row.');
+            const plane = Math.floor(index / height);
+            if (plane < kept) {
+                unpackBits(bytes, rowAt, rowAt + length, data,
+                    plane * planeBytes + (index % height) * rowBytes, rowBytes);
+            }
             rowAt += length;
         }
     } else {
@@ -219,8 +259,8 @@ export const decodePsd = (bytes: Uint8Array): DecodedPicture => {
         if (size === 2) return samples.getUint16(offset) / 65535;
         return samples.getFloat32(offset);
     };
-    const rgba = new Float32Array(width * height * 4);
-    for (let pixel = 0; pixel < width * height; pixel++) {
+    const rgba = new Float32Array(pixels * 4);
+    for (let pixel = 0; pixel < pixels; pixel++) {
         const o = pixel * 4;
         const first = read(0, pixel);
         rgba[o] = first;
