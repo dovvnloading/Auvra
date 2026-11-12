@@ -730,7 +730,9 @@ class ProjectRepository:
                 raise
             self._dirty = True
             try:
-                self.prune_unreferenced_assets()
+                # Keep every asset captured by the point, even if it was not
+                # referenced by a document. Only discard newer extra blobs.
+                self.prune_unreferenced_assets(set(live_entries) - set(manifest))
             except (OSError, ValueError):
                 # Two-phase deletion keeps even locked extras recoverable.
                 pass
