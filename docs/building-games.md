@@ -47,6 +47,8 @@ The desktop targets copy a prebuilt Auvra game player for that system, so you ca
 
 Every build carries a `THIRD_PARTY_NOTICES.txt` covering the players it includes, and an `auvra-build.json` marker that lists each file with its size and hash.
 
+**Desktop asset response limit:** The Windows, Linux and macOS players buffer each custom-protocol response in memory. To prevent a single asset request from allocating hundreds of MiB, a request without a `Range` header for a file larger than **16 MiB** returns HTTP 413 instead of loading the file. Byte-range requests are served with `206 Partial Content` in chunks of at most 16 MiB; media clients can request further chunks for playback or seeking. Large models and other assets loaded through ordinary whole-file fetches must be split or reduced to 16 MiB or less for desktop builds. The web target does not use this custom protocol and is not subject to this response limit.
+
 ### Prepared models
 
 A build does the slow work on each model once, so the game does not repeat it on every launch. Before it asks where to put the game, Auvra prepares each model, attachment and animation file the project uses, one at a time in the background, and the game then loads those prepared files. Each is a GLB beside its source file, holding:
