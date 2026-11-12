@@ -1,4 +1,4 @@
-import type * as THREE from 'three';
+import * as THREE from 'three';
 import type { LevelObject, LoadedModelData } from '../types';
 import type { AssetSelection, GameContentLoader } from '../utils/projectHydration';
 import type { LevelAssetNeeds } from './levelAssets';
@@ -41,7 +41,7 @@ const texturePixelBytes = (texture: THREE.Texture): number => {
     // Packed 16-bit RGB(A) and 24+8 depth/stencil occupy one word per pixel.
     if (texture.type === THREE.UnsignedShort4444Type
         || texture.type === THREE.UnsignedShort5551Type
-        || texture.type === THREE.UnsignedShort565Type) return 2;
+) return 2;
     if (texture.type === THREE.UnsignedInt248Type || texture.format === THREE.DepthStencilFormat) return 4;
 
     const channels = texture.format === THREE.RedFormat || texture.format === THREE.DepthFormat ? 1
