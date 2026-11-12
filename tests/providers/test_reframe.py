@@ -12,7 +12,7 @@ from unittest import mock
 
 from Auvra.providers.adapters import MediaJob
 from Auvra.providers.errors import ProviderError
-from Auvra.providers.reframe import MODEL, ReframeAdapter, _Blobs, build_render_config, find_home, read_bundle_header
+from Auvra.providers.reframe import MODEL, ReframeAdapter, _Blobs, _MAX_MATERIAL_PICTURE_BYTES, build_render_config, find_home, read_bundle_header
 from Auvra.providers.reframe_worker import fog_transmittance, panorama_along_view
 from Auvra.providers.transport import StdlibTransport
 
@@ -62,6 +62,61 @@ class BundleTests(unittest.TestCase):
             picture = {"offset": 0, "length": 4}
             config = self.config({"meshes": [dict(MESH, material={"baseColorTexture": picture, "opacityTexture": picture})]}, bytes(96), Path(raw))
             self.assertTrue(config["objects"][0]["material"]["opacityTexture"].startswith("data:image/png;base64,"))
+
+    def test_oversized_material_picture_is_rejected_before_any_read_or_seek(self) -> None:
+        class NoPayloadRead:
+            def seek(self, *_args):
+                raise AssertionError("oversized picture must not seek")
+
+            def read(self, *_args):
+                raise AssertionError("oversized picture must not read")
+
+        with tempfile.TemporaryDirectory() as raw:
+            length = _MAX_MATERIAL_PICTURE_BYTES + 1
+            blobs = _Blobs(NoPayloadRead(), 0, length, Path(raw))
+            with self.assertRaises(ProviderError) as caught:
+                blobs.picture({"offset": 0, "length": length})
+            self.assertIn("size budget", caught.exception.message)
+            self.assertEqual(blobs.picture_bytes, 0)
+
+    def test_material_picture_aggregate_limit_rejects_before_next_read(self) -> None:
+        class TrackedInput(io.BytesIO):
+            def __init__(self, payload: bytes) -> None:
+                super().__init__(payload)
+                self.reads: list[int] = []
+
+            def read(self, size: int = -1) -> bytes:
+                self.reads.append(size)
+                return super().read(size)
+
+        with tempfile.TemporaryDirectory() as raw:
+            source = TrackedInput(bytes(32))
+            blobs = _Blobs(source, 0, 32, Path(raw))
+            with mock.patch("Auvra.providers.reframe._MAX_MATERIAL_PICTURE_BYTES", 8), \
+                 mock.patch("Auvra.providers.reframe._MAX_SCENE_MATERIAL_PICTURE_BYTES", 12):
+                first = blobs.picture({"offset": 0, "length": 8})
+                self.assertTrue(first.startswith("data:image/png;base64,"))
+                with self.assertRaises(ProviderError) as caught:
+                    blobs.picture({"offset": 8, "length": 5})
+            self.assertIn("size budget", caught.exception.message)
+            self.assertEqual(source.reads, [8])
+            self.assertEqual(blobs.picture_bytes, 8)
+
+    def test_truncated_material_picture_is_not_base64_encoded(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            # The advertised bundle may shrink after its size was measured.
+            blobs = _Blobs(io.BytesIO(b"abc"), 0, 100, Path(raw))
+            with self.assertRaises(ProviderError):
+                blobs.picture({"offset": 0, "length": 4})
+            self.assertEqual(blobs.picture_bytes, 0)
+
+    def test_many_materials_share_one_aggregate_picture_budget(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            mesh = dict(MESH, material={"baseColorTexture": {"offset": 0, "length": 4}})
+            with mock.patch("Auvra.providers.reframe._MAX_SCENE_MATERIAL_PICTURE_BYTES", 8):
+                with self.assertRaises(ProviderError) as caught:
+                    self.config({"meshes": [mesh, mesh, mesh]}, bytes(96), Path(raw))
+            self.assertIn("size budget", caught.exception.message)
 
     def _config(self, **extra: object) -> dict:
         with tempfile.TemporaryDirectory() as raw:
