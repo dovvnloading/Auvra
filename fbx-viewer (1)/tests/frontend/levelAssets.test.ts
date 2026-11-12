@@ -469,7 +469,7 @@ describe('resident texture GPU bytes', () => {
         depth.generateMipmaps = false;
         expect(objectMemoryBytes(texturedModel(depth))).toBe(32);
 
-        const packed = new THREE.DataTexture(new Uint16Array(0), 4, 4, THREE.RGBFormat, THREE.UnsignedShort565Type);
+        const packed = new THREE.DataTexture(new Uint16Array(0), 4, 4, THREE.RGBAFormat, THREE.UnsignedShort4444Type);
         packed.generateMipmaps = false;
         expect(objectMemoryBytes(texturedModel(packed))).toBe(32);
 
