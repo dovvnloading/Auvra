@@ -7,6 +7,11 @@ on:
   schedule:
     - cron: "17 4 * * 1"
 
+concurrency:
+  # Only obsolete pull-request runs are canceled; never cancel main or scheduled scans.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 
