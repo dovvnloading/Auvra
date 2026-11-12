@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { decodePicture, holdsLightBeyondWhite, limitPictureSize, pictureToRgba8, sniffPictureFormat, browserReadsWholly } from '../../texturing/textureDecode';
+import { decodePicture, decodePsd, holdsLightBeyondWhite, limitPictureSize, pictureToRgba8, sniffPictureFormat, browserReadsWholly } from '../../texturing/textureDecode';
 import { encodePng16 } from '../../texturing/png';
 
 // The test page's Blob cannot stream; the PNG reader and writer stream theirs (a worker's can).
@@ -119,6 +119,31 @@ describe('texture pictures', () => {
         const eight = await decodePicture(psd(1, 1, 8, [[255], [128], [0], [64]], true));
         expect(eight.channels).toBe(4);
         expect(eight.rgba[3]).toBeCloseTo(64 / 255, 5);
+    });
+
+    it('rejects giant PSD dimensions before allocating the flattened picture', () => {
+        const huge = psd(1, 1, 8, [[1], [2], [3]], false);
+        const view = new DataView(huge.buffer);
+        view.setUint32(14, 60_000);
+        view.setUint32(18, 60_000);
+        expect(() => decodePsd(huge)).toThrow('pixel budget');
+        view.setUint32(14, 0);
+        view.setUint32(18, 1);
+        expect(() => decodePsd(huge)).toThrow('pixel budget');
+    });
+
+    it('rejects truncated PSD raw and PackBits rows and impossible section lengths', () => {
+        const raw = psd(2, 1, 8, [[1, 2], [3, 4], [5, 6]], false);
+        expect(() => decodePsd(raw.subarray(0, raw.length - 1))).toThrow('truncated raw');
+        const packed = psd(2, 1, 8, [[1, 2], [3, 4], [5, 6]], true);
+        expect(() => decodePsd(packed.subarray(0, packed.length - 1))).toThrow('truncated packed');
+        const malformedRun = packed.slice();
+        // Three 2-byte row lengths follow the 40-byte header.
+        malformedRun[46] = 127;
+        expect(() => decodePsd(malformedRun)).toThrow('damaged packed row');
+        const badSection = raw.slice();
+        new DataView(badSection.buffer).setUint32(26, 0xffffffff);
+        expect(() => decodePsd(badSection)).toThrow('section length');
     });
 
     it('keep light beyond 1 in an HDR picture', async () => {
