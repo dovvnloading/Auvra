@@ -362,7 +362,7 @@ fn requested_span(range: Option<&str>, len: u64) -> Span {
 /// Content-Range reports the actual returned subsection so media clients can
 /// request later chunks. Arithmetic stays bounded even for multi-GiB files.
 fn bounded_range(range: Option<&str>, start: u64, end: u64) -> (u64, u64) {
-    if end - start + 1 <= MAX_PROTOCOL_RESPONSE_BYTES {
+    if end - start < MAX_PROTOCOL_RESPONSE_BYTES {
         return (start, end);
     }
     if range.is_some_and(|header| header.trim().starts_with("bytes=-")) {
