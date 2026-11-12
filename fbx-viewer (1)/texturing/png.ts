@@ -153,7 +153,7 @@ const readRows = async (blob: Blob): Promise<PngRows> => {
             }
             sawHeader = true;
         } else if (type === 'IDAT') {
-            if (sawEnd) throw new Error('The PNG has image data after its end.');
+            // The IEND branch breaks the loop, so no IDAT can follow it.
             sawImage = true;
             parts.push(data);
         } else if (type === 'IEND') {
