@@ -480,7 +480,7 @@ describe('resident texture GPU bytes', () => {
         const compressed = new THREE.CompressedTexture([
             { data: new Uint8Array(64), width: 4, height: 4 },
             { data: new Uint8Array(16), width: 2, height: 2 },
-        ], 4, 4, THREE.RGBA_S3TC_DXT5_Format);
+        ] as unknown as ImageData[], 4, 4, THREE.RGBA_S3TC_DXT5_Format);
         expect(objectMemoryBytes(texturedModel(compressed))).toBe(80);
 
         const group = new THREE.Group();
