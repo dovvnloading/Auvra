@@ -716,6 +716,7 @@ class ProjectRepository:
             (asset_staging / ".ready").write_text("ready\n", encoding="ascii", newline="\n")
             _fsync_file(asset_staging / ".ready")
             _fsync_directory(asset_staging)
+            _fsync_directory(asset_staging.parent)
             prepared = True
 
             try:
