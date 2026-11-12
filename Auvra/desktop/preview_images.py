@@ -159,12 +159,22 @@ def _jpeg(stream) -> tuple[int, int]:
     in_scan = False
     scan_bytes = 0
     while True:
+        if in_scan:
+            # Skip entropy bytes in buffered blocks, not one read() per byte.
+            buffered = stream.peek(_READ)
+            if not buffered:
+                raise InvalidPreviewImage("generated JPEG is missing EOI")
+            offset = buffered.find(b"\xff")
+            if offset < 0:
+                scan_bytes += len(buffered)
+                stream.read(len(buffered))
+                continue
+            if offset:
+                scan_bytes += offset
+                stream.read(offset)
         marker_start = stream.read(1)
         if not marker_start:
             raise InvalidPreviewImage("generated JPEG is missing EOI")
-        if in_scan and marker_start != b"\xff":
-            scan_bytes += 1
-            continue
         if marker_start != b"\xff":
             raise InvalidPreviewImage("generated JPEG marker is invalid")
         marker = _exact(stream, 1)[0]
