@@ -209,6 +209,34 @@ class GameBuildTests(unittest.TestCase):
                 self.assertEqual((self.destination / BUILD_MARKER).read_bytes(), marker)
                 self.assert_no_leftovers()
 
+    def test_malformed_stream_reader_shape_closes_handle_and_legacy_size_prechecked(self):
+        asset_id = sha256(b"abc")
+        domains = project_domains(
+            models=[{"id": "model-1", "name": "Hero", "assetId": asset_id}],
+            textures=[], objects=[],
+        )
+        for shape in ("missing_fields", "extra_fields"):
+            with self.subTest(shape=shape):
+                stream = io.BytesIO(b"abc")
+                result = (stream,) if shape == "missing_fields" else (stream, "model/fbx", 3, "extra")
+                with self.assertRaises(GameBuildError) as caught:
+                    self.build(domains=domains, read_asset=lambda _: result)
+                self.assertEqual(caught.exception.code, "invalid_project")
+                self.assertTrue(stream.closed)
+                self.assert_no_leftovers()
+
+        class ReportedHugeBytes(bytes):
+            def __len__(self):
+                return 2 * 1024**3 + 1
+
+            def __bytes__(self):
+                raise AssertionError("oversized legacy asset must be rejected before copying")
+
+        with self.assertRaises(GameBuildError) as caught:
+            self.build(domains=domains, read_asset=lambda _: (ReportedHugeBytes(b"abc"), "model/fbx"))
+        self.assertEqual(caught.exception.code, "invalid_project")
+        self.assert_no_leftovers()
+
     def test_stream_reader_rejects_unbounded_chunks_and_maps_locked_reads(self):
         expected_id = sha256(b"abc")
         domains = project_domains(

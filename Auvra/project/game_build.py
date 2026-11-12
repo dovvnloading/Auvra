@@ -614,11 +614,22 @@ def _load_asset(read_asset: AssetReader, asset_id: str) -> Iterator[tuple[bytes 
     except (LookupError, OSError, ValueError) as error:
         raise GameBuildError("invalid_project", f"asset {asset_id} could not be read") from error
     if not isinstance(result, (tuple, list)) or len(result) not in (2, 3):
+        # Even a malformed tuple may transfer ownership of an opened stream.
+        # Close it before rejecting the shape, just as for invalid sizes.
+        data = result[0] if isinstance(result, (tuple, list)) and result else None
+        close = getattr(data, "close", None)
+        if callable(close):
+            close()
         raise GameBuildError("invalid_project", f"asset {asset_id} could not be read")
 
     data, mime = result[:2]
     essence = mime.split(";", 1)[0].strip().lower() if isinstance(mime, str) else ""
     if len(result) == 2 and isinstance(data, (bytes, bytearray, memoryview)):
+        # Reject oversized legacy buffers before making another whole-size
+        # allocation. For typed/multidimensional views len() is not byte size.
+        byte_count = data.nbytes if isinstance(data, memoryview) else len(data)
+        if byte_count > _MAX_ASSET_BYTES:
+            raise GameBuildError("invalid_project", f"asset {asset_id} exceeds the build size limit")
         payload = bytes(data)
         if len(payload) > _MAX_ASSET_BYTES:
             raise GameBuildError("invalid_project", f"asset {asset_id} exceeds the build size limit")
