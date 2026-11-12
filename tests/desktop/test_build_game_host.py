@@ -11,7 +11,7 @@ import unittest
 from Auvra.desktop.assets import AssetTransferRegistry, AssetTransportError, AssetUpload
 from Auvra.desktop.dialogs import DialogSelection, WinFormsProjectDialogs
 from Auvra.desktop.prepared_models import PreparedModelStore
-from Auvra.desktop.project_host import NativeProjectHost
+from Auvra.desktop.project_host import NativeProjectHost, _public_build_warnings
 from Auvra.host.validation import validate_message
 from Auvra.host.dispatcher import HostOperationError
 from Auvra.project.game_build import BUILD_MARKER, TEMPLATE_MANIFEST
@@ -130,7 +130,7 @@ class BuildGameHostTests(unittest.TestCase):
         self.assertEqual(result["projectId"], self.project_id)
         self.assertEqual(result["revision"], self.revision)
         self.assertRegex(result["handle"], r"^build-[A-Za-z0-9_-]+$")
-        self.assertEqual(set(result["report"]), {"target", "files", "sizeBytes", "assets", "levels"})
+        self.assertEqual(set(result["report"]), {"target", "files", "sizeBytes", "assets", "levels", "warnings"})
         self.assertEqual(result["report"]["target"], "web")
         self.assertEqual(result["report"]["assets"], 1)
         self.assertEqual(result["report"]["levels"], 1)
@@ -141,6 +141,45 @@ class BuildGameHostTests(unittest.TestCase):
                           "revision": 1, "ok": True, "result": result})
         self.assertNotIn(str(self.root), encoded)
         self.assertNotIn(self.root.as_posix(), encoded)
+
+    def test_build_report_surfaces_bounded_warning_codes_without_sensitive_values(self) -> None:
+        changed = self.host.handle("project.applyChanges", {
+            "projectId": self.project_id, "expectedRevision": self.revision,
+            "changes": [{
+                "domain": "metadata", "documentId": "game-settings", "operation": "upsert",
+                "document": {"id": "game-settings", "settings": {
+                    "name": "Demo Game",
+                    "playerBlueprintId": "missing-player",
+                    "network": {"enabled": True, "serverUrl": "not-a-websocket-url"},
+                }},
+            }],
+        })
+        self.revision = changed["revision"]
+        web = self._build()
+        self.assertEqual(
+            {entry["code"] for entry in web["report"]["warnings"]},
+            {"player_blueprint_missing", "multiplayer_offline"},
+        )
+        windows = self._build(target="windows")
+        self.assertIn("player_notices_missing", {entry["code"] for entry in windows["report"]["warnings"]})
+        for result in (web, windows):
+            validate_message({"protocol": "auvra.host/1", "type": "response", "id": "r1",
+                              "session": "s1", "revision": 1, "ok": True, "result": result})
+            self.assertNotIn(str(self.root), json.dumps(result))
+            self.assertNotIn("missing-player", json.dumps(result["report"]["warnings"]))
+            self.assertNotIn("not-a-websocket-url", json.dumps(result["report"]["warnings"]))
+
+    def test_unknown_or_path_bearing_builder_warnings_never_cross_protocol(self) -> None:
+        private = "/home/user/secret/project"
+        warnings = _public_build_warnings([
+            f"the previous build at {private} could not be removed",
+            f"future diagnostic at {private}",
+            "multiplayer is on but the server address is invalid",
+        ])
+        self.assertEqual([entry["code"] for entry in warnings],
+                         ["old_build_cleanup_failed", "other_build_warning", "multiplayer_offline"])
+        self.assertNotIn(private, json.dumps(warnings))
+        self.assertEqual(len(_public_build_warnings(["unrecognized"] * 1000)), 1)
 
     def test_handle_rebuilds_into_the_same_parent_without_a_dialog(self) -> None:
         first = self._build()
