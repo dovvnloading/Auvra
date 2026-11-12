@@ -711,8 +711,7 @@ mod tests {
             .map(|_| {
                 let path = path.clone();
                 std::thread::spawn(move || {
-                    let response =
-                        read_span(&path, Some("bytes=0-18446744073709551615")).unwrap();
+                    let response = read_span(&path, Some("bytes=0-18446744073709551615")).unwrap();
                     assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
                     response.body().len() as u64
                 })
