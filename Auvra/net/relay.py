@@ -257,6 +257,11 @@ def _payload(value: Any) -> bool:
 
 # --- Rooms ---------------------------------------------------------------------
 
+def _wire_bytes(message: dict[str, Any]) -> bytes:
+    """Encode the UTF-8 JSON sent to browsers without expanding Unicode to ASCII escapes."""
+    return json.dumps(message, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+
+
 @dataclass(eq=False)
 class Peer:
     id: str
@@ -269,7 +274,7 @@ class Peer:
     async def send(self, message: dict[str, Any]) -> bool:
         """Send to one peer without retaining an unbounded backlog on a slow link."""
         try:
-            frame = encode_frame(_OP_TEXT, json.dumps(message, separators=(",", ":")).encode("utf-8"))
+            frame = encode_frame(_OP_TEXT, _wire_bytes(message))
             if self.writer.transport.get_write_buffer_size() + len(frame) > MAX_PEER_PENDING_BYTES:
                 self.writer.close()
                 return False
@@ -418,6 +423,10 @@ class Relay:
             if not isinstance(name, str) or not 0 < len(name) <= MAX_EVENT_NAME_LENGTH or not _payload(message.get("payload")):
                 raise ProtocolError("bad_message", "events need a name and a plain payload")
             relayed = {"t": "event", "from": peer.id, "name": name, "payload": message.get("payload")}
+            # The relay adds a sender ID and reshapes its envelope. Reject at the
+            # source rather than silently forwarding a frame clients would drop.
+            if len(_wire_bytes(relayed)) > MAX_MESSAGE_BYTES:
+                raise ProtocolError("bad_message", "event is too large to relay")
             target = message.get("to")
             if target is None:
                 await self.broadcast(room, relayed, skip=peer)
