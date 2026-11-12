@@ -307,7 +307,8 @@ describe('phones and devices without BC', () => {
             keep: async (id, signature) => { writes.push({ id, signature }); },
         };
         const desktop = { bptc: true, rgtc: true };
-        const loader = createMaterialTextureLoader({ compress: true, cache, support: desktop, alsoKeepFor: PHONE_SUPPORTS });
+        const projectAbort = new AbortController();
+        const loader = createMaterialTextureLoader({ compress: true, cache, support: desktop, alsoKeepFor: PHONE_SUPPORTS, signal: projectAbort.signal });
         const fetchSpy = vi.spyOn(globalThis, 'fetch');
         try {
             setProjectTextureLoader(loader);
@@ -324,9 +325,10 @@ describe('phones and devices without BC', () => {
             // 13 foreground fetches; no job waiting behind the stalled one may
             // refetch/decode a large image ahead of its turn.
             expect(fetchSpy).toHaveBeenCalledTimes(13);
-            setProjectTextureLoader(null); // Closing/swapping projects cancels its old queue.
+            projectAbort.abort(); // Closing a project cancels work even before its loader is replaced.
             resume();
             await phoneVersionsKept();
+            setProjectTextureLoader(null);
             expect(fetchSpy).toHaveBeenCalledTimes(13);
             expect(writes.some(write => write.signature === astc)).toBe(false);
 
