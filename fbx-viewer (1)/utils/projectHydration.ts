@@ -326,7 +326,7 @@ export function createGameContentLoader(
         keep: options.keepCompressedTexture,
       };
       // Where compressed textures can be kept (the editor), their phone versions are kept too, for built games.
-      projectTextureLoader = createMaterialTextureLoader({ compress: compressTextures, cache, ...(options.keepCompressedTexture ? { alsoKeepFor: PHONE_SUPPORTS } : {}) });
+      projectTextureLoader = createMaterialTextureLoader({ compress: compressTextures, cache, signal, ...(options.keepCompressedTexture ? { alsoKeepFor: PHONE_SUPPORTS } : {}) });
       // Terrain arrays keep their compressed slices there too (terrainLayerTextures.ts).
       setProjectCompressedCache(compressTextures ? cache : null);
       setProjectTextureLoader(projectTextureLoader);
