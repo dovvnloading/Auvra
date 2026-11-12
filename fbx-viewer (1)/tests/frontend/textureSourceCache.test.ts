@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { createNode, graphContentKey, normalizeTextureGraph } from '../../texturing/graph/document';
 import { TextureGraphEvaluator } from '../../texturing/graph/evaluator';
 import { sourceTextureKey } from '../../texturing/graph/sourceTextureKey';
+import { graphStampContentKey } from '../../texturing/paint/graphStamps';
 import type { TextureGraph } from '../../texturing/graph/types';
 
 const bitmap = { ...createNode('bitmap', 0, 0, { texture: 'picture' }), id: 'picture-node' };
@@ -94,4 +95,32 @@ describe('texture source revision cache keys', () => {
         first.source.needsUpdate = true;
         expect(sourceTextureKey(first)).not.toBe(refreshed);
     });
+
+    it('revises brush stamp keys for replaced defaults and bound picture overrides', () => {
+        const brushGraph = normalizeTextureGraph({
+            version: 1, size: { w: 6, h: 6 }, seed: 1,
+            parameters: [{ name: 'paintPhoto', label: 'Paint photo', kind: 'texture', default: 'default' }],
+            nodes: [{ ...bitmap, params: { ...bitmap.params, texture: { $bind: 'paintPhoto' } } }],
+            links: [],
+        });
+        let normal = new THREE.Texture();
+        let override = new THREE.Texture();
+        const texture = (id: string) => id === 'default' ? normal : id === 'override' ? override : null;
+        const stamp = { graphId: 'brush', output: '', values: { paintPhoto: 'override' } };
+        const key = () => graphStampContentKey(stamp, brushGraph, () => undefined, texture);
+        const initial = key();
+        expect(key()).toBe(initial);
+        override = new THREE.Texture();
+        const replaced = key();
+        expect(replaced).not.toBe(initial);
+        override.needsUpdate = true;
+        expect(key()).not.toBe(replaced);
+
+        const unmodifiedStamp = { ...stamp, values: {} };
+        const defaultKey = () => graphStampContentKey(unmodifiedStamp, brushGraph, () => undefined, texture);
+        const initialDefault = defaultKey();
+        normal = new THREE.Texture();
+        expect(defaultKey()).not.toBe(initialDefault);
+    });
+
 });
