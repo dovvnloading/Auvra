@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 from Auvra.desktop.assets import AssetTransferRegistry, AssetTransportError, AssetUpload
 from Auvra.desktop.dialogs import DialogSelection, WinFormsProjectDialogs
@@ -15,6 +16,7 @@ from Auvra.desktop.project_host import NativeProjectHost, _public_build_warnings
 from Auvra.host.validation import validate_message
 from Auvra.host.dispatcher import HostOperationError
 from Auvra.project.game_build import BUILD_MARKER, TEMPLATE_MANIFEST
+from Auvra.project.assets import AssetStore
 from tests.desktop.test_dialogs import _Forms
 
 
@@ -141,6 +143,42 @@ class BuildGameHostTests(unittest.TestCase):
                           "revision": 1, "ok": True, "result": result})
         self.assertNotIn(str(self.root), encoded)
         self.assertNotIn(self.root.as_posix(), encoded)
+
+    def test_native_build_reads_assets_only_in_bounded_chunks(self) -> None:
+        original_open = AssetStore.open
+        read_sizes: list[int] = []
+        opened = []
+
+        class BoundedReader:
+            def __init__(self, source):
+                self.source = source
+                self.closed = False
+
+            def read(self, size=-1):
+                read_sizes.append(size)
+                if not 0 < size <= 1024 * 1024:
+                    raise AssertionError("native build read an entire asset")
+                return self.source.read(size)
+
+            def close(self):
+                self.closed = True
+                self.source.close()
+
+        def guarded_open(store, asset_id):
+            reader = BoundedReader(original_open(store, asset_id))
+            opened.append(reader)
+            return reader
+
+        with mock.patch.object(AssetStore, "open", guarded_open):
+            result = self._build()
+
+        self.assertEqual(result["report"]["assets"], 1)
+        self.assertTrue(read_sizes)
+        self.assertTrue(all(0 < size <= 1024 * 1024 for size in read_sizes))
+        self.assertTrue(all(reader.closed for reader in opened))
+        asset_id = self._source_id()
+        packaged = self.builds / "Demo Game-Web" / "game" / "assets" / f"{asset_id}.fbx"
+        self.assertEqual(packaged.read_bytes(), MODEL_BYTES)
 
     def test_build_report_surfaces_bounded_warning_codes_without_sensitive_values(self) -> None:
         changed = self.host.handle("project.applyChanges", {
