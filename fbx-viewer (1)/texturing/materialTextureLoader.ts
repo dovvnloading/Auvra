@@ -128,12 +128,13 @@ export const textureFromCompressed = (picture: CompressedPicture, role: TextureR
     return texture;
 };
 
-let projectLoader: ((url: string, request?: MaterialTextureRequest) => Promise<THREE.Texture>) | null = null;
+type ProjectTextureLoader = (url: string, request?: MaterialTextureRequest) => Promise<THREE.Texture>;
+let projectLoader: ProjectTextureLoader | null = null;
 let projectCache: CompressedTextureCache | null = null;
 // A project switch invalidates deferred encodes that belong to its previous loader.
-const phoneLoaderCancellations = new WeakMap<NonNullable<typeof projectLoader>, () => void>();
+const phoneLoaderCancellations = new WeakMap<ProjectTextureLoader, () => void>();
 /** Cancel a retired project's phone jobs without touching a newer loader. */
-export const cancelPhoneVersionsForLoader = (loader: NonNullable<typeof projectLoader>): void => {
+export const cancelPhoneVersionsForLoader = (loader: ProjectTextureLoader): void => {
     phoneLoaderCancellations.get(loader)?.();
 };
 
@@ -142,7 +143,7 @@ export const setProjectCompressedCache = (cache: CompressedTextureCache | null):
 export const projectCompressedCache = (): CompressedTextureCache | null => projectCache;
 
 /** The open project's texture loader (set as it loads), for textures outside material assets: decals. */
-export const setProjectTextureLoader = (loader: typeof projectLoader): void => {
+export const setProjectTextureLoader = (loader: ProjectTextureLoader | null): void => {
     if (projectLoader && projectLoader !== loader) cancelPhoneVersionsForLoader(projectLoader);
     projectLoader = loader;
 };
