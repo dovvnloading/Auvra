@@ -15,7 +15,7 @@ from tests.desktop.preview_fixtures import png as _png, png_chunk as _png_chunk
 
 # Real tiny encoded fixtures, not dimension-only headers.
 _JPEG = base64.b64decode(
-    "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAA0JCgsKCA0LCgsODg0PEyAVExISEyccHhcgLikxMC4pLSwzOko+MzZGNywtQFdBRkxOUlNSMj5aYVpQYEpRUk//2wBDAQ4ODhMREyYVFSZPNS01T09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT0//wAARCAACAAMDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwCvRRRXhH0R/9k="
+    "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAUDBAQEAwUEBAQFBQUGBwwIBwcHBw8LCwkMEQ8SEhEPERETFhwXExQaFRERGCEYGh0dHx8fExciJCIeJBweHx7/2wBDAQUFBQcGBw4ICA4eFBEUHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eH4eHh7/wAARCAACAAMDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwD5/ooor0jzz//Z"
 )
 _WEBP = base64.b64decode("UklGRjgAAABXRUJQVlA4ICwAAADQAQCdASoDAAIAAoBCJaACdLoB+AADsAD+3FH/8guWF1yNf+WfP4bOjAAAAA==")
 
@@ -111,6 +111,32 @@ class PreviewStoreTests(unittest.TestCase):
         for mime, payload in (("image/jpeg", _JPEG), ("image/webp", _WEBP)):
             with self.subTest(mime=mime), self.assertRaises(PreviewError):
                 self.store.ingest("job-1111111111111111", io.BytesIO(payload[:-1]), declared_mime=mime)
+
+    def test_full_decoder_rejects_corrupt_jpeg_tables_and_webp_payload(self) -> None:
+        # The container scanner sees a SOF, SOS, entropy bytes and EOI even when
+        # the Huffman table is unusable. Only actual JPEG decoding catches it.
+        bad_jpeg = bytearray(_JPEG)
+        table = bad_jpeg.index(b"\xff\xc4")
+        bad_jpeg[table + 4] = 0xff
+        # Preserve RIFF size, VP8 tag and canvas fields, but corrupt VP8 entropy.
+        bad_webp = bytearray(_WEBP)
+        bad_webp[30] = 0xff
+        for mime, payload in (("image/jpeg", bad_jpeg), ("image/webp", bad_webp)):
+            with self.subTest(mime=mime), self.assertRaises(PreviewError):
+                self.store.ingest("job-1111111111111111", io.BytesIO(payload), declared_mime=mime)
+        self.assertEqual(self.store._records, {})
+        self.assertEqual(list(self.store._root.glob("incoming-*")), [])
+
+    def test_jpeg_and_webp_large_canvas_rejected_before_decode(self) -> None:
+        huge_jpeg = bytearray(_JPEG)
+        frame = huge_jpeg.index(b"\xff\xc0")
+        huge_jpeg[frame + 5:frame + 9] = (5000).to_bytes(2, "big") * 2
+        huge_webp = bytearray(_WEBP)
+        huge_webp[26:30] = (5000).to_bytes(2, "little") * 2
+        for mime, payload in (("image/jpeg", huge_jpeg), ("image/webp", huge_webp)):
+            with self.subTest(mime=mime), self.assertRaises(PreviewError):
+                self.store.ingest("job-1111111111111111", io.BytesIO(payload), declared_mime=mime)
+        self.assertEqual(self.store._records, {})
 
     def test_truncated_crc_invalid_and_oversized_pngs_do_not_publish(self) -> None:
         valid = _png()
