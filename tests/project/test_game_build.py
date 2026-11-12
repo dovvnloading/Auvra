@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import os
 import tempfile
+import tracemalloc
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -124,6 +126,116 @@ class GameBuildTests(unittest.TestCase):
         self.assertEqual(written, sorted([item["path"] for item in marker["files"]] + [BUILD_MARKER]))
         self.assertEqual((report.files, report.assets, report.levels, report.warnings), (len(written), 3, 2, ()))
         self.assertEqual(report.bytes, sum((self.destination / p).stat().st_size for p in written))
+        self.assert_no_leftovers()
+
+    def test_large_streamed_asset_is_bounded_and_manifest_matches(self):
+        block = b"x" * (1024 * 1024)
+        remainder = 137
+        byte_count = 24 * len(block) + remainder
+        digest = hashlib.sha256()
+        for _ in range(24):
+            digest.update(block)
+        digest.update(block[:remainder])
+        asset_id = digest.hexdigest()
+
+        class PatternStream:
+            def __init__(self):
+                self.remaining = byte_count
+                self.requested: list[int] = []
+                self.closed = False
+
+            def read(self, size=-1):
+                self.requested.append(size)
+                if not 0 < size <= 1024 * 1024:
+                    raise AssertionError("asset stream must use bounded positive reads")
+                chunk = block[:min(size, self.remaining)]
+                self.remaining -= len(chunk)
+                return chunk
+
+            def close(self):
+                self.closed = True
+
+        stream = PatternStream()
+        domains = project_domains(
+            models=[{"id": "model-1", "name": "Large", "assetId": asset_id}],
+            textures=[], objects=[],
+        )
+        tracemalloc.start()
+        try:
+            report = self.build(domains=domains, read_asset=lambda _: (stream, "model/fbx", byte_count))
+            _, peak = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+        self.assertTrue(stream.closed)
+        self.assertEqual(stream.remaining, 0)
+        self.assertTrue(stream.requested)
+        self.assertLessEqual(max(stream.requested), 1024 * 1024)
+        # A build must not materialize the complete 24 MiB asset in Python.
+        self.assertLess(peak, 8 * 1024 * 1024)
+        asset_path = self.destination / "game" / "assets" / f"{asset_id}.fbx"
+        self.assertEqual(asset_path.stat().st_size, byte_count)
+        with asset_path.open("rb") as reader:
+            self.assertEqual(hashlib.file_digest(reader, "sha256").hexdigest(), asset_id)
+        self.assertEqual(self.load("game/game.json")["assets"], [
+            {"id": asset_id, "file": f"{asset_id}.fbx", "mime": "model/fbx", "size": byte_count},
+        ])
+        record = next(item for item in self.load(BUILD_MARKER)["files"] if item["path"].endswith(f"{asset_id}.fbx"))
+        self.assertEqual((record["size"], record["sha256"]), (byte_count, asset_id))
+        self.assertEqual(report.assets, 1)
+        self.assert_no_leftovers()
+
+    def test_streamed_asset_errors_preserve_previously_published_build(self):
+        self.build("baseline")
+        marker = (self.destination / BUILD_MARKER).read_bytes()
+        expected_id = sha256(b"correct")
+        domains = project_domains(
+            models=[{"id": "model-1", "name": "Hero", "assetId": expected_id}],
+            textures=[], objects=[],
+        )
+
+        for name, payload, declared_size in (
+            ("wrong_hash", b"tampered", len(b"tampered")),
+            ("truncated", b"ab", 3),
+            ("oversized", b"ab", 1),
+            ("too_big", b"", 2 * 1024**3 + 1),
+            ("negative", b"", -1),
+        ):
+            with self.subTest(name=name):
+                stream = io.BytesIO(payload)
+                with self.assertRaises(GameBuildError) as caught:
+                    self.build("rejected", domains=domains, read_asset=lambda _: (stream, "model/fbx", declared_size))
+                self.assertEqual(caught.exception.code, "invalid_project")
+                self.assertTrue(stream.closed)
+                self.assertEqual((self.destination / BUILD_MARKER).read_bytes(), marker)
+                self.assert_no_leftovers()
+
+    def test_stream_reader_rejects_unbounded_chunks_and_maps_locked_reads(self):
+        expected_id = sha256(b"abc")
+        domains = project_domains(
+            models=[{"id": "model-1", "name": "Hero", "assetId": expected_id}],
+            textures=[], objects=[],
+        )
+
+        class OvereagerStream(io.BytesIO):
+            def read(self, size=-1):
+                return b"x" * (size + 1)
+
+        stream = OvereagerStream()
+        with self.assertRaises(GameBuildError) as caught:
+            self.build(domains=domains, read_asset=lambda _: (stream, "model/fbx", 1024 * 1024 + 1))
+        self.assertEqual(caught.exception.code, "invalid_project")
+        self.assertTrue(stream.closed)
+        self.assert_no_leftovers()
+
+        class LockedStream(io.BytesIO):
+            def read(self, size=-1):
+                raise PermissionError("locked during asset copy")
+
+        locked = LockedStream(b"abc")
+        with self.assertRaises(GameBuildError) as caught:
+            self.build(domains=domains, read_asset=lambda _: (locked, "model/fbx", 3))
+        self.assertEqual(caught.exception.code, "locking")
+        self.assertTrue(locked.closed)
         self.assert_no_leftovers()
 
     def test_windows_build_ships_the_player_named_after_the_game(self):
