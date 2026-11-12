@@ -6,6 +6,7 @@ import type { TextureGraph } from '../../texturing/graph/types';
 import { DataUtils } from 'three';
 import { encodePng, encodePng16, pngBitDepth, readPng16, readPng16Half, toHalf } from '../../texturing/png';
 import { crc32 } from '../../texturing/zip';
+import { decodePicture } from '../../texturing/textureDecode';
 
 // The test page's Blob cannot be read as a stream; Node's can, as a browser's can.
 globalThis.Blob = NodeBlob as unknown as typeof Blob;
@@ -19,6 +20,36 @@ const chunk = (type: string, data: Uint8Array): Uint8Array => {
     out.set(data, 8);
     view.setUint32(8 + data.length, crc32(out.subarray(4, 8 + data.length)));
     return out;
+};
+
+/** Small RGB, grayscale or RGBA PNG with explicit, unfiltered samples and optional chunk order. */
+const keyedPng = (
+    colourType: 0 | 2 | 6, depth: 8 | 16, samples: readonly number[],
+    transparency?: Uint8Array, placement: 'before' | 'after' | 'duplicate' = 'before',
+): Blob => {
+    const channels = colourType === 0 ? 1 : colourType === 2 ? 3 : 4;
+    if (samples.length % channels !== 0) throw new Error('invalid PNG test pixels');
+    const header = new Uint8Array(13);
+    const view = new DataView(header.buffer);
+    view.setUint32(0, samples.length / channels);
+    view.setUint32(4, 1);
+    header[8] = depth;
+    header[9] = colourType;
+    const pixels = new Uint8Array(1 + samples.length * (depth / 8));
+    samples.forEach((sample, i) => {
+        if (depth === 16) {
+            pixels[1 + i * 2] = sample >>> 8;
+            pixels[2 + i * 2] = sample & 255;
+        } else pixels[1 + i] = sample;
+    });
+    const keyed = transparency ? chunk('tRNS', transparency) : null;
+    const image = chunk('IDAT', new Uint8Array(deflateSync(pixels)));
+    const parts: Uint8Array[] = [chunk('IHDR', header)];
+    if (keyed && placement !== 'after') parts.push(keyed);
+    parts.push(image);
+    if (keyed && placement !== 'before') parts.push(keyed);
+    parts.push(chunk('IEND', new Uint8Array(0)));
+    return new Blob([new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]), ...parts]);
 };
 
 describe('PNG pictures', () => {
@@ -67,6 +98,76 @@ describe('PNG pictures', () => {
         expect(new Uint8Array(await blob.slice(25, 26).arrayBuffer())[0]).toBe(0);
         const back = await readPng16(blob);
         for (let p = 0; p < grey.length; p++) expect(Math.round(back.data[p * 4] * 255)).toBe(grey[p]);
+    });
+
+    it('preserves 8-bit RGB tRNS key transparency in float and half-float readers', async () => {
+        const file = keyedPng(2, 8, [31, 17, 50, 31, 17, 51, 31, 17, 50], new Uint8Array([0, 31, 0, 17, 0, 50]));
+        const full = await readPng16(file);
+        expect(full.channels).toBe(4);
+        expect([full.data[3], full.data[7], full.data[11]]).toEqual([0, 1, 0]);
+        expect(Math.round(full.data[4] * 255)).toBe(31);
+        expect(Math.round(full.data[6] * 255)).toBe(51);
+        const half = await readPng16Half(file);
+        expect(half.channels).toBe(4);
+        expect([half.data[3], half.data[7], half.data[11]]).toEqual([toHalf(0), toHalf(1), toHalf(0)]);
+        expect(DataUtils.fromHalfFloat(half.data[4])).toBeCloseTo(31 / 255, 3);
+        const decoded = await decodePicture(new Uint8Array(await file.arrayBuffer()));
+        expect([decoded.depth, decoded.channels]).toEqual([8, 4]);
+        expect([decoded.rgba[3], decoded.rgba[7], decoded.rgba[11]]).toEqual([0, 1, 0]);
+    });
+
+    it('matches 16-bit RGB tRNS keys at full source precision', async () => {
+        const file = keyedPng(2, 16, [500, 12345, 65000, 500, 12345, 64999],
+            new Uint8Array([0x01, 0xf4, 0x30, 0x39, 0xfd, 0xe8]));
+        const full = await readPng16(file);
+        const half = await readPng16Half(file);
+        expect(full.channels).toBe(4);
+        expect([full.data[3], full.data[7]]).toEqual([0, 1]);
+        expect([half.data[3], half.data[7]]).toEqual([0, 0x3c00]);
+        expect(full.data[6]).toBeCloseTo(64999 / 65535, 6);
+    });
+
+    it.each([
+        [8, [0, 140, 255], [0, 140]],
+        [16, [0, 1000, 65535], [0x03, 0xe8]],
+    ] as const)('preserves %i-bit grayscale tRNS without quantizing the source', async (depth, samples, key) => {
+        const file = keyedPng(0, depth, samples, new Uint8Array(key));
+        const full = await readPng16(file);
+        expect(full.channels).toBe(2);
+        expect([full.data[3], full.data[7], full.data[11]]).toEqual([1, 0, 1]);
+        expect(full.data[4]).toBe(full.data[5]);
+        const half = await readPng16Half(file);
+        expect(half.channels).toBe(4); // A transparent gray texture needs an alpha channel.
+        expect([half.data[3], half.data[7], half.data[11]]).toEqual([0x3c00, 0, 0x3c00]);
+        expect(half.data[4]).toBe(half.data[5]);
+        expect(half.data[5]).toBe(half.data[6]);
+        const decoded = await decodePicture(new Uint8Array(await file.arrayBuffer()));
+        expect(decoded.channels).toBe(2);
+        expect([decoded.rgba[3], decoded.rgba[7], decoded.rgba[11]]).toEqual([1, 0, 1]);
+    });
+
+    it('keeps unkeyed RGB and grayscale pictures opaque', async () => {
+        const rgb = await readPng16(keyedPng(2, 8, [10, 20, 30, 40, 50, 60]));
+        expect(rgb.channels).toBe(3);
+        expect([rgb.data[3], rgb.data[7]]).toEqual([1, 1]);
+        const gray = await readPng16Half(keyedPng(0, 16, [1000, 2000]));
+        expect(gray.channels).toBe(1);
+        expect(gray.data.length).toBe(2);
+    });
+
+    it('rejects malformed, repeated, late or illegal tRNS chunks', async () => {
+        const invalid = [
+            keyedPng(2, 8, [10, 20, 30], new Uint8Array([0, 10])),
+            keyedPng(0, 8, [10], new Uint8Array([0, 10, 0, 20, 0, 30])),
+            keyedPng(2, 8, [10, 20, 30], new Uint8Array([1, 10, 0, 20, 0, 30])),
+            keyedPng(6, 8, [10, 20, 30, 255], new Uint8Array([0, 10, 0, 20, 0, 30])),
+            keyedPng(2, 8, [10, 20, 30], new Uint8Array([0, 10, 0, 20, 0, 30]), 'after'),
+            keyedPng(2, 8, [10, 20, 30], new Uint8Array([0, 10, 0, 20, 0, 30]), 'duplicate'),
+        ];
+        for (const file of invalid) {
+            await expect(readPng16(file)).rejects.toThrow('transparency');
+            await expect(readPng16Half(file)).rejects.toThrow('transparency');
+        }
     });
 
     it('reads every row filter other tools write', async () => {

@@ -106,10 +106,10 @@ const toRgba = (source: ArrayLike<number>, width: number, height: number, channe
 
 const decodePng = async (bytes: Uint8Array): Promise<DecodedPicture> => {
     const depth = pngDepthOf(bytes);
-    const colourType = bytes[25];
-    const channels = ({ 0: 1, 2: 3, 4: 2, 6: 4 } as Record<number, 1 | 2 | 3 | 4>)[colourType];
-    const { width, height, data } = await readPng16(new Blob([asBuffer(bytes)]));
-    return { width, height, depth: depth === 16 ? 16 : 8, channels: channels ?? 4, hdr: false, rgba: data };
+    // The PNG reader reports effective channels: a tRNS key supplies alpha
+    // even when the source has only grey or RGB colour samples.
+    const { width, height, channels, data } = await readPng16(new Blob([asBuffer(bytes)]));
+    return { width, height, depth: depth === 16 ? 16 : 8, channels, hdr: false, rgba: data };
 };
 
 // --- TIFF ----------------------------------------------------------------------------------------
