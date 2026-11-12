@@ -18,6 +18,19 @@ from Auvra.diagnostics import trace_public_class
 
 _HASH = re.compile(r"^[0-9a-f]{64}$")
 _MANIFEST_LOCK = threading.RLock()
+# The blob is moved to this same-volume staging location before its manifest
+# entry is removed. A writer can replay either side of the deletion on open.
+_PENDING_DELETE = re.compile(r"^\.delete-([0-9a-f]{64})$")
+
+
+def _sync_directory(path: Path) -> None:
+    try:
+        fd = os.open(path, os.O_RDONLY)
+        try: os.fsync(fd)
+        finally: os.close(fd)
+    except OSError:
+        # Ordinary Windows directory handles cannot be fsynced.
+        pass
 
 # Terrain heightfields: a 16-byte header (magic, uint32 columns, uint32 rows)
 # followed by columns * rows row-major Float32 samples, all little-endian.
@@ -226,7 +239,12 @@ class AssetStore:
         return AssetReference(asset_id, size, mime, name)
 
     def remove(self, asset_id: str) -> bool:
-        """Remove one unreferenced content-addressed blob and its metadata."""
+        """Remove a blob without ever publishing an orphaned live filename.
+
+        First move the blob to durable, same-volume staging; then publish the
+        smaller manifest; finally unlink the staged bytes. A crash at either
+        boundary is reconciled by recover_pending_deletions on the next open.
+        """
 
         path = self.path_for(asset_id)
         if path.is_symlink() or (path.exists() and _is_reparse(path)):
@@ -243,24 +261,126 @@ class AssetStore:
                     raise ValueError("asset manifest is corrupt")
                 values = loaded
             existed = asset_id in values or path.exists()
-            if asset_id in values:
-                values.pop(asset_id)
-                temporary = manifest.with_name(f"manifest.json.tmp-{os.getpid()}-{uuid.uuid4().hex}")
-                try:
-                    temporary.write_text(
-                        json.dumps(values, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n",
-                        encoding="utf-8",
-                        newline="\n",
-                    )
-                    with temporary.open("a", encoding="utf-8") as stream:
-                        stream.flush()
-                        os.fsync(stream.fileno())
-                    os.replace(temporary, manifest)
-                finally:
-                    temporary.unlink(missing_ok=True)
-            _forget_verified(path)
-            path.unlink(missing_ok=True)
+            staged: Path | None = None
+            staging = self.content / ".incoming"
+            if path.exists() or asset_id in values:
+                staging.mkdir(parents=True, exist_ok=True)
+                if staging.is_symlink() or _is_reparse(staging):
+                    raise ValueError("unsafe asset staging directory")
+            if path.exists():
+                candidate = staging / f".delete-{asset_id}"
+                if candidate.exists() or candidate.is_symlink():
+                    raise ValueError("pending asset deletion requires recovery")
+                os.replace(path, candidate)
+                staged = candidate
+                _forget_verified(path)
+                _sync_directory(self.content)
+                _sync_directory(staging)
+            manifest_published = False
+            try:
+                if asset_id in values:
+                    values.pop(asset_id)
+                    # Keep even an unremovable temporary manifest out of the
+                    # strict Content/ tree's root. Rename remains atomic.
+                    temporary = staging / f"manifest.json.tmp-{os.getpid()}-{uuid.uuid4().hex}"
+                    try:
+                        temporary.write_text(
+                            json.dumps(values, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n",
+                            encoding="utf-8",
+                            newline="\n",
+                        )
+                        with temporary.open("a", encoding="utf-8") as stream:
+                            stream.flush()
+                            os.fsync(stream.fileno())
+                        os.replace(temporary, manifest)
+                        manifest_published = True
+                        _sync_directory(manifest.parent)
+                        _sync_directory(staging)
+                    finally:
+                        temporary.unlink(missing_ok=True)
+            except Exception:
+                # Roll back only when the manifest did not commit. An error
+                # cleaning up an already-published temp file must not revive
+                # an orphaned live blob.
+                if not manifest_published and staged is not None and staged.exists():
+                    try:
+                        os.replace(staged, path)
+                        _sync_directory(self.content)
+                        _sync_directory(staged.parent)
+                    except OSError:
+                        # The staged blob remains intact for verified replay
+                        # by the next writable project opener.
+                        pass
+                raise
+            if staged is not None:
+                # A sharing violation here is harmless to project integrity:
+                # the manifest and the live sha256/ files already agree.
+                staged.unlink()
+                _sync_directory(staged.parent)
             return existed
+
+    def recover_pending_deletions(self, *, writable: bool) -> bool:
+        """Reconcile interrupted removals before the project's tree check.
+
+        Returns False only when a read-only opener needs the writer lock to
+        restore a manifest-listed asset. Unlisted staged blobs are safe to
+        leave behind if Windows still holds a file handle open.
+        """
+
+        staging = self.content / ".incoming"
+        if not staging.exists():
+            return True
+        if staging.is_symlink() or _is_reparse(staging) or not staging.is_dir():
+            raise ValueError("unsafe asset staging directory")
+        with _MANIFEST_LOCK:
+            pending = sorted(
+                (entry for entry in staging.iterdir() if _PENDING_DELETE.fullmatch(entry.name)),
+                key=lambda entry: entry.name,
+            )
+            if not pending:
+                return True
+            manifest = self.root / "manifest.json"
+            if manifest.is_symlink() or (manifest.exists() and _is_reparse(manifest)):
+                raise ValueError("unsafe asset manifest")
+            try:
+                values = json.loads(manifest.read_text(encoding="utf-8")) if manifest.exists() else {}
+            except (OSError, ValueError) as exc:
+                raise ValueError("asset manifest is corrupt") from exc
+            if not isinstance(values, dict):
+                raise ValueError("asset manifest is corrupt")
+            for entry in pending:
+                info = entry.lstat()
+                if (not stat.S_ISREG(info.st_mode) or entry.is_symlink()
+                        or getattr(info, "st_file_attributes", 0) & 0x400):
+                    raise ValueError("unsafe pending asset deletion")
+                asset_id = _PENDING_DELETE.fullmatch(entry.name).group(1)
+                target = self.path_for(asset_id)
+                if target.is_symlink() or (target.exists() and _is_reparse(target)):
+                    raise ValueError("unsafe asset path")
+                if asset_id in values and not target.exists():
+                    metadata = values[asset_id]
+                    if (not isinstance(metadata, dict)
+                            or not isinstance(metadata.get("size"), int)
+                            or isinstance(metadata["size"], bool)
+                            or info.st_size != metadata["size"]
+                            or _file_digest(entry) != asset_id):
+                        raise ValueError("pending asset deletion does not match manifest")
+                    if not writable:
+                        return False
+                    os.replace(entry, target)
+                    _sync_directory(self.content)
+                    _sync_directory(staging)
+                elif writable:
+                    # Do not make opening a valid project depend on whether
+                    # a now-unreferenced staged file can be deleted yet.
+                    try:
+                        entry.unlink()
+                        _sync_directory(staging)
+                    except OSError:
+                        # Locked staging is outside the validated asset set;
+                        # retry its removal on a later writable open.
+                        pass
+            return True
 
     def remove_unreferenced(
         self,
