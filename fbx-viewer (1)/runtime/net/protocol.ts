@@ -113,6 +113,7 @@ export interface NetSession {
     serverTime(): number;
     /** Sends this peer's owned entity states; throttled to NET_LIMITS.stateRateHz, the latest call winning. */
     sendState(entities: NetEntityState[]): void;
+    /** Best-effort event: excess bursts are dropped locally (and diagnosed), never replayed late. */
     sendEvent(name: string, payload: NetPayload, to?: string): void;
     onState(listener: (from: string, frame: NetStateFrame) => void): () => void;
     onEvent(listener: (from: string, name: string, payload: NetPayload) => void): () => void;

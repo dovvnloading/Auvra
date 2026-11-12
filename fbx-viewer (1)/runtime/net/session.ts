@@ -20,6 +20,11 @@ const RECONNECT_MIN_MS = 1000;
 const RECONNECT_MAX_MS = 15000;
 /** Maximum bytes the client allows to queue on a stalled WebSocket. */
 const MAX_SOCKET_BUFFERED_BYTES = 4 * NET_LIMITS.maxMessageBytes;
+/** Leave relay capacity for timing jitter and the initial handshake. */
+const OUTBOUND_WINDOW_MS = 1000;
+const MAX_OUTBOUND_MESSAGES = NET_LIMITS.maxMessagesPerSecond - 24;
+/** Reserve 20 state updates/s, clock pings and additional control headroom. */
+const MAX_OUTBOUND_EVENTS = MAX_OUTBOUND_MESSAGES - NET_LIMITS.stateRateHz - 4;
 const textEncoder = new TextEncoder();
 
 const isRecord = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
@@ -113,6 +118,9 @@ export const createNetSession = (options: NetSessionOptions): NetSession => {
     let seq = 0;
     let pingId = 0;
     let backpressureWarned = false;
+    const outboundSentAt: number[] = [];
+    const eventSentAt: number[] = [];
+    let lastEventRateWarning = -Infinity;
     // A relay that rejects this build for good (other protocol version or game) is not retried.
     let rejected = false;
 
@@ -136,8 +144,23 @@ export const createNetSession = (options: NetSessionOptions): NetSession => {
         changed();
     };
 
-    const send = (message: unknown): boolean => {
+    const send = (message: unknown, kind: 'state' | 'event' | 'ping'): boolean => {
         if (!socket || status !== 'connected' || socket.readyState !== 1) return false;
+        const timestamp = now();
+        // The relay enforces a per-peer one-second window. Track every outgoing
+        // application frame, rather than limiting state alone. These arrays are
+        // bounded by the allowed frame counts and never retain dropped events.
+        while (outboundSentAt.length && timestamp - outboundSentAt[0] >= OUTBOUND_WINDOW_MS) outboundSentAt.shift();
+        while (eventSentAt.length && timestamp - eventSentAt[0] >= OUTBOUND_WINDOW_MS) eventSentAt.shift();
+        if (outboundSentAt.length >= MAX_OUTBOUND_MESSAGES
+            || (kind === 'event' && eventSentAt.length >= MAX_OUTBOUND_EVENTS)) {
+            if (kind === 'event' && timestamp - lastEventRateWarning >= OUTBOUND_WINDOW_MS) {
+                frontendDiagnostics.warning('net_event_rate_limited');
+                lastEventRateWarning = timestamp;
+            }
+            // Events are best-effort and dropped, not queued or replayed out of order.
+            return false;
+        }
         const text = JSON.stringify(message);
         // A frame can fit in UTF-16 code units but exceed the relay's UTF-8 byte limit.
         if (text.length > NET_LIMITS.maxMessageBytes) {
@@ -158,6 +181,8 @@ export const createNetSession = (options: NetSessionOptions): NetSession => {
         }
         backpressureWarned = false;
         socket.send(text);
+        outboundSentAt.push(timestamp);
+        if (kind === 'event') eventSentAt.push(timestamp);
         return true;
     };
 
@@ -168,7 +193,7 @@ export const createNetSession = (options: NetSessionOptions): NetSession => {
         if (!pendingState) return;
         const entities = pendingState;
         pendingState = null;
-        if (send({ t: 'state', seq: seq++, time: serverTime(), entities })) lastStateSent = now();
+        if (send({ t: 'state', seq: seq++, time: serverTime(), entities }, 'state')) lastStateSent = now();
     };
 
     const stopTimers = () => {
@@ -188,7 +213,7 @@ export const createNetSession = (options: NetSessionOptions): NetSession => {
                 clockOffset = message.serverTime - now();
                 clockSamples.length = 0;
                 reconnectDelay = RECONNECT_MIN_MS;
-                pingTimer = setInterval(() => send({ t: 'ping', id: pingId++, time: now() }), PING_INTERVAL_MS);
+                pingTimer = setInterval(() => send({ t: 'ping', id: pingId++, time: now() }, 'ping'), PING_INTERVAL_MS);
                 setStatus('connected');
                 break;
             case 'joined':
@@ -237,6 +262,9 @@ export const createNetSession = (options: NetSessionOptions): NetSession => {
             return;
         }
         backpressureWarned = false;
+        outboundSentAt.length = 0;
+        eventSentAt.length = 0;
+        lastEventRateWarning = -Infinity;
         setStatus('connecting');
         let current: WebSocket;
         try {
@@ -248,7 +276,9 @@ export const createNetSession = (options: NetSessionOptions): NetSession => {
         }
         socket = current;
         current.onopen = () => {
+            if (socket !== current || closed) return;
             current.send(JSON.stringify({ t: 'hello', v: NET_PROTOCOL_VERSION, game: gameId.slice(0, NET_LIMITS.maxGameLength), room: settings.room, name }));
+            outboundSentAt.push(now());
         };
         current.onmessage = (event: MessageEvent) => {
             const message = parseServerMessage(event.data);
@@ -295,7 +325,7 @@ export const createNetSession = (options: NetSessionOptions): NetSession => {
         },
         sendEvent(eventName, payload, to) {
             if (!eventName || eventName.length > NET_LIMITS.maxEventNameLength || !isNetPayload(payload)) return;
-            send(to ? { t: 'event', name: eventName, payload, to } : { t: 'event', name: eventName, payload });
+            send(to ? { t: 'event', name: eventName, payload, to } : { t: 'event', name: eventName, payload }, 'event');
         },
         onState(listener) {
             stateListeners.add(listener);

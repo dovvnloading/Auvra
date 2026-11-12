@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_NETWORK_SETTINGS, NET_LIMITS, normalizeNetworkSettings, type NetworkSettings } from '../../runtime/net/protocol';
 import { createNetSession, parseServerMessage, relayName } from '../../runtime/net/session';
+import { frontendDiagnostics } from '../../diagnostics/runtime';
 
 class FakeSocket {
   static instances: FakeSocket[] = [];
@@ -129,6 +130,42 @@ describe('net session', () => {
     session.onEvent(events);
     socket.receive({ t: 'event', from: 'bob', name: 'score', payload: 3 });
     expect(events).toHaveBeenCalledWith('bob', 'score', 3);
+  });
+
+  it('drops bursts locally without delaying events or starving state and clock pings', () => {
+    const warning = vi.spyOn(frontendDiagnostics, 'warning').mockImplementation(() => undefined);
+    try {
+      const { session, socket } = connect();
+      welcome(socket);
+      for (let i = 0; i < 300; i++) session.sendEvent('hit', i);
+      const sentEvents = () => socket.sent.filter((message: any) => message.t === 'event') as Array<{ payload: number | string }>;
+      const firstBurst = sentEvents();
+      expect(firstBurst.length).toBeGreaterThan(0);
+      expect(firstBurst.length).toBeLessThan(NET_LIMITS.maxMessagesPerSecond - NET_LIMITS.stateRateHz);
+      expect(firstBurst.map(message => message.payload)).toEqual(
+        Array.from({ length: firstBurst.length }, (_, i) => i),
+      );
+      expect(warning).toHaveBeenCalledWith('net_event_rate_limited');
+
+      // The entire event allowance is spent, yet state and pings have headroom.
+      session.sendState([{ id: 'player:me', position: [1, 0, 0], rotation: [0, 0, 0] }]);
+      vi.advanceTimersByTime(2000);
+      expect(socket.sent.filter((message: any) => message.t === 'state')).toHaveLength(1);
+      expect(socket.sent.filter((message: any) => message.t === 'ping')).toHaveLength(1);
+      expect(socket.sent.length).toBeLessThan(NET_LIMITS.maxMessagesPerSecond);
+
+      // The rolling budget does not release events early; it resumes on expiry.
+      clock += 990;
+      session.sendEvent('hit', -1);
+      expect(sentEvents()).toHaveLength(firstBurst.length);
+      clock += 11;
+      session.sendEvent('hit', 'fresh');
+      expect(sentEvents().at(-1)?.payload).toBe('fresh');
+      expect(sentEvents()).toHaveLength(firstBurst.length + 1);
+      expect(session.status()).toBe('connected');
+    } finally {
+      warning.mockRestore();
+    }
   });
 
   it('enforces exact UTF-8 frame limits for ASCII and emoji payloads', () => {
