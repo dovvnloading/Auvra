@@ -100,6 +100,63 @@ describe('PNG pictures', () => {
             for (let c = 0; c < 3; c++) expect(Math.round(back.data[p * 4 + c] * 255)).toBe(pixels[p * 3 + c]);
         }
     });
+    it('rejects tiny PNG files claiming impossible pixel dimensions before inflation', async () => {
+        const header = new Uint8Array(13);
+        const view = new DataView(header.buffer);
+        view.setUint32(0, 60_000);
+        view.setUint32(4, 60_000);
+        header[8] = 8;
+        header[9] = 6;
+        const signature = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+        const file = new Blob([signature, chunk('IHDR', header), chunk('IDAT', new Uint8Array(deflateSync(new Uint8Array(5)))), chunk('IEND', new Uint8Array(0))]);
+        await expect(readPng16(file)).rejects.toThrow('pixel budget');
+        await expect(readPng16Half(file)).rejects.toThrow('pixel budget');
+    });
+
+    it('caps actual inflated PNG scanlines and rejects short streams', async () => {
+        const header = new Uint8Array(13);
+        const view = new DataView(header.buffer);
+        view.setUint32(0, 1);
+        view.setUint32(4, 1);
+        header[8] = 8;
+        header[9] = 6;
+        const signature = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+        const file = (raw: Uint8Array) => new Blob([signature, chunk('IHDR', header), chunk('IDAT', new Uint8Array(deflateSync(raw))), chunk('IEND', new Uint8Array(0))]);
+        await expect(readPng16(file(new Uint8Array(100_000)))).rejects.toThrow('declared decoded scanline');
+        await expect(readPng16(file(new Uint8Array(4)))).rejects.toThrow('truncated decoded scanlines');
+    });
+
+    it('validates chunk lengths, CRCs and split IDAT streams', async () => {
+        const header = new Uint8Array(13);
+        const view = new DataView(header.buffer);
+        view.setUint32(0, 1);
+        view.setUint32(4, 1);
+        header[8] = 8;
+        header[9] = 6;
+        const signature = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+        const compressed = new Uint8Array(deflateSync(new Uint8Array([0, 10, 20, 30, 255])));
+        const split = Math.floor(compressed.length / 2);
+        const valid = new Uint8Array(await new Blob([signature, chunk('IHDR', header),
+            chunk('IDAT', compressed.subarray(0, split)), chunk('IDAT', compressed.subarray(split)),
+            chunk('IEND', new Uint8Array(0))]).arrayBuffer());
+        const decoded = await readPng16(new Blob([valid]));
+        expect(Array.from(decoded.data).map((value) => Math.round(value * 255))).toEqual([10, 20, 30, 255]);
+        const badLength = valid.slice();
+        new DataView(badLength.buffer).setUint32(8, 0xffffffff);
+        await expect(readPng16(new Blob([badLength]))).rejects.toThrow('chunk length');
+        const badCrc = valid.slice();
+        badCrc[29] ^= 1;
+        await expect(readPng16(new Blob([badCrc]))).rejects.toThrow('checksum');
+    });
+
+    it('rejects oversized PNG sources before requesting the backing buffer', async () => {
+        const oversized = {
+            size: 161 * 1024 * 1024,
+            arrayBuffer: async () => { throw new Error('must not buffer oversized source'); },
+        } as unknown as Blob;
+        await expect(readPng16(oversized)).rejects.toThrow('file budget');
+    });
+
 });
 
 describe('graph content keys', () => {
