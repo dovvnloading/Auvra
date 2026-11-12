@@ -409,9 +409,37 @@ class ProviderCoreTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             db = str(Path(folder) / "jobs.sqlite"); store = SQLiteJobStore(db)
             job = store.create(project_id="project-1", provider="fal", model="fal-ai/flux/dev", capability="media.generate", prompt_hash=hashlib.sha256(b"x").hexdigest())
-            store.transition(job.job_id, JobState.SUBMITTING, reconcile={"durable": True}); store.close()
+            store.transition(job.job_id, JobState.SUBMITTING, remote_id="request-123", reconcile={"durable": True}); store.close()
             reopened = SQLiteJobStore(db); durable = reopened.reconcile_restart()
             self.assertEqual(durable[0].state, JobState.RECOVERING); reopened.close()
+
+    def test_restart_fails_legacy_local_and_remote_jobs_without_a_remote_id(self):
+        with tempfile.TemporaryDirectory() as folder:
+            db = str(Path(folder) / "jobs.sqlite")
+            store = SQLiteJobStore(db)
+            identities = []
+            for provider, model, capability, remote_id in (
+                ("reframe", "path-tracer", Capability.MEDIA_RENDER.value, "local-render-1"),
+                ("reframe", "path-tracer", Capability.MEDIA_RENDER.value, None),
+                ("fal", "fal-ai/flux/dev", Capability.MEDIA_GENERATE.value, None),
+            ):
+                job = store.create(project_id="project-1", provider=provider, model=model,
+                                   capability=capability, prompt_hash="a" * 64)
+                store.transition(job.job_id, JobState.SUBMITTING, remote_id=remote_id,
+                                 reconcile={"durable": True})
+                identities.append(job.job_id)
+            store.close()
+            reopened = SQLiteJobStore(db)
+            try:
+                self.assertEqual(reopened.reconcile_restart(), ())
+                for job_id in identities:
+                    failed = reopened.get(job_id)
+                    self.assertEqual(failed.state, JobState.FAILED)
+                    self.assertEqual(failed.reconcile["error_code"], "restart_interrupted")
+                    self.assertFalse(failed.reconcile["retryable"])
+                    self.assertNotIn(job_id, {job.job_id for job in reopened.pending_reconciliation()})
+            finally:
+                reopened.close()
 
     def test_provider_settings_roundtrip_conflict_endpoint_and_budget(self):
         with tempfile.TemporaryDirectory() as folder:
