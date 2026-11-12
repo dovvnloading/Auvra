@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import io
 import math
 import os
 from dataclasses import dataclass
@@ -12,9 +11,11 @@ import re
 import secrets
 import shutil
 import threading
+import zlib
 from types import MappingProxyType
 from typing import Any, BinaryIO, Mapping
 
+from Auvra.desktop.preview_images import InvalidPreviewImage, dimensions as _validate_image
 from Auvra.project.assets import sniff_mime
 from Auvra.diagnostics import trace_public_class
 
@@ -118,9 +119,10 @@ class PreviewStore:
                 raise PreviewError("generated media content is unsupported")
             if normalized_mime and normalized_mime != actual_mime:
                 raise PreviewError("generated media type does not match its content")
-            width, height = _image_dimensions(temporary, actual_mime)
-            if not 1 <= width <= 65536 or not 1 <= height <= 65536:
-                raise PreviewError("generated image dimensions are invalid")
+            try:
+                width, height = _validate_image(temporary, actual_mime)
+            except (InvalidPreviewImage, OSError, ValueError, zlib.error) as exc:
+                raise PreviewError("generated image is malformed or exceeds the pixel budget") from exc
             destination = self._root / (actual_hash + ".preview")
             with self._lock:
                 self._require_open()
@@ -274,55 +276,6 @@ def _safe_provenance(value: Mapping[str, Any], *, job_id: str) -> Mapping[str, A
         result[key] = child
     return MappingProxyType(result)
 
-
-def _image_dimensions(path: Path, mime: str) -> tuple[int, int]:
-    with path.open("rb") as stream:
-        if mime == "image/png":
-            header = stream.read(24)
-            if len(header) != 24 or header[12:16] != b"IHDR":
-                raise PreviewError("generated PNG is malformed")
-            return int.from_bytes(header[16:20], "big"), int.from_bytes(header[20:24], "big")
-        if mime == "image/webp":
-            header = stream.read(30)
-            if len(header) < 25 or header[:4] != b"RIFF" or header[8:12] != b"WEBP":
-                raise PreviewError("generated WebP is malformed")
-            kind = header[12:16]
-            if kind == b"VP8X" and len(header) >= 30:
-                return 1 + int.from_bytes(header[24:27], "little"), 1 + int.from_bytes(header[27:30], "little")
-            if kind == b"VP8 " and len(header) >= 30 and header[23:26] == b"\x9d\x01\x2a":
-                return int.from_bytes(header[26:28], "little") & 0x3FFF, int.from_bytes(header[28:30], "little") & 0x3FFF
-            if kind == b"VP8L" and header[20] == 0x2F:
-                bits = int.from_bytes(header[21:25], "little")
-                return 1 + (bits & 0x3FFF), 1 + ((bits >> 14) & 0x3FFF)
-            raise PreviewError("generated WebP dimensions are unavailable")
-        if mime == "image/jpeg":
-            if stream.read(2) != b"\xff\xd8":
-                raise PreviewError("generated JPEG is malformed")
-            while True:
-                marker_start = stream.read(1)
-                if not marker_start:
-                    break
-                if marker_start != b"\xff":
-                    continue
-                marker = stream.read(1)
-                while marker == b"\xff":
-                    marker = stream.read(1)
-                if not marker or marker in {b"\xd8", b"\xd9"}:
-                    continue
-                length_bytes = stream.read(2)
-                if len(length_bytes) != 2:
-                    break
-                length = int.from_bytes(length_bytes, "big")
-                if length < 2 or length > 65535:
-                    break
-                if marker[0] in {0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7, 0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF}:
-                    data = stream.read(5)
-                    if len(data) != 5:
-                        break
-                    return int.from_bytes(data[3:5], "big"), int.from_bytes(data[1:3], "big")
-                stream.seek(length - 2, io.SEEK_CUR)
-            raise PreviewError("generated JPEG dimensions are unavailable")
-    raise PreviewError("generated image type is unsupported")
 
 
 def _reject_reparse(path: Path) -> None:
