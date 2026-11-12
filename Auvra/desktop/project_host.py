@@ -67,6 +67,50 @@ _DEV_PLAYER_HINTS = {
 }
 # GameBuildError codes that are already host protocol error codes.
 _BUILD_ERROR_CODES = frozenset({"invalid_request", "invalid_project", "locking", "unsupported_capability"})
+# Only approved, bounded messages cross the native host boundary. BuildReport warnings
+# may contain project identifiers, filenames or absolute OS paths.
+_BUILD_WARNING_MESSAGES = (
+    ("third-party notices were not found beside", "player_notices_missing",
+     "The desktop player's third-party notices are missing; only web-player notices were included."),
+    ("player blueprint ", "player_blueprint_missing",
+     "The selected player blueprint is missing; the default player was used."),
+    ("multiplayer is on but the server address", "multiplayer_offline",
+     "The multiplayer server URL is invalid; the game will play offline."),
+    (" has unrecognised type ", "asset_type_unknown",
+     "Some assets have an unrecognized type and were shipped as .bin files."),
+    ("the prepared copy of asset ", "prepared_model_missing",
+     "A prepared model was unavailable; the game will load its source instead."),
+    ("game version ", "bundle_version_invalid",
+     "The game version is invalid; the macOS app bundle will have no version."),
+    ("the player page has no recognised connect-src", "multiplayer_csp_missing",
+     "The player page's connection policy could block multiplayer."),
+    ("changed during the build and was kept", "old_build_changed",
+     "A previous build was changed during publishing and was kept."),
+    ("could not be removed", "old_build_cleanup_failed",
+     "A previous build could not be removed after publishing."),
+)
+_BUILD_WARNING_LIMIT = 12
+
+
+def _public_build_warnings(warnings: Sequence[str]) -> list[dict[str, str]]:
+    """Send fixed user-facing warning codes, never untrusted builder text."""
+
+    result: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for warning in warnings:
+        code, message = next(
+            ((name, description) for phrase, name, description in _BUILD_WARNING_MESSAGES
+             if isinstance(warning, str) and phrase in warning),
+            ("other_build_warning", "The build completed with an additional warning."),
+        )
+        if code not in seen:
+            result.append({"code": code, "message": message})
+            seen.add(code)
+        if len(result) >= _BUILD_WARNING_LIMIT:
+            break
+    return result
+
+
 _SNAPSHOT_SOFT_LIMIT = 192 * 1024
 # A snapshot page also carries the project status envelope (recent projects,
 # recovery points).  Writes are capped below the page limit by this reserve so
@@ -1066,7 +1110,7 @@ class NativeProjectHost:
                 "sizeBytes": report.bytes,
                 "assets": report.assets,
                 "levels": report.levels,
-                # Host warnings do not reach the editor, so it compares this with what it asked for.
+                "warnings": _public_build_warnings(report.warnings),
                 **({"preparedModels": report.prepared_models} if prepared else {}),
             },
         )
