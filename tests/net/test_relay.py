@@ -287,9 +287,9 @@ class RelayTests(unittest.IsolatedAsyncioTestCase):
         await ann.hello(name="Ann")
         await bob.hello(name="Bob")
         await ann.receive()
-        await ann.send({"t": "event", "name": "edge", "payload": "\\ud800"})
+        await ann.send({"t": "event", "name": "edge", "payload": "\ud800"})
         delivered = await bob.receive(max_payload_bytes=relay.MAX_MESSAGE_BYTES)
-        self.assertEqual(delivered["payload"], "\\ud800")
+        self.assertEqual(delivered["payload"], "\ud800")
 
     async def test_ping_returns_server_time_and_control_pings_get_pongs(self) -> None:
         ann = await self.client()
