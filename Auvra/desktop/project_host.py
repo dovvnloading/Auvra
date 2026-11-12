@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import defaultdict
 from dataclasses import asdict
 import errno
+import hashlib
 import json
 import math
 from pathlib import Path
@@ -1025,10 +1026,15 @@ class NativeProjectHost:
         prepared = payload.get("prepared")
 
         def read_asset(asset_id: str) -> tuple[bytes, str]:
-            # ValueError (bad id, missing metadata) becomes invalid_project.
+            # ValueError (bad id, missing metadata or corrupt content) becomes invalid_project.
             mime = store.reference(asset_id).mime or "application/octet-stream"
             with store.open(asset_id) as stream:
-                return stream.read(), mime
+                data = stream.read()
+            # Check the exact bytes we package; verifying the file before opening
+            # it would leave a race if the blob changed between those operations.
+            if hashlib.sha256(data).hexdigest() != asset_id:
+                raise ValueError("asset digest does not match its id")
+            return data, mime
 
         self._progress("buildGame", 0.0)
         try:
