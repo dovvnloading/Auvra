@@ -132,6 +132,10 @@ let projectLoader: ((url: string, request?: MaterialTextureRequest) => Promise<T
 let projectCache: CompressedTextureCache | null = null;
 // A project switch invalidates deferred encodes that belong to its previous loader.
 const phoneLoaderCancellations = new WeakMap<NonNullable<typeof projectLoader>, () => void>();
+/** Cancel a retired project's phone jobs without touching a newer loader. */
+export const cancelPhoneVersionsForLoader = (loader: NonNullable<typeof projectLoader>): void => {
+    phoneLoaderCancellations.get(loader)?.();
+};
 
 /** The open project's store of compressed blocks (set as it loads), for what compresses outside material textures: terrain arrays. */
 export const setProjectCompressedCache = (cache: CompressedTextureCache | null): void => { projectCache = cache; };
@@ -139,7 +143,7 @@ export const projectCompressedCache = (): CompressedTextureCache | null => proje
 
 /** The open project's texture loader (set as it loads), for textures outside material assets: decals. */
 export const setProjectTextureLoader = (loader: typeof projectLoader): void => {
-    if (projectLoader && projectLoader !== loader) phoneLoaderCancellations.get(projectLoader)?.();
+    if (projectLoader && projectLoader !== loader) cancelPhoneVersionsForLoader(projectLoader);
     projectLoader = loader;
 };
 
