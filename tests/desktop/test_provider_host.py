@@ -19,6 +19,7 @@ from Auvra.project import ProjectIndex, ProjectService
 from Auvra.providers import Capability
 from Auvra.providers.adapters import TextResult
 from Auvra.providers.jobs import JobState
+from tests.desktop.preview_fixtures import png as _png
 
 
 @dataclass
@@ -663,7 +664,7 @@ class ProviderHostTests(unittest.TestCase):
             try:
                 project_id = service.active.project_id
                 job_id = "job-media-f039-00002"
-                payload = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x02\x00\x00\x00\x03\x08\x06\x00\x00\x00"
+                payload = _png()
                 preview = previews.ingest(job_id, io.BytesIO(payload), project_id=project_id)
                 host.jobs.create(project_id=project_id, provider="fal", model="gpt-test", capability=Capability.MEDIA_EDIT.value, prompt_hash="a" * 64, job_id=job_id)
                 for state in (JobState.SUBMITTING, JobState.RUNNING, JobState.SUCCEEDED):
@@ -691,7 +692,7 @@ class ProviderHostTests(unittest.TestCase):
             try:
                 project_id = service.active.project_id
                 job_id = "job-media-f039-00003"
-                picture = lambda width, height: b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR" + width.to_bytes(4, "big") + height.to_bytes(4, "big") + b"\x08\x06\x00\x00\x00"
+                picture = _png
                 preview = previews.ingest(job_id, io.BytesIO(picture(2, 3)), project_id=project_id)
                 host.jobs.create(project_id=project_id, provider="fal", model="gpt-test", capability=Capability.MEDIA_EDIT.value, prompt_hash="a" * 64, job_id=job_id)
                 for state in (JobState.SUBMITTING, JobState.RUNNING, JobState.SUCCEEDED):
@@ -730,7 +731,7 @@ class ProviderHostTests(unittest.TestCase):
             try:
                 project_id = service.active.project_id
                 job_id = "job-media-f039-00004"
-                picture = lambda width, height: b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR" + width.to_bytes(4, "big") + height.to_bytes(4, "big") + b"\x08\x06\x00\x00\x00"
+                picture = _png
                 preview = previews.ingest(job_id, io.BytesIO(picture(2, 3)), project_id=project_id)
                 host.jobs.create(project_id=project_id, provider="fal", model="gpt-test", capability=Capability.MEDIA_EDIT.value, prompt_hash="a" * 64, job_id=job_id)
                 for state in (JobState.SUBMITTING, JobState.RUNNING, JobState.SUCCEEDED):
@@ -793,10 +794,7 @@ class ProviderHostTests(unittest.TestCase):
             try:
                 project_id = service.active.project_id
                 job_id = "job-media-f039-00001"
-                payload = (
-                    b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"
-                    b"\x00\x00\x00\x02\x00\x00\x00\x03\x08\x06\x00\x00\x00"
-                )
+                payload = _png()
                 preview = previews.ingest(job_id, io.BytesIO(payload), project_id=project_id)
                 host.jobs.create(
                     project_id=project_id,

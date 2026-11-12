@@ -15,6 +15,7 @@ from Auvra.diagnostics.core import DiagnosticsSession, install_diagnostics
 from Auvra.host.dispatcher import HostOperationError
 from Auvra.project.repository import ProjectRepository
 from Auvra.project.schemas import DOMAIN_NAMES
+from tests.desktop.preview_fixtures import png as _png
 
 
 class _Dialogs:
@@ -270,10 +271,7 @@ class NativeProjectHostTests(unittest.TestCase):
         created = self.host.handle("project.create", {"name": "Preview"})
         previews = PreviewStore(self.root / "previews")
         try:
-            payload = (
-                b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"
-                b"\x00\x00\x00\x02\x00\x00\x00\x03\x08\x06\x00\x00\x00"
-            )
+            payload = _png()
             record = previews.ingest(
                 "job-0123456789abcdef", io.BytesIO(payload), project_id=created["projectId"],
             )
@@ -299,10 +297,7 @@ class NativeProjectHostTests(unittest.TestCase):
         first = self.host.handle("project.create", {"name": "Preview A"})
         previews = PreviewStore(self.root / "cross-project-previews")
         try:
-            payload = (
-                b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"
-                b"\x00\x00\x00\x02\x00\x00\x00\x03\x08\x06\x00\x00\x00"
-            )
+            payload = _png()
             record = previews.ingest(
                 "job-0123456789abcdef", io.BytesIO(payload), project_id=first["projectId"],
             )

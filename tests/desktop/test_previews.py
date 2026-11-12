@@ -1,22 +1,23 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import io
 from pathlib import Path
 import tempfile
 import unittest
+import zlib
 
 from Auvra.desktop.previews import PreviewError, PreviewStore
+from tests.desktop.preview_fixtures import png as _png, png_chunk as _png_chunk
 
 
-def _png(width: int = 2, height: int = 3) -> bytes:
-    return (
-        b"\x89PNG\r\n\x1a\n"
-        + b"\x00\x00\x00\rIHDR"
-        + width.to_bytes(4, "big")
-        + height.to_bytes(4, "big")
-        + b"\x08\x06\x00\x00\x00"
-    )
+
+# Real tiny encoded fixtures, not dimension-only headers.
+_JPEG = base64.b64decode(
+    "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAA0JCgsKCA0LCgsODg0PEyAVExISEyccHhcgLikxMC4pLSwzOko+MzZGNywtQFdBRkxOUlNSMj5aYVpQYEpRUk//2wBDAQ4ODhMREyYVFSZPNS01T09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT0//wAARCAACAAMDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwCvRRRXhH0R/9k="
+)
+_WEBP = base64.b64decode("UklGRjgAAABXRUJQVlA4ICwAAADQAQCdASoDAAIAAoBCJaACdLoB+AADsAD+3FH/8guWF1yNf+WfP4bOjAAAAA==")
 
 
 class PreviewStoreTests(unittest.TestCase):
@@ -102,18 +103,33 @@ class PreviewStoreTests(unittest.TestCase):
             self.store.find(record.asset_id, project_id="project-b")
         self.assertEqual(self.store.find(record.asset_id, project_id="project-a"), record)
 
-    def test_jpeg_and_webp_dimensions_are_parsed_without_image_dependency(self) -> None:
-        jpeg = b"\xff\xd8\xff\xc0\x00\x07\x08\x00\x02\x00\x03"
-        record = self.store.ingest("job-0123456789abcdef", io.BytesIO(jpeg), declared_mime="image/jpeg")
-        self.assertEqual((record.width, record.height), (3, 2))
+    def test_jpeg_and_webp_require_complete_containers(self) -> None:
+        jpeg = self.store.ingest("job-0123456789abcdef", io.BytesIO(_JPEG), declared_mime="image/jpeg")
+        self.assertEqual((jpeg.width, jpeg.height), (3, 2))
+        webp = self.store.ingest("job-fedcba9876543210", io.BytesIO(_WEBP), declared_mime="image/webp")
+        self.assertEqual((webp.width, webp.height), (3, 2))
+        for mime, payload in (("image/jpeg", _JPEG), ("image/webp", _WEBP)):
+            with self.subTest(mime=mime), self.assertRaises(PreviewError):
+                self.store.ingest("job-1111111111111111", io.BytesIO(payload[:-1]), declared_mime=mime)
 
-        webp = (
-            b"RIFF" + (22).to_bytes(4, "little") + b"WEBPVP8X"
-            + (10).to_bytes(4, "little") + b"\x00\x00\x00\x00"
-            + (4).to_bytes(3, "little") + (6).to_bytes(3, "little")
+    def test_truncated_crc_invalid_and_oversized_pngs_do_not_publish(self) -> None:
+        valid = _png()
+        # Regression: the old 24-byte IHDR prefix alone was accepted as an image.
+        broken_crc = bytearray(valid)
+        broken_crc[-5] ^= 1
+        header = (65536).to_bytes(4, "big") * 2 + b"\x08\x06\x00\x00\x00"
+        huge_canvas = valid[:8] + _png_chunk(b"IHDR", header) + valid[33:]
+        enormous_expansion = (
+            valid[:33] + _png_chunk(b"IDAT", zlib.compress(b"\0" * 100_000))
+            + _png_chunk(b"IEND", b"")
         )
-        record = self.store.ingest("job-fedcba9876543210", io.BytesIO(webp), declared_mime="image/webp")
-        self.assertEqual((record.width, record.height), (5, 7))
+        no_pixels = valid[:33] + _png_chunk(b"IEND", b"")
+        for malformed in (valid[:24], valid[:-12], bytes(broken_crc), huge_canvas, enormous_expansion, no_pixels):
+            with self.subTest(size=len(malformed)), self.assertRaises(PreviewError):
+                self.store.ingest("job-1111111111111111", io.BytesIO(malformed))
+        self.assertEqual(self.store._records, {})
+        self.assertEqual(list(self.store._root.glob("incoming-*")), [])
+
 
     def test_open_returns_the_verified_handle_and_rejects_link_replacement(self) -> None:
         record = self.store.ingest("job-0123456789abcdef", io.BytesIO(_png()))
