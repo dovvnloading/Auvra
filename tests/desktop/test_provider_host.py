@@ -370,6 +370,63 @@ class ProviderHostTests(unittest.TestCase):
             finally:
                 host.shutdown()
 
+    def test_reframe_restart_terminalizes_legacy_durable_job_and_notifies_editor(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw) / "provider"
+            first = NativeProviderHost(root, project_host=_Project())
+            try:
+                job = first.jobs.create(project_id="project-1", provider="reframe",
+                                        model="path-tracer", capability=Capability.MEDIA_RENDER.value,
+                                        prompt_hash="a" * 64)
+                first.jobs.transition(job.job_id, JobState.SUBMITTING, remote_id="local-render-1",
+                                      reconcile={"durable": True, "provider": "reframe"})
+            finally:
+                first.shutdown()
+
+            restarted = NativeProviderHost(root, project_host=_Project())
+            try:
+                self.assertEqual(restarted.jobs.get(job.job_id).state, JobState.FAILED)
+                report = restarted._job_value(job.job_id)
+                self.assertIn("start a new render", report["message"])
+                self.assertFalse(report["retryable"])
+                self.assertFalse(restarted._futures)
+                events = restarted.drain_events()
+                self.assertTrue(any(name == "provider.job" and payload["jobId"] == job.job_id
+                                    and payload["status"] == "failed" for name, payload in events))
+                self.assertFalse(any(name == "provider.recovery" for name, _ in events))
+            finally:
+                restarted.shutdown()
+
+    def test_reframe_media_worker_does_not_mark_local_job_remotely_durable(self) -> None:
+        class FailedLocalRender:
+            def submit(self, **_kwargs):
+                return SimpleNamespace(request_id="local-render-2", queue_root=None)
+
+            def status(self, _job):
+                return {"status": "failed", "error": "test failure"}
+
+            def status_state(self, _status):
+                return "failed"
+
+        with tempfile.TemporaryDirectory() as raw:
+            host = NativeProviderHost(Path(raw), project_host=_Project(),
+                                      adapters={"reframe": FailedLocalRender()})
+            try:
+                job = host.jobs.create(project_id="project-1", provider="reframe",
+                                       model="path-tracer", capability=Capability.MEDIA_RENDER.value,
+                                       prompt_hash="a" * 64)
+                host._meta[job.job_id] = {"projectId": "project-1", "prompt": "test",
+                                          "assetIds": [], "route": "local"}
+                with mock.patch.object(host.jobs, "transition", wraps=host.jobs.transition) as transitions:
+                    host._run_job(job.job_id, "reframe", "path-tracer", Capability.MEDIA_RENDER)
+                submitted = [call.kwargs["reconcile"] for call in transitions.call_args_list
+                             if "reconcile" in call.kwargs and
+                             "remote_request_id" in call.kwargs["reconcile"]]
+                self.assertEqual(len(submitted), 1)
+                self.assertIs(submitted[0]["durable"], False)
+            finally:
+                host.shutdown()
+
     def test_command_worker_binds_provider_output_to_selected_target(self) -> None:
         class CaptureAdapter:
             def __init__(self) -> None:

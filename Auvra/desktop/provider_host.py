@@ -264,13 +264,28 @@ class NativeProviderHost:
                     self._futures.pop(job_id, None)
 
     def _recover_restart_jobs(self) -> None:
-        """Reconcile durable Fal requests after a process restart."""
+        """Resume remote Fal work; report interrupted local work as failed."""
         try:
+            previously_pending = self.jobs.pending_reconciliation()
             pending = self.jobs.reconcile_restart()
         except Exception:
             return
+        for previous in previously_pending:
+            if not previous.project_id:
+                continue
+            current = self.jobs.get(previous.job_id)
+            if current.state.value == "failed" and current.reconcile.get("error_code") == "restart_interrupted":
+                self._queue_job_event(current.job_id, "failed", None, self.registry.get(current.provider),
+                                      message="restart_interrupted")
         for job in pending:
             if job.provider != "fal" or not job.remote_id:
+                # Never strand a row returned for recovery if provider support changes.
+                self.jobs.transition(
+                    job.job_id, "failed", message="job interrupted by restart",
+                    reconcile={"restart_pending": True, "error_code": "restart_interrupted", "retryable": False},
+                )
+                self._queue_job_event(job.job_id, "failed", None, self.registry.get(job.provider),
+                                      message="restart_interrupted")
                 continue
             self._meta[job.job_id] = {
                 "projectId": getattr(job, "project_id", None), "prompt": "", "assetIds": [], "route": "cloud",
@@ -1116,7 +1131,7 @@ class NativeProviderHost:
                 if self._shutdown_event.is_set():
                     return
                 request_id = getattr(result, "request_id", None)
-                self.jobs.transition(job_id, "running", remote_id=request_id, reconcile={"durable": True, "remote_request_id": request_id or "", "remote_root": getattr(result, "queue_root", None), "provider": provider_id, "model": model, "route": meta["route"]})
+                self.jobs.transition(job_id, "running", remote_id=request_id, reconcile={"durable": provider_id == "fal" and bool(request_id), "remote_request_id": request_id or "", "remote_root": getattr(result, "queue_root", None), "provider": provider_id, "model": model, "route": meta["route"]})
                 for wait in self._poll_waits(getattr(adapter, "poll_limit_seconds", _POLL_LIMIT_SECONDS)):
                     if self._shutdown_event.is_set():
                         return
@@ -1286,6 +1301,12 @@ class NativeProviderHost:
         if job.state.value == "failed":
             value["message"] = str(meta.get("errorMessage") or meta.get("errorCode", job.reconcile.get("error_code", "provider_error")))[:256]
             value["retryable"] = bool(meta.get("retryable", job.reconcile.get("retryable", False)))
+            if job.reconcile.get("error_code") == "restart_interrupted":
+                # Neither a local process nor the user's prompt is preserved across restarts.
+                value["message"] = ("Local render interrupted by restart; start a new render."
+                                    if job.provider == "reframe" else
+                                    "Job interrupted by restart; submit a new request.")
+                value["retryable"] = False
         if "outputText" in meta: value["outputText"] = meta["outputText"]
         if "proposal" in meta: value["proposalAvailable"] = True; value["proposalId"] = meta["proposal"].proposal_id
         if "preview" in meta:
