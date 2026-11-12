@@ -1095,6 +1095,9 @@ class DiagnosticsSession:
         self._active = False
         self._write_summary(outcome, exit_code=exit_code,
                             drain_incomplete=drain_incomplete)
+        # The marker must remain until the log stream is durably closed.
+        # Otherwise a new process can observe a clean run with open log files.
+        self._close_stream(durable=True)
         marker = self.root / RUN_MARKER_NAME
         current = _load_json(marker)
         if not drain_incomplete and not self._storage_failed \
@@ -1104,7 +1107,6 @@ class DiagnosticsSession:
                 marker.unlink()
             except OSError:
                 pass
-        self._close_stream(durable=True)
         self._prune_runs()
 
     def _next_sequence(self) -> int:
