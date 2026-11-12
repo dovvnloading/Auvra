@@ -607,6 +607,18 @@ class ProjectTests(unittest.TestCase):
         self.assertEqual(self.repo.revision, 2)
         self.assertTrue(self.repo.assets.verify(new.asset_id))
 
+    def test_restore_rejects_invalid_snapshot_asset_metadata_before_publication(self):
+        point, _, new = self._checkpoint_then_change_asset()
+        manifest = self.root / ".auvra" / "backups" / point / "Content" / "manifest.json"
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+        next(iter(data.values()))["size"] += 1
+        manifest.write_text(json.dumps(data), encoding="utf-8")
+        with self.assertRaisesRegex(InvalidProjectError, "asset metadata is invalid"):
+            self.repo.restore_recovery("manual", point)
+        self.assertEqual(self.repo.revision, 2)
+        self.assertTrue(self.repo.assets.verify(new.asset_id))
+        self.assertFalse(list((self.root / ".auvra").glob(".recovery-assets-*")))
+
     def test_malicious_journal_path_fails_closed(self):
         journal = self.root / ".auvra" / "transactions" / "malicious.json"
         journal.write_text(json.dumps({"state":"prepared","newRevision":1,"files":[{"target":"../../escape.json","backup":"staging/x/old","staged":"staging/x/new"}]}), encoding="utf-8")
