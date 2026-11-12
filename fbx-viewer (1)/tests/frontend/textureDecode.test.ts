@@ -99,6 +99,22 @@ describe('texture pictures', () => {
         expect(picture.rgba[4]).not.toBe(picture.rgba[0]);
     });
 
+
+    it('rejects huge palette and interlaced PNG headers before browser decoding', async () => {
+        const header = new Uint8Array(29);
+        header.set([137, 80, 78, 71, 13, 10, 26, 10]);
+        header.set([73, 72, 68, 82], 12); // IHDR
+        const view = new DataView(header.buffer);
+        view.setUint32(16, 60_000);
+        view.setUint32(20, 60_000);
+        header[24] = 8;
+        header[25] = 3; // Indexed colour: normally delegated to browser
+        await expect(decodePicture(header, 'indexed.png')).rejects.toThrow('pixel budget');
+        header[25] = 6;
+        header[28] = 1; // Interlaced: normally delegated to browser
+        await expect(decodePicture(header, 'interlaced.png')).rejects.toThrow('pixel budget');
+    });
+
     it('keep a 16-bit TIFF\'s depth', async () => {
         const picture = await decodePicture(tiff16(2, 1, [1000, 1001]));
         expect([picture.width, picture.height, picture.depth, picture.channels, picture.hdr]).toEqual([2, 1, 16, 1, false]);
