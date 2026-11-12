@@ -8,15 +8,22 @@ import tempfile
 import unittest
 import zlib
 
+from PIL import Image
+
 from Auvra.desktop.previews import PreviewError, PreviewStore
 from tests.desktop.preview_fixtures import png as _png, png_chunk as _png_chunk
 
 
 
 # Real tiny encoded fixtures, not dimension-only headers.
-_JPEG = base64.b64decode(
-    "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAUDBAQEAwUEBAQFBQUGBwwIBwcHBw8LCwkMEQ8SEhEPERETFhwXExQaFRERGCEYGh0dHx8fExciJCIeJBweHx7/2wBDAQUFBQcGBw4ICA4eFBEUHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eH4eHh7/wAARCAACAAMDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwD5/ooor0jzz//Z"
-)
+def _jpeg_fixture() -> bytes:
+    # Encode a real tiny JPEG; the historical SOF/SOS-only fixture was not decodable.
+    output = io.BytesIO()
+    Image.new("RGB", (3, 2), color=(34, 51, 68)).save(output, format="JPEG", quality=85)
+    return output.getvalue()
+
+
+_JPEG = _jpeg_fixture()
 _WEBP = base64.b64decode("UklGRjgAAABXRUJQVlA4ICwAAADQAQCdASoDAAIAAoBCJaACdLoB+AADsAD+3FH/8guWF1yNf+WfP4bOjAAAAA==")
 
 
