@@ -202,6 +202,8 @@ class ProjectRepository:
                     or metadata["size"] < 0 or not isinstance(metadata["mime"], str)
                     or (metadata["name"] is not None and not isinstance(metadata["name"], str))):
                 raise RecoveryRequiredError("pending recovery asset metadata is invalid")
+            if asset_id in staged and staged[asset_id].stat().st_size != metadata["size"]:
+                raise RecoveryRequiredError("pending recovery asset size mismatch")
             if asset_id not in staged and not self.assets.verify(asset_id, expected_size=metadata["size"]):
                 raise RecoveryRequiredError("pending recovery is missing an existing asset")
         incoming = live_content / ".incoming"
@@ -230,6 +232,11 @@ class ProjectRepository:
             _fsync_directory(self.path / "Content")
         finally:
             temporary.unlink(missing_ok=True)
+        # Clear the replay marker only after the live manifest is durable.
+        # A crash during directory cleanup must not leave a half-removed plan
+        # that appears ready to replay.
+        (staging / ".ready").unlink()
+        _fsync_directory(staging)
         shutil.rmtree(staging)
         _fsync_directory(staging.parent)
 
