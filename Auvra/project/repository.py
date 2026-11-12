@@ -672,8 +672,22 @@ class ProjectRepository:
                 raise InvalidProjectError("recovery point asset manifest is invalid")
             if not (snapshot_content / asset_id).is_file():
                 raise InvalidProjectError("recovery point asset manifest is incomplete")
+            if (set(metadata) != {"size", "mime", "name"}
+                    or not isinstance(metadata["size"], int) or isinstance(metadata["size"], bool)
+                    or metadata["size"] < 0 or metadata["size"] != (snapshot_content / asset_id).stat().st_size
+                    or not isinstance(metadata["mime"], str)
+                    or (metadata["name"] is not None and not isinstance(metadata["name"], str))):
+                raise InvalidProjectError("recovery point asset metadata is invalid")
+            with (snapshot_content / asset_id).open("rb") as stream:
+                detected = sniff_mime(stream.read(512))
+            if metadata["mime"] in {"image/png", "image/jpeg", "audio/wav", "audio/ogg", "model/gltf-binary"} and metadata["mime"] != detected:
+                raise InvalidProjectError("recovery point asset MIME is invalid")
         if set(manifest) != snapshot_ids:
             raise InvalidProjectError("recovery point asset manifest does not match stored content")
+        try:
+            validate_project_references(docs, asset_exists=lambda asset_id: asset_id in manifest)
+        except ValueError as exc:
+            raise InvalidProjectError("recovery point references invalid assets or documents") from exc
 
         # Retain the current content records alongside the snapshot's. A
         # successful restore can later prune extras, but replacing the manifest
