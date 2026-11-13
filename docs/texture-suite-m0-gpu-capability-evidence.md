@@ -1,0 +1,76 @@
+# Texture Suite M0.4 — GPU Capability Evidence
+
+> **Status:** Source + passing **software-adapter CI** evidence. This is not a certification of the user's GPU, hardware drivers, or complete texture-node coverage.
+>
+> **Milestone:** [M0 #279](https://github.com/dovvnloading/Auvra/issues/279), [M0.4 issue #292](https://github.com/dovvnloading/Auvra/issues/292).
+>
+> **Evidence commit:** `fabb98ac5158ac9d6d34b6e0aff101893ecac1e6` ([PR #294](https://github.com/dovvnloading/Auvra/pull/294)), CI [Verify run #43411086653](https://github.com/dovvnloading/Auvra/actions/runs/43411086653), November 13, 2026.
+>
+> **Important:** A test that compares with a fixed renderer-specific screenshot does **not** establish exact cross-backend pixel equality. A test that only executes conditionally on a device feature cannot establish that the device had that feature unless the run logs prove it.
+
+## 1. Definitions used in the capability matrix
+
+- **Source-present:** implementation exists; not a passing device test.
+- **Unit-verified:** executable tests cover code or mocks; not device-wide shader behavior.
+- **Visual-verified (software):** GitHub Actions completed a scene on its selected SwiftShader/software adapter, and compared with that renderer's visual reference under the repository tolerance.
+- **Conditional visual proof:** scene contains an embedded operation, but execution depends on a capability flag not independently logged in the cited run.
+- **Unsupported/approximate:** a documented limitation/fallback; do not label as a pass.
+- **Not tested:** no current evidence on the requested backend/device.
+
+## 2. What CI actually demonstrated
+
+| Reference | Backend requested | CI result | Reported scene metrics | Meaning |
+|---|---|---|---|---|
+| [Rendering pictures (WebGL2)](https://github.com/dovvnloading/Auvra/actions/runs/43411086653/job/131838089601) | WebGL2/software | **Success** | `texture-graph`: 342 ms scene load; 16.8 ms reported frame; ~2.7 MiB estimated GPU allocation | One fixed proof texture graph renders within the WebGL2 visual baseline |
+| [Rendering pictures on WebGPU](https://github.com/dovvnloading/Auvra/actions/runs/43411086653/job/131838089595) | WebGPU/SwiftShader | **Success** | `texture-graph`: 1,129 ms scene load; 299.5 ms reported frame; ~132.6 MiB estimated GPU allocation | The WebGPU reference and embedded proof checks passed in that software environment |
+| Same WebGL2 job | WebGL2/software | **Success** | `physical-materials`: 5,229 ms load; 870.5 ms frame; `car-paint`: 2,467 ms load; 512.9 ms frame | Separate reference scenes for physical materials; **not** authoring-paint benchmarks |
+| Same WebGPU job | WebGPU/SwiftShader | **Success** | `physical-materials`: 1,321 ms load; 664.3 ms frame; `car-paint`: 1,246 ms load; 588.2 ms frame | The renderer-specific physical material scenes matched their WebGPU references |
+
+The WebGPU `texture-graph` comparison reported **0.220% differing pixels (worst channel difference 142)** under the harness's per-channel threshold and 0.5% allowed differing-pixel share. It was marked **same**, not identical. The corresponding WebGL2 comparison was 0.000% in this run.
+
+**Do not compare the WebGL2 and WebGPU numbers above as an optimization result.** Software adapters, pipeline initialization, synchronization, memory estimators, and scene code paths differ. These are one-run provenance points, not p50/p95 measurements. They also predate subsequent code changes and do not certify current `main`.
+
+## 3. Feature-by-feature evidence
+
+| Operation/family | Editor WebGL2 | Player WebGPU texturing | Native renderer | Evidence and remaining gap |
+|---|---|---|---|---|
+| Base procedural texture graph, perlin/tiles/blend | Source-present; fixed scene visual-verified | Visual-verified (software) | Not tested for feature equivalence | `tests/visual/textureGraphScene.tsx` proof graph; full per-node matrix not tested |
+| Height-to-normal graph output | Visual-verified (software) | Visual-verified (software) | Not tested | Fixed graph includes `normalFromHeight`; image output is encoded and displayed |
+| Pixel processor function graph | Visual-verified (software) | Visual-verified (software) | Not tested | Fixed graph uses `pixelProcessor` function with mix/sample |
+| Instanced scatter and four layering modes | Source-present, embedded GPU reference | Visual-verified (software) for embedded parity checks | Not tested | `checkScatterParity` tests specific interior/edge pixels in `higher`, `over`, `max`, `add` |
+| BC1 compressed texture input | Source and unit tests exist | **Conditional visual proof** | Not tested | `checkCompressedParity` only runs when the WebGPU adapter exposes BC compression **and** WebGL2 supports S3TC; logs do not separately confirm it ran |
+| Applied paint-stack snapshot input | Source and visual proof present | Visual-verified (software) | Not tested | `checkPaintSnapshotParity` tests base color, packed ORM channels and sample pixels; **not** all paint-stack modes or full layers |
+| GLSL code-mode structures | WebGL2 shader path present | Unsupported/explicit translator rejection for affected structures | Not tested | `tests/frontend/textureWebGpu.test.ts` verifies intentional rejection; strict game cook falls back to WebGL2 |
+| Full in-editor WebGPU graph cooking | Existing editor defaults to WebGL2 | Game-time device can use WebGPU | Not established | `texturing/gpu/cookingDevice.ts` and `runtime/materials/graphCooker.ts`; no editor UI-switch acceptance yet |
+| Anisotropy, clearcoat, tint, sheen, flakes | Physical renderer features in source and reference scenes | Renderer-specific physical scene baseline passing; complete channel parity **not verified** | Not tested | No per-channel cross-renderer error budget or sampled texture-map round trip yet |
+| Dynamic per-object materials, capture, 4K/UDIM | Source present in selected subsystems | Not tested end-to-end by this fixture | Not tested | Requires real-world game scenes, state transitions, memory/driver and export tests |
+| WebGPU fallback diagnostics | Strict cook, WebGL2 fallback in source | Source/unit verified; displays stable node ID, type, name after [PR #294](https://github.com/dovvnloading/Auvra/pull/294) | Not relevant | Still need real device-loss and fallback playback fixture |
+
+The native `wgpu` viewport is **not** the same thing as the established editor WebGL2 painting/graph toolchain. Avoid carrying a source capability across a renderer boundary without a test.
+
+## 4. How to reproduce the proven tests
+
+From `fbx-viewer (1)` on a machine with the project's required Node/browser dependencies:
+
+```powershell
+npm ci
+npm run rendering:verify -- --only texture-graph
+npm run rendering:verify -- --renderer webgpu --only texture-graph
+npm test -- tests/frontend/textureWebGpu.test.ts
+```
+
+The visual harness is `scripts/rendering/run.mjs` and its graph scene lives at `tests/visual/textureGraphScene.tsx`. CI uses software adapters for deterministic reference images. Run with `--gpu` on a real GPU to gather machine-specific costs; that mode does not compare against software reference images.
+
+For every new device-backed claim, record exact commit, OS/driver, browser version, GPU/adapter and capabilities, chosen renderer, graph hash and output size, test command, screenshots/PNG hashes and failure/recovery logs. Mark unexecuted conditional operations **not tested**, rather than treating a scene's success as proof of absent adapter features.
+
+## 5. Gates still needed before M0.4 can close
+
+- [ ] Generate or curate an explicit per-node-family WebGL2 vs WebGPU **code/capability** matrix. Unsupported and fallback must be recorded separately.
+- [ ] Record device capabilities and **actual execution** of BC/ETC2/ASTC input tests; add representative compressed image visual fixtures.
+- [ ] Compare coat/sheened/anisotropic/transparent materials with repeatable sampled texture inputs between backends, with accepted quantitative/visual tolerances.
+- [ ] Prove device-loss recovery, interrupted cancellation, shader compile failure, image cache invalidation and reuse of GPU resources across scene transitions.
+- [ ] Cover scan/capture, layered painting and a multi-UDIM authoring workflow, not just applied snapshots.
+- [ ] Run and document actual hardware devices, not only SwiftShader, and store results alongside the historical scene and new M0.5 cook-benchmark reports.
+- [ ] Define an editor WebGPU feature flag only once editor-specific integration and interaction tests pass; preserve default WebGL2 compatibility.
+
+**Completion rule:** A feature is only verified for the specific backend, fixture and adapter actually exercised. M0.4 stays open until those device-backed gates are met.
