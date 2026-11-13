@@ -2,7 +2,7 @@
 
 > **Status:** M0.1 source inspection **started**; all runtime, visual, performance, and hardware verification below is **pending**, unless explicitly marked as an existing test (the presence of a test is not proof it passed in this audit).
 >
-> **Audited repository revision:** `f8161a5eea25c80ef69e7be474799ef0ca254202` (merged [texture suite roadmap](../../TEXTURE_SUITE_EXPANSION_ROADMAP.md))
+> **Audited repository revision:** `f8161a5eea25c80ef69e7be474799ef0ca254202` (merged [texture suite roadmap](../TEXTURE_SUITE_EXPANSION_ROADMAP.md))
 >
 > **Tracking:** [M0 milestone issue #279](https://github.com/dovvnloading/Auvra/issues/279)
 >
