@@ -4,6 +4,7 @@ import { textureGpu, type GpuImage, type TextureGpu } from '../../texturing/gpu/
 import { AbortedError, TextureGraphEvaluator, type ExternalImage, type NodeState } from '../../texturing/graph/evaluator';
 import { OUTPUT_NODE_TYPE } from '../../texturing/graph/nodes/io';
 import { readAnimation, timeAt } from '../../texturing/graph/animation';
+import { TextureCookTimingWindow } from '../../texturing/graph/cookTiming';
 import { graphAnimates, textureNodeDefinition, type GraphResolver } from '../../texturing/graph/registry';
 import type { OutputChannel, TextureGraph } from '../../texturing/graph/types';
 import type { ChannelImages, MaterialChannel } from '../../texturing/materialOutput';
@@ -69,6 +70,8 @@ export class TextureGraphSession {
     busy = false;
     /** Nodes drawn in the last run and how long the run took. */
     lastRun = { nodes: 0, milliseconds: 0 };
+    /** Last successful 64 runs for the active graph topology and resolution. */
+    readonly cookTimings = new TextureCookTimingWindow();
     version = 0;
     private readonly listeners = new Set<() => void>();
     private controller: AbortController | null = null;
@@ -284,6 +287,18 @@ export class TextureGraphSession {
             for (const id of [...this.thumbnails.keys()]) if (!types.has(id)) this.dropThumbnail(id);
             this.updatePreview();
             this.lastRun = { nodes: drawn, milliseconds: performance.now() - started };
+            // Successful, completed runs only. A cached run (0 recomputed nodes)
+            // is counted separately so it cannot make p50/p95 look faster than
+            // actual work. A different topology/resolution resets the window.
+            const requestedSize = context?.size ?? graph.size;
+            const profileKey = JSON.stringify([
+                requestedSize, graph.nodes.map((node) => [node.id, node.type]),
+                graph.links.map((link) => [link.from, link.fromOutput, link.to, link.toInput]),
+            ]);
+            this.cookTimings.record(profileKey, {
+                drawnNodes: drawn,
+                milliseconds: this.lastRun.milliseconds,
+            });
         } catch (error) {
             if (!(error instanceof AbortedError)) frontendDiagnostics.failure('texture_graph_evaluation_failed', error);
         } finally {
