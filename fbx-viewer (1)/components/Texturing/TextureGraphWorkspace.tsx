@@ -5,7 +5,8 @@ import { useAssets } from '../../context/AssetContext';
 import { useScene } from '../../context/SceneContext';
 import { frontendDiagnostics } from '../../diagnostics/runtime';
 import { projectService } from '../../utils/projectService';
-import { planTextureParameterRename, requiresProjectWideParameterRename, type ProjectModelForRename, type ProjectObjectForRename, type ProjectMetadataForRename } from '../../texturing/graph/renameProjectParameter';
+import { planTextureParameterRename, requiresProjectWideParameterRename } from '../../texturing/graph/renameProjectParameter';
+import { readTextureRenameInventory } from '../../texturing/graph/renameSnapshot';
 import { materialLibrary, type MaterialAsset } from '../../runtime/materials/materialLibrary';
 import { AbortedError, unknownNodeMessage, type ExternalImage, type TextureGraphEvaluator } from '../../texturing/graph/evaluator';
 import { MAX_SIZE_LOG2, MIN_SIZE_LOG2, coerceParameter, formulaScope, mixSeeds, parameterValues, readTextureGraph, resolveNodeParams, subgraphRunSeed, unknownNodeTypes } from '../../texturing/graph/document';
@@ -1076,31 +1077,23 @@ const Workspace: React.FC<{
                                 // Graph-local undo cannot restore dependent materials/models/objects.
                                 // Check the COMPLETE host snapshot, not only loaded scene objects.
                                 const snapshot = await projectService.getSnapshotAll();
-                                if (!snapshot?.domains) throw new Error('The project reference inventory could not be loaded.');
-                                const documents = (domain: string): Array<Record<string, unknown> & { id: string }> => {
-                                    const value = snapshot.domains?.[domain];
-                                    const list: unknown[] = Array.isArray(value) ? value : value && typeof value === 'object'
-                                        ? (value as { documents?: unknown[] }).documents ?? [] : [];
-                                    return list.filter((candidate): candidate is Record<string, unknown> & { id: string } =>
-                                        Boolean(candidate && typeof candidate === 'object' && !Array.isArray(candidate) && typeof (candidate as { id?: unknown }).id === 'string'));
-                                };
-                                const models: ProjectModelForRename[] = documents('models');
-                                const objects: ProjectObjectForRename[] = documents('objects')
-                                    .filter((entry): entry is Record<string, unknown> & { id: string; modelId: string } => typeof entry.modelId === 'string');
-                                const metadata: ProjectMetadataForRename[] = documents('metadata');
+                                const inventory = readTextureRenameInventory(snapshot, materialLibrary.list(), {
+                                    projectId: status.projectId, revision: status.revision,
+                                });
                                 const plan = planTextureParameterRename({
-                                    sourceMaterialId: asset.id, from, to,
-                                    materials: materialLibrary.list(), models, objects, metadata,
+                                    sourceMaterialId: asset.id, from, to, ...inventory,
                                 });
                                 const sharedInMemory = sharedPresets.of(asset.id).some((preset) => Object.hasOwn(preset.values, from));
                                 if (requiresProjectWideParameterRename(plan.impact) || sharedInMemory) {
                                     const otherMaterials = plan.impact.materials.filter((id) => id !== asset.id).length;
-                                    setMessage({ tone: 'error', text: `This parameter is used by ${otherMaterials} other material(s), ${plan.impact.models.length} model(s), ${plan.impact.objects.length} placed object(s), and ${plan.impact.metadata.length || Number(sharedInMemory)} project-preset document(s). Renaming it locally would lose those settings, so the edit was blocked until project-wide rename and undo are available.` });
+                                    setMessage({ tone: 'error', text: `Rename blocked: ${otherMaterials} dependent material(s), ${plan.impact.nestedNodes} subgraph/Iterate node(s), ${plan.impact.paintReferences} paint reference(s), ${plan.impact.modelOverrides} model override(s), ${plan.impact.objectOverrides} placed-object override(s), and ${Math.max(plan.impact.sharedPresets, Number(sharedInMemory))} shared preset(s) need coordinated project-wide save and undo.` });
                                     return;
                                 }
                                 const currentStatus = projectService.getStatus();
+                                const latest = currentStored();
                                 if (currentStatus.projectId !== status.projectId || currentStatus.revision !== status.revision
-                                    || JSON.stringify(currentStored().graph) !== JSON.stringify(before.graph)) {
+                                    || JSON.stringify(latest.graph) !== JSON.stringify(before.graph)
+                                    || JSON.stringify(latest.values) !== JSON.stringify(before.values)) {
                                     throw new Error('The project changed while references were being checked. Nothing was renamed; try again.');
                                 }
                                 // No external references: the existing graph-local history is valid.
