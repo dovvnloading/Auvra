@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { cookingDevice, setCookingDevice, textureCookingCapabilities, webgpuFallbacks } from '../../texturing/gpu/cookingDevice';
+import { clearWebgpuFallback, cookingDevice, recordWebgpuFallback, setCookingDevice, textureCookingCapabilities, webgpuFallbacks } from '../../texturing/gpu/cookingDevice';
 
 afterEach(() => {
     setCookingDevice(null);
@@ -52,6 +52,22 @@ describe('runtime GPU texture-cooking device lifecycle', () => {
         });
         setCookingDevice(null);
         expect(textureCookingCapabilities().fallbacks).toEqual([]);
+    });
+
+    it('does not permit an old asynchronous GPU cook to alter the new device’s fallback diagnostics', () => {
+        const oldDevice = { id: 'lost' };
+        const replacement = { id: 'replacement' };
+        setCookingDevice(oldDevice);
+        expect(recordWebgpuFallback(oldDevice, 'shared', 'first device failed')).toBe(true);
+        setCookingDevice(replacement);
+        expect(webgpuFallbacks.size).toBe(0);
+        expect(recordWebgpuFallback(oldDevice, 'shared', 'late failure from old GPU')).toBe(false);
+        expect(webgpuFallbacks.size).toBe(0);
+        expect(recordWebgpuFallback(replacement, 'shared', 'current device cannot compile')).toBe(true);
+        expect(clearWebgpuFallback(oldDevice, 'shared')).toBe(false);
+        expect(webgpuFallbacks.get('shared')).toBe('current device cannot compile');
+        expect(clearWebgpuFallback(replacement, 'shared')).toBe(true);
+        expect(webgpuFallbacks.size).toBe(0);
     });
 
     it('does not mistake an identical device setting for a device reset', () => {
