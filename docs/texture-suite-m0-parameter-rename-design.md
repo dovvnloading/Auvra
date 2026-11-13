@@ -48,6 +48,16 @@ It ignores unrelated assets that merely happen to have a parameter of the same n
 
 **Important:** Current `TextureGraphWorkspace.tsx` uses graph-local history. Do **not** route a cross-document rename through its existing `change({ graph, values })` callback. This feature must wait for a project-level transaction and history integration. Avoid publishing a deceptively functional UI button that only updates part of the project.
 
+## Interim safety guard for the editor
+
+The texture-graph Parameter Editor now preflights a public parameter rename against complete native project snapshots for models, objects and metadata, plus the active material library. If the plan sees **any** dependent document beyond the source graph, the editor **refuses the local rename** and explains how many dependent assets would otherwise be left with stale parameter names.
+
+This deliberately blocks a previously unsafe operation rather than pretending a graph-local Undo could restore another asset's model/object settings. A graph with no outside references may still use its existing local rename/undo flow.
+
+The preflight also refuses to rename if project identity/revision or the graph changed during scanning, if the project cannot be queried or is read-only, or if the planner finds a collision/unsupported document. It checks the in-memory shared-presets list in addition to the persisted metadata snapshot.
+
+**The cross-document project transaction and unified undo/redo are still unfinished.** The guard must be removed/replaced once a full atomic rename action has been implemented and tested; do not turn failed checks into best-effort changes.
+
 ## Limitations and future gates
 
 - **Not yet wired into UI:** simply adding the pure planner does not fix the user-facing Rename button; issue #291 stays open.
