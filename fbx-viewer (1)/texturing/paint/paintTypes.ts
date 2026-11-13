@@ -183,7 +183,7 @@ export interface PaintDocument {
     /** The baked maps; `version` (BAKE_VERSION) and `space` are missing on bakes made before they were kept. */
     bake: { settings: BakeSettings; maps: Partial<Record<MeshMapName, TilePictures>>; extras?: Partial<Record<ExtraBakeMap, TilePictures>>; at: number; version?: number; space?: PositionSpace } | null;
     /** The pictures the model last got from this set. */
-    applied?: { textures: ChannelTextureIds; at: number; atlas?: TileLayout };
+    applied?: { textures: ChannelTextureIds; at: number; atlas?: TileLayout | null };
     /**
      * What the surface wore before painting began, carried onto the set's own layout (a picture per tile)
      * once it was laid out afresh. "What it wore before" fills read these over the model's own pictures,

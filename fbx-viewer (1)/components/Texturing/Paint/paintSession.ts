@@ -829,7 +829,7 @@ export class PaintSession {
             const layout: TileLayout | null = atlas && { tiles: atlas.tiles, columns: atlas.columns, rows: atlas.rows,
                 cell: atlas.cell, gutter: atlas.gutter, width: atlas.width, height: atlas.height };
             const document: PaintDocument = { ...this.stack.document,
-                applied: { textures: ids, at: Date.now(), ...(layout ? { atlas: layout } : {}) } };
+                applied: { textures: ids, at: Date.now(), atlas: layout } };
             this.stack.setDocument(document);
             this.asset = {
                 ...(materialLibrary.get(this.asset.id) ?? this.asset),

@@ -123,7 +123,8 @@ export interface GltfMesh {
 }
 
 /** Layout of the uploaded pictures. Older painted sets recorded it on the generated material node. */
-export const appliedAtlasLayout = (saved: TileLayout | undefined, graph: MaterialGraph): TileLayout | null => {
+export const appliedAtlasLayout = (saved: TileLayout | null | undefined, graph: MaterialGraph): TileLayout | null => {
+    if (saved === null) return null; // Applied as a single tile, even if the shader still has an older atlas node.
     const node = graph.nodes.find(node => node.type === UDIM_ATLAS_NODE_TYPE && node.id === 'udimTiles');
     if (!saved && !node) return null;
     const tiles = saved ? saved.tiles : readUdimTiles(node!.params.tiles);

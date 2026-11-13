@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
+import { createPaintDocument, readPaintDocument } from '../../texturing/paint/paintTypes';
 import { materialGraphForTextures, tileAtlasLayout } from '../../texturing/materialOutput';
 import { appliedAtlasLayout, atlasGeometryUvCorners, atlasMaterialUvCorners, markPaintedMaterials, PAINTED_KEY } from '../../texturing/paint/gltfExport';
 
@@ -81,7 +82,16 @@ describe('whole-model UDIM glTF geometry atlas', () => {
         const first = tileAtlasLayout([1001, 1003], 256, 4096);
         const other = tileAtlasLayout([1002, 1011, 1021], 128, 4096);
         const legacy = materialGraphForTextures({ baseColor: 'other-paint' }, { tiles: other });
-        const restored = appliedAtlasLayout(undefined, legacy);
+        const applied = { textures: { baseColor: 'picture' }, at: 7 };
+        const document = createPaintDocument('model', ['Trim']);
+        const roundTrip = (saved: typeof document.applied) =>
+            readPaintDocument(JSON.parse(JSON.stringify({ ...document, applied: saved })))!.applied!;
+        const single = roundTrip({ ...applied, atlas: null });
+        expect(single.atlas).toBeNull();
+        expect(appliedAtlasLayout(single.atlas, legacy)).toBeNull();
+        const prior = roundTrip(applied);
+        expect(prior).not.toHaveProperty('atlas');
+        const restored = appliedAtlasLayout(prior.atlas, legacy);
         expect(restored).toEqual(other);
         expect(appliedAtlasLayout(first, legacy)).toEqual(first);
         const source = sharedEdgeMesh();
