@@ -13,7 +13,7 @@ export const SURFACE_CHANNEL_CONTRACT_VERSION = 1;
 
 export type SurfaceValueKind = 'scalar' | 'colour' | 'tangentNormal';
 export type SurfaceDataRole = 'colour' | 'data' | 'normal';
-export type SurfaceUnit = 'normalized' | 'degrees' | 'nanometres' | 'metres' | 'scene-units';
+export type SurfaceUnit = 'normalized' | 'dimensionless' | 'degrees' | 'nanometres' | 'scene-units';
 
 export interface PaintV1ChannelDescriptor {
     readonly key: PaintChannel;
@@ -73,7 +73,7 @@ export const PAINT_V1_CHANNEL_CATALOG: Readonly<Record<PaintChannel, PaintV1Chan
 export const PROPOSED_PHYSICAL_CHANNELS = [
     { key: 'specularWeight', kind: 'scalar', unit: 'normalized', feature: 'specular' },
     { key: 'specularColor', kind: 'colour', unit: 'normalized', feature: 'specular' },
-    { key: 'ior', kind: 'scalar', unit: 'scene-units', feature: 'specular' },
+    { key: 'ior', kind: 'scalar', unit: 'dimensionless', feature: 'specular' },
     { key: 'coat', kind: 'scalar', unit: 'normalized', feature: 'coat' },
     { key: 'coatRoughness', kind: 'scalar', unit: 'normalized', feature: 'coat' },
     { key: 'coatColor', kind: 'colour', unit: 'normalized', feature: 'coat' },
@@ -85,10 +85,10 @@ export const PROPOSED_PHYSICAL_CHANNELS = [
     { key: 'thinFilm', kind: 'scalar', unit: 'normalized', feature: 'thinFilm' },
     { key: 'thinFilmThickness', kind: 'scalar', unit: 'nanometres', feature: 'thinFilm' },
     { key: 'transmission', kind: 'scalar', unit: 'normalized', feature: 'transmission' },
-    { key: 'thickness', kind: 'scalar', unit: 'metres', feature: 'transmission' },
+    { key: 'thickness', kind: 'scalar', unit: 'scene-units', feature: 'transmission' },
     { key: 'attenuationColor', kind: 'colour', unit: 'normalized', feature: 'transmission' },
-    { key: 'attenuationDistance', kind: 'scalar', unit: 'metres', feature: 'transmission' },
-    { key: 'dispersion', kind: 'scalar', unit: 'scene-units', feature: 'dispersion' },
+    { key: 'attenuationDistance', kind: 'scalar', unit: 'scene-units', feature: 'transmission' },
+    { key: 'dispersion', kind: 'scalar', unit: 'dimensionless', feature: 'dispersion' },
     { key: 'flakeDensity', kind: 'scalar', unit: 'normalized', feature: 'flakes' },
     { key: 'flakeSize', kind: 'scalar', unit: 'scene-units', feature: 'flakes' },
     { key: 'flakeColor', kind: 'colour', unit: 'normalized', feature: 'flakes' },
