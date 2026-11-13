@@ -31,8 +31,8 @@ export interface TextureCookingCapabilitySnapshot {
     /** Hardware-reported limit, not proof every graph size can run. */
     maxTextureDimension2D: number | null;
     /** WebGPU adapter feature flags, not proof a particular format uploads successfully. */
-    compression: { bc: boolean; etc2: boolean; astc: boolean };
-    float32Filterable: boolean;
+    compression: { bc: boolean | null; etc2: boolean | null; astc: boolean | null };
+    float32Filterable: boolean | null;
     /** Per-material fallback reasons from the current device only. */
     fallbacks: ReadonlyArray<{ materialId: string; reason: string }>;
 }
@@ -48,7 +48,7 @@ export const textureCookingCapabilities = (): TextureCookingCapabilitySnapshot =
     const features = gpu?.features;
     const limit = gpu?.limits?.maxTextureDimension2D;
     const valid = typeof limit === 'number' && Number.isInteger(limit) && limit > 0 && typeof features?.has === 'function';
-    const has = (name: string): boolean => valid && features!.has!(name);
+    const has = (name: string): boolean | null => valid ? features!.has!(name) : null;
     return {
         backend: valid ? 'webgpu' : 'webgl2',
         maxTextureDimension2D: valid ? limit as number : null,
