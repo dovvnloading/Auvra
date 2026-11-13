@@ -8,54 +8,62 @@ on:
   workflow_dispatch:
 
 concurrency:
-  # Only obsolete pull-request runs are canceled; never cancel runs on main.
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  # Cancel superseded PR and main runs instead of clogging GitHub's runner queue.
+  # Each explicitly dispatched release run gets its own independent group.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || (github.event_name == 'push' && github.ref) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'push' }}
 
 permissions:
   contents: read
 
 jobs:
   changes:
-    # Decides whether the browser tests need to run for this change. A job
-    # skipped by its `if` reports success, so required checks never hang.
+    # Required checks remain present: irrelevant jobs report skipped/success.
     name: Detect browser-relevant changes
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
+      editor: ${{ steps.filter.outputs.editor }}
       browser: ${{ steps.filter.outputs.browser }}
+      python: ${{ steps.filter.outputs.python }}
+      native: ${{ steps.filter.outputs.native }}
+      player: ${{ steps.filter.outputs.player }}
+      smoke: ${{ steps.filter.outputs.smoke }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 2
-      - name: Classify the changed files
+      - name: Select affected checks (fail open on unknown or missing diff)
         id: filter
         env:
           EVENT_NAME: ${{ github.event_name }}
           BEFORE: ${{ github.event.before }}
-          RUN_IF: '^(fbx-viewer \(1\)/|\.github/workflows/verify\.yml$)'
         run: |
-          browser=true
+          set -euo pipefail
           changed=""
           if [ "$EVENT_NAME" = "pull_request" ]; then
-            changed=$(git diff --name-only HEAD^1 HEAD)
+            changed=$(git diff --name-only HEAD^1 HEAD) || changed=""
           elif [ "$EVENT_NAME" = "push" ] && [ -n "$BEFORE" ] && [ "$BEFORE" != "0000000000000000000000000000000000000000" ]; then
-            if git fetch -q --depth=1 origin "$BEFORE"; then changed=$(git diff --name-only "$BEFORE" HEAD); fi
-          fi
-          if [ -n "$changed" ]; then
-            if [ -n "${RUN_IF:-}" ]; then
-              echo "$changed" | grep -qE "$RUN_IF" || browser=false
-            else
-              echo "$changed" | grep -qvE "$SKIP_IF" || browser=false
+            if git fetch -q --depth=1 origin "$BEFORE"; then
+              changed=$(git diff --name-only "$BEFORE" HEAD) || changed=""
             fi
           fi
-          echo "Changed files:"
-          echo "$changed"
-          echo "browser=$browser" | tee -a "$GITHUB_OUTPUT"
+          echo "Changed paths:" >&2
+          printf '%s\n' "$changed" >&2
+          printf '%s\n' "$changed" | python3 tools/ci/select_checks.py --event "$EVENT_NAME" >> "$GITHUB_OUTPUT"
+          for check in editor browser python native player smoke; do
+            if ! grep -Eq "^$check=(true|false)$" "$GITHUB_OUTPUT"; then
+              echo "::error::Path selector did not emit valid $check" >&2
+              exit 1
+            fi
+          done
 
   editor-build:
     name: Editor build (Node ${{ matrix.node-version }})
+    needs: changes
+    if: needs.changes.outputs.editor == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -115,13 +123,20 @@ jobs:
 
   rendering:
     needs: changes
-    if: needs.changes.outputs.browser == 'true'
+    # This REQUIRED check must fail, not silently pass as skipped, if the path
+    # selector itself failed. !cancelled() still permits obsolete runs to stop.
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.browser == 'true') }}
     name: Rendering pictures
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: fbx-viewer (1)
     steps:
+      - name: Block the merge if change selection failed
+        if: needs.changes.result != 'success'
+        run: exit 1
+
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -160,6 +175,7 @@ jobs:
     if: needs.changes.outputs.browser == 'true'
     name: Rendering pictures on WebGPU
     runs-on: windows-latest
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: fbx-viewer (1)
@@ -193,6 +209,7 @@ jobs:
     needs: rendering
     if: ${{ github.event_name == 'push' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
       contents: write
     concurrency:
@@ -225,7 +242,10 @@ jobs:
 
   python-verify:
     name: Python ${{ matrix.python-version }} (${{ matrix.os }})
+    needs: changes
+    if: needs.changes.outputs.python == 'true'
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -258,7 +278,10 @@ jobs:
 
   python-lint:
     name: Python lint
+    needs: changes
+    if: needs.changes.outputs.python == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -271,8 +294,11 @@ jobs:
 
   native-engine-build:
     name: Native engine (${{ matrix.os }})
+    needs: changes
+    if: needs.changes.outputs.native == 'true'
     # Keep the check name stable while using the established Ubuntu runner image for apt-dependent verification.
     runs-on: ${{ matrix.os == 'ubuntu-latest' && 'ubuntu-24.04' || matrix.os }}
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -323,7 +349,10 @@ jobs:
 
   desktop-player-build:
     name: Desktop game player (windows-latest)
+    needs: changes
+    if: needs.changes.outputs.player == 'true'
     runs-on: windows-latest
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: player-desktop
@@ -348,8 +377,11 @@ jobs:
 
   desktop-player-linux:
     name: Desktop game player (ubuntu-latest)
+    needs: changes
+    if: needs.changes.outputs.player == 'true'
     # Match the native-engine runner to avoid unstable rolling-image apt resolution.
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: player-desktop
@@ -407,7 +439,10 @@ jobs:
 
   desktop-player-macos:
     name: Desktop game player (macos-latest)
+    needs: changes
+    if: needs.changes.outputs.player == 'true'
     runs-on: macos-latest
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: player-desktop
@@ -463,7 +498,10 @@ jobs:
 
   native-project-smoke:
     name: Native project lifecycle (Windows WebView2)
+    needs: changes
+    if: needs.changes.outputs.smoke == 'true'
     runs-on: windows-latest
+    timeout-minutes: 15
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -515,10 +553,10 @@ jobs:
 
   release-dev-msix:
     name: Clean Windows unsigned dev MSIX
-    # Packaging is release qualification, not a routine PR merge gate.
-    # Preserve this job's name: branch protection still requires its check,
-    # and GitHub treats this skipped PR job as a passing required check.
-    if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
+    # This 350+ MB WebView2 MSIX takes 16-18 minutes and is release qualification,
+    # not routine CI. Trigger it through Actions > Verify > Run workflow.
+    # Preserve this required check name (skipped checks pass branch protection).
+    if: ${{ github.event_name == 'workflow_dispatch' }}
     runs-on: windows-latest
     needs: [desktop-player-linux, desktop-player-macos]
     permissions:
