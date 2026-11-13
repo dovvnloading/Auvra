@@ -175,6 +175,7 @@ const EXEMPT = new Map(Object.entries({
   'texturing/graph/quilting.ts': 'pure-utility',
   'texturing/graph/nodes/text.ts': 'pure-utility',
   'texturing/graph/iterate.ts': 'pure-utility',
+  'texturing/graph/cookTiming.ts': 'pure-utility',
   'texturing/graph/nodes/processors.ts': 'pure-utility',
   'components/NodeGraph/tidy.ts': 'pure-utility',
   'texturing/graph/nodes/transform.ts': 'pure-utility',

@@ -461,6 +461,10 @@ export const TextureGraphCanvas: React.FC<TextureGraphCanvasProps> = (props) => 
     }, []);
     const onSelect = useCallback((ids: string[], frame?: string | null) => latest.current.onSelect(ids, frame ?? null), []);
 
+    const timing = session.cookTimings.summary();
+    const timingWords = timing.recomputedRuns >= 5 && timing.p50Milliseconds !== null && timing.p95Milliseconds !== null
+        ? ` · p50 ${Math.round(timing.p50Milliseconds)} / p95 ${Math.round(timing.p95Milliseconds)} ms (${timing.recomputedRuns} recomputes)`
+        : '';
     const canvas = (
         <NodeGraphCanvas
             label="Texture graph"
@@ -478,7 +482,7 @@ export const TextureGraphCanvas: React.FC<TextureGraphCanvasProps> = (props) => 
             onSelect={onSelect}
             onEdit={onEdit}
             notice={notice}
-            status={session.busy ? 'Drawing…' : `${graph.nodes.length} nodes · drew ${session.lastRun.nodes} in ${Math.round(session.lastRun.milliseconds)} ms`}
+            status={session.busy ? 'Drawing…' : `${graph.nodes.length} nodes · drew ${session.lastRun.nodes} in ${Math.round(session.lastRun.milliseconds)} ms${timingWords}`}
         />
     );
     // Hidden, it keeps where it was looking for when it shows again (the same element either way, so it is kept).
