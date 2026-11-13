@@ -158,6 +158,12 @@ Materials made before blend modes keep their look: one whose opacity was set or 
 
 A shader that does not compile marks the nodes whose code failed on the canvas, and on a Custom GLSL node's code, with what is wrong in plain words; the panel under the preview says the same, with the compiler's own lines behind **Details**.
 
+### Curves in reusable texture graphs
+
+In a **Texture graph**, **Graph input: curve** and **Output: curve** expose paths as curve wires on a graph used inside another graph. The input name becomes the outer node's input pin; the output node's name is its displayed label, while its pin keeps a stable ID when renamed. Curve paths keep their points and open/closed state without being converted to pixels. An unwired curve input gives no paths.
+
+The **Iterate** node also accepts and outputs curve paths. Give a curve input and output the same name to pass the previous iteration's paths into the next pass (just as named image and material outputs can feed back). CPU curve paths are kept separately from GPU images.
+
 ### My library
 
 **My library** (the book button at the top of the Materials list) keeps your own materials for every project, on this computer, each shown as a ball drawn the way the engine draws it. **Add to my library** (the book button beside a material's name) keeps a copy of the material with its pictures, and for a texture graph the graphs it uses as nodes (they come into a project with it, each with an id of its own); adding it again updates that copy. In the library, search by name, tag or folder, or pick a folder or tag above the balls. The chosen material's page renames it, moves it into a folder (type a path such as Metals/Painted), tags it, says which projects it went into, and has **Use in this project** (or drag its ball onto the project's materials, or double-click it), **Duplicate** and **Delete**, which can be undone. A material brought in is the project's own copy, its pictures added to the project's textures under Materials/its name. The project's own materials show their balls in the Materials list too, drawn again a moment after each edit. The buttons above the list are icons: My library, Describe, Texture memory and New; each says what it does when you point at it.

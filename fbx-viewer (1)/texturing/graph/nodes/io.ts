@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import type { GpuImage } from '../../gpu/textureGpu';
 import { MATERIAL_CHANNELS, MATERIAL_DEFAULTS, materialKey, materialResults, outputChannelOf, type MaterialImages } from '../material';
 import { NAMED_RECEIVE_TYPE, NAMED_SEND_TYPE } from '../namedLinks';
-import { anyIn, color, colorIn, float, onePass, out, select, vec2 } from '../nodeKit';
+import { anyIn, color, colorIn, curveIn, curveOut, float, onePass, out, select, vec2 } from '../nodeKit';
 import { OUTPUT_CHANNELS, OUTPUT_CHANNEL_LABELS, outputNodeKind, type GraphParameter, type NodeRunContext, type OutputChannel, type PortKind, type TexNodeDef, type TexParamDef } from '../types';
 import { parameterSetting } from '../parameters';
 
@@ -21,6 +21,9 @@ export const REROUTE_NODE_TYPE = 'reroute';
 /** A graph's input that takes a whole material, and its output that gives one: for graphs used as nodes. */
 export const MATERIAL_INPUT_NODE_TYPE = 'materialInput';
 export const MATERIAL_OUTPUT_NODE_TYPE = 'materialOutput';
+/** CPU curve paths entering or leaving a graph used as a node (not raster pictures). */
+export const CURVE_INPUT_NODE_TYPE = 'curveInput';
+export const CURVE_OUTPUT_NODE_TYPE = 'curveOutput';
 
 /**
  * A sub-graph node's own random seed and whether each copy varies, kept under names no graph
@@ -309,6 +312,42 @@ void main() {
     outColor = c;
 }`, { uniforms: { uScale: new THREE.Vector2(scale[0], scale[1]), uCrop: new THREE.Vector4(...crop), uColour: colour } });
             return { out: image };
+        },
+    },
+    {
+        type: CURVE_INPUT_NODE_TYPE,
+        label: 'Graph input: curve',
+        category: 'Inputs and outputs',
+        description: 'Curve paths supplied by a graph using this one as a node. The paths keep their points and open/closed state, without becoming a picture.',
+        keywords: ['curve input', 'path input', 'spline', 'sub-graph', 'socket'],
+        inputs: [],
+        outputs: [curveOut('path', 'Curve')],
+        params: [
+            { key: 'name', label: 'Name', kind: 'string', default: 'curve' },
+            { key: 'visibleIf', label: 'Shown when', kind: 'string', default: '', hint: 'On a node using this graph, show this curve pin only while this condition holds.' },
+        ],
+        sizeFrom: 'graph',
+        async run(context) {
+            context.giveCurve('path', context.externalCurve(String(context.params.name || 'curve')) ?? []);
+            return {};
+        },
+    },
+    {
+        type: CURVE_OUTPUT_NODE_TYPE,
+        label: 'Output: curve',
+        category: 'Inputs and outputs',
+        description: 'Gives the incoming paths to a graph using this one as a node, without converting them to pixels.',
+        keywords: ['curve output', 'path output', 'spline', 'sub-graph', 'socket'],
+        inputs: [curveIn('in', 'Curve')],
+        outputs: [],
+        params: [
+            { key: 'name', label: 'Name', kind: 'string', default: 'curve' },
+            { key: 'visibleIf', label: 'Shown when', kind: 'string', default: '', hint: 'On a node using this graph, show this curve pin only while this condition holds.' },
+        ],
+        sizeFrom: 'graph',
+        async run(context) {
+            context.giveCurve('path', context.curve('in') ?? []);
+            return {};
         },
     },
     {

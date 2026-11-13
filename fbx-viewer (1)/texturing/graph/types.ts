@@ -234,6 +234,10 @@ export interface SubgraphRunOptions {
     /** Mixed into the seed the graph inside runs with (a new seed each pass). */
     seedOffset?: number;
     owned?: boolean;
+    /** CPU curve paths supplied to a nested graph's Curve input nodes, by name. */
+    curveInputs?: Readonly<Record<string, CurvePaths | null>>;
+    /** The paths produced by nested Curve output nodes, keyed by their stable node id. */
+    onCurveOutput?: (outputId: string, paths: CurvePaths) => void;
 }
 
 /** Everything a node sees while it draws. */
@@ -276,6 +280,8 @@ export interface NodeRunContext {
     subgraph(graphId: string, params: Readonly<Record<string, unknown>>, inputs: Readonly<Record<string, GpuImage | null>>, options?: SubgraphRunOptions): Promise<Record<string, GpuImage>>;
     /** An image the caller supplied for one of the graph's Input nodes. */
     external(name: string): GpuImage | THREE.Texture | null;
+    /** CPU paths supplied for a Curve input node, or null when absent. */
+    externalCurve(name: string): CurvePaths | null;
     /** The channels of the material wired into a material input (null when none is). */
     material(key: string): MaterialImages | null;
     /** The paths of the curve wired into a curve input (null when none is). */
