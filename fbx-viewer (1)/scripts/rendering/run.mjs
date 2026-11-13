@@ -106,8 +106,13 @@ const main = async () => {
       if (textureBench) {
         verdict = 'BENCHMARK (not reference-compared)';
         if (!cost.textureCook) failures.push(`${name}: no texture graph benchmark results were returned`);
-        else if (renderer === 'webgpu' && cost.textureCook.backend !== 'webgpu') {
-          failures.push(`${name}: requested WebGPU but benchmark used ${cost.textureCook.backend}: ${cost.textureCookProblem ?? 'unknown fallback'}`);
+        else {
+          if (renderer === 'webgpu' && cost.textureCook.backend !== 'webgpu') {
+            failures.push(`${name}: requested WebGPU but benchmark used ${cost.textureCook.backend}: ${cost.textureCookProblem ?? 'unknown fallback'}`);
+          }
+          if (cost.textureCook.firstNodes < 1) failures.push(`${name}: the cold graph evaluation did not run any nodes`);
+          if (cost.textureCook.cachedNodes !== 0) failures.push(`${name}: unchanged graph recomputed ${cost.textureCook.cachedNodes} cached nodes`);
+          if (cost.textureCook.editNodes < 1) failures.push(`${name}: changing the noise parameter did not recompute dependent nodes`);
         }
       } else if (updating) {
         writeFileSync(referenceFile, bytes);
@@ -147,6 +152,18 @@ const main = async () => {
           'incremental nodes': cooked.editNodes,
         }]);
       }
+    }
+    if (textureBench) {
+      numbers._benchmark = {
+        createdAt: new Date().toISOString(),
+        rendererRequested: renderer,
+        gpuSelection: realGpu ? 'hardware-requested' : 'software-requested',
+        resolution: 2 ** textureSize,
+        browserUserAgent: await run('navigator.userAgent'),
+        operatingSystem: process.platform,
+        architecture: process.arch,
+        note: 'Requested GPU mode does not establish a vendor/driver; record the adapter separately before hardware comparisons. Eval and readback are independently timed.',
+      };
     }
     writeFileSync(path.join(outputDir, 'numbers.json'), `${JSON.stringify(numbers, null, 2)}\n`);
     if (updating && !only) {
