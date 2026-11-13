@@ -75,4 +75,6 @@ New WebGPU `texture-graph` captures write `bc1Parity` under `texture-graph` in `
 - [ ] Run and document actual hardware devices, not only SwiftShader, and store results alongside the historical scene and new M0.5 cook-benchmark reports.
 - [ ] Define an editor WebGPU feature flag only once editor-specific integration and interaction tests pass; preserve default WebGL2 compatibility.
 
+The ordinary WebGPU `texture-graph` capture runs a controlled device-loss fixture after the scene is unmounted. It draws red then green on a shared texture target pool, destroys that device, awaits its loss notification, and checks that the same green image can be drawn from scratch on a distinct replacement. A successful run records the sampled RGBA values and loss reason in `texture-graph.deviceLoss` in the WebGPU `numbers.json`. A mismatch fails the rendering job. This exercises explicit destruction and reacquisition. Physical driver resets, cancellation during a live graph cook and scene-wide isolation still require separate fixtures.
+
 **Completion rule:** A feature is only verified for the specific backend, fixture and adapter actually exercised. M0.4 stays open until those device-backed gates are met.
