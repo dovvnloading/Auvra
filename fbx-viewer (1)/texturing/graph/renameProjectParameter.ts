@@ -70,6 +70,17 @@ export interface TextureParameterRenamePlan {
     changedMaterials: MaterialAsset[];
 }
 
+/**
+ * A graph-local rename is permitted only when no other saved project record
+ * relies on the parameter. Until the editor has project-wide undo, use this
+ * guard instead of silently orphaning names in dependent documents.
+ */
+export const requiresProjectWideParameterRename = (impact: RenameImpact): boolean =>
+    impact.materials.some((id) => id !== impact.sourceMaterialId)
+    || impact.models.length > 0
+    || impact.objects.length > 0
+    || impact.metadata.length > 0;
+
 const record = (value: unknown): Record<string, unknown> | null =>
     value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
 const owns = (r: Record<string, unknown>, key: string): boolean =>
