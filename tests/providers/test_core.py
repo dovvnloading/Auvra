@@ -2,7 +2,7 @@ from __future__ import annotations
 import hashlib, io, json, re, sqlite3, sys, tempfile, unittest
 from datetime import datetime, timezone
 from pathlib import Path
-from unittest import mock
+import unittest.mock as mock
 
 from Auvra.providers import *
 from Auvra.providers.adapters import MediaJob, TextResult, _fal_cdn_url
@@ -578,7 +578,7 @@ class ProviderCoreTests(unittest.TestCase):
             seen.add(kind)
             with self.subTest(kind=kind):
                 defaults = re.search(r"defaultProps:\s*\{([^}]*)\}", chunk)
-                self.assertTrue(set(re.findall(r"(\w+)\s*:", defaults.group(1))) <= PROP_FIELDS[kind])
+                self.assertLessEqual(set(re.findall(r"(\w+)\s*:", defaults.group(1))), PROP_FIELDS[kind])
                 bindable = re.search(r"bindableProps:\s*\[([^\]]*)\]", chunk)
                 self.assertEqual(set(re.findall(r"'(\w+)'", bindable.group(1))), set(BINDABLE_PROPS[kind]))
                 align = re.search(r"textAlign:\s*\[([^\]]*)\]", chunk)

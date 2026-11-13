@@ -9,7 +9,7 @@ import time
 import types
 import unittest
 import weakref
-from unittest import mock
+import unittest.mock as mock
 
 from Auvra.desktop.contracts import FrameConfig, FrameMode, FrameStartupError, FrameState
 from Auvra.desktop.assets import ASSET_ORIGIN, AssetResourceResponse

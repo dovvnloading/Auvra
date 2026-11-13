@@ -13,6 +13,7 @@ from enum import Enum
 import hashlib
 import hmac
 import json
+import logging
 import os
 import queue
 import re
@@ -29,6 +30,8 @@ from Auvra.host.dispatcher import HostOperationError
 from Auvra.host.logging import redact
 from Auvra.launcher.platform import PosixProcessGroup, WindowsJob
 
+
+_LOG = logging.getLogger(__name__)
 
 PROTOCOL_VERSION = "auvra.native/1"
 SESSION_TOKEN_ENV = "AUVRA_NATIVE_SESSION_TOKEN"
@@ -366,16 +369,16 @@ class NativeEngine:
                     else:
                         self._process.kill()
                 except Exception:
-                    pass
+                    _LOG.warning("Could not stop the native process after startup failed")
                 try:
                     self._process.wait(timeout=1)
                 except (OSError, subprocess.TimeoutExpired):
-                    pass
+                    _LOG.warning("Could not confirm the native process exited after startup failed")
             if owner is not None:
                 try:
                     owner.close()
                 except Exception:
-                    pass
+                    _LOG.warning("Could not release native process ownership after startup failed")
             self._process_owner = None
             self._state = NativeEngineState.FAILED
             if self._runtime_diagnostics is not None:
@@ -561,11 +564,11 @@ class NativeEngine:
             else:
                 process.terminate()
         except (OSError, ValueError):
-            pass
+            _LOG.debug("Graceful native process termination failed; forced cleanup will follow")
         try:
             process.wait(timeout=max(0.05, timeout))
         except subprocess.TimeoutExpired:
-            pass
+            _LOG.debug("Native process exceeded its graceful termination timeout")
         # Kill through the ownership boundary even when the root already
         # exited: descendants may still be alive in the group/job.
         try:
@@ -574,13 +577,13 @@ class NativeEngine:
             elif process.poll() is None:
                 process.kill()
         except (OSError, ValueError):
-            pass
+            _LOG.warning("Could not kill the owned native process tree")
         if process.poll() is None:
             try:
                 process.kill()
                 process.wait(timeout=min(max(0.05, timeout), 1.0))
             except (OSError, subprocess.TimeoutExpired):
-                pass
+                _LOG.warning("Could not confirm the native process exited after forced termination")
 
     def _invalidate_transport(self, *, code: str) -> None:
         """Fail closed after a response-channel timeout or protocol fault.
@@ -818,7 +821,7 @@ class NativeEngine:
                 response = self._call("shutdown", {}, timeout=wait_for)
                 acknowledged = response.get("stopped") is True
             except NativeEngineError:
-                pass
+                _LOG.debug("Native shutdown request failed; continuing process cleanup")
         if process is not None:
             if process.poll() is None:
                 try:
@@ -834,7 +837,7 @@ class NativeEngine:
                 try:
                     owner.close()
                 except OSError:
-                    pass
+                    _LOG.warning("Could not release native process ownership on shutdown")
                 self._process_owner = None
         self._state = NativeEngineState.CLOSED
         if process is not None:
@@ -843,7 +846,7 @@ class NativeEngine:
                     try:
                         stream.close()
                     except OSError:
-                        pass
+                        _LOG.debug("Could not close a native process stream")
         if self._runtime_diagnostics is not None:
             self._runtime_diagnostics.emit("native", "native.lifecycle",
                                            attributes={"state": "closed", "acknowledged": acknowledged,
@@ -975,10 +978,12 @@ class NativeEngineHost:
             os.replace(temporary, target)
             try:
                 directory_fd = os.open(self._source_root, os.O_RDONLY)
-                os.fsync(directory_fd)
-                os.close(directory_fd)
+                try:
+                    os.fsync(directory_fd)
+                finally:
+                    os.close(directory_fd)
             except OSError:
-                pass
+                _LOG.debug("Directory sync unavailable for the staged native asset")
             self._staged_assets.add(asset_id)
         finally:
             temporary.unlink(missing_ok=True)
@@ -1107,7 +1112,7 @@ class NativeEngineHost:
             try:
                 self.engine.call("world.abortHydration")
             except NativeEngineError:
-                pass
+                _LOG.warning("Could not abort the failed native hydration transaction")
             raise
 
     @staticmethod

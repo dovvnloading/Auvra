@@ -11,7 +11,10 @@ from enum import Enum
 import re
 from urllib.parse import SplitResult, urlsplit
 
-from .contracts import FrameMode
+
+class FrameMode(str, Enum):
+    DEVELOPMENT = "development"
+    PACKAGED = "packaged"
 
 
 class PolicyAction(str, Enum):

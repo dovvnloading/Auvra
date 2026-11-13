@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from contextlib import contextmanager
+import logging
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 import json
 import errno
 import os
-import shutil  # noqa: F401 - tests hold this module's `shutil.which` to prove it is never trusted
 from pathlib import Path
 import re
 import stat
@@ -148,10 +148,7 @@ def _mkdir_safe(path: Path) -> None:
         current = current.parent
     for item in reversed(missing):
         _assert_tree(item, allow_missing_leaf=True)
-        try:
-            item.mkdir()
-        except FileExistsError:
-            pass
+        item.mkdir(exist_ok=True)
         _assert_tree(item)
         if not item.is_dir() or _link_like(item):
             raise BootstrapError("bootstrap directory became a link or non-directory")
@@ -363,11 +360,9 @@ def _write_marker(paths: BootstrapPaths, *, interpreter: Path) -> None:
     finally:
         if fd >= 0:
             os.close(fd)
-        try:
+        with suppress(OSError):
             if temporary.exists() or temporary.is_symlink():
                 temporary.unlink()
-        except OSError:
-            pass
 
 
 def _write_initializing_marker(paths: BootstrapPaths, *, interpreter: str | os.PathLike[str]) -> None:
@@ -402,11 +397,9 @@ def _write_initializing_marker(paths: BootstrapPaths, *, interpreter: str | os.P
     finally:
         if fd >= 0:
             os.close(fd)
-        try:
+        with suppress(OSError):
             if temporary.exists() or temporary.is_symlink():
                 temporary.unlink()
-        except OSError:
-            pass
 
 
 def _remove_initializing_marker(paths: BootstrapPaths) -> None:
@@ -605,7 +598,7 @@ def _owner_file(path: Path, *, timeout: float, clock: Clock, sleeper: Sleeper,
                     if owner is not None and owner[0] == os.getpid() and owner[1] == token:
                         path.unlink()
             except OSError:
-                pass
+                logging.getLogger(__name__).debug("Could not remove the launcher ownership file")
         return
 
 

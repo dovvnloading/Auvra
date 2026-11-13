@@ -8,7 +8,7 @@ import struct
 import tempfile
 import unittest
 from pathlib import Path
-from unittest import mock
+import unittest.mock as mock
 
 from Auvra.providers.adapters import MediaJob
 from Auvra.providers.errors import ProviderError

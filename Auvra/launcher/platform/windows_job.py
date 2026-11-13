@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from contextlib import suppress
 import ctypes
-from ctypes import wintypes
+import ctypes.wintypes as wintypes
 import signal
 import subprocess
 
@@ -95,10 +96,8 @@ class WindowsJob:
             ctypes.byref(info), ctypes.sizeof(info))
         if not ok:
             error = ctypes.get_last_error()
-            try:
+            with suppress(OSError):
                 self.close()
-            except OSError:
-                pass
             raise OSError(error, "SetInformationJobObject failed")
 
     def assign(self, process: subprocess.Popen[bytes] | subprocess.Popen[str]) -> None:
@@ -109,10 +108,8 @@ class WindowsJob:
                 process.terminate()
                 process.wait(timeout=2)
             except Exception:
-                try:
+                with suppress(Exception):
                     process.kill()
-                except Exception:
-                    pass
             self.close()
             raise OSError(error, "AssignProcessToJobObject failed; child was stopped")
         if not self._resume_primary_thread(process):

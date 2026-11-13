@@ -1,6 +1,7 @@
 """Transactional native project repository."""
 from __future__ import annotations
 
+import logging
 import copy, hashlib, os, re, shutil, tempfile, time, uuid, zipfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -417,7 +418,7 @@ class ProjectRepository:
             try:
                 self.assets.remove_unreferenced(candidate_refs, superseded)
             except (OSError, ValueError):
-                pass
+                logging.getLogger(__name__).warning("Could not prune superseded assets after commit")
         return self.revision
 
     def _transaction(self, docs: dict[str, dict[str, Any]], new_revision: int) -> None:
@@ -788,7 +789,7 @@ class ProjectRepository:
             try:
                 self.prune_unreferenced_assets()
             except (OSError, ValueError):
-                pass
+                logging.getLogger(__name__).warning("Could not prune unreferenced assets on close")
         self._lock.release()
     def __enter__(self): return self
     def __exit__(self, *_): self.close()

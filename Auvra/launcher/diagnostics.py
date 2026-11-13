@@ -15,10 +15,8 @@ import time
 import zipfile
 from typing import Callable
 
+from Auvra.diagnostics import core
 from Auvra.diagnostics.core import (
-    LATEST_RUN_NAME,  # noqa: F401 - the command line takes these from here
-    RUN_MARKER_NAME,  # noqa: F401
-    follow_records,  # noqa: F401
     DiagnosticsSession,
     active_diagnostics,
     atomic_json as _core_atomic_json,
@@ -34,6 +32,12 @@ from .dependencies import inspect_dependencies, validate_lockfile
 from .process import ProcessCleanupError, ProcessLaunchError, run_owned_command
 
 
+# Launcher callers use the same run markers and stream reader as the diagnostics core.
+LATEST_RUN_NAME = core.LATEST_RUN_NAME
+RUN_MARKER_NAME = core.RUN_MARKER_NAME
+follow_records = core.follow_records
+
+
 @dataclass(frozen=True)
 class RuntimeResult:
     name: str
@@ -46,12 +50,7 @@ class RuntimeResult:
 
 
 _VERSION = re.compile(r"(?:v)?(\d+)\.(\d+)\.(\d+)")
-_SECRET_ASSIGNMENT = re.compile(
-    r"(?i)(\b[\w.-]*(?:api[_-]?key|anon[_-]?key|access[_-]?key|private[_-]?key|fal[_-]?key|token|password|secret|credential)[\w.-]*\b\s*[:=]\s*)(?:\"[^\"]*\"|'[^']*'|[^\s,;]+)"
-)
-_AUTHORIZATION_HEADER = re.compile(r"(?i)(\bauthorization\s*:\s*)([^\r\n,;]+)")
 _BEARER_TOKEN = re.compile(r"(?i)(\bbearer\s+)([^\s,;]+)")
-_URL_CREDENTIALS = re.compile(r"(?i)(https?://)([^/@\s:]+):([^/@\s]+)@")
 _ABSOLUTE_PATH = re.compile(r"(?i)(?:[a-z]:[\\/]|\\\\|(?<![A-Za-z0-9._-])/(?![\s\"']))[^\s\"']*")
 _URL = re.compile(r"(?i)https?://[^\s\"']+")
 _SUPPORT_SECRET = re.compile(r"(?i)(?:bearer\s+|authorization\s*[:=]|(?:api|anon|access|private|fal)[_-]?key\s*[:=]|password\s*[:=]|secret\s*[:=]|token\s*[:=])")
@@ -206,18 +205,19 @@ def prune_local_diagnostics(paths: Paths, *, now: float | None = None) -> list[s
             path.unlink()
             removed.append(path.name)
         except OSError:
-            pass
+            continue
     candidates = [p for p in candidates[:DIAGNOSTIC_MAX_FILES] if p.exists()]
     total = sum(p.stat().st_size for p in candidates)
     for path in sorted(candidates, key=lambda item: item.stat().st_mtime):
         if total <= DIAGNOSTIC_MAX_BYTES:
             break
         try:
-            total -= path.stat().st_size
+            size = path.stat().st_size
             path.unlink()
+            total -= size
             removed.append(path.name)
         except OSError:
-            pass
+            continue
     return removed
 
 
@@ -383,10 +383,7 @@ def export_support_bundle(paths: Paths, destination: str | os.PathLike[str], *, 
             os.fsync(stream.fileno())
         os.replace(temporary, destination)
     finally:
-        try:
-            temporary.unlink()
-        except FileNotFoundError:
-            pass
+        temporary.unlink(missing_ok=True)
     if session is not None:
         session.emit("diagnostics", "diagnostics.support_exported",
                      attributes={"count": len(events), "bytes": destination.stat().st_size})

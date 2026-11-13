@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import deque
 from concurrent.futures import Future, ThreadPoolExecutor
 import json
+import logging
 import os
 from pathlib import Path
 import re
@@ -34,6 +35,8 @@ from .sdk import SdkLayout, acquire_sdk
 from Auvra.diagnostics.core import trace_public_class
 from Auvra.diagnostics.webview import WEBVIEW_DIAGNOSTIC_PROTOCOL
 from Auvra.host.validation import ProtocolValidationError, validate_message
+
+_LOG = logging.getLogger(__name__)
 
 MESSAGE_MAX_BYTES = 256 * 1024
 
@@ -532,20 +535,20 @@ class WebView2Frame:
                 if controller is not None:
                     controller.Close()
             except Exception:
-                pass
+                _LOG.debug("Could not close the WebView2 controller during shutdown")
         for native in (self._control, self._form, self._environment):
             if native is not None:
                 try:
                     native.Dispose()
                 except Exception:
-                    pass
+                    _LOG.debug("Could not dispose a native WebView2 object during shutdown")
         handle = self._dll_directory_handle
         self._dll_directory_handle = None
         if handle is not None:
             try:
                 handle.close()
             except (OSError, AttributeError):
-                pass
+                _LOG.debug("Could not close the WebView2 DLL directory handle")
         with self._lock:
             self._pending_actions.clear()
 
@@ -846,7 +849,7 @@ class WebView2Frame:
             try:
                 deferral.Complete()
             except Exception:
-                pass
+                _LOG.warning("Could not complete the deferred WebView2 resource request")
 
     @staticmethod
     def _close_resource_body(response: AssetResourceResponse) -> None:
@@ -854,7 +857,7 @@ class WebView2Frame:
             try:
                 response.body.close()
             except Exception:
-                pass
+                _LOG.warning("Could not close the WebView2 resource response body")
 
     def _set_resource_response(self, args: Any, response: AssetResourceResponse) -> None:
         # Pure-Python fakes accept the bounded response directly. Native
@@ -901,7 +904,7 @@ class WebView2Frame:
                 try:
                     native_stream.Dispose()
                 except Exception:
-                    pass
+                    _LOG.warning("Could not dispose the failed WebView2 resource stream")
             self._fail("asset_resource_failed", "Auvra could not serve a secured asset resource")
 
     @staticmethod

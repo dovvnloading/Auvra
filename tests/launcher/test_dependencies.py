@@ -7,7 +7,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
-from unittest import mock
+import unittest.mock as mock
 
 from Auvra.launcher import dependencies
 from Auvra.launcher.config import Paths

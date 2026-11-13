@@ -5,7 +5,7 @@ import struct
 import tempfile
 import unittest
 from pathlib import Path
-from unittest import mock
+import unittest.mock as mock
 
 from Auvra.project import material_commands
 from Auvra.project.material_commands import MaterialCommandError, apply_preset, headless_unavailable, list_materials, main, set_value

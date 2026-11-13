@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-import Auvra.desktop.contracts as contracts
+from Auvra.desktop import contracts
 from Auvra.desktop.controller import _new_profile, _remove_profile, _sweep_abandoned_profiles
 from Auvra.desktop.contracts import FrameConfig, FrameConfigurationError, FrameMode
 from Auvra.desktop.policy import FramePolicy

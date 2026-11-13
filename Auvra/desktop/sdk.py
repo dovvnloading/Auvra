@@ -12,6 +12,7 @@ from dataclasses import dataclass
 import errno
 import hashlib
 import io
+import logging
 import os
 from pathlib import Path
 import shutil
@@ -22,6 +23,8 @@ from typing import Callable
 from urllib.request import Request, urlopen
 import zipfile
 
+
+_LOG = logging.getLogger(__name__)
 
 SDK_VERSION = "1.0.4129.50"
 SDK_SHA256 = "d3934f482d484b89fb4825df720c710664e1143a1e90f7b3a60794ef33f473d2"
@@ -104,11 +107,11 @@ def _layout(root: Path) -> SdkLayout:
 def _remove_temp(path: Path) -> None:
     try:
         if path.is_symlink() or not path.is_dir():
-            path.unlink()
+            path.unlink(missing_ok=True)
         else:
-            shutil.rmtree(path, ignore_errors=True)
+            shutil.rmtree(path)
     except OSError:
-        pass
+        _LOG.warning("Could not remove the temporary or quarantined WebView2 SDK cache")
 
 
 def _cached(root: Path) -> SdkLayout | None:

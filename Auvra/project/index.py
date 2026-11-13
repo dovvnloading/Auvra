@@ -1,5 +1,6 @@
 """Rebuildable user-local project index; never project authority."""
 from __future__ import annotations
+from contextlib import suppress
 import os, sqlite3, time
 from pathlib import Path
 import threading
@@ -21,8 +22,8 @@ class ProjectIndex:
             self.db.execute("CREATE TABLE IF NOT EXISTS projects (project_id TEXT PRIMARY KEY, name TEXT NOT NULL, path TEXT NOT NULL, opened_at REAL NOT NULL)")
             self.db.execute("SELECT 1 FROM projects LIMIT 1")
         except sqlite3.DatabaseError:
-            try: self.db.close()
-            except Exception: pass
+            with suppress(Exception):
+                self.db.close()
             corrupt = self.path.with_name(self.path.name + f".corrupt-{int(time.time())}")
             if self.path.exists(): os.replace(self.path, corrupt)
             self.db = sqlite3.connect(self.path, check_same_thread=False)

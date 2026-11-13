@@ -10,6 +10,7 @@ one.  Losing a file only means the next build prepares that model again.
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 from pathlib import Path
 import re
@@ -20,11 +21,12 @@ from Auvra.diagnostics import trace_public_class
 from .assets import AssetUpload
 
 
+_LOG = logging.getLogger(__name__)
+
 PREPARED_MODEL_MIME = "model/gltf-binary"
 # Past this, what was used longest ago goes after a build.
 DEFAULT_CAPACITY_BYTES = 16 * 1024**3
 _KEY = re.compile(r"^[0-9a-f]{64}$")
-_CHUNK_SIZE = 1024 * 1024
 
 
 @trace_public_class("prepared_models", concise=("available", "read"))
@@ -49,8 +51,10 @@ class PreparedModelStore:
             if model.is_file() and model.with_suffix(".sha256").is_file():
                 try:
                     os.utime(model)
+                except FileNotFoundError:
+                    continue
                 except OSError:
-                    pass
+                    _LOG.debug("Could not update the prepared model cache timestamp")
                 found.append(key)
         return found
 
@@ -98,13 +102,18 @@ class PreparedModelStore:
         for _used, size, key in sorted(entries):
             if total <= self._capacity:
                 return
-            self._delete(key)
-            total -= size
+            if self._delete(key):
+                total -= size
 
-    def _delete(self, key: str) -> None:
+    def _delete(self, key: str) -> bool:
+        """Return whether the model bytes were removed or already absent."""
         model = self._model_path(key)
+        model_removed = True
         for path in (model, model.with_suffix(".sha256")):
             try:
                 path.unlink(missing_ok=True)
             except OSError:
-                pass
+                _LOG.warning("Could not remove a prepared model cache file")
+                if path == model:
+                    model_removed = False
+        return model_removed

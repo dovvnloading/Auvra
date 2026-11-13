@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterator, Mapping, Sequence
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 import contextvars
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import wraps
 import inspect
 import json
+import math
 import os
 from pathlib import Path
 import queue
@@ -245,7 +247,7 @@ def redact(value: Any, *, max_depth: int = 4, max_items: int = ATTRIBUTE_MAX_ITE
     if value is None or isinstance(value, (bool, int)):
         return value
     if isinstance(value, float):
-        return value if value == value and abs(value) != float("inf") else None
+        return value if math.isfinite(value) else None
     if isinstance(value, str):
         return _redact_text(value, max_string)
     if isinstance(value, Mapping):
@@ -317,10 +319,7 @@ def atomic_json(path: Path, value: object) -> None:
                 os.close(fd)
         os.replace(temporary, path)
     finally:
-        try:
-            temporary.unlink()
-        except FileNotFoundError:
-            pass
+        temporary.unlink(missing_ok=True)
 
 
 @contextmanager
@@ -1106,7 +1105,7 @@ class DiagnosticsSession:
             try:
                 marker.unlink()
             except OSError:
-                pass
+                logging.getLogger(__name__).debug("Could not clear the diagnostics run marker")
         self._prune_runs()
 
     def _next_sequence(self) -> int:
@@ -1277,10 +1276,8 @@ class DiagnosticsSession:
                 self.emit("diagnostics", "diagnostics.storage_failed",
                           attributes={"code": "storage_unavailable", "errorType": type(exc).__name__},
                           deduplicate=False)
-                try:
+                with suppress(Exception):
                     sys.stderr.write(f"Auvra diagnostics storage unavailable ({type(exc).__name__})\n")
-                except Exception:
-                    pass
             self._flush_done.set()
 
     def _report_drops(self) -> None:
@@ -1386,11 +1383,9 @@ class DiagnosticsSession:
         self._segments.append(path.name)
         while len(self._segments) > RUN_MAX_SEGMENTS:
             removed = self.root / self._segments.pop(0)
-            try:
+            with suppress(OSError):
                 if removed.is_file() and not _is_link_or_reparse(removed):
                     removed.unlink()
-            except OSError:
-                pass
         self._manifest_dirty = True
 
     def _write_record(self, record: Mapping[str, Any]) -> None:
@@ -1498,7 +1493,7 @@ class DiagnosticsSession:
             atomic_json(summary_path, safe_summary)
             atomic_json(self.root / LATEST_RUN_NAME, safe_summary)
         except OSError:
-            pass
+            logging.getLogger(__name__).warning("Could not mark the previous diagnostics run unclean")
 
     def _prune_runs(self) -> None:
         try:
@@ -1535,12 +1530,10 @@ class DiagnosticsSession:
                         if candidate.is_file() and not _is_link_or_reparse(candidate):
                             candidate.unlink()
                     except OSError:
-                        pass
-                try:
+                        continue
+                with suppress(OSError):
                     if path.is_file() and not _is_link_or_reparse(path):
                         path.unlink()
-                except OSError:
-                    pass
         except OSError:
             return
 
@@ -1564,15 +1557,13 @@ def _run_group_size(root: Path, summary: Mapping[str, Any]) -> int:
     run_id = summary.get("runId")
     if isinstance(run_id, str):
         path = root / f"run-{run_id}.json"
-        try:
+        with suppress(OSError):
             total += path.stat().st_size
-        except OSError:
-            pass
     for name in _safe_segment_names(summary):
         try:
             total += (root / str(name)).stat().st_size
         except OSError:
-            pass
+            continue
     return total
 
 

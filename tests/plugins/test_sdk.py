@@ -8,7 +8,7 @@ import sys
 import tempfile
 import threading
 import unittest
-from unittest import mock
+import unittest.mock as mock
 import zipfile
 
 from Auvra.plugins.install import InstallError, PluginInstaller

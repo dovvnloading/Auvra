@@ -13,6 +13,7 @@ next to a game build (``python relay.py --port 7777``).
 
 from __future__ import annotations
 
+from contextlib import suppress
 import argparse
 import asyncio
 import base64
@@ -336,16 +337,15 @@ class Relay:
         except ProtocolError as error:
             await self._fail(writer, error)
         except (asyncio.TimeoutError, asyncio.IncompleteReadError, asyncio.LimitOverrunError, ConnectionError):
-            pass
+            # Disconnected or timed-out peers follow the normal teardown below.
+            return
         finally:
             if peer and room:
                 await self._leave(peer, room)
             self._writers.discard(writer)
             writer.close()
-            try:
+            with suppress(ConnectionError, OSError):
                 await writer.wait_closed()
-            except (ConnectionError, OSError):
-                pass
 
     @staticmethod
     def _decode(payload: bytes) -> dict[str, Any]:
@@ -526,7 +526,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         asyncio.run(serve())
     except KeyboardInterrupt:
-        pass
+        return 0
     return 0
 
 

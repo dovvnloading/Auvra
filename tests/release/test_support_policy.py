@@ -5,7 +5,7 @@ from pathlib import Path
 import tempfile
 import unittest
 import zipfile
-from unittest import mock
+import unittest.mock as mock
 
 from Auvra.launcher import diagnostics
 from Auvra.launcher.config import Paths

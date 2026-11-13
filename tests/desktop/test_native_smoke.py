@@ -619,9 +619,9 @@ class NativeWebView2SmokeTests(unittest.TestCase):
         reference = result["reference"]
         self.assertEqual(reference["selected"], "webgl2", reference)
         self.assertTrue(reference["passed"], reference)
-        self.assertTrue(reference["budget"]["maxCpuP95Ms"] > 0)
-        self.assertTrue(reference["budget"]["maxGpuFrameMs"] > 0)
-        self.assertTrue(reference["budget"]["maxMemoryBytes"] > 0)
+        self.assertGreater(reference["budget"]["maxCpuP95Ms"], 0)
+        self.assertGreater(reference["budget"]["maxGpuFrameMs"], 0)
+        self.assertGreater(reference["budget"]["maxMemoryBytes"], 0)
         selected = next((item for item in reference.get("results", []) if item.get("backend") == "webgl2"), None)
         self.assertIsNotNone(selected, reference)
         self.assertTrue(selected.get("supported"), selected)

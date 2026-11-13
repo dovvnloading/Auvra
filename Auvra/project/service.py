@@ -5,6 +5,7 @@ status, revisions, snapshots, and opaque asset identifiers; callers do not
 need or receive a filesystem authority.
 """
 from __future__ import annotations
+from .serialization import sync_directory
 from pathlib import Path
 import os, shutil, tempfile
 from typing import BinaryIO, Iterable
@@ -116,9 +117,7 @@ class ProjectService:
                 changes["metadata"] = [{"id":"migrated", "name": name or destination.name}]
             candidate.apply_changes(changes, expected_revision=0); candidate.save(); candidate.close(); candidate = None
             os.replace(staged_project, destination)
-            try:
-                fd = os.open(destination.parent, os.O_RDONLY); os.fsync(fd); os.close(fd)
-            except OSError: pass
+            sync_directory(destination.parent)
             self._close_active(); self.active = ProjectRepository(destination); self._record()
             return self.active.status, report
         except Exception:

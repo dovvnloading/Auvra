@@ -8,7 +8,7 @@ import threading
 import unittest
 from unittest.mock import Mock, patch
 
-import Auvra.desktop.contracts as contracts
+from Auvra.desktop import contracts
 from Auvra.diagnostics.core import DiagnosticsSession, install_diagnostics
 from Auvra.desktop.controller import FrameController, FrameProcessExitedError
 from Auvra.desktop.contracts import FrameConfig, FrameConfigurationError, FrameFailure, FrameMode, FrameStartupError, FrameState

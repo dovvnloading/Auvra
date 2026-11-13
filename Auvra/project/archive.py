@@ -1,5 +1,6 @@
 """Portable archive writer and fail-closed archive validator."""
 from __future__ import annotations
+from .serialization import sync_directory
 import os, unicodedata, uuid, zipfile
 from pathlib import Path
 from .schemas import DOMAIN_NAMES
@@ -76,9 +77,6 @@ def export_folder(folder: str | os.PathLike[str], destination: str | os.PathLike
                 archive.writestr(directory.relative_to(folder).as_posix().rstrip("/") + "/", b"")
         with temp.open("rb+") as stream: os.fsync(stream.fileno())
         os.replace(temp, destination)
-        try:
-            fd = os.open(destination.parent, os.O_RDONLY); os.fsync(fd); os.close(fd)
-        except OSError: pass
+        sync_directory(destination.parent)
     finally:
-        try: temp.unlink()
-        except FileNotFoundError: pass
+        temp.unlink(missing_ok=True)

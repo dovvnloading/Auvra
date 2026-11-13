@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from abc import abstractmethod
 import json
 import http.client
 import ssl
@@ -47,9 +48,17 @@ class HttpResponse:
 
 
 class Transport(Protocol):
-    def request(self, request: HttpRequest) -> HttpResponse: ...
-    def stream(self, request: HttpRequest, sink: BinaryIO, *, max_bytes: int) -> HttpResponse: ...
-    def upload(self, request: HttpRequest, source: BinaryIO, *, size: int) -> HttpResponse: ...
+    @abstractmethod
+    def request(self, request: HttpRequest) -> HttpResponse:
+        raise NotImplementedError
+
+    @abstractmethod
+    def stream(self, request: HttpRequest, sink: BinaryIO, *, max_bytes: int) -> HttpResponse:
+        raise NotImplementedError
+
+    @abstractmethod
+    def upload(self, request: HttpRequest, source: BinaryIO, *, size: int) -> HttpResponse:
+        raise NotImplementedError
 
 
 @trace_public_class("provider_transport", concise=("request", "stream", "upload"))
@@ -225,11 +234,7 @@ class BoundedTransport:
         self.allowed_origins = frozenset(allowed_origins)
 
     def request(self, request: HttpRequest) -> HttpResponse:
-        parsed, origin = self._validate(request)
-        if len(request.body) > self.max_request_bytes:
-            raise ProviderError(ErrorCode.INVALID_REQUEST, "provider request exceeded size limit")
-        if request.timeout <= 0 or request.timeout > self.max_timeout:
-            raise ProviderError(ErrorCode.TIMEOUT, "provider timeout is outside the allowed bound")
+        self._validate(request)
         response = self.transport.request(request)
         if len(response.body) > self.max_response_bytes:
             raise ProviderError(ErrorCode.REMOTE, "provider response exceeded size limit")
@@ -263,7 +268,7 @@ class BoundedTransport:
         if response.status < 200 or response.status >= 300: raise from_http_status(response.status, provider="provider", retry_after=response.retry_after)
         return response
 
-    def _validate(self, request: HttpRequest):
+    def _validate(self, request: HttpRequest) -> None:
         try:
             parsed = urlsplit(request.url)
             origin = f"{parsed.scheme}://{parsed.netloc}"
@@ -279,7 +284,6 @@ class BoundedTransport:
         if self.allowed_origins and origin not in self.allowed_origins: raise ProviderError(ErrorCode.ENDPOINT_NOT_ALLOWED, "provider endpoint is not allowed")
         if len(request.body) > self.max_request_bytes: raise ProviderError(ErrorCode.INVALID_REQUEST, "provider request exceeded size limit")
         if request.timeout <= 0 or request.timeout > self.max_timeout: raise ProviderError(ErrorCode.TIMEOUT, "provider timeout is outside the allowed bound")
-        return parsed, origin
 
 
 @dataclass(frozen=True, slots=True)

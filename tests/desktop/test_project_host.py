@@ -4,7 +4,7 @@ import io
 from pathlib import Path
 import tempfile
 import unittest
-from unittest import mock
+import unittest.mock as mock
 
 from Auvra.desktop.assets import AssetTransferRegistry, AssetTransportError
 from Auvra.desktop.dialogs import DialogSelection
@@ -149,7 +149,7 @@ class NativeProjectHostTests(unittest.TestCase):
             {"projectId": created["projectId"], "domain": "objects", "pageSize": 200},
         )
         kinds = {item["type"] for item in snapshot["domains"]["objects"]["documents"]}
-        self.assertTrue({"terrain", "sky_sphere", "player_start", "prop"} <= kinds)
+        self.assertLessEqual({"terrain", "sky_sphere", "player_start", "prop"}, kinds)
         self.assertGreater(created["revision"], 0)
 
     def test_create_apply_snapshot_save_as_and_status_never_expose_paths(self) -> None:
@@ -509,7 +509,7 @@ class NativeProjectHostTests(unittest.TestCase):
             if not page["hasMore"]:
                 return received
             cursor = page["cursor"]
-        self.fail("snapshot paging did not terminate")
+        raise AssertionError("snapshot paging did not terminate")
 
     def test_document_write_beyond_the_load_limit_is_rejected_before_commit(self) -> None:
         created = self.host.handle("project.create", {"name": "LoadLimit"})
@@ -696,15 +696,12 @@ class NativeProjectHostTests(unittest.TestCase):
         self.assertEqual(len(native.stale), 2)
 
         source_dir = self.root / "stale-source"
-        source = ProjectRepository.create(source_dir, "Source")
-        try:
+        with ProjectRepository.create(source_dir, "Source") as source:
             asset = source.assets.put_stream(io.BytesIO(b"stale-asset"), name="asset.glb")
             source.apply_changes({"models": [{"id": "model", "name": "Model", "assetId": asset.asset_id}]}, expected_revision=0)
             source.save()
             pack = self.root / "stale.auvrapack"
             source.export_pack(pack)
-        finally:
-            source.close()
         native.fail_stage = True
         destination = self.root / "projects" / "StaleImported"
         with mock.patch.object(self.host.dialogs, "choose_import_pack", return_value=DialogSelection(pack)), \
@@ -722,15 +719,12 @@ class NativeProjectHostTests(unittest.TestCase):
         previous = self.host.handle("project.create", {"name": "Previous"})
         self.assertEqual(native._canonical("engine.status")["projectId"], previous["projectId"])
 
-        source = ProjectRepository.create(self.root / "switch-source", "Switch")
-        try:
+        with ProjectRepository.create(self.root / "switch-source", "Switch") as source:
             asset = source.assets.put_stream(io.BytesIO(b"switch-asset"), name="asset.glb")
             source.apply_changes({"models": [{"id": "model", "name": "Model", "assetId": asset.asset_id}]}, expected_revision=0)
             source.save()
             pack = self.root / "switch.auvrapack"
             source.export_pack(pack)
-        finally:
-            source.close()
         destination = self.root / "projects" / "Switched"
         with mock.patch.object(native, "stage_asset", side_effect=OSError("native staging failed")), \
                 mock.patch.object(self.host.dialogs, "choose_import_pack", return_value=DialogSelection(pack)), \
@@ -856,15 +850,12 @@ class NativeProjectHostTests(unittest.TestCase):
 
     def test_native_stage_failure_fail_closes_import_pack_and_legacy(self) -> None:
         source_dir = self.root / "source-project"
-        source = ProjectRepository.create(source_dir, "Source")
-        try:
+        with ProjectRepository.create(source_dir, "Source") as source:
             asset = source.assets.put_stream(io.BytesIO(b"asset-bytes"), name="asset.glb")
             source.apply_changes({"models": [{"id": "model", "name": "Model", "assetId": asset.asset_id}]}, expected_revision=0)
             source.save()
             pack = self.root / "source.auvrapack"
             source.export_pack(pack)
-        finally:
-            source.close()
         destination = self.root / "projects" / "ImportedPackFailure"
         native = _NativeRecorder(fail_stage=True)
         self.host._native_engine = native

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from abc import abstractmethod
 import ctypes
 import sys
 from typing import Protocol
@@ -15,9 +16,17 @@ class CredentialError(RuntimeError):
 
 
 class CredentialBackend(Protocol):
-    def read(self, target: str) -> str | None: ...
-    def write(self, target: str, value: str) -> None: ...
-    def delete(self, target: str) -> None: ...
+    @abstractmethod
+    def read(self, target: str) -> str | None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def write(self, target: str, value: str) -> None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def delete(self, target: str) -> None:
+        raise NotImplementedError
 
 
 @trace_public_class("credential_store", concise=("write", "delete", "clear"))

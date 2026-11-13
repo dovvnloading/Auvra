@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from abc import abstractmethod
 from dataclasses import dataclass
 import hashlib
+import logging
 import os
 from pathlib import Path
 from pathlib import PurePosixPath
@@ -19,12 +21,17 @@ from .security import PermissionGrantStore, RevocationStore, TrustStore
 from Auvra.diagnostics import trace_public_class
 
 
+_LOG = logging.getLogger(__name__)
+
+
 class IsolationUnavailable(RuntimeError):
     """The required OS process boundary is not available."""
 
 
 class WorkerPolicy(Protocol):
-    def launch(self, executable: Path, *, package: PluginPackage) -> Any: ...
+    @abstractmethod
+    def launch(self, executable: Path, *, package: PluginPackage) -> Any:
+        raise NotImplementedError
 
 
 class WindowsAppContainerPolicy:
@@ -191,7 +198,7 @@ class _SandboxProcess:
             try:
                 stream.close()
             except Exception:
-                pass
+                _LOG.debug("Could not close an isolated plugin process stream")
         for handle in (self._thread_handle, self._process_handle, self._job_handle):
             if handle:
                 kernel32.CloseHandle(handle)
@@ -200,7 +207,7 @@ class _SandboxProcess:
 
 def _create_windows_sandbox_process(executable: Path, package: PluginPackage) -> _SandboxProcess:
     import ctypes
-    from ctypes import wintypes
+    import ctypes.wintypes as wintypes
     executable = _validate_installed_executable(executable, package)
     expected = package.manifest["entrypoint"]["sha256"]
     digest = hashlib.sha256()
@@ -406,21 +413,27 @@ def _create_windows_sandbox_process(executable: Path, package: PluginPackage) ->
         raise IsolationUnavailable("AppContainer plugin process could not be resumed")
     kernel32.CloseHandle(child_in); kernel32.CloseHandle(child_out); kernel32.CloseHandle(process_info.hThread)
     import msvcrt
+
+    def open_pipe(handle, mode):
+        descriptor = msvcrt.open_osfhandle(int(handle.value), 0)
+        handle.value = None  # Ownership passed to the CRT descriptor.
+        try:
+            return os.fdopen(descriptor, mode, buffering=0)
+        except (OSError, ValueError):
+            os.close(descriptor)
+            raise
+
     stdin = None
-    stdout = None
     try:
-        stdin = os.fdopen(msvcrt.open_osfhandle(int(parent_in.value), 0), "wb", buffering=0)
-        stdout = os.fdopen(msvcrt.open_osfhandle(int(parent_out.value), 0), "rb", buffering=0)
+        stdin = open_pipe(parent_in, "wb")
+        stdout = open_pipe(parent_out, "rb")
     except (OSError, ValueError) as exc:
         kernel32.TerminateJobObject(job, 1)
         if stdin is not None:
             stdin.close()
-        else:
-            kernel32.CloseHandle(parent_in)
-        if stdout is not None:
-            stdout.close()
-        else:
-            kernel32.CloseHandle(parent_out)
+        for handle in (parent_in, parent_out):
+            if handle:
+                kernel32.CloseHandle(handle)
         kernel32.CloseHandle(process_info.hProcess)
         kernel32.CloseHandle(job)
         raise IsolationUnavailable("plugin stdio streams could not be opened") from exc
@@ -589,7 +602,7 @@ class PluginWorker:
                 try:
                     terminate()
                 except Exception:
-                    pass
+                    _LOG.warning("Could not terminate the disabled plugin worker")
 
     def stop(self) -> None:
         self.disable()

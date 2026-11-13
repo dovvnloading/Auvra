@@ -1,5 +1,7 @@
 """Bounded, content-addressed binary storage."""
 from __future__ import annotations
+from contextlib import suppress
+from .serialization import sync_directory
 import hashlib
 import math
 import os
@@ -23,14 +25,6 @@ _MANIFEST_LOCK = threading.RLock()
 _PENDING_DELETE = re.compile(r"^\.delete-([0-9a-f]{64})$")
 
 
-def _sync_directory(path: Path) -> None:
-    try:
-        fd = os.open(path, os.O_RDONLY)
-        try: os.fsync(fd)
-        finally: os.close(fd)
-    except OSError:
-        # Ordinary Windows directory handles cannot be fsynced.
-        pass
 
 # Terrain heightfields: a 16-byte header (magic, uint32 columns, uint32 rows)
 # followed by columns * rows row-major Float32 samples, all little-endian.
@@ -175,8 +169,8 @@ class AssetStore:
                     _forget_verified(target)
                     os.replace(tmp, target)
                     # The bytes now at ``target`` were hashed while staging.
-                    try: _remember_verified(target, target.stat())
-                    except OSError: pass
+                    with suppress(OSError):
+                        _remember_verified(target, target.stat())
                 self._record(asset_id, total, mime, name)
             return AssetReference(asset_id, total, mime, name)
         finally:
@@ -274,8 +268,8 @@ class AssetStore:
                 os.replace(path, candidate)
                 staged = candidate
                 _forget_verified(path)
-                _sync_directory(self.content)
-                _sync_directory(staging)
+                sync_directory(self.content)
+                sync_directory(staging)
             manifest_published = False
             try:
                 if asset_id in values:
@@ -294,8 +288,8 @@ class AssetStore:
                             os.fsync(stream.fileno())
                         os.replace(temporary, manifest)
                         manifest_published = True
-                        _sync_directory(manifest.parent)
-                        _sync_directory(staging)
+                        sync_directory(manifest.parent)
+                        sync_directory(staging)
                     finally:
                         temporary.unlink(missing_ok=True)
             except Exception:
@@ -305,8 +299,8 @@ class AssetStore:
                 if not manifest_published and staged is not None and staged.exists():
                     try:
                         os.replace(staged, path)
-                        _sync_directory(self.content)
-                        _sync_directory(staged.parent)
+                        sync_directory(self.content)
+                        sync_directory(staged.parent)
                     except OSError:
                         # The staged blob remains intact for verified replay
                         # by the next writable project opener.
@@ -316,7 +310,7 @@ class AssetStore:
                 # A sharing violation here is harmless to project integrity:
                 # the manifest and the live sha256/ files already agree.
                 staged.unlink()
-                _sync_directory(staged.parent)
+                sync_directory(staged.parent)
             return existed
 
     def recover_pending_deletions(self, *, writable: bool) -> bool:
@@ -368,14 +362,14 @@ class AssetStore:
                     if not writable:
                         return False
                     os.replace(entry, target)
-                    _sync_directory(self.content)
-                    _sync_directory(staging)
+                    sync_directory(self.content)
+                    sync_directory(staging)
                 elif writable:
                     # Do not make opening a valid project depend on whether
                     # a now-unreferenced staged file can be deleted yet.
                     try:
                         entry.unlink()
-                        _sync_directory(staging)
+                        sync_directory(staging)
                     except OSError:
                         # Locked staging is outside the validated asset set;
                         # retry its removal on a later writable open.
@@ -432,9 +426,7 @@ class AssetStore:
                 temp.write_text(json.dumps(values, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8", newline="\n")
                 with temp.open("a", encoding="utf-8") as stream: stream.flush(); os.fsync(stream.fileno())
                 os.replace(temp, manifest)
-                try:
-                    fd = os.open(manifest.parent, os.O_RDONLY); os.fsync(fd); os.close(fd)
-                except OSError: pass
+                sync_directory(manifest.parent)
             finally:
                 temp.unlink(missing_ok=True)
 

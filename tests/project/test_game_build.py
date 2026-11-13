@@ -8,9 +8,9 @@ import tempfile
 import tracemalloc
 import unittest
 from pathlib import Path
-from unittest import mock
+import unittest.mock as mock
 
-import Auvra.project.game_build as game_build_module
+from Auvra.project import game_build as game_build_module
 from Auvra.project.game_build import BUILD_MARKER, GameBuildError, build_game
 from Auvra.project.schemas import DOMAIN_NAMES
 

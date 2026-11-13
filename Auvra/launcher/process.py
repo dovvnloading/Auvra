@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import suppress
 from dataclasses import dataclass
 import subprocess
 import threading
@@ -109,10 +110,8 @@ class OwnedProcess:
                 # stop below remains mandatory and authoritative.
                 pass
             if self.is_alive():
-                try:
+                with suppress(subprocess.TimeoutExpired):
                     self.process.wait(timeout=grace)
-                except subprocess.TimeoutExpired:
-                    pass
             # Ensure descendants that outlive the root are gone too. This
             # remains scoped to the launcher's process group/job.
             try:

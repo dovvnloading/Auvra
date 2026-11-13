@@ -10,7 +10,7 @@ import subprocess
 import tempfile
 import unittest
 import zipfile
-from unittest import mock
+import unittest.mock as mock
 
 from Auvra.launcher import cli
 from Auvra.launcher import diagnostics
@@ -112,8 +112,8 @@ class CliParserTests(unittest.TestCase):
         self.assertTrue(result.ok)
         self.assertEqual(calls[0][0], ["node.exe", "--version"])
         self.assertFalse(calls[0][1]["shell"])
-        self.assertTrue(calls[0][1]["check"] is False)
-        self.assertTrue(calls[0][1]["text"] is True)
+        self.assertIs(calls[0][1]["check"], False)
+        self.assertIs(calls[0][1]["text"], True)
         self.assertEqual(calls[0][1]["encoding"], "utf-8")
         self.assertEqual(calls[0][1]["errors"], "replace")
 

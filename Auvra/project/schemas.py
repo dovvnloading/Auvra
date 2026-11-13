@@ -120,14 +120,6 @@ _PROTOCOL_RESERVED_KEY = re.compile(
 )
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
-_COMMON = {
-    "type": "object", "required": ["schemaVersion", "documents"],
-    "properties": {"schemaVersion": {"const": 1}, "documents": {
-        "type": "array", "items": {"type": "object", "required": ["id"],
-        "properties": {"id": {"type": "string", "minLength": 1}},
-        "additionalProperties": True}
-    }}, "additionalProperties": False,
-}
 
 def schema_for(domain: str) -> dict[str, Any]:
     if domain not in DOMAIN_NAMES and domain != PROJECT_SCHEMA_NAME:

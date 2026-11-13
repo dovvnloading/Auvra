@@ -1,9 +1,11 @@
+from contextlib import suppress
 import asyncio
 import base64
 import json
 import os
 import struct
 import unittest
+import unittest.mock as mock
 
 from Auvra.net import relay
 
@@ -83,10 +85,8 @@ class Client:
 
     async def close(self) -> None:
         self.writer.close()
-        try:
+        with suppress(ConnectionError, OSError):
             await self.writer.wait_closed()
-        except (ConnectionError, OSError):
-            pass
 
 
 class RelayTests(unittest.IsolatedAsyncioTestCase):
@@ -133,7 +133,6 @@ class RelayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await cat.receive(), {"t": "host", "id": bob_id})
 
     async def test_cancelled_join_does_not_leave_a_ghost_peer_or_room(self) -> None:
-        from unittest import mock
 
         hello = json.dumps({"t": "hello", "v": 1, "game": "demo", "room": "main", "name": "Late"}).encode()
         reader = asyncio.StreamReader()
@@ -203,7 +202,6 @@ class RelayTests(unittest.IsolatedAsyncioTestCase):
         fast = relay.Peer("fast", "Fast", fast_writer, 0.0)
         room = relay.Room("test", "demo", [slow, fast])
         relay_instance = relay.Relay()
-        from unittest import mock
         with mock.patch.object(relay, "PEER_SEND_TIMEOUT_SECONDS", 1.0):
             broadcasting = asyncio.create_task(relay_instance.broadcast(room, {"t": "event", "name": "ping", "payload": 1}))
             # Give busy Windows CI runners time to schedule the healthy writer,
@@ -346,7 +344,6 @@ class RelayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await healthy.receive(), {"t": "__pong_frame__", "payload": "ok"})
 
     async def test_control_pong_write_has_a_deadline(self) -> None:
-        from unittest import mock
 
         class SlowWriter:
             class Transport:

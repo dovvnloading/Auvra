@@ -6,6 +6,7 @@ from collections import defaultdict
 from dataclasses import asdict
 import errno
 import json
+import logging
 import math
 from pathlib import Path
 import re
@@ -45,6 +46,8 @@ from .dialogs import DialogSelection, WinFormsProjectDialogs, _validated_name
 from .native_engine import NativeEngineState, NativeEngineUnavailableHost
 from .prepared_models import PREPARED_MODEL_MIME, PreparedModelStore
 
+
+_LOG = logging.getLogger(__name__)
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _CHECKOUT_ROOT = Path(__file__).resolve().parents[2]
@@ -377,7 +380,7 @@ class NativeProjectHost:
             try:
                 self._native_engine.close_project()
             except Exception:
-                pass
+                _LOG.warning("Could not close the native project during host shutdown")
         active = self.service.active
         if active is not None:
             self._discard_pending_assets(active.project_id, active)
@@ -411,7 +414,7 @@ class NativeProjectHost:
         active = active or self.service.active
         if active is None or getattr(active, "project_id", None) != project_id:
             return
-        live = getattr(active, "referenced_asset_ids", lambda: set())()
+        live = getattr(active, "referenced_asset_ids", set)()
         for asset_id in list(pending):
             if asset_id in live:
                 pending.discard(asset_id)
@@ -453,7 +456,7 @@ class NativeProjectHost:
             try:
                 native.close_project(previous)
             except Exception:
-                pass
+                _LOG.warning("Could not close the previous native project before switching")
             self._native_project = None
 
     def _native_domains(self, active: Any, reuse: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -603,7 +606,7 @@ class NativeProjectHost:
                     project_revision=active.revision,
                 )
             except Exception:
-                pass
+                _LOG.warning("Could not mark the native project view stale")
         self._emit_native_lifecycle("stale", "hydration_failed", error)
 
     @staticmethod
@@ -637,7 +640,7 @@ class NativeProjectHost:
             try:
                 active.close()
             except Exception:
-                pass
+                _LOG.warning("Could not close the invalidated project repository")
         self._dirty_since = self._last_mutation = None
         self._queue("project.closed", self._status_value())
 
@@ -860,7 +863,7 @@ class NativeProjectHost:
             try:
                 self._native_engine.close_project(project_id)
             except Exception:
-                pass
+                _LOG.warning("Could not close the native project while closing its repository")
         self._discard_pending_assets(project_id, active)
         self.service.close()
         self._native_staged_assets.clear()
@@ -1220,7 +1223,7 @@ class NativeProjectHost:
                     try:
                         current.discard_asset_if_unreferenced(upload.sha256)
                     except (OSError, ValueError):
-                        pass
+                        _LOG.warning("Could not remove the unreferenced asset after upload failed")
                 raise
             if reference.asset_id != upload.sha256:
                 raise InvalidProjectError("uploaded asset hash changed during ingestion")

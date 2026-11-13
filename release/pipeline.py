@@ -22,7 +22,7 @@ import struct
 import sys
 import tempfile
 import tomllib
-from typing import Any, Iterable, Mapping
+from typing import Any, Mapping
 from urllib.parse import urlsplit
 import xml.etree.ElementTree as ET
 import zlib
