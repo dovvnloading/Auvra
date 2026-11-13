@@ -11,7 +11,13 @@ let device: unknown = null;
 
 /** The game's WebGPU device, or null when it draws with WebGL2 (or stops drawing). */
 export const setCookingDevice = (next: unknown): void => {
-    device = next ?? null;
+    const resolved = next ?? null;
+    if (device === resolved) return;
+    device = resolved;
+    // These diagnostics belong to the old GPU device's cooking attempts.
+    // A project/backend switch or device loss must not display stale reasons
+    // for a new runtime material with the same asset id.
+    webgpuFallbacks.clear();
 };
 
 /** The device a game cooks on, if it draws with WebGPU. */
