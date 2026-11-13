@@ -107,8 +107,8 @@ const main = async () => {
         verdict = 'BENCHMARK (not reference-compared)';
         if (!cost.textureCook) failures.push(`${name}: no texture graph benchmark results were returned`);
         else {
-          if (renderer === 'webgpu' && cost.textureCook.backend !== 'webgpu') {
-            failures.push(`${name}: requested WebGPU but benchmark used ${cost.textureCook.backend}: ${cost.textureCookProblem ?? 'unknown fallback'}`);
+          if (cost.textureCook.backend !== renderer || cost.textureCookProblem) {
+            failures.push(`${name}: requested ${renderer} but benchmark used ${cost.textureCook.backend}: ${cost.textureCookProblem ?? 'unexpected fallback'}`);
           }
           if (cost.textureCook.firstNodes < 1) failures.push(`${name}: the cold graph evaluation did not run any nodes`);
           if (cost.textureCook.cachedNodes !== 0) failures.push(`${name}: unchanged graph recomputed ${cost.textureCook.cachedNodes} cached nodes`);
