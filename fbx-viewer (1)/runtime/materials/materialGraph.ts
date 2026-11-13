@@ -727,6 +727,7 @@ export const compileMaterialGraph = (stored: MaterialGraph, options: CompileOpti
     const uniforms: MaterialUniformSpec[] = [];
     const uniformNames = new Map<string, string>();
     const results = new Map<string, Record<string, string>>();
+    const footprints = new Map<string, string>();
     const visiting = new Set<string>();
     const builtins = new Set<MaterialBuiltin>();
     const shape: string[] = [stage];
@@ -739,6 +740,7 @@ export const compileMaterialGraph = (stored: MaterialGraph, options: CompileOpti
             stage,
             auto: autoType,
             derivatives: stage === 'fragment',
+            footprint: uv => footprints.get(uv),
             param: (key) => {
                 const id = `${node.id}:${key}`;
                 let name = uniformNames.get(id);
@@ -818,6 +820,8 @@ export const compileMaterialGraph = (stored: MaterialGraph, options: CompileOpti
                 const type = resolvedPortType(port.type, node.id, autoTypes);
                 const local = `mg_${glslName(node.id)}_out_${port.key}_${counter++}`;
                 statements.push(`${type} ${local} = ${convertValue(value, from, type)};`);
+                const footprint = footprints.get(value);
+                if (footprint && from === 'vec2' && type === 'vec2') footprints.set(local, footprint);
                 outputs[port.key] = local;
             }
             statements.push(NODE_CODE_END);
@@ -845,6 +849,9 @@ export const compileMaterialGraph = (stored: MaterialGraph, options: CompileOpti
             const type = resolvedPortType(port.type, node.id, autoTypes);
             const local = `mg_${glslName(node.id)}_out_${port.key}_${counter++}`;
             statements.push(`${type} ${local} = ${expression};`);
+            // A wire/reroute that forwards its input also forwards its continuous footprint.
+            const footprint = emitted.footprints?.[port.key] ?? footprints.get(expression);
+            if (footprint && type === 'vec2') footprints.set(local, footprint);
             outputs[port.key] = local;
         }
         statements.push(NODE_CODE_END);

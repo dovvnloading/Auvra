@@ -24,13 +24,14 @@ describe('the Parallax node', () => {
         const medium = compileMaterialGraph(bricks());
         expect(medium.helpers).toEqual(expect.arrayContaining(['mgParallaxUv', 'mgParallaxShadow', 'mgTangentFrame']));
         const code = medium.statements.join('\n');
-        expect(code).toMatch(/mgParallaxUv\(mg_height_texture, vUv, normalize\(cameraPosition - vMgWorldPosition\) \* mg_height_frame, mg_height_depth, 16\.0\)/);
+        expect(code).toContain('mgParallaxUv(mg_height_texture, vUv, normalize(cameraPosition - vMgWorldPosition) * mg_height_frame, mg_height_depth, 16.0, dFdx(vUv), dFdy(vUv))');
+        expect(code).toContain('mg_height_depth, 16.0, dFdx(mg_height_uv), dFdy(mg_height_uv))');
         expect(code).toContain('#if NUM_DIR_LIGHTS > 0');
         expect(code).toContain('directionalLights[0].direction');
         // The colour is read where the march ends.
         expect(code).toMatch(/texture\(mg_colour_texture, mg_height_out_uv_\d+\)/);
-        expect(compileMaterialGraph(bricks({ quality: 'low' })).statements.join('\n')).toContain(', 8.0)');
-        expect(compileMaterialGraph(bricks({ quality: 'high' })).statements.join('\n')).toContain(', 32.0)');
+        expect(compileMaterialGraph(bricks({ quality: 'low' })).statements.join('\n')).toContain(', 8.0, dFdx(vUv), dFdy(vUv))');
+        expect(compileMaterialGraph(bricks({ quality: 'high' })).statements.join('\n')).toContain(', 32.0, dFdx(vUv), dFdy(vUv))');
     });
 
     it('leaves out the shadow march when self-shadow is off, and changes the shader when it is', () => {

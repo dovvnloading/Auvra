@@ -17,6 +17,12 @@ import type {
  * neutral value through.
  */
 
+const sampleUv = (context: NodeEmitContext, uv: string): string => {
+    const texture = context.param('texture');
+    const footprint = context.stage !== 'vertex' && context.footprint(uv);
+    return footprint ? `textureGrad(${texture}, ${uv}, dFdx(${footprint}), dFdy(${footprint}))` : `texture(${texture}, ${uv})`;
+};
+
 export const OUTPUT_NODE_TYPE = 'output';
 export const REROUTE_NODE_TYPE = 'reroute';
 /** Reads one of the material's own pictures by name (MaterialAsset.pictures): see withMaterialPictures. */
@@ -478,6 +484,8 @@ export const MATERIAL_NODE_DEFINITIONS: MaterialNodeDef[] = [
                     `vec2 ${inside} = clamp(fract(${uv}) * ${size}, vec2(0.5), vec2(max(${size} - 0.5, 0.5)));`,
                 ],
                 outputs: { out: `((${place} * ${stride} + vec2(${gutter}) + ${inside}) / (vec2(${columns}, ${rows}) * ${stride}))` },
+                // Cell offsets and wrapping are discontinuous; the tile interior has this continuous texel scale.
+                footprints: { out: `(${uv} * ${size} / (vec2(${columns}, ${rows}) * ${stride}))` },
             };
         },
     },
@@ -527,7 +535,7 @@ export const MATERIAL_NODE_DEFINITIONS: MaterialNodeDef[] = [
         emit: (inputs, context) => {
             const sample = context.local('sample');
             return {
-                statements: [`vec4 ${sample} = texture(${context.param('texture')}, ${inputs.uv});`],
+                statements: [`vec4 ${sample} = ${sampleUv(context, inputs.uv)};`],
                 outputs: { rgb: `${sample}.rgb`, a: `${sample}.a`, r: `${sample}.r`, g: `${sample}.g`, b: `${sample}.b` },
             };
         },
@@ -550,7 +558,7 @@ export const MATERIAL_NODE_DEFINITIONS: MaterialNodeDef[] = [
             return {
                 statements: [
                     // Blue is rebuilt from red and green, so a map compressed to two channels (BC5) reads the same.
-                    `vec3 ${normal} = vec3(texture(${context.param('texture')}, ${inputs.uv}).xy * 2.0 - 1.0, 0.0);`,
+                    `vec3 ${normal} = vec3(${sampleUv(context, inputs.uv)}.xy * 2.0 - 1.0, 0.0);`,
                     `${normal}.z = sqrt(max(1.0 - dot(${normal}.xy, ${normal}.xy), 0.0));`,
                     ...(context.static('flipGreen') === true ? [`${normal}.y = -${normal}.y;`] : []),
                     `${normal}.xy *= ${context.param('strength')};`,
@@ -621,7 +629,7 @@ export const MATERIAL_NODE_DEFINITIONS: MaterialNodeDef[] = [
             const normal = context.local('normal');
             return {
                 statements: [
-                    `vec4 ${sample} = texture(${context.param('texture')}, ${inputs.uv});`,
+                    `vec4 ${sample} = ${sampleUv(context, inputs.uv)};`,
                     `vec3 ${normal} = vec3(${sample}.xy * 2.0 - 1.0, 0.0);`,
                     `${normal}.z = sqrt(max(1.0 - dot(${normal}.xy, ${normal}.xy), 0.0));`,
                 ],
@@ -661,10 +669,13 @@ export const MATERIAL_NODE_DEFINITIONS: MaterialNodeDef[] = [
             const frame = context.local('frame');
             const uv = context.local('uv');
             const shadow = context.local('shadow');
+            const footprint = context.footprint(inputs.uv);
+            const heightUv = footprint ?? inputs.uv;
+            const shadowUv = footprint ?? uv;
             const position = context.builtin('worldPosition');
             const statements = [
-                `mat3 ${frame} = mgTangentFrame(${position}, ${context.builtin('worldNormal')}, ${inputs.uv});`,
-                `vec2 ${uv} = mgParallaxUv(${heightMap}, ${inputs.uv}, normalize(${context.builtin('cameraPosition')} - ${position}) * ${frame}, ${inputs.depth}, ${layers});`,
+                `mat3 ${frame} = mgTangentFrame(${position}, ${context.builtin('worldNormal')}, ${heightUv});`,
+                `vec2 ${uv} = mgParallaxUv(${heightMap}, ${inputs.uv}, normalize(${context.builtin('cameraPosition')} - ${position}) * ${frame}, ${inputs.depth}, ${layers}, dFdx(${heightUv}), dFdy(${heightUv}));`,
                 `float ${shadow} = 1.0;`,
             ];
             if (context.static('selfShadow') === true) {
@@ -672,11 +683,11 @@ export const MATERIAL_NODE_DEFINITIONS: MaterialNodeDef[] = [
                 // Toward the first sun, which three gives in view space.
                 statements.push(
                     '#if NUM_DIR_LIGHTS > 0',
-                    `${shadow} = mgParallaxShadow(${heightMap}, ${uv}, normalize(inverseTransformDirection(directionalLights[0].direction, viewMatrix)) * ${frame}, ${inputs.depth}, ${layers});`,
+                    `${shadow} = mgParallaxShadow(${heightMap}, ${uv}, normalize(inverseTransformDirection(directionalLights[0].direction, viewMatrix)) * ${frame}, ${inputs.depth}, ${layers}, dFdx(${shadowUv}), dFdy(${shadowUv}));`,
                     '#endif',
                 );
             }
-            return { statements, outputs: { uv, shadow } };
+            return { statements, outputs: { uv, shadow }, footprints: footprint ? { uv: footprint } : undefined };
         },
     },
     {

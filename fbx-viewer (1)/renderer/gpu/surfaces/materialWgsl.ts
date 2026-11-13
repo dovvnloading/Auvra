@@ -382,12 +382,10 @@ fn mgTangentFrame(position: vec3f, normal: vec3f, uv: vec2f) -> mat3x3f {
   // toward the light, both marched in the surface's own (tangent) space. A texture is its texture and its sampler. ---
   mgParallaxUv: {
     returns: "vec2",
-    params: ["sampler2D", "vec2", "vec3", "float", "float"],
+    params: ["sampler2D", "vec2", "vec3", "float", "float", "vec2", "vec2"],
     source: `
 @diagnostic(off, derivative_uniformity)
-fn mgParallaxUv(heightMap: texture_2d<f32>, heightSampler: sampler, uv: vec2f, toEye: vec3f, depth: f32, layers: f32) -> vec2f {
-  let dx = dpdx(uv);
-  let dy = dpdy(uv);
+fn mgParallaxUv(heightMap: texture_2d<f32>, heightSampler: sampler, uv: vec2f, toEye: vec3f, depth: f32, layers: f32, dx: vec2f, dy: vec2f) -> vec2f {
   // Fewer steps head-on, where the view crosses few heights.
   let steps = max(mix(layers, layers * 0.5, abs(toEye.z)), 1.0);
   let stepDepth = 1.0 / steps;
@@ -410,14 +408,12 @@ fn mgParallaxUv(heightMap: texture_2d<f32>, heightSampler: sampler, uv: vec2f, t
   },
   mgParallaxShadow: {
     returns: "float",
-    params: ["sampler2D", "vec2", "vec3", "float", "float"],
+    params: ["sampler2D", "vec2", "vec3", "float", "float", "vec2", "vec2"],
     source: `
 @diagnostic(off, derivative_uniformity)
-fn mgParallaxShadow(heightMap: texture_2d<f32>, heightSampler: sampler, uv: vec2f, light: vec3f, depth: f32, layers: f32) -> f32 {
+fn mgParallaxShadow(heightMap: texture_2d<f32>, heightSampler: sampler, uv: vec2f, light: vec3f, depth: f32, layers: f32, dx: vec2f, dy: vec2f) -> f32 {
   // A light below the surface leaves it unlit anyway; so does no sun, whose direction is nothing.
   if (light.z <= 0.0) { return 1.0; }
-  let dx = dpdx(uv);
-  let dy = dpdy(uv);
   let height = textureSampleGrad(heightMap, heightSampler, uv, dx, dy).r;
   let steps = max(layers, 1.0);
   let rise = (1.0 - height) / steps;
@@ -474,17 +470,17 @@ fn mgTangentFrameVertex(position: vec3f, normal: vec3f, uv: vec2f) -> mat3x3f {
   // Parallax marches across pixels: a vertex reads its own place, unshadowed.
   mgParallaxUvVertex: {
     returns: "vec2",
-    params: ["sampler2D", "vec2", "vec3", "float", "float"],
+    params: ["sampler2D", "vec2", "vec3", "float", "float", "vec2", "vec2"],
     source: `
-fn mgParallaxUvVertex(heightMap: texture_2d<f32>, heightSampler: sampler, uv: vec2f, toEye: vec3f, depth: f32, layers: f32) -> vec2f {
+fn mgParallaxUvVertex(heightMap: texture_2d<f32>, heightSampler: sampler, uv: vec2f, toEye: vec3f, depth: f32, layers: f32, dx: vec2f, dy: vec2f) -> vec2f {
   return uv;
 }`,
   },
   mgParallaxShadowVertex: {
     returns: "float",
-    params: ["sampler2D", "vec2", "vec3", "float", "float"],
+    params: ["sampler2D", "vec2", "vec3", "float", "float", "vec2", "vec2"],
     source: `
-fn mgParallaxShadowVertex(heightMap: texture_2d<f32>, heightSampler: sampler, uv: vec2f, light: vec3f, depth: f32, layers: f32) -> f32 {
+fn mgParallaxShadowVertex(heightMap: texture_2d<f32>, heightSampler: sampler, uv: vec2f, light: vec3f, depth: f32, layers: f32, dx: vec2f, dy: vec2f) -> f32 {
   return 1.0;
 }`,
   },
