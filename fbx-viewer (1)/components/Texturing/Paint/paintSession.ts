@@ -22,7 +22,7 @@ import { PAINT_CHANNELS, castsFromThreeSides, incompatiblePaintSetFor, paintedSe
 import { download, makeZip } from '../../../texturing/zip';
 import { fileName, holdsNormalGreen, planPicture, type ChannelSource, type ExportPicture, type ExportSource, type ExportTemplate } from '../../../texturing/paint/exportTemplates';
 import { colourChannels, extensionOf, linearChannels, writePicture, type PictureData } from '../../../texturing/paint/pictureFiles';
-import { atlasMesh, atlasUvs, markPaintedMaterials, surfaceOfGraph, withPaintedMaterials, writePaintedGlb, type GltfPictures, type GltfSurface, type PaintedMaterial } from '../../../texturing/paint/gltfExport';
+import { atlasGeometryUvCorners, atlasMesh, markPaintedMaterials, surfaceOfGraph, withPaintedMaterials, writePaintedGlb, type GltfPictures, type GltfSurface, type PaintedMaterial } from '../../../texturing/paint/gltfExport';
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js';
 import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { graphPictureLookup } from './graphPictures';
@@ -1021,7 +1021,7 @@ export class PaintSession {
      * The whole model as a binary glTF: every mesh, its skin and its clips, every material; this set with
      * its painting as it is now, the model's other painted sets with the pictures their painting was last
      * put on with, the rest as the model has them. A painted set over several UDIM tiles is laid on one
-     * atlas, its meshes' texture coordinates moved to match (vertex by vertex).
+     * atlas, with UVs remapped per triangle corner (including tile-edge shared vertices).
      */
     async exportModelGltf(): Promise<void> {
         if (this.busy || !this.usable) return;
@@ -1053,8 +1053,11 @@ export class PaintSession {
                     if (!materials.some((material) => mine.has(material.name))) return;
                     const uv = mesh.geometry.getAttribute('uv');
                     if (!uv) return;
-                    mesh.geometry = mesh.geometry.clone();
-                    mesh.geometry.setAttribute('uv', new THREE.BufferAttribute(atlasUvs(uv.array, atlasLayout), 2));
+                    // An integer-edge UV can belong to either adjacent triangle's
+                    // tile. The per-corner remap splits shared vertices as needed,
+                    // retaining skin attributes and other material groups' UVs.
+                    mesh.geometry = atlasGeometryUvCorners(mesh.geometry, atlasLayout,
+                        (materialIndex) => mine.has(materials[materialIndex]?.name ?? ''));
                 });
             }
             const keys = markPaintedMaterials(copy, keyOf);
