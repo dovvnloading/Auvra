@@ -1,6 +1,7 @@
 import contextlib
 import io
 import json
+import shutil
 import struct
 import tempfile
 import unittest
@@ -56,6 +57,86 @@ class MaterialCommandTests(unittest.TestCase):
                 set_value(repository, "Living crate", "Wetness", "wet")
             with self.assertRaisesRegex(MaterialCommandError, "no material called"):
                 set_value(repository, "Bricks", "Wetness", 1)
+
+    @unittest.skipUnless(shutil.which("node") and (material_commands._EDITOR_ROOT / "node_modules/esbuild").is_dir(),
+                         "requires the editor's Node dependencies")
+    def test_rename_previews_commits_and_travels_through_reopened_project(self) -> None:
+        with ProjectRepository(self.path) as repository:
+            materials = repository.get_domain("materials")["documents"]
+            source = materials[0]
+            source["roughness"] = 0.42
+            source["textureGraph"]["graph"]["parameters"][0]["hintExtension"] = "keep"
+            dependent = {"id": "dependent", "name": "Dependent", "graph": source["graph"], "textureGraph": {"graph": {
+                "version": 1, "nodes": [{"id": "graph", "type": "subgraph", "params": {"graph": source["id"]},
+                                        "valuePins": ["Wetness"]}], "links": [], "parameters": []}},
+                "paint": {"version": 1, "layers": [{"fill": {"roughness": {"kind": "graph", "graphId": source["id"],
+                                                                "values": {"Wetness": 0.75}}}}]}}
+            models = repository.get_domain("models")["documents"]
+            objects = repository.get_domain("objects")["documents"]
+            placed = next(obj for obj in objects if obj["id"] == "living-wet-1")
+            model = next(item for item in models if item["id"] == placed["modelId"])
+            slot = next(iter(placed["materialOverrides"]))
+            model["materialOverrides"][slot]["parameters"] = [{"name": "Wetness", "value": 0.77}]
+            member = {key: placed[key] for key in ("id", "modelId", "name", "type", "position", "rotation", "scale", "materialOverrides")}
+            prefab = {"id": "kit", "name": "Kit", "rootId": member["id"], "objects": [member]}
+            meta = {"id": "texture-graph-presets", "settings": {"version": 1, "presets": [
+                {"id": "library", "graphId": source["id"], "values": {"Wetness": 0.2}}]}}
+            repository.apply_changes({"materials": [*materials, dependent], "models": models, "prefabs": [prefab],
+                                      "metadata": [*repository.get_domain("metadata")["documents"], meta]},
+                                     expected_revision=repository.revision)
+            before = material_commands._rename_inventory(repository)
+            revision = repository.revision
+            code, _, error = self.run_command("rename-parameter", source["id"], "Wetness", "Patina")
+            self.assertEqual(code, 2, error)
+            self.assertIn("open elsewhere", error)
+
+        receipt = Path(self.tmp.name) / "command.json"
+        args = ["rename-parameter", source["id"], "Wetness", "Patina"]
+        def run(*arguments):
+            code, out, err = self.run_command("--json", *arguments)
+            self.assertEqual(code, 0, err)
+            return json.loads(out)
+
+        preview = run(*args)
+        self.assertFalse(preview["applied"])
+        self.assertEqual(preview["revision"], revision)
+        self.assertEqual(preview["impact"]["nestedNodes"], 1)
+        self.assertEqual(preview["impact"]["objectOverrides"], 5)
+        self.assertEqual(preview["impact"]["prefabOverrides"], 1)
+        self.assertEqual(preview["impact"]["sharedPresets"], 1)
+        self.assertEqual(preview["impact"]["paintReferences"], 1)
+        self.assertEqual(preview["impact"]["modelOverrides"], 1)
+        with ProjectRepository(self.path) as repository:
+            self.assertEqual(material_commands._rename_inventory(repository), before)
+
+        apply = [*args, "--apply-revision", str(revision), "--receipt", str(receipt)]
+        with mock.patch.object(ProjectRepository, "apply_changes", side_effect=MaterialCommandError("forced failure")):
+            self.assertEqual(self.run_command(*apply)[0], 2)
+        with ProjectRepository(self.path) as repository:
+            self.assertEqual(repository.revision, revision)
+            self.assertEqual(material_commands._rename_inventory(repository), before)
+        self.assertEqual(self.run_command(*apply)[0], 2)  # Existing receipt is preserved.
+        receipt.unlink()
+        self.assertEqual(run(*apply)["revision"], revision + 1)
+        with ProjectRepository(self.path) as repository:
+            after = material_commands._rename_inventory(repository)
+            values = [parameter for obj in after["objects"] for entry in obj.get("materialOverrides", {}).values()
+                      for parameter in entry.get("parameters", [])]
+            self.assertFalse(any(parameter["name"] == "Wetness" for parameter in values))
+            self.assertEqual(sum(parameter["name"] == "Patina" for parameter in values), 5)
+            saved = next(item for item in after["materials"] if item["id"] == source["id"])
+            self.assertEqual(saved["roughness"], 0.42)
+            self.assertEqual(saved["textureGraph"]["graph"]["parameters"][0]["hintExtension"], "keep")
+        self.assertEqual(run("undo-rename", str(receipt))["revision"], revision + 2)
+        with ProjectRepository(self.path) as repository:
+            self.assertEqual(material_commands._rename_inventory(repository), before)
+        self.assertEqual(run("redo-rename", str(receipt))["revision"], revision + 3)
+        with ProjectRepository(self.path) as repository:
+            self.assertEqual(material_commands._rename_inventory(repository), after)
+            set_value(repository, source["id"], "Patina", 0.6)
+        code, _, err = self.run_command("undo-rename", str(receipt))
+        self.assertEqual(code, 2)
+        self.assertIn("differ", err)
 
     def test_drawing_asks_where_the_pictures_go_and_says_what_it_needs(self) -> None:
         for command in ("cook", "ball", "bake-mesh-maps"):

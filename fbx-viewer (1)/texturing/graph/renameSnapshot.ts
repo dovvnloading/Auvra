@@ -12,6 +12,7 @@ import type { ProjectMetadataForRename, ProjectModelForRename, ProjectObjectForR
  */
 export interface TextureRenameInventory {
     materials: readonly MaterialAsset[];
+    materialDocuments: ReadonlyMap<string, Record<string, unknown>>;
     models: ProjectModelForRename[];
     objects: ProjectObjectForRename[];
     prefabs: ProjectPrefabForRename[];
@@ -62,12 +63,16 @@ const records = (documents: unknown, name: string): Array<Record<string, unknown
 };
 
 const validateMaterial = (document: Record<string, unknown> & { id: string }): MaterialAsset => {
-    if (!record(document.graph)) {
+    if (document.graph !== undefined && !record(document.graph)) {
         throw new Error(`Saved material "${document.id}" has an unreadable shader graph. Nothing was renamed.`);
     }
     if (document.textureGraph !== undefined) {
         const stored = record(document.textureGraph);
-        if (!stored || record(stored.graph)?.version !== 1) {
+        const graph = record(stored?.graph);
+        if (!graph || graph.version !== 1 || !Array.isArray(graph.nodes)
+            || graph.nodes.some(node => !record(node) || typeof record(node)?.id !== 'string'
+                || typeof record(node)?.type !== 'string' || !record(record(node)?.params))
+            || (graph.links !== undefined && !Array.isArray(graph.links))) {
             throw new Error(`Saved material "${document.id}" has an unsupported texture graph. Nothing was renamed.`);
         }
     }
@@ -97,7 +102,7 @@ const validateMaterial = (document: Record<string, unknown> & { id: string }): M
  */
 export const readTextureRenameInventory = (
     snapshot: ProjectSnapshot | null,
-    liveMaterials: readonly MaterialAsset[],
+    liveMaterials: readonly MaterialAsset[] | null,
     expected: { projectId: string; revision: number },
 ): TextureRenameInventory => {
     if (!snapshot || !expected.projectId || snapshot.projectId !== expected.projectId
@@ -122,14 +127,16 @@ export const readTextureRenameInventory = (
     for (const doc of metadata) {
         if (doc.id !== 'texture-graph-presets') continue;
         const settings = record(doc.settings);
-        if (!settings || settings.version !== 1 || !Array.isArray(settings.presets)) {
+        if (!settings || settings.version !== 1 || !Array.isArray(settings.presets)
+            || settings.presets.some(preset => typeof record(preset)?.graphId !== 'string' || !record(record(preset)?.values))) {
             throw new Error('Project-shared graph presets have an unsupported schema. Nothing was renamed.');
         }
     }
 
     const savedMaterials = savedMaterialDocs.map(validateMaterial);
     const live = new Map<string, MaterialAsset>();
-    for (const material of liveMaterials) {
+    const materials = liveMaterials ?? savedMaterials;
+    for (const material of materials) {
         if (!material.id || live.has(material.id)) {
             throw new Error('The editor material library has missing or duplicate asset identities. Nothing was renamed.');
         }
@@ -145,7 +152,7 @@ export const readTextureRenameInventory = (
             throw new Error(`Material "${saved.id}" differs from the saved project. Finish pending saves or reload before renaming.`);
         }
     }
-    return { materials: liveMaterials, models, objects, prefabs, metadata };
+    return { materials, materialDocuments: new Map(savedMaterialDocs.map(doc => [doc.id, doc])), models, objects, prefabs, metadata };
 };
 
 /** Placed objects and prefab members use the same model-slot override schema. */
