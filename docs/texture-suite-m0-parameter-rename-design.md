@@ -50,11 +50,11 @@ It ignores unrelated assets that merely happen to have a parameter of the same n
 
 ## Interim safety guard for the editor
 
-The texture-graph Parameter Editor now preflights a public parameter rename against complete native project snapshots for models, objects and metadata, plus the active material library. If the plan sees **any** dependent document beyond the source graph, the editor **refuses the local rename** and explains how many dependent assets would otherwise be left with stale parameter names.
+The texture-graph Parameter Editor now preflights a public parameter rename against **all four native host domains** (materials, models, objects and metadata). The pure `readTextureRenameInventory` boundary rejects missing domains (including domains whose complete result should be an empty array), malformed or duplicate document identities, unsupported reference-bearing schemas and model overrides without model identity. It also checks that **every saved material matches the in-memory material library** before the planner is allowed to consider a graph-local edit. Unsaved/debounced material changes require completing their writes or reloading, rather than silently omitting dependencies. If the plan sees **any** dependent document beyond the source graph, the editor **refuses the local rename** and reports subgraph/Iterate, paint, model, object and shared-preset reference counts.
 
 This deliberately blocks a previously unsafe operation rather than pretending a graph-local Undo could restore another asset's model/object settings. A graph with no outside references may still use its existing local rename/undo flow.
 
-The preflight also refuses to rename if project identity/revision or the graph changed during scanning, if the project cannot be queried or is read-only, or if the planner finds a collision/unsupported document. It checks the in-memory shared-presets list in addition to the persisted metadata snapshot.
+The preflight also refuses to rename if project identity/revision, graph **or parameter values** changed during scanning, if the project cannot be queried or is read-only, or if the planner finds a collision/unsupported document. `getSnapshotAll` now rejects page-to-page project/revision changes, missing continuation pages and cursor loops rather than returning a stitched, inconsistent snapshot. It checks the in-memory shared-presets list in addition to the persisted metadata snapshot.
 
 **The cross-document project transaction and unified undo/redo are still unfinished.** The guard must be removed/replaced once a full atomic rename action has been implemented and tested; do not turn failed checks into best-effort changes.
 
@@ -87,7 +87,7 @@ npm ci
 npm run diagnostics:verify
 npm run typecheck
 npm run typecheck:strict
-npm test -- tests/frontend/textureParameterRenamePlan.test.ts tests/frontend/textureParameters.test.ts
+npm test -- tests/frontend/textureParameterRenamePlan.test.ts tests/frontend/textureRenameSnapshot.test.ts tests/frontend/projectSnapshotPagination.test.ts tests/frontend/textureParameters.test.ts
 npm run build
 ```
 
