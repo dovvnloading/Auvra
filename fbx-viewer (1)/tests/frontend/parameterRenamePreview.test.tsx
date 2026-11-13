@@ -1,4 +1,3 @@
-import React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { materialLibrary } from '../../runtime/materials/materialLibrary';
@@ -28,6 +27,10 @@ describe('project parameter rename preview', () => {
         await waitFor(() => expect(writeText).toHaveBeenCalledWith(
             "python -m Auvra.project.material_commands 'C:\\my work\\Pat''s project' rename-parameter -- 'graph''s-id' 'Wear' 'Patina'",
         ));
+        fireEvent.change(screen.getByLabelText('Project folder'), { target: { value: "C:\\O’Connor $(sample)" } });
+        const quoted = screen.getByRole('textbox', { name: 'PowerShell preview command' }) as HTMLTextAreaElement;
+        const encoded = /FromBase64String\('([A-Za-z0-9+/=]+)'\)/.exec(quoted.value)![1];
+        expect(new TextDecoder().decode(Uint8Array.from(atob(encoded), letter => letter.charCodeAt(0)))).toBe("C:\\O’Connor $(sample)");
         expect(screen.getByRole('textbox', { name: 'PowerShell preview command' })).toHaveAttribute('readonly');
     });
 
