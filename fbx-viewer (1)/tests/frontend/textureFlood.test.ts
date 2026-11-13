@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { islandSpan, labelReference, packBoxSize, seamOffset, shortestOffset, unpackBoxSize } from '../../texturing/graph/flood';
+import { exactIslandSpan, islandSpan, labelReference, packBoxSize, seamOffset, shortestOffset, unpackBoxSize } from '../../texturing/graph/flood';
 
 /** A mask from rows of text, the first row at the bottom as the GPU reads it ('#' inside). */
 const maskOf = (rows: string[]) => {
@@ -114,5 +114,51 @@ describe('flood fill boxes', () => {
         expect(w * 1024).toBeCloseTo(128, 0);
         expect(h * 1024).toBeCloseTo(64, 0);
         expect(unpackBoxSize(packBoxSize(1024, 1024, 1024, 1024))).toEqual([1, 1]);
+    });
+});
+
+
+describe('exact circular island span oracle (GPU parity still pending)', () => {
+    it('exposes a large wrapping island that the four fixed GPU seams overestimate', () => {
+        // A 100-wide row with only columns 31..35 empty; the island wraps
+        // through column 0. The missing gap sits between the quarter seams.
+        const places = [...Array.from({ length: 31 }, (_, i) => i),
+            ...Array.from({ length: 64 }, (_, i) => i + 36)];
+        expect(places).toHaveLength(95);
+        expect(exactIslandSpan(places, 0, 100, true)).toEqual({ low: -64, size: 95 });
+        expect(islandSpan(places, 0, 100, true).size).toBe(100);
+        // A GPU result claiming a full 100-wide box would fail an exact test.
+    });
+
+    it('keeps full-width, single-pixel, duplicate and equally spaced islands deterministic', () => {
+        expect(exactIslandSpan([3], 3, 100, true)).toEqual({ low: 0, size: 1 });
+        expect(exactIslandSpan([3, 3, 3], 3, 100, true)).toEqual({ low: 0, size: 1 });
+        expect(exactIslandSpan([0, 1, 2, 3, 4], 2, 5, true)).toEqual({ low: 0, size: 5 });
+        expect(exactIslandSpan([0, 2, 4, 6], 0, 8, true)).toEqual({ low: 0, size: 7 });
+        expect(exactIslandSpan([], 0, 8, true)).toEqual({ low: 0, size: 0 });
+        expect(exactIslandSpan([3, 5, 9], 5, 100, false)).toEqual({ low: -2, size: 7 });
+    });
+
+    it('matches exhaustive seam search over many seeded masks, including wrap and near-full axes', () => {
+        let seed = 99161;
+        const next = () => {
+            seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+            return seed / 0x100000000;
+        };
+        for (const size of [7, 8, 13, 17, 23, 32, 47]) for (let sample = 0; sample < 18; sample++) {
+            const occupancy = sample % 4 === 0 ? 0.92 : sample % 4 === 1 ? 0.75 : 0.45;
+            const places = Array.from({ length: size }, (_, i) => i).filter(() => next() < occupancy);
+            if (!places.length) continue;
+            const root = places[Math.floor(next() * places.length)];
+            const exact = exactIslandSpan(places, root, size, true);
+            const brute = Math.min(...Array.from({ length: size }, (_, seam) => {
+                const offsets = places.map(place => ((place - seam) % size + size) % size);
+                return Math.max(...offsets) - Math.min(...offsets) + 1;
+            }));
+            expect(exact.size).toBe(brute);
+            expect(exact.low).toBeLessThanOrEqual(0);
+            expect(exact.low + exact.size).toBeGreaterThan(0);
+            expect(exact.size).toBeLessThanOrEqual(size);
+        }
     });
 });
