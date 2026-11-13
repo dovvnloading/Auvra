@@ -77,9 +77,6 @@ interface Document {
 const COMPRESSED_GEOMETRY_EXTENSIONS = ['KHR_draco_mesh_compression', 'EXT_meshopt_compression'];
 /** Extensions of a texture that hold an image of their own, each read in place of its `source`. */
 const IMAGE_EXTENSIONS = ['KHR_texture_basisu', 'EXT_texture_webp', 'EXT_texture_avif'];
-const COMPONENT_ARRAYS = new Map<number, { new (buffer: ArrayBuffer): THREE.TypedArray; BYTES_PER_ELEMENT: number }>([
-  [5120, Int8Array], [5121, Uint8Array], [5122, Int16Array], [5123, Uint16Array], [5125, Uint32Array], [5126, Float32Array],
-]);
 const ITEM_SIZES = new Map<string, number>([
   ['SCALAR', 1], ['VEC2', 2], ['VEC3', 3], ['VEC4', 4], ['MAT2', 4], ['MAT3', 9], ['MAT4', 16],
 ]);
@@ -137,22 +134,39 @@ const addIndexAccessor = (json: Document, views: View[], indices: Uint16Array | 
   return accessors.length - 1;
 };
 
+/** Allocate the numeric representation specified by a glTF accessor component type. */
+const allocateComponents = (componentType: number, length: number) => {
+  switch (componentType) {
+    case 5120: return new Int8Array(length);
+    case 5121: return new Uint8Array(length);
+    case 5122: return new Int16Array(length);
+    case 5123: return new Uint16Array(length);
+    case 5125: return new Uint32Array(length);
+    case 5126: return new Float32Array(length);
+    default: return null;
+  }
+};
+
 /** One accessor's elements, packed and aligned, as an attribute; null for what cannot be read directly. */
 const readAccessor = (json: Document, views: View[], index: number, cache: Map<number, THREE.BufferAttribute | null>): THREE.BufferAttribute | null => {
   if (cache.has(index)) return cache.get(index) ?? null;
   const accessor = json.accessors?.[index];
   let attribute: THREE.BufferAttribute | null = null;
-  const TypedArray = accessor && COMPONENT_ARRAYS.get(accessor.componentType);
   const itemSize = accessor && ITEM_SIZES.get(accessor.type);
-  if (accessor && TypedArray && itemSize && accessor.bufferView !== undefined && !accessor.sparse) {
+  if (accessor && itemSize && accessor.bufferView !== undefined && !accessor.sparse) {
+    const values = allocateComponents(accessor.componentType, accessor.count * itemSize);
+    if (!values) {
+      cache.set(index, null);
+      return null;
+    }
     const view = views[accessor.bufferView];
-    const itemBytes = TypedArray.BYTES_PER_ELEMENT * itemSize;
+    const itemBytes = values.BYTES_PER_ELEMENT * itemSize;
     const stride = view.byteStride || itemBytes;
     const start = accessor.byteOffset ?? 0;
-    const packed = new Uint8Array(accessor.count * itemBytes);
+    const packed = new Uint8Array(values.buffer);
     if (stride === itemBytes) packed.set(view.bytes.subarray(start, start + packed.length));
     else for (let item = 0; item < accessor.count; item++) packed.set(view.bytes.subarray(start + item * stride, start + item * stride + itemBytes), item * itemBytes);
-    attribute = new THREE.BufferAttribute(new TypedArray(packed.buffer), itemSize, accessor.normalized === true);
+    attribute = new THREE.BufferAttribute(values, itemSize, accessor.normalized === true);
   }
   cache.set(index, attribute);
   return attribute;
