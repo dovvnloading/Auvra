@@ -307,7 +307,8 @@ const Workspace: React.FC<{
     const renamingParameter = useRef(false);
     const [, setHistoryVersion] = useState(0);
     // Kept outside this screen, so it survives switching material and leaving the tab.
-    const history = useMemo(() => materialHistory<GraphSnapshot>(asset.id), [asset.id]);
+    const generation = materialLibrary.generation;
+    const history = useMemo(() => materialHistory<GraphSnapshot>(asset.id, generation), [asset.id, generation]);
     const meshMaps = usePreviewMeshMaps(session, graph, resolve, shape, surfaceId, libraryVersion);
 
     // A processor's function graph, opened in place of the graph's canvas.
@@ -333,7 +334,7 @@ const Workspace: React.FC<{
     // The graph's parameters: shown as a finished panel, or edited; and its presets.
     const [parameterView, setParameterView] = useState<'panel' | 'edit'>('panel');
     const [variations, setVariations] = useState(false);
-    useEffect(() => { sharedPresets.load(); }, []);
+    useEffect(() => { void sharedPresets.load(); }, [generation]);
     const sharedVersion = useSyncExternalStore(sharedPresets.subscribe, sharedPresets.getVersion);
     const placedPresets = useMemo<PlacedPreset[]>(() => {
         void sharedVersion;
