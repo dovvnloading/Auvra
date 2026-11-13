@@ -21,8 +21,10 @@ const record = (value: unknown): Record<string, unknown> | null =>
     value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
 
 /** Ignore object property insertion order, not array order, when comparing saved and live material documents. */
-const signature = (value: unknown): string => JSON.stringify(value, (_key, item: unknown) =>
-    record(item) ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => a.localeCompare(b))) : item);
+const signature = (value: unknown): string => JSON.stringify(value, (_key, item: unknown) => {
+    const object = record(item);
+    return object ? Object.fromEntries(Object.entries(object).sort(([a], [b]) => a.localeCompare(b))) : item;
+});
 
 const records = (domains: Record<string, unknown>, name: string): Array<Record<string, unknown> & { id: string }> => {
     if (!Object.hasOwn(domains, name) || !Array.isArray(domains[name])) {
