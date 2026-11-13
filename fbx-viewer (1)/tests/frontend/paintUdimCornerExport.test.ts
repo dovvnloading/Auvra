@@ -39,13 +39,13 @@ const atlasU = (cell: number, localU: number) =>
 describe('whole-model UDIM glTF geometry atlas', () => {
     it('splits shared integer-edge vertices by triangle and preserves skin/morph attributes', () => {
         const source = sharedEdgeMesh();
-        const original = [...(source.getAttribute('uv').array as ArrayLike<number>)];
+        const original = Array.from(source.getAttribute('uv').array as ArrayLike<number>);
         const out = atlasGeometryUvCorners(source, layout, () => true);
         const uv = out.getAttribute('uv');
 
         expect(out).not.toBe(source);
         expect(source.index?.count).toBe(6);
-        expect([...source.getAttribute('uv').array]).toEqual(original);
+        expect(Array.from(source.getAttribute('uv').array)).toEqual(original);
         expect(out.index).toBeNull();
         expect(uv.count).toBe(6); // One independent UV corner per triangle.
         expect(uv.getX(0)).toBeCloseTo(atlasU(0, 1), 6);
@@ -59,7 +59,7 @@ describe('whole-model UDIM glTF geometry atlas', () => {
         expect(out.getAttribute('skinWeight').count).toBe(6);
         expect(out.getAttribute('skinIndex').getX(0)).toBe(1);
         expect(out.getAttribute('skinIndex').getX(3)).toBe(1);
-        expect(out.morphAttributes.position[0].count).toBe(6);
+        expect(out.morphAttributes.position?.[0].count).toBe(6);
         expect(out.groups.map(g => [g.start, g.count, g.materialIndex])).toEqual([[0, 3, 0], [3, 3, 1]]);
         source.dispose();
         out.dispose();
