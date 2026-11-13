@@ -4,11 +4,15 @@ import { createRoot } from 'react-dom/client';
 import { advance, useThree, type RootState } from '@react-three/fiber';
 import { gpuBytes, realNow, resetClock, seedChance, stepClock, virtualSeconds, webGpuBytes, webGpuWaiting } from './instrument';
 import { AuvraCanvas, readRequestedRendererBackend } from '../../renderer/AuvraCanvas';
+import { deviceLossPixels } from './deviceLossPixels';
 import { acceptSoftwareAdapter, acquireGpuCore, releaseIdleGpuCore } from '../../renderer/gpu/device';
 import { isGpuRenderer } from '../../renderer/gpu/frame';
 import type { GpuRenderer } from '../../renderer/gpu/GpuRenderer';
 import { SCENES, type SceneSteps, type VisualScene } from './scenes';
 import { textureGraphScene } from './textureGraphScene';
+import { textureGpu } from '../../texturing/gpu/textureGpu';
+import { webgpuTexturing, type WgpuDevice } from '../../texturing/gpu/webgpuTexturing';
+import { checkMaterialCompression, readMaterialTexture } from './materialCompression';
 
 /**
  * The page behind scripts/rendering/run.mjs: mounts one scene at a time, steps it a fixed number of frames on a clock
@@ -78,6 +82,26 @@ const stepsFor = (state: () => RootState): SceneSteps => {
   };
 };
 
+// Sample the actual cooking context after the screenshot and timed frames, before the device is released.
+const materialCompression = async (state: RootState) => {
+  if (isGpuRenderer(state.gl)) {
+    const { device, adapter } = state.gl.core;
+    const gpu = webgpuTexturing(device as unknown as WgpuDevice);
+    const info = adapter.info;
+    return { backend: 'webgpu', vendor: info?.vendor || null, renderer: info?.description || null,
+      architecture: info?.architecture || null, device: info?.device || null,
+      formats: await checkMaterialCompression('webgpu', feature => device.features.has(feature),
+        (_format, texture) => readMaterialTexture(gpu, texture)) };
+  }
+  const gpu = textureGpu();
+  const gl = gpu.renderer.getContext();
+  const debug = gl.getExtension('WEBGL_debug_renderer_info');
+  return { backend: 'webgl2', vendor: debug ? gl.getParameter(debug.UNMASKED_VENDOR_WEBGL) : null,
+    renderer: debug ? gl.getParameter(debug.UNMASKED_RENDERER_WEBGL) : null,
+    formats: await checkMaterialCompression('webgl2', feature => Boolean(gl.getExtension(feature)),
+      (_format, texture) => readMaterialTexture(gpu, texture)) };
+};
+
 const capture = async (name: string) => {
   const scene: VisualScene | undefined = SCENES[name];
   if (!scene) throw new Error(`No scene called ${name}`);
@@ -131,6 +155,8 @@ const capture = async (name: string) => {
   const standardCook = name === 'texture-graph' ? textureGraphScene.cook : null;
   const cookProblem = name === 'texture-graph' ? textureGraphScene.problem : null;
   const bc1Parity = name === 'texture-graph' && onWebGpu ? textureGraphScene.bc1Parity : null;
+  const compression = name === 'texture-graph' && !new URLSearchParams(window.location.search).has('textureBench')
+    ? await materialCompression(state) : null;
   if (onWebGpu) await settled();
   root.unmount();
   // Lets the canvas and what it holds go before the next scene.
@@ -143,10 +169,13 @@ const capture = async (name: string) => {
       await new Promise((resolve) => setTimeout(resolve, 20));
     }
   }
-  return { png, numbers: { loadMs, frameMs, calls, triangles, geometries, textures, programs, gpuBytes: bytes,
+  const deviceLoss = onWebGpu && name === 'texture-graph' && !new URLSearchParams(window.location.search).has('textureBench')
+    ? await deviceLossPixels() : null;
+  return { png, numbers: { ...(deviceLoss ? { deviceLoss } : {}), loadMs, frameMs, calls, triangles, geometries, textures, programs, gpuBytes: bytes,
     ...(cookBenchmark ? { textureCook: cookBenchmark, textureCookProblem: cookProblem } : {}),
     ...(standardCook ? { graphCook: standardCook, graphCookProblem: cookProblem } : {}),
     ...(bc1Parity ? { bc1Parity } : {}),
+    ...(compression ? { materialCompression: compression } : {}),
   } };
 };
 

@@ -173,7 +173,7 @@ export class GpuRenderer implements GpuRendererApi {
     const context = canvas.getContext("webgpu");
     if (!context) throw new Error("The canvas has no webgpu context");
     this.context = context;
-    this.releaseCore = holdGpuCore(core);
+    this.releaseCore = holdGpuCore();
     context.configure({ device, format: core.presentFormat, alphaMode: "opaque" });
     this.viewBuffer = device.createBuffer({ label: "gpu views", size: MAX_VIEWS * VIEW_BYTES, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     this.cameraLayout = device.createBindGroupLayout({

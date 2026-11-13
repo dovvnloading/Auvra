@@ -84,6 +84,33 @@ describe('texture parameter rename host inventory safety', () => {
         });
     });
 
+    it('keeps source and dependent host fields through forward and inverse changes', () => {
+        const data = fixture();
+        const docs = domains(data).materials as Array<MaterialAsset & { metallic?: number; overrides?: unknown }>;
+        for (const asset of docs) {
+            asset.metallic = 0.234;
+            asset.overrides = { oldRenderer: true };
+        }
+        const graph = docs[0].textureGraph!.graph as any;
+        graph.extension = { note: 'metadata' };
+        graph.parameters[0].customHint = 'retain';
+        graph.nodes.push({ id: 'future', type: 'future-node', params: {}, vendor: 'future' });
+        docs[0].textureGraph!.values = { wear: 0.3, unrelated: [2.2] };
+        const plan = planTextureParameterRename({
+            ...readTextureRenameInventory(data.snapshot, null, { projectId: 'project-a', revision: 7 }),
+            sourceMaterialId: 'source', from: 'wear', to: 'patina',
+        });
+        for (const doc of docs) {
+            expect(plan.changes.find(change => change.id === doc.id)?.value).toMatchObject({ metallic: 0.234, overrides: doc.overrides });
+            expect(plan.undoChanges.find(change => change.id === doc.id)?.value).toEqual(doc);
+        }
+        const next = plan.changes[0].value as MaterialAsset;
+        expect(next.textureGraph).toMatchObject({
+            values: { patina: 0.3, unrelated: [2.2] },
+            graph: { extension: graph.extension, parameters: [{ name: 'patina', customHint: 'retain' }], nodes: graph.nodes },
+        });
+    });
+
     it('allows a local rename in a project with export templates and unrelated saved smart materials', () => {
         const templates = material('templates', undefined, { exportTemplates: [] });
         const smart = material('smart', undefined, { smartMaterial: { version: 1, at: 12, layer: {

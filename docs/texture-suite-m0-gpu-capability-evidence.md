@@ -22,7 +22,7 @@
 | Reference | Backend requested | CI result | Reported scene metrics | Meaning |
 |---|---|---|---|---|
 | [Rendering pictures (WebGL2)](https://github.com/dovvnloading/Auvra/actions/runs/43411086653/job/131838089601) | WebGL2/software | **Success** | `texture-graph`: 342 ms scene load; 16.8 ms reported frame; ~2.7 MiB estimated GPU allocation | One fixed proof texture graph renders within the WebGL2 visual baseline |
-| [Rendering pictures on WebGPU](https://github.com/dovvnloading/Auvra/actions/runs/43411086653/job/131838089595) | WebGPU/SwiftShader | **Success** | `texture-graph`: 1,129 ms scene load; 299.5 ms reported frame; ~132.6 MiB estimated GPU allocation | The WebGPU reference and embedded proof checks passed in that software environment |
+| [Rendering pictures on WebGPU](https://github.com/dovvnloading/Auvra/actions/runs/43411086653/job/131838089595) | WebGPU/SwiftShader | **Success** | `texture-graph`: 1,129 ms scene load; 299.5 ms reported frame; ~132.6 MiB estimated GPU allocation | The WebGPU scene matched its reference. Individual graph operations and the cooking backend were not recorded in this run |
 | Same WebGL2 job | WebGL2/software | **Success** | `physical-materials`: 5,229 ms load; 870.5 ms frame; `car-paint`: 2,467 ms load; 512.9 ms frame | Separate reference scenes for physical materials; **not** authoring-paint benchmarks |
 | Same WebGPU job | WebGPU/SwiftShader | **Success** | `physical-materials`: 1,321 ms load; 664.3 ms frame; `car-paint`: 1,246 ms load; 588.2 ms frame | The renderer-specific physical material scenes matched their WebGPU references |
 
@@ -34,12 +34,12 @@ The WebGPU `texture-graph` comparison reported **0.220% differing pixels (worst 
 
 | Operation/family | Editor WebGL2 | Player WebGPU texturing | Native renderer | Evidence and remaining gap |
 |---|---|---|---|---|
-| Base procedural texture graph, perlin/tiles/blend | Source-present; fixed scene visual-verified | Visual-verified (software) | Not tested for feature equivalence | `tests/visual/textureGraphScene.tsx` proof graph; full per-node matrix not tested |
-| Height-to-normal graph output | Visual-verified (software) | Visual-verified (software) | Not tested | Fixed graph includes `normalFromHeight`; image output is encoded and displayed |
-| Pixel processor function graph | Visual-verified (software) | Visual-verified (software) | Not tested | Fixed graph uses `pixelProcessor` function with mix/sample |
-| Instanced scatter and four layering modes | Source-present, embedded GPU reference | Visual-verified (software) for embedded parity checks | Not tested | `checkScatterParity` tests specific interior/edge pixels in `higher`, `over`, `max`, `add` |
-| BC1 compressed texture input | Source and unit tests exist | **Conditional visual proof** | Not tested | `checkCompressedParity` only runs when the WebGPU adapter exposes BC compression **and** WebGL2 supports S3TC; logs do not separately confirm it ran |
-| Applied paint-stack snapshot input | Source and visual proof present | Visual-verified (software) | Not tested | `checkPaintSnapshotParity` tests base color, packed ORM channels and sample pixels; **not** all paint-stack modes or full layers |
+| Base procedural texture graph, perlin/tiles/blend | Source-present; fixed scene visual-verified | Cooking backend not recorded | Not tested for feature equivalence | `tests/visual/textureGraphScene.tsx` proof graph; full per-node matrix not tested |
+| Height-to-normal graph output | Visual-verified (software) | Cooking backend not recorded | Not tested | Fixed graph includes `normalFromHeight`; image output is encoded and displayed |
+| Pixel processor function graph | Visual-verified (software) | Cooking backend not recorded | Not tested | Fixed graph uses `pixelProcessor` function with mix/sample |
+| Instanced scatter and four layering modes | Source-present, embedded GPU reference | Included in fixture; execution not independently recorded | Not tested | `checkScatterParity` tests specific interior/edge pixels in `higher`, `over`, `max`, `add` |
+| BC1 compressed texture input | Source and unit tests exist | **Verified on the #316 software adapter** | Not tested | Both feature flags were present and the fixture sampled the expected stripes; the whole graph separately fell back to WebGL2. [Windows job](https://github.com/dovvnloading/Auvra/actions/runs/43499845786/job/132142495087), [artifact](https://github.com/dovvnloading/Auvra/actions/runs/43499845786/artifacts/14072569068) |
+| Applied paint-stack snapshot input | Source and visual fixture present | Included in fixture; execution not independently recorded | Not tested | `checkPaintSnapshotParity` tests base color, packed ORM channels and sample pixels; **not** all paint-stack modes or full layers |
 | GLSL code-mode structures | WebGL2 shader path present | Unsupported/explicit translator rejection for affected structures | Not tested | `tests/frontend/textureWebGpu.test.ts` verifies intentional rejection; strict game cook falls back to WebGL2 |
 | Full in-editor WebGPU graph cooking | Existing editor defaults to WebGL2 | Game-time device can use WebGPU | Not established | `texturing/gpu/cookingDevice.ts` and `runtime/materials/graphCooker.ts`; no editor UI-switch acceptance yet |
 | Anisotropy, clearcoat, tint, sheen, flakes | Physical renderer features in source and reference scenes | Renderer-specific physical scene baseline passing; complete channel parity **not verified** | Not tested | No per-channel cross-renderer error budget or sampled texture-map round trip yet |
@@ -65,6 +65,21 @@ For every new device-backed claim, record exact commit, OS/driver, browser versi
 
 New WebGPU `texture-graph` captures write `bc1Parity` under `texture-graph` in `tests/visual/output/webgpu/numbers.json`. The report records `webgpuBC` from the active device and `webgl2S3TC` from the WebGL2 texturing context. A missing feature yields `not-tested` with a reason. With both features, `verified` means four sampled pixels from the BC1 fixture matched across both backends and reproduced the fixture’s red and green stripes within four byte levels per RGB channel. A drawing, readback or comparison error yields `failed` with the diagnostic and fails the rendering check. The historical CI run above predates this report.
 
+### Saved material compression fixtures
+
+The ordinary `texture-graph` capture also writes `materialCompression` to the scene's `numbers.json` entry. Run both rendering commands above to collect independent WebGL2 and WebGPU observations. Each capture records the cooking context's adapter information exposed by the browser and the feature checked for each saved material format.
+
+| Saved format | WebGL2 extension | WebGPU device feature | Channels checked |
+|---|---|---|---|
+| BC4 signed | EXT_texture_compression_rgtc | texture-compression-bc | R data, zero G/B, opaque alpha |
+| BC5 | EXT_texture_compression_rgtc | texture-compression-bc | R/G data, zero B, opaque alpha |
+| BC7 | EXT_texture_compression_bptc | texture-compression-bc | RGBA |
+| ETC2 RGB8 | WEBGL_compressed_texture_etc | texture-compression-etc2 | RGB, opaque alpha |
+| ETC2 RGBA8 EAC | WEBGL_compressed_texture_etc | texture-compression-etc2 | RGBA |
+| ASTC 4×4 | WEBGL_compressed_texture_astc | texture-compression-astc | RGBA |
+
+For each supported format Auvra encodes an 8×8 two-stripe picture, loads it through the saved material texture path, samples the texture into an RGBA8 target, and compares all 64 pixels with the expected channels. The tolerance is four byte levels per component. A missing feature yields `not-tested`. A readback or assertion error yields `failed` with a diagnostic and fails the run. The six fixtures use a single mip level and a linear data texture. They run after the scene screenshot and timed frames. The opt-in benchmarks omit these extra draws.
+
 ## 5. Gates still needed before M0.4 can close
 
 - [ ] Generate or curate an explicit per-node-family WebGL2 vs WebGPU **code/capability** matrix. Unsupported and fallback must be recorded separately.
@@ -74,5 +89,7 @@ New WebGPU `texture-graph` captures write `bc1Parity` under `texture-graph` in `
 - [ ] Cover scan/capture, layered painting and a multi-UDIM authoring workflow, not just applied snapshots.
 - [ ] Run and document actual hardware devices, not only SwiftShader, and store results alongside the historical scene and new M0.5 cook-benchmark reports.
 - [ ] Define an editor WebGPU feature flag only once editor-specific integration and interaction tests pass; preserve default WebGL2 compatibility.
+
+The ordinary WebGPU `texture-graph` capture runs a controlled device-loss fixture after the scene is unmounted. It draws red then green on a shared texture target pool, destroys that device, awaits its loss notification, and checks that the same green image can be drawn from scratch on a distinct replacement. A successful run records the sampled RGBA values and loss reason in `texture-graph.deviceLoss` in the WebGPU `numbers.json`. A mismatch fails the rendering job. This exercises explicit destruction and reacquisition. Physical driver resets, cancellation during a live graph cook and scene-wide isolation still require separate fixtures.
 
 **Completion rule:** A feature is only verified for the specific backend, fixture and adapter actually exercised. M0.4 stays open until those device-backed gates are met.
