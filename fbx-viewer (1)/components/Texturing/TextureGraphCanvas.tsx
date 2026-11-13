@@ -13,7 +13,7 @@ import { createNode, newNodeId } from '../../texturing/graph/document';
 import { mainInput, unknownNodeMessage } from '../../texturing/graph/evaluator';
 import { wireFits } from '../../texturing/graph/material';
 import { NAMED_RECEIVE_TYPE, NAMED_SEND_TYPE, linkName, namedLinks } from '../../texturing/graph/namedLinks';
-import { ALL_MESH_MAPS, ANY_MESH_MAP_LABELS, EXTRA_MESH_MAPS, INPUT_NODE_TYPE, ITERATE_NODE_TYPE, MATERIAL_INPUT_NODE_TYPE, MATERIAL_OUTPUT_NODE_TYPE, MESH_MAP_NODE_TYPE, OUTPUT_NODE_TYPE, REROUTE_NODE_TYPE, SUBGRAPH_NODE_TYPE } from '../../texturing/graph/nodes/io';
+import { ALL_MESH_MAPS, ANY_MESH_MAP_LABELS, CURVE_INPUT_NODE_TYPE, CURVE_OUTPUT_NODE_TYPE, EXTRA_MESH_MAPS, INPUT_NODE_TYPE, ITERATE_NODE_TYPE, MATERIAL_INPUT_NODE_TYPE, MATERIAL_OUTPUT_NODE_TYPE, MESH_MAP_NODE_TYPE, OUTPUT_NODE_TYPE, REROUTE_NODE_TYPE, SUBGRAPH_NODE_TYPE } from '../../texturing/graph/nodes/io';
 import { feedbackPairs } from '../../texturing/graph/iterate';
 import { PAINT_STACK_NODE_TYPE } from '../../texturing/paint/stackNode';
 import { NODE_CATEGORY_ORDER, TEXTURE_NODE_DEFINITIONS, placeholderDefinition, textureNodeDefinition, textureNodeDefinitionByType, type GraphResolver } from '../../texturing/graph/registry';
@@ -50,9 +50,9 @@ const match = (from: string, to: string): number => {
     return from === to || from === 'any' || to === 'any' || to === 'anyMaterial' ? 2 : 1;
 };
 const refusal = (from: string, to: string): string => (from === 'curve'
-    ? 'A curve wire goes only into a curve input: a Curve, a Bridge, Picture along a curve, Scatter along curves or a path tool. A Curve draws it as a picture.'
+    ? 'A curve wire goes only into a curve input: a Curve, Bridge, path tool or reusable graph with a Curve input. A Curve can also draw it as a picture.'
     : to === 'curve'
-        ? 'A curve input takes a curve wire: a Curve\'s path, Mask to paths\' paths or a path tool\'s.'
+        ? 'A curve input takes a curve wire: a Curve, Mask to paths, path tool or reusable graph can give it.'
         : to === 'value'
     ? 'A setting shown as a pin follows a value. A Value processor works one out of pictures, on the GPU.'
     : from === 'material'
@@ -203,7 +203,7 @@ const PICTURE_REQUESTS: readonly PictureRequest[] = NODE_ENTRIES.flatMap((entry)
         const variant = textureNodeDefinitionByType(type)?.variants?.find((candidate) => candidate.key === key);
         return variant ? [{ key: entry.id, type, params: variant.params }] : [];
     }
-    if (entry.id.includes(':') || [INPUT_NODE_TYPE, REROUTE_NODE_TYPE, NAMED_SEND_TYPE, NAMED_RECEIVE_TYPE, MATERIAL_INPUT_NODE_TYPE, MATERIAL_OUTPUT_NODE_TYPE, ITERATE_NODE_TYPE, VALUE_PROCESSOR_TYPE, 'bitmap', 'time'].includes(entry.id)) return [];
+    if (entry.id.includes(':') || [INPUT_NODE_TYPE, CURVE_INPUT_NODE_TYPE, CURVE_OUTPUT_NODE_TYPE, REROUTE_NODE_TYPE, NAMED_SEND_TYPE, NAMED_RECEIVE_TYPE, MATERIAL_INPUT_NODE_TYPE, MATERIAL_OUTPUT_NODE_TYPE, ITERATE_NODE_TYPE, VALUE_PROCESSOR_TYPE, 'bitmap', 'time'].includes(entry.id)) return [];
     return [{ key: entry.id, type: entry.id }];
 });
 
@@ -354,8 +354,12 @@ export const TextureGraphCanvas: React.FC<TextureGraphCanvasProps> = (props) => 
                 category: GRAPHS_CATEGORY,
                 description: 'This graph used as one node: its exposed parameters are its settings.',
                 keywords: ['graph', 'sub-graph', 'subgraph', 'group'],
-                inputs: (used?.nodes ?? []).filter((node) => node.type === INPUT_NODE_TYPE).map((node) => (node.params.kind === 'gray' ? 'gray' : 'color')),
-                outputs: (used?.nodes ?? []).filter((node) => node.type === OUTPUT_NODE_TYPE).map(() => 'any'),
+                inputs: (used?.nodes ?? [])
+                    .filter((node) => node.type === INPUT_NODE_TYPE || node.type === MATERIAL_INPUT_NODE_TYPE || node.type === CURVE_INPUT_NODE_TYPE)
+                    .map((node) => node.type === CURVE_INPUT_NODE_TYPE ? 'curve' : node.type === MATERIAL_INPUT_NODE_TYPE ? 'material' : node.params.kind === 'gray' ? 'gray' : 'color'),
+                outputs: (used?.nodes ?? [])
+                    .filter((node) => node.type === OUTPUT_NODE_TYPE || node.type === MATERIAL_OUTPUT_NODE_TYPE || node.type === CURVE_OUTPUT_NODE_TYPE)
+                    .map((node) => node.type === CURVE_OUTPUT_NODE_TYPE ? 'curve' : node.type === MATERIAL_OUTPUT_NODE_TYPE ? 'material' : 'any'),
             };
         }),
         // Each graph run pass after pass, where an Output of it feeds an Input of the same name.
@@ -370,8 +374,12 @@ export const TextureGraphCanvas: React.FC<TextureGraphCanvasProps> = (props) => 
                 category: GRAPHS_CATEGORY,
                 description: 'Runs this graph pass after pass, each pass taking the last one\'s results: an Output feeds the Input of the same name.',
                 keywords: ['iterate', 'loop', 'repeat', 'feedback', 'passes'],
-                inputs: (used?.nodes ?? []).filter((node) => node.type === INPUT_NODE_TYPE).map((node) => (node.params.kind === 'gray' ? 'gray' : 'color')),
-                outputs: (used?.nodes ?? []).filter((node) => node.type === OUTPUT_NODE_TYPE).map(() => 'any'),
+                inputs: (used?.nodes ?? [])
+                    .filter((node) => node.type === INPUT_NODE_TYPE || node.type === MATERIAL_INPUT_NODE_TYPE || node.type === CURVE_INPUT_NODE_TYPE)
+                    .map((node) => node.type === CURVE_INPUT_NODE_TYPE ? 'curve' : node.type === MATERIAL_INPUT_NODE_TYPE ? 'material' : node.params.kind === 'gray' ? 'gray' : 'color'),
+                outputs: (used?.nodes ?? [])
+                    .filter((node) => node.type === OUTPUT_NODE_TYPE || node.type === MATERIAL_OUTPUT_NODE_TYPE || node.type === CURVE_OUTPUT_NODE_TYPE)
+                    .map((node) => node.type === CURVE_OUTPUT_NODE_TYPE ? 'curve' : node.type === MATERIAL_OUTPUT_NODE_TYPE ? 'material' : 'any'),
             };
         }),
     ], [graphs, resolve]);
