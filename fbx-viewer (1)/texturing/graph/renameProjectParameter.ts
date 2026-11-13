@@ -23,7 +23,7 @@ export interface ProjectModelForRename {
 }
 export interface ProjectObjectForRename {
     id: string;
-    modelId: string;
+    modelId?: string;
     materialOverrides?: unknown;
     [key: string]: unknown;
 }
@@ -36,6 +36,7 @@ export interface ProjectMetadataForRename {
 export interface ProjectPrefabForRename {
     id: string;
     objects: readonly ProjectObjectForRename[];
+    [key: string]: unknown;
 }
 
 export interface TextureParameterRenameInput {
@@ -58,11 +59,13 @@ export interface RenameImpact {
     materials: string[];
     models: string[];
     objects: string[];
+    prefabs: string[];
     metadata: string[];
     nestedNodes: number;
     paintReferences: number;
     modelOverrides: number;
     objectOverrides: number;
+    prefabOverrides: number;
     sharedPresets: number;
 }
 
@@ -85,6 +88,7 @@ export const requiresProjectWideParameterRename = (impact: RenameImpact): boolea
     || impact.materials.some((id) => id !== impact.sourceMaterialId)
     || impact.models.length > 0
     || impact.objects.length > 0
+    || impact.prefabs.length > 0
     || impact.metadata.length > 0;
 
 const record = (value: unknown): Record<string, unknown> | null =>
@@ -250,8 +254,8 @@ export const planTextureParameterRename = (input: TextureParameterRenameInput): 
     };
     const nextMaterials = new Map<string, MaterialAsset>([[source.id, first]]);
     const impact: RenameImpact = {
-        sourceMaterialId, from, to, materials: [], models: [], objects: [], metadata: [],
-        nestedNodes: 0, paintReferences: 0, modelOverrides: 0, objectOverrides: 0, sharedPresets: 0,
+        sourceMaterialId, from, to, materials: [], models: [], objects: [], prefabs: [], metadata: [],
+        nestedNodes: 0, paintReferences: 0, modelOverrides: 0, objectOverrides: 0, prefabOverrides: 0, sharedPresets: 0,
     };
     const put = (asset: MaterialAsset): void => { nextMaterials.set(asset.id, asset); };
     for (const material of materials) {
@@ -276,20 +280,20 @@ export const planTextureParameterRename = (input: TextureParameterRenameInput): 
     }
     // Object/model parameter lists are shared by the shader and baked texture
     // graph. A same-named shader parameter would be ambiguous to rename.
-    const sharedShaderName = materialGraphParameters(source.graph).some((parameter) => parameter.name === from);
+    const sharedShaderParameter = materialGraphParameters(source.graph).find(parameter => parameter.name === from || parameter.name === to);
     const modelsById = new Map(models.map(model => [model.id, model]));
     for (const model of models) {
         const changed = renamedOverrideSettings(model.materialOverrides,
             (_name, entry) => entry.materialId === sourceMaterialId, from, to, `model ${model.id}`);
         if (!changed.count) continue;
-        if (sharedShaderName) throw new Error(`Cannot rename "${from}" in model overrides: a shader parameter in "${source.name}" has the same name.`);
+        if (sharedShaderParameter) throw new Error(`Cannot rename "${from}" in model overrides: "${sharedShaderParameter.name}" is also a shader parameter in "${source.name}".`);
         const next = { ...model, materialOverrides: changed.value };
         impact.models.push(model.id);
         impact.modelOverrides += changed.count;
         commit('models', model.id, model, next);
     }
     const objectOverrides = (object: ProjectObjectForRename, path: string) => {
-        const model = modelsById.get(object.modelId);
+        const model = object.modelId ? modelsById.get(object.modelId) : undefined;
         if (!model) {
             const overrides = record(object.materialOverrides);
             if (overrides && Object.values(overrides).some((entry) => {
@@ -299,26 +303,33 @@ export const planTextureParameterRename = (input: TextureParameterRenameInput): 
             return { value: object.materialOverrides, count: 0 };
         }
         const assigned = record(model.materialOverrides);
-        return renamedOverrideSettings(object.materialOverrides,
+        const changed = renamedOverrideSettings(object.materialOverrides,
             (name) => record(assigned?.[name])?.materialId === sourceMaterialId,
             from, to, path);
-    };
-    for (const prefab of input.prefabs) {
-        for (const member of prefab.objects) {
-            const path = `prefab "${prefab.id}" object "${member.id}"`;
-            if (objectOverrides(member, path).count) {
-                throw new Error(`Rename blocked: ${path} overrides "${from}". Renaming it requires updating the saved prefab.`);
-            }
+        if (changed.count && sharedShaderParameter) {
+            throw new Error(`Cannot rename "${from}" in ${path} overrides: "${sharedShaderParameter.name}" is also a shader parameter in "${source.name}".`);
         }
-    }
+        return changed;
+    };
     for (const object of objects) {
         const changed = objectOverrides(object, `object ${object.id}`);
         if (!changed.count) continue;
-        if (sharedShaderName) throw new Error(`Cannot rename "${from}" in object overrides: a shader parameter in "${source.name}" has the same name.`);
         const next = { ...object, materialOverrides: changed.value };
         impact.objects.push(object.id);
         impact.objectOverrides += changed.count;
         commit('objects', object.id, object, next);
+    }
+    for (const prefab of input.prefabs) {
+        let count = 0;
+        const members = prefab.objects.map(member => {
+            const changed = objectOverrides(member, `prefab "${prefab.id}" object "${member.id}"`);
+            count += changed.count;
+            return changed.count ? { ...member, materialOverrides: changed.value } : member;
+        });
+        if (!count) continue;
+        impact.prefabs.push(prefab.id);
+        impact.prefabOverrides += count;
+        commit('prefabs', prefab.id, prefab, { ...prefab, objects: members });
     }
     for (const doc of metadata) {
         const changed = renamedSharedPresets(doc, sourceMaterialId, from, to);

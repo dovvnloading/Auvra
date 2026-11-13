@@ -109,10 +109,10 @@ export const readTextureRenameInventory = (
 
     const savedMaterialDocs = records(domains.materials, 'materials');
     const models = records(domains.models, 'models');
-    const objects = modelObjects(records(domains.objects, 'objects'), 'Object');
+    const objects = readObjects(domains.objects, 'objects').filter(object => object.modelId);
     const prefabs = records(domains.prefabs, 'prefabs').map(prefab => ({
-        id: prefab.id,
-        objects: modelObjects(records(prefab.objects, `objects in prefab "${prefab.id}"`), `Prefab "${prefab.id}" object`),
+        ...prefab,
+        objects: readObjects(prefab.objects, `objects in prefab "${prefab.id}"`),
     }));
     const metadata = records(domains.metadata, 'metadata');
 
@@ -149,16 +149,17 @@ export const readTextureRenameInventory = (
 };
 
 /** Placed objects and prefab members use the same model-slot override schema. */
-const modelObjects = (documents: Array<Record<string, unknown> & { id: string }>, label: string): ProjectObjectForRename[] => {
-    const objects: ProjectObjectForRename[] = [];
+const readObjects = (raw: unknown, label: string): ProjectObjectForRename[] => {
+    const documents = records(raw, label);
     for (const object of documents) {
-        const owner = `${label} "${object.id}"`;
+        const owner = `Object "${object.id}" in ${label}`;
         validateOverrides(object.materialOverrides, owner);
-        if (typeof object.modelId === 'string' && object.modelId) {
-            objects.push({ ...object, modelId: object.modelId });
-        } else if (Object.keys(record(object.materialOverrides) ?? {}).length) {
+        if (object.modelId !== undefined && typeof object.modelId !== 'string') {
+            throw new Error(`${owner} has an invalid model identity. Nothing was renamed.`);
+        }
+        if (!object.modelId && Object.keys(record(object.materialOverrides) ?? {}).length) {
             throw new Error(`${owner} has material overrides but no model identity. Nothing was renamed.`);
         }
     }
-    return objects;
+    return documents;
 };
