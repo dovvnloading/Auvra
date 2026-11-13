@@ -90,6 +90,11 @@ const main = async () => {
     const failures = [];
     const numbers = {};
     const rows = [];
+    let paintPreview;
+    if (!onWebGpu && !textureBench && names.includes('texture-graph')) {
+      // Exercise the actual viewport target separately so its allocations do not enter scene timings.
+      paintPreview = await run('window.auvraVisual.verifyPaintViewTarget()');
+    }
     // What the page itself warned of since `from`: the renderer reports its own trouble there.
     const pageSaid = (from) => saidSince(client, from);
     const said = (lines) => (lines.length ? `\nThe page said:\n  ${lines.join('\n  ')}` : '');
@@ -98,6 +103,7 @@ const main = async () => {
       const { png, numbers: cost } = await run(`window.auvraVisual.capture(${JSON.stringify(name)})`).catch((error) => {
         throw new Error(`${name}: ${error.message}${said(pageSaid(sceneStart))}`);
       });
+      if (name === 'texture-graph' && paintPreview) cost.paintPreview = paintPreview;
       numbers[name] = cost;
       if (onWebGpu && name === 'texture-graph') {
         if (!cost.bc1Parity) failures.push(`${name}: no BC1 parity result was returned`);
