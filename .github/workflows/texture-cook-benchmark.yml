@@ -1,0 +1,66 @@
+name: Texture cooking benchmark (manual)
+
+# Optional measurements rather than a required CI check. The normal visual
+# comparison remains part of Verify; this workflow intentionally changes the
+# proof graph's resolution and therefore does not update reference screenshots.
+on:
+  workflow_dispatch:
+    inputs:
+      renderer:
+        description: "Texture cooking backend (WebGPU software tests run on Windows)"
+        required: true
+        type: choice
+        default: webgl2
+        options:
+          - webgl2
+          - webgpu
+      size:
+        description: "Log2 texture size: 9=512, 11=2048, 12=4096"
+        required: true
+        type: choice
+        default: "9"
+        options:
+          - "9"
+          - "11"
+          - "12"
+
+permissions:
+  contents: read
+
+jobs:
+  texture-cook:
+    name: Texture cook ${{ inputs.renderer }} 2^${{ inputs.size }}
+    # Headless Linux can lose the software Vulkan WebGPU device before a frame.
+    # Mirror Verify's known-good Windows WebGPU and Linux WebGL2 runners.
+    runs-on: ${{ inputs.renderer == 'webgpu' && 'windows-latest' || 'ubuntu-latest' }}
+    timeout-minutes: 35
+    defaults:
+      run:
+        working-directory: fbx-viewer (1)
+    steps:
+      - name: Check out the selected revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: "24.x"
+          cache: npm
+          cache-dependency-path: fbx-viewer (1)/package-lock.json
+
+      - name: Install locked editor dependencies
+        run: npm ci
+
+      - name: Measure texture-graph cooking on the requested software backend
+        run: npm run texture:benchmark -- --texture-size ${{ inputs.size }} --renderer ${{ inputs.renderer }}
+
+      - name: Keep benchmark metrics and output picture
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: texture-cook-${{ inputs.renderer }}-2pow${{ inputs.size }}
+          path: |
+            fbx-viewer (1)/tests/visual/output/**/numbers.json
+            fbx-viewer (1)/tests/visual/output/**/texture-graph.actual.png
+          if-no-files-found: warn
+          retention-days: 30

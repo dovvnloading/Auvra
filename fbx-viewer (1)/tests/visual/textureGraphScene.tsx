@@ -24,27 +24,42 @@ import { realNow } from './instrument';
  */
 
 /** Seen by the scene's settle step: the cooked pictures are on the plane, and why the renderer's own GPU could not cook (if it could not). */
-export interface TextureGraphCookMetric {
-    /** Actual browser wall-clock time through GPU graph cooking and PNG encoding. */
+export interface TextureCookBenchmark {
+    resolution: number;
+    backend: 'webgl2' | 'webgpu' | 'webgl2-fallback';
+    firstNodes: number;
+    coldEvalMs: number;
+    coldSyncMs: number;
+    encodeMs: number;
+    cachedNodes: number;
+    cachedEvalMs: number;
+    editNodes: number;
+    editEvalMs: number;
+    editSyncMs: number;
+}
+
+/** Total time of the ordinary 512px graph bake, including PNG encoding. */
+export interface TextureGraphCookMeasurement {
     milliseconds: number;
-    /** Backend which actually cooked (not necessarily the one requested). */
+    pixels: number;
     backend: 'webgl2' | 'webgpu';
     fallback: boolean;
-    pixels: number;
 }
-/** The scene's measured graph cook, or null before the cook finishes. */
+
+/** Optional measurements, only when ?textureBench=1; default screenshots do not run extra cooks. */
 export const textureGraphScene = {
     ready: false,
     problem: null as string | null,
-    cook: null as TextureGraphCookMetric | null,
+    benchmark: null as TextureCookBenchmark | null,
+    cook: null as TextureGraphCookMeasurement | null,
 };
 
 const node = (id: string, type: string, params: Record<string, unknown> = {}) => ({ id, type, x: 0, y: 0, params });
 
 /** Bricks, noise multiplied over them, their height as a normal, and a colour from a function graph. */
-const proofGraph = () => normalizeTextureGraph({
+const proofGraph = (logSize = 9) => normalizeTextureGraph({
     version: 1,
-    size: { w: 9, h: 9 },
+    size: { w: logSize, h: logSize },
     seed: 7,
     parameters: [],
     nodes: [
@@ -182,17 +197,68 @@ const checkCompressedParity = async (webgpu: TexturingGpu): Promise<void> => {
 };
 
 /** The graph's base colour and normal on `gpu`, as PNG pictures the way a game cooks them. */
-const cook = async (gpu: TexturingGpu): Promise<{ colour: Blob; normal: Blob }> => {
+const cook = async (gpu: TexturingGpu, benchmark = false, logSize = 9): Promise<{
+    colour: Blob;
+    normal: Blob;
+    timings?: Omit<TextureCookBenchmark, 'backend'>;
+}> => {
     const evaluator = new TextureGraphEvaluator(gpu, () => undefined, () => null);
+    const graph = proofGraph(logSize);
+    const resolution = 2 ** logSize;
+    const targets = ['colour', 'normal'];
     try {
-        const states = await evaluator.evaluate({ graph: proofGraph(), targets: ['colour', 'normal'] });
+        let firstNodes = 0;
+        const coldStart = realNow();
+        const states = await evaluator.evaluate({ graph, targets, onNode: () => { firstNodes++; } });
+        const coldEvalMs = realNow() - coldStart;
         // Any node the GPU could not draw counts, not only the two shown (a node upstream would leave a stand-in).
         for (const [id, state] of states) if (state.error) throw new Error(`${id}: ${state.error}`);
         const colour = states.get('colour');
         const normal = states.get('normal');
         if (!colour?.outputs.out || !normal?.outputs.out) throw new Error(colour?.error ?? normal?.error ?? 'The graph drew nothing.');
-        const pictures = await encodeChannels(gpu, { baseColor: colour.outputs.out, normal: normal.outputs.out }, 512, 512, 'separate', true);
-        return { colour: pictures.find((picture) => picture.role === 'baseColor')!.blob, normal: pictures.find((picture) => picture.role === 'normal')!.blob };
+        let coldSyncMs = 0;
+        if (benchmark) {
+            const syncStart = realNow();
+            if (!await gpu.readPixelLater(colour.outputs.out, 0, 0)) throw new Error('Cannot synchronize the texture-graph benchmark with its GPU.');
+            coldSyncMs = realNow() - syncStart;
+        }
+        const encodeStart = realNow();
+        const pictures = await encodeChannels(gpu, { baseColor: colour.outputs.out, normal: normal.outputs.out },
+            resolution, resolution, 'separate', true);
+        const encodeMs = realNow() - encodeStart;
+        const result = {
+            colour: pictures.find((picture) => picture.role === 'baseColor')!.blob,
+            normal: pictures.find((picture) => picture.role === 'normal')!.blob,
+        };
+        if (!benchmark) return result;
+        // The exact same request must be a cache hit. An upstream parameter edit
+        // must only recompute descendants, not every unrelated node. Count actual
+        // onNode completions instead of pretending repeated timing proves cache use.
+        let cachedNodes = 0;
+        const cachedStart = realNow();
+        const cached = await evaluator.evaluate({ graph, targets, onNode: () => { cachedNodes++; } });
+        const cachedEvalMs = realNow() - cachedStart;
+        for (const [id, state] of cached) if (state.error) throw new Error(`Cached ${id}: ${state.error}`);
+        const editedGraph = normalizeTextureGraph({
+            ...graph,
+            nodes: graph.nodes.map((node) => node.id === 'noise'
+                ? { ...node, params: { ...node.params, scale: 7 } } : node),
+        });
+        let editNodes = 0;
+        const editStart = realNow();
+        const edited = await evaluator.evaluate({ graph: editedGraph, targets, onNode: () => { editNodes++; } });
+        const editEvalMs = realNow() - editStart;
+        for (const [id, state] of edited) if (state.error) throw new Error(`Incremental ${id}: ${state.error}`);
+        const editedImage = edited.get('colour')?.outputs.out;
+        if (!editedImage) throw new Error('Incremental graph did not produce the base colour.');
+        const editSyncStart = realNow();
+        if (!await gpu.readPixelLater(editedImage, 0, 0)) throw new Error('Cannot synchronize incremental texture cooking.');
+        const editSyncMs = realNow() - editSyncStart;
+        return {
+            ...result,
+            timings: { resolution, firstNodes, coldEvalMs, coldSyncMs, encodeMs,
+                cachedNodes, cachedEvalMs, editNodes, editEvalMs, editSyncMs },
+        };
     } finally {
         evaluator.dispose();
     }
@@ -285,11 +351,16 @@ export const TextureGraphScene: React.FC = () => {
         let gone = false;
         textureGraphScene.ready = false;
         textureGraphScene.problem = null;
+        textureGraphScene.benchmark = null;
         textureGraphScene.cook = null;
+        const options = new URLSearchParams(window.location.search);
+        const benchmark = options.has('textureBench');
+        const requestedSize = Number(options.get('textureSize') ?? 9);
+        const logSize = benchmark && [9, 11, 12].includes(requestedSize) ? requestedSize : 9;
         const gpu: TexturingGpu = isGpuRenderer(gl) ? webgpuTexturing(gl.core.device as unknown as WgpuDevice) : textureGpu();
         void (async () => {
             let own = true;
-            let pictures: { colour: Blob; normal: Blob };
+            let pictures: Awaited<ReturnType<typeof cook>>;
             try {
                 if (isGpuRenderer(gl)) {
                     await checkScatterParity(gpu);
@@ -297,25 +368,30 @@ export const TextureGraphScene: React.FC = () => {
                     await checkPaintSnapshotParity(gpu);
                 }
                 const cookStarted = realNow();
-                pictures = await cook(gpu);
-                textureGraphScene.cook = {
+                pictures = await cook(gpu, benchmark, logSize);
+                // Only time the normal visual bake; the opt-in benchmark has
+                // separate cold/cache/incremental durations and should not
+                // aggregate those phases into a misleading single number.
+                if (!benchmark) textureGraphScene.cook = {
                     milliseconds: realNow() - cookStarted,
                     backend: isGpuRenderer(gl) ? 'webgpu' : 'webgl2',
                     fallback: false,
                     pixels: 512 * 512,
                 };
+                if (pictures.timings) textureGraphScene.benchmark = { ...pictures.timings, backend: isGpuRenderer(gl) ? 'webgpu' : 'webgl2' };
             } catch (error) {
                 // The renderer's own GPU could not: keep why (textureGraphScene.problem), and show WebGL2's cook with the ball red.
                 own = false;
                 textureGraphScene.problem = error instanceof Error ? error.message : String(error);
                 const fallbackStarted = realNow();
-                pictures = await cook(textureGpu());
-                textureGraphScene.cook = {
+                pictures = await cook(textureGpu(), benchmark, logSize);
+                if (!benchmark) textureGraphScene.cook = {
                     milliseconds: realNow() - fallbackStarted,
                     backend: 'webgl2',
                     fallback: isGpuRenderer(gl),
                     pixels: 512 * 512,
                 };
+                if (pictures.timings) textureGraphScene.benchmark = { ...pictures.timings, backend: 'webgl2-fallback' };
             }
             const [colour, normal] = await Promise.all([load(pictures.colour, true), load(pictures.normal, false)]);
             if (gone) return;

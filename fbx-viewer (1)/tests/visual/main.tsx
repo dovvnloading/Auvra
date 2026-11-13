@@ -127,6 +127,9 @@ const capture = async (name: string) => {
   const { geometries, textures } = state.gl.info.memory;
   const programs = state.gl.info.programs?.length ?? 0;
   const bytes = onWebGpu ? webGpuBytes() : gpuBytes(state.gl.getContext() as WebGL2RenderingContext);
+  const cookBenchmark = name === 'texture-graph' ? textureGraphScene.benchmark : null;
+  const standardCook = name === 'texture-graph' ? textureGraphScene.cook : null;
+  const cookProblem = name === 'texture-graph' ? textureGraphScene.problem : null;
   if (onWebGpu) await settled();
   root.unmount();
   // Lets the canvas and what it holds go before the next scene.
@@ -139,15 +142,10 @@ const capture = async (name: string) => {
       await new Promise((resolve) => setTimeout(resolve, 20));
     }
   }
-  return {
-    png,
-    numbers: {
-      loadMs, frameMs, calls, triangles, geometries, textures, programs, gpuBytes: bytes,
-      // A measured wall-clock GPU texture-graph bake, not virtual scene time
-      // or a renderer frame. Saved in the existing numbers.json artifact.
-      ...(name === 'texture-graph' && textureGraphScene.cook ? { graphCook: textureGraphScene.cook } : {}),
-    },
-  };
+  return { png, numbers: { loadMs, frameMs, calls, triangles, geometries, textures, programs, gpuBytes: bytes,
+    ...(cookBenchmark ? { textureCook: cookBenchmark, textureCookProblem: cookProblem } : {}),
+    ...(standardCook ? { graphCook: standardCook } : {}),
+  } };
 };
 
 const toPixels = async (url: string): Promise<ImageData> => {

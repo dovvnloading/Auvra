@@ -109,6 +109,12 @@ These statuses are **triage, not closure**:
 
 These rows describe **potential capabilities**, not passing end-to-end tests. Fill in driver, browser, adapter, supported feature flags, and actual failures before M0.4 is complete.
 
+### M0.4 — Device capability snapshot (implementation follow-up)
+
+`texturing/gpu/cookingDevice.ts::textureCookingCapabilities()` supplies a serializable diagnostic snapshot with the selected runtime cooking backend, device-reported maximum texture dimension, BC/ETC2/ASTC and float32-filterable flags, and current per-material fallback reasons. On WebGL2 or without a valid WebGPU device, feature support is **unknown** (`null`), not wrongly reported as unsupported. Stored fallback reasons are cleared when the runtime cooking device changes, including device loss and WebGL2 fallback. Late asynchronous cooks from a previously active device are fenced: they cannot publish a new fallback reason or clear a valid reason belonging to the replacement device.
+
+This is **a hardware feature-reporting primitive, not a verified node/backend matrix**. Real image comparisons, format uploads, cancellation, device loss and per-node fallback fixtures remain required for M0.4.
+
 ## 5. Proposed M0.3 channel-descriptor decisions
 
 The paint document currently declares seven channels at `texturing/paint/paintTypes.ts::PAINT_CHANNELS`, while `runtime/materials/materialGraph.ts` exposes additional physical-surface features. Before adding channels, specify one metadata-driven contract that can describe:
