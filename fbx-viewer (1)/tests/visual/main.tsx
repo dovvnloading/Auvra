@@ -4,6 +4,7 @@ import { createRoot } from 'react-dom/client';
 import { advance, useThree, type RootState } from '@react-three/fiber';
 import { gpuBytes, realNow, resetClock, seedChance, stepClock, virtualSeconds, webGpuBytes, webGpuWaiting } from './instrument';
 import { AuvraCanvas, readRequestedRendererBackend } from '../../renderer/AuvraCanvas';
+import { clearcoatMapPixels } from './clearcoatMapPixels';
 import { deviceLossPixels } from './deviceLossPixels';
 import { acceptSoftwareAdapter, acquireGpuCore, releaseIdleGpuCore } from '../../renderer/gpu/device';
 import { isGpuRenderer } from '../../renderer/gpu/frame';
@@ -151,6 +152,10 @@ const capture = async (name: string) => {
   const { geometries, textures } = state.gl.info.memory;
   const programs = state.gl.info.programs?.length ?? 0;
   const bytes = onWebGpu ? webGpuBytes() : gpuBytes(state.gl.getContext() as WebGL2RenderingContext);
+  const clearcoatMap = name === 'physical-materials' ? await clearcoatMapPixels(state, async () => {
+    await nextTask();
+    if (onWebGpu) await settled();
+  }) : null;
   const cookBenchmark = name === 'texture-graph' ? textureGraphScene.benchmark : null;
   const standardCook = name === 'texture-graph' ? textureGraphScene.cook : null;
   const cookProblem = name === 'texture-graph' ? textureGraphScene.problem : null;
@@ -175,6 +180,7 @@ const capture = async (name: string) => {
     ...(cookBenchmark ? { textureCook: cookBenchmark, textureCookProblem: cookProblem } : {}),
     ...(standardCook ? { graphCook: standardCook, graphCookProblem: cookProblem } : {}),
     ...(bc1Parity ? { bc1Parity } : {}),
+    ...(clearcoatMap ? { clearcoatMap } : {}),
     ...(compression ? { materialCompression: compression } : {}),
   } };
 };
