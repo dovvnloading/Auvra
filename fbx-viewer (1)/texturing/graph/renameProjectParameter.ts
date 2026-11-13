@@ -75,7 +75,7 @@ const owns = (r: Record<string, unknown>, key: string): boolean =>
     Object.prototype.hasOwnProperty.call(r, key);
 
 const collision = (path: string, key: string): never => {
-    throw new Error(\`Cannot rename graph parameter: "\${key}" already exists in \${path}. No project documents were changed.\`);
+    throw new Error(`Cannot rename graph parameter: "${key}" already exists in ${path}. No project documents were changed.`);
 };
 
 /** One exact key only; substring matches and local parameter names must not be edited. */
@@ -99,9 +99,9 @@ const renamedGraphUser = (
         const node = record(candidate);
         const params = record(node?.params);
         if (!node || !params || !GRAPH_USING_TYPES.has(String(node.type)) || params.graph !== sourceId || !owns(params, from)) return candidate;
-        if (graph.version !== 1) throw new Error(\`Cannot edit a graph in "\${material.name}": unsupported graph version.\`);
+        if (graph.version !== 1) throw new Error(`Cannot edit a graph in "${material.name}": unsupported graph version.`);
         const next = { ...params };
-        renameValueKey(next, from, to, \`graph node \${String(node.id)} in "\${material.name}"\`);
+        renameValueKey(next, from, to, `graph node ${String(node.id)} in "${material.name}"`);
         count++;
         return { ...node, params: next };
     });
@@ -122,7 +122,7 @@ const renamedPaintUsers = (
     const copy = structuredClone(paint);
     let count = 0;
     const visit = (layers: unknown[], depth: number): void => {
-        if (depth > 16) throw new Error(\`Paint layers in "\${material.name}" are nested too deeply to rename safely.\`);
+        if (depth > 16) throw new Error(`Paint layers in "${material.name}" are nested too deeply to rename safely.`);
         for (const candidate of layers) {
             const layer = record(candidate);
             if (!layer) continue;
@@ -130,11 +130,11 @@ const renamedPaintUsers = (
             if (fill) for (const [key, candidateFill] of Object.entries(fill)) {
                 const entry = record(candidateFill);
                 const values = record(entry?.values);
-                if (entry?.kind === 'graph' && entry.graphId === sourceId && values && renameValueKey(values, from, to, \`paint fill \${key} in "\${material.name}"\`)) count++;
+                if (entry?.kind === 'graph' && entry.graphId === sourceId && values && renameValueKey(values, from, to, `paint fill ${key} in "${material.name}"`)) count++;
             }
             if (Array.isArray(layer.mask)) for (const candidateMask of layer.mask) {
                 const mask = record(candidateMask), values = record(mask?.values);
-                if (mask?.graphId === sourceId && values && renameValueKey(values, from, to, \`paint mask in "\${material.name}"\`)) count++;
+                if (mask?.graphId === sourceId && values && renameValueKey(values, from, to, `paint mask in "${material.name}"`)) count++;
             }
             if (Array.isArray(layer.layers)) visit(layer.layers, depth + 1);
         }
@@ -142,7 +142,7 @@ const renamedPaintUsers = (
     visit(copy.layers as unknown[], 0);
     if (!count) return null;
     if (paint.version !== 1 && paint.version !== undefined) {
-        throw new Error(\`Cannot rename a reference inside "\${material.name}": unsupported paint document version.\`);
+        throw new Error(`Cannot rename a reference inside "${material.name}": unsupported paint document version.`);
     }
     return { asset: { ...material, paint: copy }, count };
 };
@@ -161,7 +161,7 @@ const renamedOverrideSettings = (
         if (!entry || !relevant(name, entry) || !Array.isArray(entry.parameters)) continue;
         const fields = entry.parameters.map((item) => record(item));
         if (!fields.some((item) => item?.name === from)) continue;
-        if (fields.some((item) => item?.name === to)) collision(\`\${path} material "\${name}"\`, to);
+        if (fields.some((item) => item?.name === to)) collision(`${path} material "${name}"`, to);
         count += fields.filter((item) => item?.name === from).length;
         next[name] = {
             ...entry,
@@ -208,7 +208,7 @@ export const planTextureParameterRename = (input: TextureParameterRenameInput): 
     const rawGraph = record(raw?.graph);
     if (!rawGraph || rawGraph.version !== 1) throw new Error('The source texture graph has an unsupported version.');
     const stored = readStoredGraph(source.textureGraph);
-    if (!stored.graph.parameters.some((parameter) => parameter.name === from)) throw new Error(\`No parameter named "\${from}" exists in this graph.\`);
+    if (!stored.graph.parameters.some((parameter) => parameter.name === from)) throw new Error(`No parameter named "${from}" exists in this graph.`);
     const problem = formulaNameProblem(to, stored.graph.parameters, from);
     if (problem) throw new Error(problem);
     const renamed = renameParameter(stored.graph, stored.values, from, to);
@@ -245,7 +245,7 @@ export const planTextureParameterRename = (input: TextureParameterRenameInput): 
     const nextModels = new Map<string, ProjectModelForRename>();
     for (const model of models) {
         const changed = renamedOverrideSettings(model.materialOverrides,
-            (_name, entry) => entry.materialId === sourceMaterialId, from, to, \`model \${model.id}\`);
+            (_name, entry) => entry.materialId === sourceMaterialId, from, to, `model ${model.id}`);
         if (!changed.count) continue;
         const next = { ...model, materialOverrides: changed.value };
         nextModels.set(model.id, next);
@@ -258,7 +258,7 @@ export const planTextureParameterRename = (input: TextureParameterRenameInput): 
         const assigned = record(model?.materialOverrides);
         const changed = renamedOverrideSettings(object.materialOverrides,
             (name) => record(assigned?.[name])?.materialId === sourceMaterialId,
-            from, to, \`object \${object.id}\`);
+            from, to, `object ${object.id}`);
         if (!changed.count) continue;
         const next = { ...object, materialOverrides: changed.value };
         impact.objects.push(object.id);
