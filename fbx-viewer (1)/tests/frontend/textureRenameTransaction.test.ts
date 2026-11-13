@@ -43,9 +43,9 @@ const makeHost = () => {
 describe('M0 project-wide rename commit coordinator', () => {
     it('commits dependent documents in one host transaction, then publishes, with one inverse batch', async () => {
         const { current, calls, host } = makeHost();
-        const published: readonly ProjectChange[][] = [];
+        const published: ProjectChange[][] = [];
         const receipt = await commitTextureParameterRename(plan(), host, { projectId: 'project-a', revision: 12 },
-            async (changes) => { (published as ProjectChange[][]).push([...changes]); });
+            async (changes) => { published.push([...changes]); });
         expect(calls).toEqual([after]);
         expect(published).toEqual([after]);
         expect(receipt).toMatchObject({
@@ -54,7 +54,7 @@ describe('M0 project-wide rename commit coordinator', () => {
         expect(current.revision).toBe(13);
 
         const undoneRevision = await undoTextureParameterRename(receipt, host,
-            async (changes) => { (published as ProjectChange[][]).push([...changes]); });
+            async (changes) => { published.push([...changes]); });
         expect(undoneRevision).toBe(14);
         expect(calls).toEqual([after, before]);
         expect(published).toEqual([after, before]);
