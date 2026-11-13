@@ -4,6 +4,8 @@ import { ArrowLeftIcon, CheckCircleIcon, ChevronRightIcon, DiceIcon, ExternalLin
 import { useAssets } from '../../context/AssetContext';
 import { useScene } from '../../context/SceneContext';
 import { frontendDiagnostics } from '../../diagnostics/runtime';
+import { projectService } from '../../utils/projectService';
+import { planTextureParameterRename, requiresProjectWideParameterRename, type ProjectModelForRename, type ProjectObjectForRename, type ProjectMetadataForRename } from '../../texturing/graph/renameProjectParameter';
 import { materialLibrary, type MaterialAsset } from '../../runtime/materials/materialLibrary';
 import { AbortedError, unknownNodeMessage, type ExternalImage, type TextureGraphEvaluator } from '../../texturing/graph/evaluator';
 import { MAX_SIZE_LOG2, MIN_SIZE_LOG2, coerceParameter, formulaScope, mixSeeds, parameterValues, readTextureGraph, resolveNodeParams, subgraphRunSeed, unknownNodeTypes } from '../../texturing/graph/document';
@@ -301,6 +303,7 @@ const Workspace: React.FC<{
     // What could not be opened, read once as the graph opens: the first change saves it without it.
     const [problems, setProblems] = useState(() => readTextureGraph((asset.textureGraph as { graph?: unknown } | undefined)?.graph ?? null).problems);
     const dragBase = useRef<GraphSnapshot | null>(null);
+    const renamingParameter = useRef(false);
     const [, setHistoryVersion] = useState(0);
     // Kept outside this screen, so it survives switching material and leaving the tab.
     const history = useMemo(() => materialHistory<GraphSnapshot>(asset.id), [asset.id]);
@@ -1063,9 +1066,49 @@ const Workspace: React.FC<{
                             update(groups.length ? { ...rest, parameters, groups } : { ...rest, parameters }, true);
                         }}
                         onRename={(from, to) => {
-                            // The graph and its stored values change together, as one undo step.
-                            const renamed = renameParameter(graph, stored.values, from, to);
-                            change({ graph: renamed.graph, values: renamed.values });
+                            if (renamingParameter.current) return;
+                            renamingParameter.current = true;
+                            setMessage({ text: 'Checking this parameter’s references across the project…', tone: 'info' });
+                            void (async () => {
+                                const status = projectService.getStatus();
+                                if (!status.projectId || status.readOnly) throw new Error('Open a writable project to rename a public graph parameter safely.');
+                                const before = currentStored();
+                                // Graph-local undo cannot restore dependent materials/models/objects.
+                                // Check the COMPLETE host snapshot, not only loaded scene objects.
+                                const snapshot = await projectService.getSnapshotAll();
+                                if (!snapshot?.domains) throw new Error('The project reference inventory could not be loaded.');
+                                const documents = (domain: string): Record<string, unknown>[] => {
+                                    const value = snapshot.domains?.[domain];
+                                    const list = Array.isArray(value) ? value : value && typeof value === 'object'
+                                        ? (value as { documents?: unknown[] }).documents ?? [] : [];
+                                    return list.filter((candidate): candidate is Record<string, unknown> =>
+                                        Boolean(candidate && typeof candidate === 'object' && !Array.isArray(candidate) && typeof (candidate as { id?: unknown }).id === 'string'));
+                                };
+                                const models = documents('models') as ProjectModelForRename[];
+                                const objects = documents('objects').filter((entry) => typeof entry.modelId === 'string') as ProjectObjectForRename[];
+                                const metadata = documents('metadata') as ProjectMetadataForRename[];
+                                const plan = planTextureParameterRename({
+                                    sourceMaterialId: asset.id, from, to,
+                                    materials: materialLibrary.list(), models, objects, metadata,
+                                });
+                                const sharedInMemory = sharedPresets.of(asset.id).some((preset) => Object.hasOwn(preset.values, from));
+                                if (requiresProjectWideParameterRename(plan.impact) || sharedInMemory) {
+                                    const otherMaterials = plan.impact.materials.filter((id) => id !== asset.id).length;
+                                    setMessage({ tone: 'error', text: `This parameter is used by ${otherMaterials} other material(s), ${plan.impact.models.length} model(s), ${plan.impact.objects.length} placed object(s), and ${plan.impact.metadata.length || Number(sharedInMemory)} project-preset document(s). Renaming it locally would lose those settings, so the edit was blocked until project-wide rename and undo are available.` });
+                                    return;
+                                }
+                                const currentStatus = projectService.getStatus();
+                                if (currentStatus.projectId !== status.projectId || currentStatus.revision !== status.revision
+                                    || JSON.stringify(currentStored().graph) !== JSON.stringify(before.graph)) {
+                                    throw new Error('The project changed while references were being checked. Nothing was renamed; try again.');
+                                }
+                                // No external references: the existing graph-local history is valid.
+                                const renamed = renameParameter(before.graph, before.values, from, to);
+                                change({ graph: renamed.graph, values: renamed.values });
+                                setMessage({ text: `Parameter "${from}" renamed to "${to}" inside this graph.`, tone: 'info' });
+                            })().catch((error: unknown) => {
+                                setMessage({ tone: 'error', text: error instanceof Error ? error.message : 'Parameter rename could not be verified; no changes were made.' });
+                            }).finally(() => { renamingParameter.current = false; });
                         }}
                         onRemove={(index) => {
                             const parameter = graph.parameters[index];
