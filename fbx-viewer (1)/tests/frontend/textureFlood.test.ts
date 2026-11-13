@@ -137,6 +137,30 @@ describe('flood fill boxes', () => {
         expect(() => exactIslandSpan([1], 1, 0, true)).toThrow(/positive integer/);
     });
 
+    it('agrees with exhaustive seam search across seeded high-occupancy masks', () => {
+        let seed = 99161;
+        const next = () => {
+            seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+            return seed / 0x100000000;
+        };
+        for (const size of [7, 8, 13, 17, 23, 32, 47]) {
+            for (let sample = 0; sample < 18; sample++) {
+                const occupancy = sample % 4 === 0 ? 0.92 : sample % 4 === 1 ? 0.75 : 0.45;
+                const places = Array.from({ length: size }, (_, i) => i).filter(() => next() < occupancy);
+                if (!places.length) continue;
+                const root = places[Math.floor(next() * places.length)];
+                const exact = exactIslandSpan(places, root, size, true);
+                const exhaustive = Math.min(...Array.from({ length: size }, (_, seam) => {
+                    const offsets = places.map((pixel) => ((pixel - seam) % size + size) % size);
+                    return Math.max(...offsets) - Math.min(...offsets) + 1;
+                }));
+                expect(exact.size).toBe(exhaustive);
+                expect(exact.low).toBeLessThanOrEqual(0);
+                expect(exact.low + exact.size).toBeGreaterThan(0);
+            }
+        }
+    });
+
     it('packs a box\'s size into one float exactly, to a 4095th of the image', () => {
         const packed = packBoxSize(128, 64, 1024, 1024);
         expect(packed).toBeLessThan(2 ** 24);
