@@ -34,6 +34,7 @@ export async function sourceEditPixels(gpu: TexturingGpu) {
     const liveBefore = gpu.memory.live;
     const evaluator = new TextureGraphEvaluator(gpu, () => undefined, id => id === sourceId ? texture : null);
     let retained: GpuImage | undefined;
+    let result;
     try {
         const initial = await evaluator.evaluate({ graph, targets });
         const output = initial.get('result')?.outputs.out;
@@ -64,11 +65,12 @@ export async function sourceEditPixels(gpu: TexturingGpu) {
         const afterRetry = await assertImage(gpu, recovered.get('result')?.outputs.out, green);
         await assertImage(gpu, retained, red);
         if (!evaluator.upToDate({ graph, targets })) throw new Error('Recovered Bitmap cook missed its cache');
-        return { status: 'verified', first, afterCancel, afterRetry, interrupted, retried };
+        result = { status: 'verified', first, afterCancel, afterRetry, interrupted, retried };
     } finally {
         gpu.release(retained);
         evaluator.dispose();
         texture.dispose();
-        if (gpu.memory.live !== liveBefore) throw new Error('Cancelled Bitmap fixture leaked a live texture target');
     }
+    if (gpu.memory.live !== liveBefore) throw new Error('Cancelled Bitmap fixture leaked a live texture target');
+    return result;
 }
