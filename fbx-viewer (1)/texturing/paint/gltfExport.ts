@@ -381,50 +381,56 @@ export const atlasGeometryUvCorners = (
     const sourceUvs = geometry.getAttribute('uv');
     if (!sourceUvs) return geometry;
     const atlas = geometry.index ? geometry.toNonIndexed() : geometry.clone();
-    const uvs = atlas.getAttribute('uv');
-    const count = Math.floor(uvs.count / 3);
-    const selected = new Uint8Array(count);
-    if (atlas.groups.length) {
-        for (const group of atlas.groups) {
-            if (!isPaintedMaterial(group.materialIndex)) continue;
-            const end = Math.min(uvs.count, group.start + group.count);
-            for (let corner = group.start; corner + 2 < end; corner += 3) selected[Math.floor(corner / 3)] = 1;
-        }
-    } else if (isPaintedMaterial(0)) selected.fill(1);
-    const stride = layout.cell + 2 * layout.gutter;
-    const width = layout.columns * stride;
-    const height = layout.rows * stride;
-    const E = 1e-5;
-    for (let triangle = 0; triangle < count; triangle++) {
-        if (!selected[triangle]) continue;
-        const at = triangle * 3;
-        const averageU = (uvs.getX(at) + uvs.getX(at + 1) + uvs.getX(at + 2)) / 3;
-        const averageV = (uvs.getY(at) + uvs.getY(at + 1) + uvs.getY(at + 2)) / 3;
-        const tileU = Math.floor(averageU);
-        const tileV = Math.floor(averageV);
-        if (tileU < 0 || tileU > 9 || tileV < 0) throw new Error('A painted triangle is outside the supported UDIM grid.');
-        const tile = 1001 + tileU + 10 * tileV;
-        const cell = layout.tiles.indexOf(tile);
-        if (cell < 0) throw new Error(`The painted model uses UDIM tile ${tile}, but that tile is not in this painted set.`);
-        const left = (cell % layout.columns) * stride + layout.gutter;
-        const bottom = Math.floor(cell / layout.columns) * stride + layout.gutter;
-        for (let corner = 0; corner < 3; corner++) {
-            const index = at + corner;
-            const localU = uvs.getX(index) - tileU;
-            const localV = uvs.getY(index) - tileV;
-            // Crossing more than a boundary vertex requires cutting the triangle,
-            // which this exporter cannot do. Refuse instead of silently misplacing
-            // part of its texture.
-            if (localU < -E || localU > 1 + E || localV < -E || localV > 1 + E) {
-                throw new Error(`A triangle spans multiple UDIM tiles near tile ${tile}; split its UVs along the tile border before exporting.`);
+    try {
+        const uvs = atlas.getAttribute('uv');
+        const count = Math.floor(uvs.count / 3);
+        const selected = new Uint8Array(count);
+        if (atlas.groups.length) {
+            for (const group of atlas.groups) {
+                if (!isPaintedMaterial(group.materialIndex)) continue;
+                const end = Math.min(uvs.count, group.start + group.count);
+                for (let corner = group.start; corner + 2 < end; corner += 3) selected[Math.floor(corner / 3)] = 1;
             }
-            uvs.setXY(index,
-                (left + Math.min(1, Math.max(0, localU)) * layout.cell) / width,
-                (bottom + Math.min(1, Math.max(0, localV)) * layout.cell) / height);
+        } else if (isPaintedMaterial(0)) selected.fill(1);
+        const stride = layout.cell + 2 * layout.gutter;
+        const width = layout.columns * stride;
+        const height = layout.rows * stride;
+        const E = 1e-5;
+        for (let triangle = 0; triangle < count; triangle++) {
+            if (!selected[triangle]) continue;
+            const at = triangle * 3;
+            const averageU = (uvs.getX(at) + uvs.getX(at + 1) + uvs.getX(at + 2)) / 3;
+            const averageV = (uvs.getY(at) + uvs.getY(at + 1) + uvs.getY(at + 2)) / 3;
+            const tileU = Math.floor(averageU);
+            const tileV = Math.floor(averageV);
+            if (tileU < 0 || tileU > 9 || tileV < 0) throw new Error('A painted triangle is outside the supported UDIM grid.');
+            const tile = 1001 + tileU + 10 * tileV;
+            const cell = layout.tiles.indexOf(tile);
+            if (cell < 0) throw new Error(`The painted model uses UDIM tile ${tile}, but that tile is not in this painted set.`);
+            const left = (cell % layout.columns) * stride + layout.gutter;
+            const bottom = Math.floor(cell / layout.columns) * stride + layout.gutter;
+            for (let corner = 0; corner < 3; corner++) {
+                const index = at + corner;
+                const localU = uvs.getX(index) - tileU;
+                const localV = uvs.getY(index) - tileV;
+                // Crossing more than a boundary vertex requires cutting the triangle,
+                // which this exporter cannot do. Refuse instead of silently misplacing
+                // part of its texture.
+                if (localU < -E || localU > 1 + E || localV < -E || localV > 1 + E) {
+                    throw new Error(`A triangle spans multiple UDIM tiles near tile ${tile}; split its UVs along the tile border before exporting.`);
+                }
+                uvs.setXY(index,
+                    (left + Math.min(1, Math.max(0, localU)) * layout.cell) / width,
+                    (bottom + Math.min(1, Math.max(0, localV)) * layout.cell) / height);
+            }
         }
+        uvs.needsUpdate = true;
+        return atlas;
+    } catch (error) {
+        // A failed export must not retain a temporary, expanded geometry.
+        atlas.dispose();
+        throw error;
     }
-    uvs.needsUpdate = true;
-    return atlas;
 };
 
 /**
