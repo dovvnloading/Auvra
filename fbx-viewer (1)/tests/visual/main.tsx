@@ -4,6 +4,7 @@ import { createRoot } from 'react-dom/client';
 import { advance, useThree, type RootState } from '@react-three/fiber';
 import { gpuBytes, realNow, resetClock, seedChance, stepClock, virtualSeconds, webGpuBytes, webGpuWaiting } from './instrument';
 import { AuvraCanvas, readRequestedRendererBackend } from '../../renderer/AuvraCanvas';
+import { sourceEditPixels } from './sourceEditPixels';
 import { deviceLossPixels } from './deviceLossPixels';
 import { acceptSoftwareAdapter, acquireGpuCore, releaseIdleGpuCore } from '../../renderer/gpu/device';
 import { isGpuRenderer } from '../../renderer/gpu/frame';
@@ -155,8 +156,10 @@ const capture = async (name: string) => {
   const standardCook = name === 'texture-graph' ? textureGraphScene.cook : null;
   const cookProblem = name === 'texture-graph' ? textureGraphScene.problem : null;
   const bc1Parity = name === 'texture-graph' && onWebGpu ? textureGraphScene.bc1Parity : null;
-  const compression = name === 'texture-graph' && !new URLSearchParams(window.location.search).has('textureBench')
-    ? await materialCompression(state) : null;
+  const verifyTextures = name === 'texture-graph' && !new URLSearchParams(window.location.search).has('textureBench');
+  const compression = verifyTextures ? await materialCompression(state) : null;
+  const sourceEdit = verifyTextures ? await sourceEditPixels(isGpuRenderer(state.gl)
+    ? webgpuTexturing(state.gl.core.device as unknown as WgpuDevice) : textureGpu()) : null;
   if (onWebGpu) await settled();
   root.unmount();
   // Lets the canvas and what it holds go before the next scene.
@@ -169,13 +172,14 @@ const capture = async (name: string) => {
       await new Promise((resolve) => setTimeout(resolve, 20));
     }
   }
-  const deviceLoss = onWebGpu && name === 'texture-graph' && !new URLSearchParams(window.location.search).has('textureBench')
+  const deviceLoss = onWebGpu && verifyTextures
     ? await deviceLossPixels() : null;
   return { png, numbers: { ...(deviceLoss ? { deviceLoss } : {}), loadMs, frameMs, calls, triangles, geometries, textures, programs, gpuBytes: bytes,
     ...(cookBenchmark ? { textureCook: cookBenchmark, textureCookProblem: cookProblem } : {}),
     ...(standardCook ? { graphCook: standardCook } : {}),
     ...(bc1Parity ? { bc1Parity } : {}),
     ...(compression ? { materialCompression: compression } : {}),
+    ...(sourceEdit ? { sourceEdit } : {}),
   } };
 };
 
