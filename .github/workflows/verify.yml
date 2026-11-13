@@ -61,7 +61,7 @@ jobs:
   editor-build:
     name: Editor build (Node ${{ matrix.node-version }})
     needs: changes
-    if: needs.changes.outputs.editor == 'true'
+    # Preserve expanded protected matrix checks; skip steps instead of jobs.
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
@@ -72,10 +72,17 @@ jobs:
       run:
         working-directory: fbx-viewer (1)
     steps:
+      - name: Skip unaffected editor matrix cell
+        if: needs.changes.outputs.editor != 'true'
+        working-directory: ${{ github.workspace }}
+        run: echo "No editor changes; protected matrix check name is preserved."
+
       - name: Check out repository
+        if: needs.changes.outputs.editor == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up Node.js
+        if: needs.changes.outputs.editor == 'true'
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: ${{ matrix.node-version }}
@@ -83,42 +90,55 @@ jobs:
           cache-dependency-path: fbx-viewer (1)/package-lock.json
 
       - name: Install locked dependencies
+        if: needs.changes.outputs.editor == 'true'
         run: npm ci
 
       - name: Verify host protocol
+        if: needs.changes.outputs.editor == 'true'
         run: npm run protocol:verify
 
       - name: Verify native project boundary
+        if: needs.changes.outputs.editor == 'true'
         run: npm run project:verify
 
       - name: Verify provider boundary
+        if: needs.changes.outputs.editor == 'true'
         run: npm run provider:verify
 
       - name: Verify renderer contracts and ownership
+        if: needs.changes.outputs.editor == 'true'
         run: npm run renderer:verify
 
       - name: Verify whole-program diagnostics coverage
+        if: needs.changes.outputs.editor == 'true'
         run: npm run diagnostics:verify
 
       - name: Verify desktop frame boundaries
+        if: needs.changes.outputs.editor == 'true'
         run: node scripts/frame/verify.mjs
 
       - name: Verify the game player leaves out the editor
+        if: needs.changes.outputs.editor == 'true'
         run: npm run player:verify
 
       - name: Check for mistakes in the frontend
+        if: needs.changes.outputs.editor == 'true'
         run: npm run lint
 
       - name: Typecheck the full editor program
+        if: needs.changes.outputs.editor == 'true'
         run: npm run typecheck
 
       - name: Typecheck strict frontend boundaries
+        if: needs.changes.outputs.editor == 'true'
         run: npm run typecheck:strict
 
       - name: Run frontend unit and component tests
+        if: needs.changes.outputs.editor == 'true'
         run: npm test
 
       - name: Build editor
+        if: needs.changes.outputs.editor == 'true'
         run: npm run build
 
   rendering:
@@ -243,7 +263,7 @@ jobs:
   python-verify:
     name: Python ${{ matrix.python-version }} (${{ matrix.os }})
     needs: changes
-    if: needs.changes.outputs.python == 'true'
+    # Preserve expanded protected matrix checks; skip steps instead of jobs.
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     strategy:
@@ -252,28 +272,39 @@ jobs:
         os: [windows-latest, ubuntu-latest]
         python-version: ["3.12", "3.14"]
     steps:
+      - name: Skip unaffected python matrix cell
+        if: needs.changes.outputs.python != 'true'
+        working-directory: ${{ github.workspace }}
+        run: echo "No python changes; protected matrix check name is preserved."
+
       - name: Check out repository
+        if: needs.changes.outputs.python == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up Python
+        if: needs.changes.outputs.python == 'true'
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         with:
           python-version: ${{ matrix.python-version }}
 
       - name: Install uv
+        if: needs.changes.outputs.python == 'true'
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           python-version: ${{ matrix.python-version }}
 
       - name: Check uv and locked environment
+        if: needs.changes.outputs.python == 'true'
         run: |
           uv --version
           uv sync --locked --no-install-project --no-dev
 
       - name: Check Python syntax
+        if: needs.changes.outputs.python == 'true'
         run: uv run --locked --no-sync python -m compileall -q Auvra tests
 
       - name: Run Python tests
+        if: needs.changes.outputs.python == 'true'
         run: uv run --locked --no-sync python -W error::ResourceWarning -m unittest discover -s tests -t . -v
 
   python-lint:
@@ -295,7 +326,7 @@ jobs:
   native-engine-build:
     name: Native engine (${{ matrix.os }})
     needs: changes
-    if: needs.changes.outputs.native == 'true'
+    # Preserve expanded protected matrix checks; skip steps instead of jobs.
     # Keep the check name stable while using the established Ubuntu runner image for apt-dependent verification.
     runs-on: ${{ matrix.os == 'ubuntu-latest' && 'ubuntu-24.04' || matrix.os }}
     timeout-minutes: 15
@@ -307,14 +338,21 @@ jobs:
       run:
         working-directory: native
     steps:
+      - name: Skip unaffected native matrix cell
+        if: needs.changes.outputs.native != 'true'
+        working-directory: ${{ github.workspace }}
+        run: echo "No native changes; protected matrix check name is preserved."
+
       - name: Check out repository
+        if: needs.changes.outputs.native == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Select pinned Rust toolchain
+        if: needs.changes.outputs.native == 'true'
         run: rustup toolchain install 1.98.0 --profile minimal --component rustfmt --component clippy
 
       - name: Configure headless software Vulkan
-        if: runner.os == 'Linux'
+        if: needs.changes.outputs.native == 'true' && (runner.os == 'Linux')
         run: |
           # Keep the runner's multi-mirror list. Replacing it with one host causes outages
           # when that mirror is unreachable; APT can fall back to the next mirror.
@@ -325,24 +363,29 @@ jobs:
           echo "AUVRA_WGPU_FORCE_FALLBACK_ADAPTER=1" >> "$GITHUB_ENV"
 
       - name: Check native formatting
+        if: needs.changes.outputs.native == 'true'
         run: cargo +1.98.0 fmt -- --check
 
       - name: Check for mistakes in the native engine
+        if: needs.changes.outputs.native == 'true'
         run: cargo +1.98.0 clippy --locked --all-targets -- -D warnings
 
       - name: Run locked native tests
+        if: needs.changes.outputs.native == 'true'
         run: cargo +1.98.0 test --locked
 
       - name: Build locked native engine
+        if: needs.changes.outputs.native == 'true'
         run: cargo +1.98.0 build --release --locked
 
       - name: Run headless deterministic native acceptance
+        if: needs.changes.outputs.native == 'true'
         env:
           AUVRA_NATIVE_SESSION_TOKEN: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
         run: cargo +1.98.0 run --release --locked -- --headless-self-test
 
       - name: Run native reference lifecycle
-        if: runner.os == 'Windows'
+        if: needs.changes.outputs.native == 'true' && (runner.os == 'Windows')
         env:
           AUVRA_NATIVE_SESSION_TOKEN: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
         run: cargo +1.98.0 run --release --locked -- --self-test

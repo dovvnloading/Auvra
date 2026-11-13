@@ -1,6 +1,8 @@
 """Safety guarantees for CI path-based skips."""
 
 import unittest
+import re
+from pathlib import Path
 
 from tools.ci.select_checks import ALL, classify
 
@@ -53,6 +55,23 @@ class CheckSelectionTests(unittest.TestCase):
 
     def test_unknown_mixed_with_docs_runs_everything(self):
         self.assertEqual(classify(["README.md", "new-engine/src.rs"]), set(ALL))
+
+    def test_matrix_required_checks_are_step_gated(self):
+        # A skipped matrix job does not emit its individual required check names.
+        workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/verify.yml").read_text()
+        for job, signal, step_count in [
+            ("editor-build", "editor", 15),
+            ("python-verify", "python", 6),
+            ("native-engine-build", "native", 9),
+        ]:
+            with self.subTest(job=job):
+                after_job = workflow.split(f"  {job}:\n", 1)[1]
+                block = re.split(r"(?m)^  [a-z][a-z0-9-]*:\s*$", after_job, maxsplit=1)[0]
+                header, steps = block.split("    steps:\n", 1)
+                self.assertNotIn(f"    if: needs.changes.outputs.{signal}", header)
+                self.assertIn(f"if: needs.changes.outputs.{signal} != 'true'", steps)
+                self.assertEqual(steps.count(f"if: needs.changes.outputs.{signal} == 'true'"), step_count)
+                self.assertIn("working-directory: ${{ github.workspace }}", steps)
 
 
 if __name__ == "__main__":
