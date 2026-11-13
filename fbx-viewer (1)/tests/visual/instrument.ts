@@ -79,9 +79,30 @@ let gpuBytesHeld = 0;
 /** What the page's WebGPU buffers and textures take, for as long as they are not destroyed. */
 export const webGpuBytes = (): number => gpuBytesHeld;
 
+// During the opt-in benchmark, track every increase already seen by the allocation counter.
+export type AllocationScope = WebGL2RenderingContext | 'webgpu-page';
+const allocationPeaks = new Map<AllocationScope, number>();
+const observeAllocation = (scope: AllocationScope, bytes: number): void => {
+  const peak = allocationPeaks.get(scope);
+  if (peak !== undefined && bytes > peak) allocationPeaks.set(scope, bytes);
+};
+
+export const measureAllocations = (scope: AllocationScope) => {
+  if (allocationPeaks.has(scope)) throw new Error('An allocation measurement is already active on this scope');
+  const current = () => scope === 'webgpu-page' ? webGpuBytes() : gpuBytes(scope);
+  const baseline = current();
+  allocationPeaks.set(scope, baseline);
+  return {
+    result: () => ({ scope: scope === 'webgpu-page' ? 'page WebGPU buffers and textures' : 'WebGL2 cooking context',
+      baseline, peak: allocationPeaks.get(scope)!, end: current() }),
+    stop: () => allocationPeaks.delete(scope),
+  };
+};
+
 const holdGpu = (resource: object, bytes: number): void => {
   gpuHeld.set(resource, bytes);
   gpuBytesHeld += bytes;
+  observeAllocation('webgpu-page', gpuBytesHeld);
 };
 
 const letGoGpu = (resource: object): void => {
@@ -156,7 +177,9 @@ const bytesHeld = new WeakMap<WebGL2RenderingContext, number>();
 
 const hold = (gl: WebGL2RenderingContext, resource: object | null, bytes: number): void => {
   if (!resource) return;
-  bytesHeld.set(gl, (bytesHeld.get(gl) ?? 0) + bytes - (held.get(resource) ?? 0));
+  const total = (bytesHeld.get(gl) ?? 0) + bytes - (held.get(resource) ?? 0);
+  bytesHeld.set(gl, total);
+  observeAllocation(gl, total);
   held.set(resource, bytes);
 };
 

@@ -23,6 +23,16 @@ on:
           - "9"
           - "11"
           - "12"
+      samples:
+        description: "Independent browser samples per configuration"
+        required: true
+        type: choice
+        default: "1"
+        options:
+          - "1"
+          - "5"
+          - "20"
+          - "30"
 
 permissions:
   contents: read
@@ -33,7 +43,7 @@ jobs:
     # Headless Linux can lose the software Vulkan WebGPU device before a frame.
     # Mirror Verify's known-good Windows WebGPU and Linux WebGL2 runners.
     runs-on: ${{ inputs.renderer == 'webgpu' && 'windows-latest' || 'ubuntu-latest' }}
-    timeout-minutes: 35
+    timeout-minutes: 180
     defaults:
       run:
         working-directory: fbx-viewer (1)
@@ -51,8 +61,11 @@ jobs:
       - name: Install locked editor dependencies
         run: npm ci
 
+      - name: Verify benchmark validation and percentiles
+        run: node --test tests/rendering/textureBenchmark.test.mjs
+
       - name: Measure texture-graph cooking on the requested software backend
-        run: npm run texture:benchmark -- --texture-size ${{ inputs.size }} --renderer ${{ inputs.renderer }}
+        run: npm run texture:benchmark -- --texture-size ${{ inputs.size }} --renderer ${{ inputs.renderer }} --samples ${{ inputs.samples }}
 
       - name: Keep benchmark metrics and output picture
         if: ${{ always() }}
@@ -61,6 +74,7 @@ jobs:
           name: texture-cook-${{ inputs.renderer }}-2pow${{ inputs.size }}
           path: |
             fbx-viewer (1)/tests/visual/output/**/numbers.json
+            fbx-viewer (1)/tests/visual/output/**/summary.json
             fbx-viewer (1)/tests/visual/output/**/texture-graph.actual.png
           if-no-files-found: warn
           retention-days: 30
