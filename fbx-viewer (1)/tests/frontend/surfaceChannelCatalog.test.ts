@@ -30,7 +30,7 @@ describe('M0 physical surface channel compatibility contract', () => {
 
     it('labels proposed shader channels but never enables them in PaintDocument v1', () => {
         const currentKeys = new Set(PAINT_CHANNELS as readonly string[]);
-        const proposedKeys = new Set(PROPOSED_PHYSICAL_CHANNELS.map((channel) => channel.key));
+        const proposedKeys: ReadonlySet<string> = new Set(PROPOSED_PHYSICAL_CHANNELS.map((channel) => channel.key));
         expect(proposedKeys.size).toBe(PROPOSED_PHYSICAL_CHANNELS.length);
         for (const channel of PROPOSED_PHYSICAL_CHANNELS) {
             expect(currentKeys.has(channel.key)).toBe(false);
