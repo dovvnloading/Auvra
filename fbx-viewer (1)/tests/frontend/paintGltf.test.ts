@@ -70,6 +70,15 @@ describe('a painted set as glTF', () => {
             triangleTile: new Uint16Array([1001, 1002]),
             triangleShift: new Int16Array([0, 0, 1, 0]),
         };
+        expect(() => atlasMesh(part, tileAtlasLayout([1001], 64, 4096))).toThrow(/tile 1002/);
+        const crossing = { ...part, uvs: part.uvs.slice() };
+        crossing.uvs[0] = -0.25;
+        expect(() => atlasMesh(crossing, layout)).toThrow(/spans multiple UDIM/);
+        const offGrid = { ...part, triangleShift: new Int16Array([0, 0, 10, 0]) };
+        expect(() => atlasMesh(offGrid, layout)).toThrow(/outside the supported UDIM grid/);
+        const rounded = { ...part, uvs: part.uvs.slice() };
+        rounded.uvs[0] = -1e-7;
+        expect(atlasMesh(rounded, layout).uvs[0]).toBe(Math.fround(layout.gutter / layout.width));
         const mesh = atlasMesh(part, layout);
         // The shared corner is split: once at the right edge of the first cell, once at the left of the second.
         expect(mesh.positions.length / 3).toBe(6);

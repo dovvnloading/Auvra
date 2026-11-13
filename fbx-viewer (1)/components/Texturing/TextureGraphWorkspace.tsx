@@ -16,7 +16,7 @@ import { feedbackPairs, passCount } from '../../texturing/graph/iterate';
 import { describeMatrix, tileSafeDirection, tileSafeMatrix, transformMatrix } from '../../texturing/graph/safeTransform';
 import { PROCESSOR_PICTURES, PROCESSOR_TYPES, defaultFunctionFor, processorUse, readNamedSettings, settingDefault } from '../../texturing/graph/nodes/processors';
 import { compileFunction, readFunctionGraph, type FunctionGraph, type NamedSetting } from '../../texturing/graph/functionGraph';
-import { PARAMETER_KINDS, PARAMETER_KIND_LABELS, applyPreset, presetFrom, putPreset, removePreset, renameParameter, renamePreset } from '../../texturing/graph/parameters';
+import { PARAMETER_KINDS, PARAMETER_KIND_LABELS, applyPreset, availableParameterName, hasPinCondition, presetFrom, putPreset, removePreset, renameParameter, renamePreset } from '../../texturing/graph/parameters';
 import { VALUE_SETTING_KINDS, valuePinKey } from '../../texturing/graph/nodeKit';
 import { graphAnimates, textureNodeDefinition, type GraphEntry, type GraphResolver } from '../../texturing/graph/registry';
 import { DEFAULT_ANIMATION, FLIPBOOK_FRAMES, flipbookEdge, flipbookFrameSize, flipbookGrid, frameTime, packFlipbook, readAnimation, type GraphAnimation } from '../../texturing/graph/animation';
@@ -686,9 +686,7 @@ const Workspace: React.FC<{
     const expose = (node: TexGraphNode, param: TexParamDef) => {
         const kind = exposedKind(param);
         if (!kind) return;
-        const base = param.key.replace(/[^A-Za-z0-9_]/g, '') || 'value';
-        let name = base;
-        for (let n = 2; graph.parameters.some((parameter) => parameter.name === name); n++) name = `${base}${n}`;
+        const name = availableParameterName(param.key, graph.parameters);
         const parameter: GraphParameter = {
             name,
             label: param.label.replace(/\s*\(.*\)$/, ''),
@@ -877,7 +875,7 @@ const Workspace: React.FC<{
                                 onRemove={(index) => changeSettings(single, settings.filter((_, at) => at !== index), settings[index].key)} />
                         );
                     }
-                    if (param.key === 'visibleIf' && param.kind === 'string') {
+                    if (param.key === 'visibleIf' && param.kind === 'string' && hasPinCondition(single.type)) {
                         return (
                             <div key={param.key} className="space-y-1" title={param.hint}>
                                 <span className="text-2xs text-ink-2">Pin shown on nodes using this graph</span>
@@ -1080,8 +1078,7 @@ const Workspace: React.FC<{
                         ]} />
                     )}
                     <Select value="" placeholder="Add…" options={PARAMETER_KINDS.map((kind) => ({ value: kind, label: PARAMETER_KIND_LABELS[kind] }))} onChange={(kind: GraphParameterKind) => {
-                        let name = 'value';
-                        for (let n = 2; graph.parameters.some((parameter) => parameter.name === name); n++) name = `value${n}`;
+                        const name = availableParameterName('value', graph.parameters);
                         const choice = [{ value: 'first', label: 'First' }, { value: 'second', label: 'Second' }];
                         const parameter: GraphParameter = {
                             name, label: PARAMETER_KIND_LABELS[kind], kind,

@@ -1,7 +1,7 @@
 import { BLEND_MODES, type BlendMode } from '../gpu/glslLibrary';
 import type { MeshMapName } from '../graph/nodes/io';
 import type { BakeSettings, ExtraBakeMap, PositionSpace } from '../bake/meshBaker';
-import type { ChannelTextureIds } from '../materialOutput';
+import type { ChannelTextureIds, TileLayout } from '../materialOutput';
 import type { PickMode } from './selection';
 import type { ProjectionAxis, ProjectionMode } from './projections';
 import { readPaths, type SurfacePath } from './paths';
@@ -183,7 +183,7 @@ export interface PaintDocument {
     /** The baked maps; `version` (BAKE_VERSION) and `space` are missing on bakes made before they were kept. */
     bake: { settings: BakeSettings; maps: Partial<Record<MeshMapName, TilePictures>>; extras?: Partial<Record<ExtraBakeMap, TilePictures>>; at: number; version?: number; space?: PositionSpace } | null;
     /** The pictures the model last got from this set. */
-    applied?: { textures: ChannelTextureIds; at: number };
+    applied?: { textures: ChannelTextureIds; at: number; atlas?: TileLayout | null };
     /**
      * What the surface wore before painting began, carried onto the set's own layout (a picture per tile)
      * once it was laid out afresh. "What it wore before" fills read these over the model's own pictures,

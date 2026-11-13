@@ -1,4 +1,4 @@
-import { evaluateExpression, renameInFormula, type ExprValue } from './expressions';
+import { evaluateExpression, MAX_EXPRESSION_LENGTH, renameInFormula, type ExprValue } from './expressions';
 import { defaultCurves, readCurves, readRamp } from './nodeKit';
 import {
     isParamLink,
@@ -327,13 +327,36 @@ export const variationSeeds = (seed: number, count: number): number[] => {
 /** A parameter's formula name: letters, digits and underscores, not starting with a digit (at most 48). */
 export const FORMULA_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,47}$/;
 
+export const MAX_CONDITION_LENGTH = 200;
+
+// Used by subgraph and Iterate nodes alongside exposed parameter values.
+const GRAPH_USER_SETTINGS = new Set(['graph', 'passes', 'newSeed']);
+
 /** What is wrong with a new formula name for a parameter, in words, or null when it will do. */
 export const formulaNameProblem = (name: string, parameters: readonly GraphParameter[], current: string): string | null => {
     if (!name) return 'A formula name cannot be empty.';
     if (!FORMULA_NAME.test(name)) return 'Use letters, digits and underscores only, not starting with a digit.';
+    if (name !== current && (GRAPH_USER_SETTINGS.has(name) || name === 'pi' || Object.hasOwn(Object.prototype, name))) {
+        return `"${name}" is reserved. Choose another parameter name.`;
+    }
     if (name !== current && parameters.some((parameter) => parameter.name === name)) return `Another parameter is called ${name} already.`;
     return null;
 };
+
+/** Choose a valid, available name when exposing a node setting or adding a parameter. */
+export const availableParameterName = (key: string, parameters: readonly GraphParameter[]): string => {
+    const base = key.replace(/[^A-Za-z0-9_]/g, '').replace(/^[0-9]+/, '').slice(0, 48) || 'value';
+    let name = base;
+    for (let n = 2; formulaNameProblem(name, parameters, ''); n++) {
+        const suffix = String(n);
+        name = base.slice(0, 48 - suffix.length) + suffix;
+    }
+    return name;
+};
+
+/** Only graph input/output nodes interpret their visibleIf string as a condition. */
+export const hasPinCondition = (type: string): boolean =>
+    ['input', 'output', 'materialInput', 'materialOutput', 'curveInput', 'curveOutput'].includes(type);
 
 /**
  * A graph with a parameter's formula name changed, and everything in it that uses the name with it:
@@ -341,22 +364,29 @@ export const formulaNameProblem = (name: string, parameters: readonly GraphParam
  * stored values given. The label stays as it is.
  */
 export const renameParameter = (graph: TextureGraph, values: Readonly<Record<string, unknown>>, from: string, to: string): { graph: TextureGraph; values: Record<string, unknown> } => {
+    const renameExpression = (expression: string, limit: number): string => {
+        const next = renameInFormula(expression, from, to);
+        if (next !== expression && next.length > limit) {
+            throw new Error(`Renaming "${from}" to "${to}" would exceed the ${limit}-character formula limit. Choose a shorter name.`);
+        }
+        return next;
+    };
     const renameValue = (value: unknown): unknown => {
         if (value && typeof value === 'object' && !Array.isArray(value)) {
             const link = value as { $bind?: unknown; $expr?: unknown };
-            if (link.$bind === from) return { $bind: to };
-            if (typeof link.$expr === 'string') return { $expr: renameInFormula(link.$expr, from, to) };
+            if (link.$bind === from) return { ...value, $bind: to };
+            if (typeof link.$expr === 'string') return { ...value, $expr: renameExpression(link.$expr, MAX_EXPRESSION_LENGTH) };
         }
         return value;
     };
     const renameKey = <T,>(record: Readonly<Record<string, T>>): Record<string, T> => Object.fromEntries(Object.entries(record).map(([key, value]) => [key === from ? to : key, value]));
     const nodes = graph.nodes.map((node) => ({
         ...node,
-        params: Object.fromEntries(Object.entries(node.params).map(([key, value]) => [key, key === 'visibleIf' && typeof value === 'string' ? renameInFormula(value, from, to) : renameValue(value)])),
+        params: Object.fromEntries(Object.entries(node.params).map(([key, value]) => [key, key === 'visibleIf' && hasPinCondition(node.type) && typeof value === 'string' ? renameExpression(value, MAX_EXPRESSION_LENGTH) : renameValue(value)])),
     }));
     const parameters = graph.parameters.map((parameter) => {
         const next = { ...parameter, ...(parameter.name === from ? { name: to } : {}) };
-        if (parameter.visibleIf) next.visibleIf = renameInFormula(parameter.visibleIf, from, to);
+        if (parameter.visibleIf) next.visibleIf = renameExpression(parameter.visibleIf, MAX_CONDITION_LENGTH);
         return next;
     });
     const presets = graph.presets?.map((preset) => ({ ...preset, values: renameKey(preset.values) }));
