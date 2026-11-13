@@ -19,7 +19,7 @@ A verified cell requires a completed fixture on the stated backend. Fallback rec
 | Instanced scatter · four layering modes and wrapped copies | verified | verified | verified | not-tested |
 | Applied Paint snapshot · base colour, roughness and metallic samples | verified | verified | verified | not-tested |
 | Code-mode GLSL with a user-defined struct · explicit translator rejection | not-tested | not-tested | unsupported | not-tested |
-| Pooled target reuse and explicit device destruction/reacquisition · red/green pixels | not-tested | not-tested | not-tested | not-tested |
+| Pooled target reuse and explicit device destruction/reacquisition · red/green pixels | not-tested | not-tested | verified | not-tested |
 | Author and repaint layers, masks and multiple UDIM tiles in the editor | not-tested | not-tested | not-tested | not-tested |
 | Mesh baking, scan capture and photometric reconstruction | not-tested | not-tested | not-tested | not-tested |
 | Publish graph outputs, export a painted GLB and reopen the exported model | not-tested | not-tested | not-tested | not-tested |
@@ -58,16 +58,16 @@ The registry contains 207 node types across 19 families, including the dynamical
 ### webgl2
 
 - ubuntu-latest · Google Inc. (Google) · ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)
-- Browser Chrome/156.0.8078.79. Chromium driver inventory ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver-5.0.0) / SwANGLE / 5.0.0.
-- Workflow head `2f9635ad70529a160e60dad16a30605c346c2ed0`. Checkout `cf1c94022b0ac766af326f3a7acfa5a6fe404b49`. [CI artifact](https://github.com/dovvnloading/Auvra/actions/runs/43513400032/artifacts/14079123566)
+- Browser Chrome/157.0.8103.50. Chromium driver inventory ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver-5.0.0) / SwANGLE / 5.0.0.
+- Workflow head `78245dc64dd7f78f1e91982fba1ff2774e2b8c1f`. Checkout `4c5fa703b5382e87651be749ff5a8efb15d49f18`. [CI artifact](https://github.com/dovvnloading/Auvra/actions/runs/43515159228/artifacts/14079864880)
 - Reference PNG SHA-256 `8c9656d2f1a5f4cd824786bf19c69f3a7dea0ce0df5fa70b1d42aeec490733a4`. Screenshot SHA-256 `8c9656d2f1a5f4cd824786bf19c69f3a7dea0ce0df5fa70b1d42aeec490733a4`.
 - Compression flags `EXT_texture_compression_rgtc` (true), `EXT_texture_compression_bptc` (true), `WEBGL_compressed_texture_etc` (true), `WEBGL_compressed_texture_astc` (true).
 
 ### webgpu
 
 - windows-latest · google · swiftshader
-- Browser unavailable in this capture. Chromium driver inventory unavailable in this capture.
-- Workflow head `db253b327e931e0f173027eafa528fe70d545c7a`. Checkout unrecorded. [CI artifact](https://github.com/dovvnloading/Auvra/actions/runs/43511976618/artifacts/14079486796)
+- Browser Chrome/156.0.8078.80. Chromium driver inventory Microsoft Basic Render Driver / Microsoft / 10.0.26100.33648, Microsoft Basic Render Driver / 10.0.26100.33648.
+- Workflow head `78245dc64dd7f78f1e91982fba1ff2774e2b8c1f`. Checkout `4c5fa703b5382e87651be749ff5a8efb15d49f18`. [CI artifact](https://github.com/dovvnloading/Auvra/actions/runs/43515159228/artifacts/14080683934)
 - Reference PNG SHA-256 `a3679b82c59ededec5c45bb635e4ad1a16a477189e2cce06fbc39e55018bacae`. Screenshot SHA-256 `a3679b82c59ededec5c45bb635e4ad1a16a477189e2cce06fbc39e55018bacae`.
 - Compression flags `texture-compression-bc` (true), `texture-compression-etc2` (true), `texture-compression-astc` (true).
 

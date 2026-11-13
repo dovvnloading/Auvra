@@ -20,6 +20,11 @@ class CheckSelectionTests(unittest.TestCase):
     def test_docs_only_does_not_launch_expensive_jobs(self):
         self.assertEqual(classify(["docs/architecture.md", "README.md"]), set())
 
+    def test_generated_gpu_evidence_runs_the_editor_consistency_check(self):
+        for document in ("texture-suite-m0-gpu-captures.json", "texture-suite-m0-gpu-matrix.md"):
+            with self.subTest(document=document):
+                self.assertEqual(classify([f"docs/{document}"]), {"editor"})
+
     def test_editor_change_checks_browser_and_webview(self):
         self.assertEqual(classify(["fbx-viewer (1)/components/App.tsx"]), {"editor", "browser", "smoke"})
 

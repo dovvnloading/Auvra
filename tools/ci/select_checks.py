@@ -26,6 +26,9 @@ def classify(paths: list[str], *, full: bool = False) -> set[str]:
         if path == "LICENSE" or path.startswith("LICENSE."):
             return set(ALL)
 
+        if path in {"docs/texture-suite-m0-gpu-captures.json", "docs/texture-suite-m0-gpu-matrix.md"}:
+            selected.add("editor")
+            continue
         if path.startswith("docs/") or path.lower().endswith((".md", ".rst")):
             continue
         if path in {".gitignore", ".gitattributes", ".editorconfig"}:

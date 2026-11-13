@@ -2,11 +2,11 @@
   "webgl2": {
     "backend": "webgl2",
     "os": "ubuntu-latest",
-    "workflowHead": "2f9635ad70529a160e60dad16a30605c346c2ed0",
-    "artifact": "https://github.com/dovvnloading/Auvra/actions/runs/43513400032/artifacts/14079123566",
+    "workflowHead": "78245dc64dd7f78f1e91982fba1ff2774e2b8c1f",
+    "artifact": "https://github.com/dovvnloading/Auvra/actions/runs/43515159228/artifacts/14079864880",
     "capture": {
-      "sourceCommit": "cf1c94022b0ac766af326f3a7acfa5a6fe404b49",
-      "browser": "Chrome/156.0.8078.79",
+      "sourceCommit": "4c5fa703b5382e87651be749ff5a8efb15d49f18",
+      "browser": "Chrome/157.0.8103.50",
       "browserDevices": [
         {
           "device": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver-5.0.0)",
@@ -69,9 +69,28 @@
   "webgpu": {
     "backend": "webgpu",
     "os": "windows-latest",
-    "workflowHead": "db253b327e931e0f173027eafa528fe70d545c7a",
-    "artifact": "https://github.com/dovvnloading/Auvra/actions/runs/43511976618/artifacts/14079486796",
-    "capture": null,
+    "workflowHead": "78245dc64dd7f78f1e91982fba1ff2774e2b8c1f",
+    "artifact": "https://github.com/dovvnloading/Auvra/actions/runs/43515159228/artifacts/14080683934",
+    "capture": {
+      "sourceCommit": "4c5fa703b5382e87651be749ff5a8efb15d49f18",
+      "browser": "Chrome/156.0.8078.80",
+      "browserDevices": [
+        {
+          "device": "Microsoft Basic Render Driver",
+          "driverVendor": "Microsoft",
+          "driverVersion": "10.0.26100.33648"
+        },
+        {
+          "device": "Microsoft Basic Render Driver",
+          "driverVendor": "",
+          "driverVersion": "10.0.26100.33648"
+        }
+      ],
+      "runnerOS": "win32",
+      "gpuSelection": "software-requested",
+      "screenshotSha256": "a3679b82c59ededec5c45bb635e4ad1a16a477189e2cce06fbc39e55018bacae",
+      "referenceSha256": "a3679b82c59ededec5c45bb635e4ad1a16a477189e2cce06fbc39e55018bacae"
+    },
     "referenceSha256": "a3679b82c59ededec5c45bb635e4ad1a16a477189e2cce06fbc39e55018bacae",
     "screenshotSha256": "a3679b82c59ededec5c45bb635e4ad1a16a477189e2cce06fbc39e55018bacae",
     "cook": {
@@ -123,6 +142,27 @@
       "webgl2S3TC": true,
       "status": "verified"
     },
-    "deviceLoss": null
+    "deviceLoss": {
+      "status": "verified",
+      "lossReason": "destroyed",
+      "first": [
+        255,
+        0,
+        0,
+        255
+      ],
+      "afterFirst": [
+        0,
+        255,
+        0,
+        255
+      ],
+      "afterRecovery": [
+        0,
+        255,
+        0,
+        255
+      ]
+    }
   }
 }
