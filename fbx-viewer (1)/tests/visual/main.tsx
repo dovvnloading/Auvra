@@ -8,6 +8,7 @@ import { acceptSoftwareAdapter, acquireGpuCore, releaseIdleGpuCore } from '../..
 import { isGpuRenderer } from '../../renderer/gpu/frame';
 import type { GpuRenderer } from '../../renderer/gpu/GpuRenderer';
 import { SCENES, type SceneSteps, type VisualScene } from './scenes';
+import { textureGraphScene } from './textureGraphScene';
 
 /**
  * The page behind scripts/rendering/run.mjs: mounts one scene at a time, steps it a fixed number of frames on a clock
@@ -138,7 +139,15 @@ const capture = async (name: string) => {
       await new Promise((resolve) => setTimeout(resolve, 20));
     }
   }
-  return { png, numbers: { loadMs, frameMs, calls, triangles, geometries, textures, programs, gpuBytes: bytes } };
+  return {
+    png,
+    numbers: {
+      loadMs, frameMs, calls, triangles, geometries, textures, programs, gpuBytes: bytes,
+      // A measured wall-clock GPU texture-graph bake, not virtual scene time
+      // or a renderer frame. Saved in the existing numbers.json artifact.
+      ...(name === 'texture-graph' && textureGraphScene.cook ? { graphCook: textureGraphScene.cook } : {}),
+    },
+  };
 };
 
 const toPixels = async (url: string): Promise<ImageData> => {
