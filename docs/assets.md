@@ -176,6 +176,8 @@ Each placed object can cook its own: in the level inspector's **Material values*
 
 **New** › **Living Materials Lab** is a level built to see it: rows of crates cooking their own wood from one texture graph, a seed each, a wetness each, and a row the level blueprint wets and dries.
 
+When a texture graph's **strict WebGPU cook** cannot draw a node, the fallback diagnostic names that node's stored ID and type (plus its custom name, if present), so you can find the specific problem even when a graph has several nodes of the same kind. The game continues to use the existing WebGL2/fallback path; this diagnostic improvement does not expand WebGPU feature support.
+
 ### Materials from scripts and the command line
 
 During play, a script sets one object's material values with `object.setMaterialValue(name, value)` (a material graph's parameter, or a texture graph's parameter or its `Graph seed`) and applies one of its texture graphs' presets with `object.applyMaterialPreset(name)`; a game that cooks its texture graphs cooks that object's pictures for them.
