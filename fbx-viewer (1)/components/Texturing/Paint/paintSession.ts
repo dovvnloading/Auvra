@@ -18,7 +18,7 @@ import { GpuResetError, PaintStack, pictureOwners, type StackHost } from '../../
 import { BUILTIN_GRAPHS } from '../../../texturing/paint/smartLibrary';
 import { applyPixelHistory, trimmedHistory, type HistoryEntry } from '../../../texturing/paint/strokes';
 import { BAKE_HISTORY_BYTES, bakeStepsToForget, branchBeforeStep, branchesToDrop, historyKind, travelTo, type HistoryBranch, type HistoryKind, type HistoryLines } from '../../../texturing/paint/history';
-import { PAINT_CHANNELS, castsFromThreeSides, paintedSetName, readPaintDocument, startingPaintDocument, surfaceGlows, type PaintChannel, type PaintDocument } from '../../../texturing/paint/paintTypes';
+import { PAINT_CHANNELS, castsFromThreeSides, incompatiblePaintSetFor, paintedSetName, readPaintDocument, startingPaintDocument, surfaceGlows, type PaintChannel, type PaintDocument } from '../../../texturing/paint/paintTypes';
 import { download, makeZip } from '../../../texturing/zip';
 import { fileName, holdsNormalGreen, planPicture, type ChannelSource, type ExportPicture, type ExportSource, type ExportTemplate } from '../../../texturing/paint/exportTemplates';
 import { colourChannels, extensionOf, linearChannels, writePicture, type PictureData } from '../../../texturing/paint/pictureFiles';
@@ -292,6 +292,15 @@ export class PaintSession {
     }
 
     static async open(target: PaintTarget, host: PaintSessionHost): Promise<PaintSession> {
+        // A future painted set must never be mistaken for "no set yet". Otherwise
+        // this build could create and save a fresh v1 set over material work it
+        // cannot understand. Refuse before allocating the GPU stack or writing.
+        const unsupported = incompatiblePaintSetFor(materialLibrary.list(), target);
+        if (unsupported) {
+            const version = typeof unsupported.version === 'string' || typeof unsupported.version === 'number'
+                ? String(unsupported.version) : 'unknown';
+            throw new Error(`The painted set "${unsupported.name}" uses unsupported document version ${version}. This Auvra build cannot edit it safely. Open this project in a newer version; the saved set has not been changed.`);
+        }
         let asset = findPaintAsset(target);
         let document = asset ? readPaintDocument(asset.paint) : null;
         const part = buildPartMesh(target.object, new Set(target.materials), { udim: document ? document.udim : 'auto' });
