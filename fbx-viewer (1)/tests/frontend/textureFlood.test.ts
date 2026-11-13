@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { islandSpan, labelReference, packBoxSize, seamOffset, shortestOffset, unpackBoxSize } from '../../texturing/graph/flood';
+import { exactIslandSpan, islandSpan, labelReference, packBoxSize, seamOffset, shortestOffset, unpackBoxSize } from '../../texturing/graph/flood';
 
 /** A mask from rows of text, the first row at the bottom as the GPU reads it ('#' inside). */
 const maskOf = (rows: string[]) => {
@@ -104,6 +104,37 @@ describe('flood fill boxes', () => {
         expect(seamOffset(60, 100, 0.75, true)).toBe(60);
         expect(seamOffset(-30, 100, 0.25, true)).toBe(-30);
         expect(seamOffset(-80, 100, 0.25, true)).toBe(20);
+    });
+
+    it('has an exact circular oracle for islands occupying over 75% of a wrapping axis', () => {
+        // One 5-pixel gap at 12..16. No quarter-seam falls in that gap.
+        // The production four-seam shader currently overestimates the span.
+        const occupied = Array.from({ length: 100 }, (_, x) => x).filter((x) => x < 12 || x > 16);
+        expect(islandSpan(occupied, 0, 100, true).size).toBe(100);
+        expect(exactIslandSpan(occupied, 0, 100, true)).toEqual({ low: -83, size: 95 });
+        const oneHole = occupied.concat([12, 13, 14, 15]);
+        expect(exactIslandSpan(oneHole, 0, 100, true).size).toBe(99);
+    });
+
+    it('matches the ordinary span when not repeating and handles wrap-boundary roots', () => {
+        expect(exactIslandSpan([3, 5, 9], 5, 100, false)).toEqual(islandSpan([3, 5, 9], 5, 100, false));
+        const crossing = [...Array.from({ length: 30 }, (_, i) => 70 + i), ...Array.from({ length: 30 }, (_, i) => i)];
+        expect(exactIslandSpan(crossing, 70, 100, true)).toEqual({ low: 0, size: 60 });
+        expect(exactIslandSpan(crossing, 0, 100, true)).toEqual({ low: -30, size: 60 });
+        // Both axes use the same oracle independently.
+        expect(exactIslandSpan([18, 19, 0, 1], 0, 20, true)).toEqual({ low: -2, size: 4 });
+    });
+
+    it('deterministically breaks equal largest-gap ties and handles full/empty occupancy', () => {
+        // Gaps 2..4 and 7..9 are both three pixels long. Pick the interval
+        // that begins at the smaller x coordinate after one of those gaps.
+        const ambiguous = [0, 1, 5, 6, 10, 11];
+        expect(exactIslandSpan(ambiguous, 0, 12, true)).toEqual({ low: -7, size: 9 });
+        expect(exactIslandSpan([...ambiguous].reverse(), 0, 12, true)).toEqual({ low: -7, size: 9 });
+        expect(exactIslandSpan([9, -1, 19], 9, 10, true)).toEqual({ low: 0, size: 1 });
+        expect(exactIslandSpan(Array.from({ length: 10 }, (_, i) => i), 5, 10, true)).toEqual({ low: -5, size: 10 });
+        expect(exactIslandSpan([], 0, 100, true)).toEqual({ low: 0, size: 0 });
+        expect(() => exactIslandSpan([1], 1, 0, true)).toThrow(/positive integer/);
     });
 
     it('packs a box\'s size into one float exactly, to a 4095th of the image', () => {
