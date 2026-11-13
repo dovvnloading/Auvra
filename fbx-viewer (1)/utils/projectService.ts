@@ -185,24 +185,56 @@ export class ProjectService {
     const domains: Record<string, unknown[]> = {};
     let latest: ProjectSnapshot | null = null;
     let cursor: string | undefined;
+    const cursors = new Set<string>();
+    const unfinishedDomains = new Set<string>();
     do {
       const page = await this.getSnapshot(domain, cursor, diagnostics);
-      if (!page) break;
+      if (!page) {
+        if (latest) throw new Error('Project snapshot pagination ended before all documents were read.');
+        break;
+      }
+      // Every page must describe the same project at the same revision.
+      // Combining pages across an intervening save would fabricate an
+      // inventory that never existed, unsafe for cross-document edits.
+      if (latest && (page.projectId !== latest.projectId || page.revision !== latest.revision)) {
+        throw new Error('The project changed while reading its documents. Reload the snapshot before editing.');
+      }
+      // The desktop host pages by domain (and may split a page between
+      // domains); the in-memory host pages a flat document list.
+      if (latest && (latest.domains === undefined) !== (page.domains === undefined)) {
+        throw new Error('Project snapshot pagination changed document format between pages.');
+      }
       latest = page;
-      if (Array.isArray(page.documents)) documents.push(...page.documents);
-      if (page.domains && typeof page.domains === 'object') {
+      if (page.documents !== undefined || page.domains === undefined) {
+        if (!Array.isArray(page.documents)) throw new Error('Project snapshot page is missing its document list.');
+        documents.push(...page.documents);
+      }
+      if (page.domains !== undefined) {
+        if (!page.domains || typeof page.domains !== 'object' || Array.isArray(page.domains) || !Object.keys(page.domains).length) {
+          throw new Error('Project snapshot page has no readable domains.');
+        }
         for (const [name, value] of Object.entries(page.domains)) {
-          const pageDocuments = Array.isArray(value)
-            ? value
-            : value && typeof value === 'object' && Array.isArray((value as { documents?: unknown[] }).documents)
-              ? (value as { documents: unknown[] }).documents
-              : [];
+          const pageDocuments = value && typeof value === 'object' && 'documents' in value ? value.documents : value;
+          if (!Array.isArray(pageDocuments)) throw new Error(`Project snapshot domain "${name}" has an unreadable document list.`);
           (domains[name] ||= []).push(...pageDocuments);
+          // Split transport pages can resume a different domain first.
+          if (value && typeof value === 'object' && 'hasMore' in value && value.hasMore === true) {
+            unfinishedDomains.add(name);
+          } else {
+            unfinishedDomains.delete(name);
+          }
         }
       }
-      cursor = page.hasMore && page.cursor ? page.cursor : undefined;
+      if (typeof page.hasMore !== 'boolean') throw new Error('Project snapshot pagination is missing its completion flag.');
+      if (page.hasMore && !page.cursor) throw new Error('Project snapshot pagination returned no continuation cursor.');
+      cursor = page.hasMore ? page.cursor : undefined;
+      if (cursor) {
+        if (cursors.has(cursor)) throw new Error('Project snapshot pagination repeated a continuation cursor.');
+        cursors.add(cursor);
+      }
     } while (cursor);
     if (!latest) return null;
+    if (unfinishedDomains.size) throw new Error(`Project snapshot pagination ended before all documents were read in: ${[...unfinishedDomains].join(', ')}.`);
     return { ...latest, documents, domains };
   }
   async applyChanges(changes: ProjectChange[], diagnostics?: DiagnosticContext): Promise<ProjectSnapshot | null> {
