@@ -173,7 +173,7 @@ const capture = async (name: string) => {
     ? await deviceLossPixels() : null;
   return { png, numbers: { ...(deviceLoss ? { deviceLoss } : {}), loadMs, frameMs, calls, triangles, geometries, textures, programs, gpuBytes: bytes,
     ...(cookBenchmark ? { textureCook: cookBenchmark, textureCookProblem: cookProblem } : {}),
-    ...(standardCook ? { graphCook: standardCook } : {}),
+    ...(standardCook ? { graphCook: standardCook, graphCookProblem: cookProblem } : {}),
     ...(bc1Parity ? { bc1Parity } : {}),
     ...(compression ? { materialCompression: compression } : {}),
   } };
