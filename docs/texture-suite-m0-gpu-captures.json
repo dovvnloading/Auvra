@@ -1,0 +1,114 @@
+{
+  "webgl2": {
+    "backend": "webgl2",
+    "os": "ubuntu-latest",
+    "workflowHead": "9b47806faa05d11890440ab86eb3dafd3ff87aa5",
+    "artifact": "https://github.com/dovvnloading/Auvra/actions/runs/43510600837/artifacts/14077873652",
+    "capture": null,
+    "referenceSha256": "8c9656d2f1a5f4cd824786bf19c69f3a7dea0ce0df5fa70b1d42aeec490733a4",
+    "screenshotSha256": "8c9656d2f1a5f4cd824786bf19c69f3a7dea0ce0df5fa70b1d42aeec490733a4",
+    "cook": {
+      "backend": "webgl2",
+      "fallback": false,
+      "pixels": 262144
+    },
+    "compression": {
+      "backend": "webgl2",
+      "vendor": "Google Inc. (Google)",
+      "renderer": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
+      "formats": {
+        "bc4": {
+          "feature": "EXT_texture_compression_rgtc",
+          "supported": true,
+          "status": "verified"
+        },
+        "bc5": {
+          "feature": "EXT_texture_compression_rgtc",
+          "supported": true,
+          "status": "verified"
+        },
+        "bc7": {
+          "feature": "EXT_texture_compression_bptc",
+          "supported": true,
+          "status": "verified"
+        },
+        "etc2": {
+          "feature": "WEBGL_compressed_texture_etc",
+          "supported": true,
+          "status": "verified"
+        },
+        "etc2a": {
+          "feature": "WEBGL_compressed_texture_etc",
+          "supported": true,
+          "status": "verified"
+        },
+        "astc": {
+          "feature": "WEBGL_compressed_texture_astc",
+          "supported": true,
+          "status": "verified"
+        }
+      }
+    },
+    "bc1": null,
+    "deviceLoss": null
+  },
+  "webgpu": {
+    "backend": "webgpu",
+    "os": "windows-latest",
+    "workflowHead": "db253b327e931e0f173027eafa528fe70d545c7a",
+    "artifact": "https://github.com/dovvnloading/Auvra/actions/runs/43511976618/artifacts/14079486796",
+    "capture": null,
+    "referenceSha256": "a3679b82c59ededec5c45bb635e4ad1a16a477189e2cce06fbc39e55018bacae",
+    "screenshotSha256": "a3679b82c59ededec5c45bb635e4ad1a16a477189e2cce06fbc39e55018bacae",
+    "cook": {
+      "backend": "webgpu",
+      "fallback": false,
+      "pixels": 262144
+    },
+    "compression": {
+      "backend": "webgpu",
+      "vendor": "google",
+      "renderer": null,
+      "architecture": "swiftshader",
+      "device": null,
+      "formats": {
+        "bc4": {
+          "feature": "texture-compression-bc",
+          "supported": true,
+          "status": "verified"
+        },
+        "bc5": {
+          "feature": "texture-compression-bc",
+          "supported": true,
+          "status": "verified"
+        },
+        "bc7": {
+          "feature": "texture-compression-bc",
+          "supported": true,
+          "status": "verified"
+        },
+        "etc2": {
+          "feature": "texture-compression-etc2",
+          "supported": true,
+          "status": "verified"
+        },
+        "etc2a": {
+          "feature": "texture-compression-etc2",
+          "supported": true,
+          "status": "verified"
+        },
+        "astc": {
+          "feature": "texture-compression-astc",
+          "supported": true,
+          "status": "verified"
+        }
+      }
+    },
+    "bc1": {
+      "webgpuBC": true,
+      "webgl2S3TC": true,
+      "status": "verified"
+    },
+    "deviceLoss": null
+  }
+}

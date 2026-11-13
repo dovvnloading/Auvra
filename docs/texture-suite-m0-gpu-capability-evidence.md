@@ -8,6 +8,8 @@
 >
 > **Important:** A test that compares with a fixed renderer-specific screenshot does **not** establish exact cross-backend pixel equality. A test that only executes conditionally on a device feature cannot establish that the device had that feature unless the run logs prove it.
 
+The [generated capability matrix](texture-suite-m0-gpu-matrix.md) inventories every registered node family and records the sampled operations by adapter. Its capture records include the artifact links, feature flags and PNG hashes.
+
 ## 1. Definitions used in the capability matrix
 
 - **Source-present:** implementation exists; not a passing device test.
@@ -82,8 +84,8 @@ For each supported format Auvra encodes an 8×8 two-stripe picture, loads it thr
 
 ## 5. Gates still needed before M0.4 can close
 
-- [ ] Generate or curate an explicit per-node-family WebGL2 vs WebGPU **code/capability** matrix. Unsupported and fallback must be recorded separately.
-- [ ] Record device capabilities and **actual execution** of BC/ETC2/ASTC input tests; add representative compressed image visual fixtures.
+- [x] Generate or curate an explicit per-node-family WebGL2 vs WebGPU **code/capability** matrix. Unsupported and fallback must be recorded separately.
+- [x] Record device capabilities and **actual execution** of BC/ETC2/ASTC input tests; add representative compressed image visual fixtures.
 - [ ] Compare coat/sheened/anisotropic/transparent materials with repeatable sampled texture inputs between backends, with accepted quantitative/visual tolerances.
 - [ ] Prove device-loss recovery, interrupted cancellation, shader compile failure, image cache invalidation and reuse of GPU resources across scene transitions.
 - [ ] Cover scan/capture, layered painting and a multi-UDIM authoring workflow, not just applied snapshots.

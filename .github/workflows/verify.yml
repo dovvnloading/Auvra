@@ -121,6 +121,10 @@ jobs:
         if: needs.changes.outputs.editor == 'true'
         run: npm run player:verify
 
+      - name: Check generated GPU capability inventory
+        if: needs.changes.outputs.editor == 'true'
+        run: npm run texture:matrix -- --check
+
       - name: Check for mistakes in the frontend
         if: needs.changes.outputs.editor == 'true'
         run: npm run lint
