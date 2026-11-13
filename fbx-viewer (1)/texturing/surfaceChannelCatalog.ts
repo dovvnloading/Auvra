@@ -1,4 +1,4 @@
-import { CHANNEL_DEFAULT, CHANNEL_IS_COLOR, CHANNEL_LABELS, PAINT_CHANNELS, type PaintChannel } from './paint/paintTypes';
+import { BLEND_FOR, type ChannelBlend, CHANNEL_DEFAULT, CHANNEL_IS_COLOR, CHANNEL_LABELS, PAINT_CHANNELS, type PaintChannel } from './paint/paintTypes';
 import { PHYSICAL_FEATURE_OUTPUTS } from '../runtime/materials/materialGraph';
 
 /**
@@ -28,6 +28,9 @@ export interface PaintV1ChannelDescriptor {
     readonly defaultValue: readonly [number, number, number];
     /** True for channels whose pixel representation is RGB, including tangent normals. */
     readonly rgb: boolean;
+    /** Meaning of stored samples. Coverage is kept separately in alpha. */
+    readonly encoding: 'sRGB' | 'linear' | 'encoded-tangent-normal';
+    readonly defaultBlend: ChannelBlend['mode'];
     /** Bits per component in the editable sparse paint picture. */
     readonly paintBits: 8 | 16;
     /** Destination in the painted GLB. Null denotes a channel without a direct glTF slot. */
@@ -69,6 +72,8 @@ const descriptorOf = (key: PaintChannel, paintBits: 8 | 16, gltfTexture: GltfPai
     role: key === 'normal' ? 'normal' : CHANNEL_IS_COLOR[key] ? 'colour' : 'data',
     defaultValue: Object.freeze([...CHANNEL_DEFAULT[key]] as [number, number, number]),
     rgb: CHANNEL_IS_COLOR[key],
+    encoding: key === 'normal' ? 'encoded-tangent-normal' : CHANNEL_IS_COLOR[key] ? 'sRGB' : 'linear',
+    defaultBlend: BLEND_FOR[key],
     paintBits,
     gltfTexture,
     materialInput: MATERIAL_INPUT_OF[key],

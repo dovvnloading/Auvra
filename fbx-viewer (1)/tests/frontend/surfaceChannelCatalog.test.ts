@@ -42,6 +42,10 @@ describe('M0 physical surface channel compatibility contract', () => {
         expect(Object.values(PAINT_V1_CHANNEL_CATALOG).map(channel => [
             channel.key, channel.defaultValue, channel.role, channel.paintBits, channel.gltfTexture,
         ])).toEqual(expected);
+        expect(PAINT_CHANNELS.map(key => [PAINT_V1_CHANNEL_CATALOG[key].encoding, PAINT_V1_CHANNEL_CATALOG[key].defaultBlend])).toEqual([
+            ['sRGB', 'normal'], ['linear', 'normal'], ['linear', 'normal'], ['linear', 'normal'],
+            ['encoded-tangent-normal', 'normalCombine'], ['sRGB', 'normal'], ['linear', 'normal'],
+        ]);
         for (const channel of Object.values(PAINT_V1_CHANNEL_CATALOG)) {
             expect(channel.paintBits).toBe(picturePrecision(pictureKey('layer', channel.key)));
             expect(Object.isFrozen(channel)).toBe(true);
