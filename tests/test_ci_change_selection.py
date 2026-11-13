@@ -60,7 +60,7 @@ class CheckSelectionTests(unittest.TestCase):
         # A skipped matrix job does not emit its individual required check names.
         workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/verify.yml").read_text()
         for job, signal, step_count in [
-            ("editor-build", "editor", 15),
+            ("editor-build", "editor", 16),
             ("python-verify", "python", 6),
             ("native-engine-build", "native", 9),
         ]:

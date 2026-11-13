@@ -58,8 +58,8 @@ The registry contains 207 node types across 19 families, including the dynamical
 ### webgl2
 
 - ubuntu-latest · Google Inc. (Google) · ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)
-- Browser unavailable in this capture. Chromium driver inventory unavailable in this capture.
-- Workflow head `9b47806faa05d11890440ab86eb3dafd3ff87aa5`. Checkout unrecorded. [CI artifact](https://github.com/dovvnloading/Auvra/actions/runs/43510600837/artifacts/14077873652)
+- Browser Chrome/156.0.8078.79. Chromium driver inventory ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver-5.0.0) / SwANGLE / 5.0.0.
+- Workflow head `2f9635ad70529a160e60dad16a30605c346c2ed0`. Checkout `cf1c94022b0ac766af326f3a7acfa5a6fe404b49`. [CI artifact](https://github.com/dovvnloading/Auvra/actions/runs/43513400032/artifacts/14079123566)
 - Reference PNG SHA-256 `8c9656d2f1a5f4cd824786bf19c69f3a7dea0ce0df5fa70b1d42aeec490733a4`. Screenshot SHA-256 `8c9656d2f1a5f4cd824786bf19c69f3a7dea0ce0df5fa70b1d42aeec490733a4`.
 - Compression flags `EXT_texture_compression_rgtc` (true), `EXT_texture_compression_bptc` (true), `WEBGL_compressed_texture_etc` (true), `WEBGL_compressed_texture_astc` (true).
 
