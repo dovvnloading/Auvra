@@ -237,7 +237,16 @@ export const openZip = async (archive: Blob | Uint8Array) => {
         cache.set(name, data);
         return data;
     };
-    return { names: () => [...entries.keys()], read };
+    /**
+     * Declared uncompressed size, without inflating the member. Callers that
+     * accept smaller document formats can reject oversized members before
+     * allocating their expanded bytes. Archive limits are already validated.
+     */
+    const memberInfo = (name: string): Readonly<{ size: number; packedSize: number; method: number }> | undefined => {
+        const entry = entries.get(name);
+        return entry ? { size: entry.size, packedSize: entry.packedSize, method: entry.method } : undefined;
+    };
+    return { names: () => [...entries.keys()], memberInfo, read };
 };
 
 /** Read every ZIP member when explicitly requested (material imports use openZip to read only referenced names). */

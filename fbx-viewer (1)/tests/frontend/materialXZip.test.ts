@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { readMaterialXZip, materialXZipPictureMember } from '../../texturing/materialXZip';
-import { makeZip } from '../../texturing/zip';
+import { makeZip, openZip } from '../../texturing/zip';
 
 const material = (path: string, second?: string) => `<?xml version="1.0"?>
 <materialx version="1.39">
@@ -101,6 +101,17 @@ describe('safe MaterialX archive import', () => {
         expect(start).toBeGreaterThan(0);
         data[start] ^= 0xff;
         await expect(readMaterialXZip(data)).rejects.toThrow(/damaged/);
+    });
+
+    it('preflights the declared XML member size before it can be inflated', async () => {
+        const tooBig = new Uint8Array(4 * 1024 * 1024 + 1);
+        const zip = await make([{ name: 'huge.mtlx', bytes: tooBig }]);
+        const opened = await openZip(zip);
+        expect(opened.memberInfo('huge.mtlx')).toEqual({
+            size: tooBig.byteLength, packedSize: tooBig.byteLength, method: 0,
+        });
+        expect(opened.memberInfo('not-here')).toBeUndefined();
+        await expect(readMaterialXZip(zip)).rejects.toThrow(/exceeds the 4 MB safety limit/);
     });
 
     it('rejects oversized/invalid XML without processing any pictures', async () => {
