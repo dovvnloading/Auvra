@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
-import { tileAtlasLayout } from '../../texturing/materialOutput';
-import { atlasGeometryUvCorners } from '../../texturing/paint/gltfExport';
+import { materialGraphForTextures, tileAtlasLayout } from '../../texturing/materialOutput';
+import { appliedAtlasLayout, atlasGeometryUvCorners, atlasMaterialUvCorners, markPaintedMaterials, PAINTED_KEY } from '../../texturing/paint/gltfExport';
 
 /**
  * Two triangles share an edge vertex at exactly U=1. The left triangle
@@ -75,6 +75,32 @@ describe('whole-model UDIM glTF geometry atlas', () => {
         expect(uv.getY(5)).toBe(0.75);
         source.dispose();
         out.dispose();
+    });
+
+    it('remaps two painted sets on the same mesh using their independently saved layouts', () => {
+        const first = tileAtlasLayout([1001, 1003], 256, 4096);
+        const other = tileAtlasLayout([1002, 1011, 1021], 128, 4096);
+        const legacy = materialGraphForTextures({ baseColor: 'other-paint' }, { tiles: other });
+        const restored = appliedAtlasLayout(undefined, legacy);
+        expect(restored).toEqual(other);
+        expect(appliedAtlasLayout(first, legacy)).toEqual(first);
+        const source = sharedEdgeMesh();
+        const body = new THREE.MeshStandardMaterial({ name: 'Body' }), trim = new THREE.MeshStandardMaterial({ name: 'Trim' });
+        const copy = new THREE.Mesh(source, [body, trim]);
+        const keys = markPaintedMaterials(copy, material => material.name, material => material === body ? first : restored);
+        expect([...keys]).toEqual(['Body', 'Trim']);
+        expect(copy.material.map(material => material.userData[PAINTED_KEY])).toEqual(['Body', 'Trim']);
+        const out = copy.geometry;
+        const uv = out.getAttribute('uv');
+        expect(uv.getX(0)).toBeCloseTo((first.cell + first.gutter) / first.width, 6);
+        expect(uv.getX(3)).toBeCloseTo(other.gutter / other.width, 6);
+        expect(uv.getY(3)).toBeCloseTo((other.cell * 0.5 + other.gutter) / other.height, 6);
+        expect(source.getAttribute('uv').getX(0)).toBe(1);
+        expect(out.getAttribute('skinWeight').count).toBe(6);
+        expect(atlasMaterialUvCorners(source, () => null)).toBe(source);
+        expect(() => appliedAtlasLayout({ ...first, columns: 0 }, legacy)).toThrow(/invalid/);
+        out.dispose();
+        source.dispose();
     });
 
     it('also handles nonindexed geometry and a single material without groups', () => {

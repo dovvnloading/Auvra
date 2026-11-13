@@ -1,4 +1,5 @@
 import { getMaterialNodeDefinition, materialGraphFeatures, normalizeMaterialGraph, OUTPUT_NODE_TYPE, readParam, type MaterialGraph } from '../../runtime/materials/materialGraph';
+import { readUdimTiles, UDIM_ATLAS_NODE_TYPE } from '../../runtime/materials/materialNodes';
 import type { TileLayout } from '../materialOutput';
 import * as THREE from 'three';
 import { readGlb, readGlbBinary, writeGlb } from '../../utils/gltfContainer';
@@ -121,23 +122,57 @@ export interface GltfMesh {
     indices: Uint32Array;
 }
 
+/** Layout of the uploaded pictures. Older painted sets recorded it on the generated material node. */
+export const appliedAtlasLayout = (saved: TileLayout | undefined, graph: MaterialGraph): TileLayout | null => {
+    const node = graph.nodes.find(node => node.type === UDIM_ATLAS_NODE_TYPE && node.id === 'udimTiles');
+    if (!saved && !node) return null;
+    const tiles = saved ? saved.tiles : readUdimTiles(node!.params.tiles);
+    const columns = saved ? saved.columns : Number(node!.params.columns);
+    const cell = saved ? saved.cell : Number(node!.params.tileSize);
+    const gutter = saved ? saved.gutter : Number(node!.params.gutter);
+    if (!Array.isArray(tiles) || !tiles.length || tiles.some(tile => !Number.isSafeInteger(tile) || tile < 1001)
+        || new Set(tiles).size !== tiles.length || !Number.isSafeInteger(columns) || columns < 1
+        || !Number.isSafeInteger(cell) || cell < 1 || !Number.isSafeInteger(gutter) || gutter < 0) {
+        throw new Error('The saved UDIM atlas layout is invalid. Apply the painted set again before exporting.');
+    }
+    const rows = Math.ceil(tiles.length / columns), stride = cell + 2 * gutter;
+    return { tiles, columns, rows, cell, gutter, width: columns * stride, height: rows * stride };
+};
+
+/** The pixel origin of a triangle's tile. Reject UVs that a single atlas cell cannot represent. */
+const atlasCell = (layout: TileLayout, tileU: number, tileV: number): { index: number; left: number; bottom: number } => {
+    if (!Number.isSafeInteger(tileU) || !Number.isSafeInteger(tileV) || tileU < 0 || tileU > 9 || tileV < 0) {
+        throw new Error('A painted triangle is outside the supported UDIM grid.');
+    }
+    const tile = 1001 + tileU + 10 * tileV;
+    const index = layout.tiles.indexOf(tile);
+    if (index < 0) throw new Error(`The painted model uses UDIM tile ${tile}, but that tile is not in this painted set.`);
+    const stride = layout.cell + 2 * layout.gutter;
+    return { index, left: (index % layout.columns) * stride + layout.gutter, bottom: Math.floor(index / layout.columns) * stride + layout.gutter };
+};
+
+const atlasLocal = (coordinate: number, shift: number, tile: number): number => {
+    const local = coordinate - shift;
+    const epsilon = 1e-5;
+    if (!Number.isFinite(local) || local < -epsilon || local > 1 + epsilon) {
+        throw new Error(`A triangle spans multiple UDIM tiles near tile ${tile}; split its UVs along the tile border before exporting.`);
+    }
+    return Math.min(1, Math.max(0, local));
+};
+
 /**
  * A set over several UDIM tiles laid on one atlas (tileAtlasLayout): each corner's UV moved into its
  * triangle's cell, corners split where triangles of different tiles share them.
  */
 export const atlasMesh = (part: GltfMesh & { triangleTile: Uint16Array; triangleShift: Int16Array }, layout: TileLayout): GltfMesh => {
-    const stride = layout.cell + 2 * layout.gutter;
-    const width = layout.columns * stride;
-    const height = layout.rows * stride;
     const vertexCount = part.positions.length / 3;
     const made = new Map<number, number>();
     const corners: number[] = [];
     const uvs: number[] = [];
     const indices = new Uint32Array(part.indices.length);
     for (let triangle = 0; triangle < part.indices.length / 3; triangle++) {
-        const cell = Math.max(0, layout.tiles.indexOf(part.triangleTile[triangle]));
-        const left = (cell % layout.columns) * stride + layout.gutter;
-        const bottom = Math.floor(cell / layout.columns) * stride + layout.gutter;
+        const tileU = part.triangleShift[triangle * 2], tileV = part.triangleShift[triangle * 2 + 1];
+        const { index: cell, left, bottom } = atlasCell(layout, tileU, tileV);
         for (let k = 0; k < 3; k++) {
             const vertex = part.indices[triangle * 3 + k];
             const key = cell * vertexCount + vertex;
@@ -146,9 +181,9 @@ export const atlasMesh = (part: GltfMesh & { triangleTile: Uint16Array; triangle
                 at = corners.length;
                 made.set(key, at);
                 corners.push(vertex);
-                const u = part.uvs[vertex * 2] - part.triangleShift[triangle * 2];
-                const v = part.uvs[vertex * 2 + 1] - part.triangleShift[triangle * 2 + 1];
-                uvs.push((left + u * layout.cell) / width, (bottom + v * layout.cell) / height);
+                const u = atlasLocal(part.uvs[vertex * 2], tileU, layout.tiles[cell]);
+                const v = atlasLocal(part.uvs[vertex * 2 + 1], tileV, layout.tiles[cell]);
+                uvs.push((left + u * layout.cell) / layout.width, (bottom + v * layout.cell) / layout.height);
             }
             indices[triangle * 3 + k] = at;
         }
@@ -276,7 +311,7 @@ export const writePaintedGlb = (input: { name: string; mesh: GltfMesh; surface: 
 };
 
 /** What a material of a whole model's export is to become: a painted surface and its pictures. */
-export interface PaintedMaterial { name: string; surface: GltfSurface; pictures: GltfPictures }
+export interface PaintedMaterial { name: string; surface: GltfSurface; pictures: GltfPictures; atlas?: TileLayout | null }
 
 /** The extras key a material carries through a glTF export to be given its painted material afterwards. */
 export const PAINTED_KEY = 'auvraPainted';
@@ -286,7 +321,11 @@ export const PAINTED_KEY = 'auvraPainted';
  * becomes a plain material carrying its key (`keyOf` gives the key, or null to leave it as it is), so a
  * glTF export keeps its place and `withPaintedMaterials` can fill it in.
  */
-export const markPaintedMaterials = (root: THREE.Object3D, keyOf: (material: THREE.Material) => string | null): Set<string> => {
+export const markPaintedMaterials = (
+    root: THREE.Object3D,
+    keyOf: (material: THREE.Material) => string | null,
+    atlasFor?: (material: THREE.Material) => TileLayout | null,
+): Set<string> => {
     const keys = new Set<string>();
     const swapped = new Map<THREE.Material, THREE.Material>();
     const swap = (material: THREE.Material): THREE.Material => {
@@ -304,7 +343,12 @@ export const markPaintedMaterials = (root: THREE.Object3D, keyOf: (material: THR
     root.traverse((node) => {
         const mesh = node as THREE.Mesh;
         if (!mesh.isMesh) return;
-        mesh.material = Array.isArray(mesh.material) ? mesh.material.map(swap) : swap(mesh.material);
+        const materials = mesh.material;
+        if (atlasFor) mesh.geometry = atlasMaterialUvCorners(mesh.geometry, index => {
+            const material = Array.isArray(materials) ? materials[index] : materials;
+            return material ? atlasFor(material) : null;
+        });
+        mesh.material = Array.isArray(materials) ? materials.map(swap) : swap(materials);
     });
     return keys;
 };
@@ -377,51 +421,38 @@ export const atlasGeometryUvCorners = (
     geometry: THREE.BufferGeometry,
     layout: TileLayout,
     isPaintedMaterial: (materialIndex: number) => boolean,
+): THREE.BufferGeometry => atlasMaterialUvCorners(geometry, index => isPaintedMaterial(index) ? layout : null);
+
+/** Apply each material group's own atlas in one geometry copy, keeping untouched groups in source UV space. */
+export const atlasMaterialUvCorners = (
+    geometry: THREE.BufferGeometry,
+    layoutFor: (materialIndex: number) => TileLayout | null,
 ): THREE.BufferGeometry => {
     const sourceUvs = geometry.getAttribute('uv');
     if (!sourceUvs) return geometry;
+    const corners = geometry.index?.count ?? sourceUvs.count;
+    const groups = geometry.groups.length ? geometry.groups : [{ start: 0, count: corners, materialIndex: 0 }];
+    const selected = groups.flatMap(group => {
+        const layout = layoutFor(group.materialIndex ?? 0);
+        return layout ? [{ layout, start: group.start, end: Math.min(corners, group.start + group.count) }] : [];
+    });
+    if (!selected.length) return geometry;
     const atlas = geometry.index ? geometry.toNonIndexed() : geometry.clone();
     try {
         const uvs = atlas.getAttribute('uv');
-        const count = Math.floor(uvs.count / 3);
-        const selected = new Uint8Array(count);
-        if (atlas.groups.length) {
-            for (const group of atlas.groups) {
-                if (!isPaintedMaterial(group.materialIndex ?? 0)) continue;
-                const end = Math.min(uvs.count, group.start + group.count);
-                for (let corner = group.start; corner + 2 < end; corner += 3) selected[Math.floor(corner / 3)] = 1;
-            }
-        } else if (isPaintedMaterial(0)) selected.fill(1);
-        const stride = layout.cell + 2 * layout.gutter;
-        const width = layout.columns * stride;
-        const height = layout.rows * stride;
-        const E = 1e-5;
-        for (let triangle = 0; triangle < count; triangle++) {
-            if (!selected[triangle]) continue;
-            const at = triangle * 3;
-            const averageU = (uvs.getX(at) + uvs.getX(at + 1) + uvs.getX(at + 2)) / 3;
-            const averageV = (uvs.getY(at) + uvs.getY(at + 1) + uvs.getY(at + 2)) / 3;
-            const tileU = Math.floor(averageU);
-            const tileV = Math.floor(averageV);
-            if (tileU < 0 || tileU > 9 || tileV < 0) throw new Error('A painted triangle is outside the supported UDIM grid.');
-            const tile = 1001 + tileU + 10 * tileV;
-            const cell = layout.tiles.indexOf(tile);
-            if (cell < 0) throw new Error(`The painted model uses UDIM tile ${tile}, but that tile is not in this painted set.`);
-            const left = (cell % layout.columns) * stride + layout.gutter;
-            const bottom = Math.floor(cell / layout.columns) * stride + layout.gutter;
-            for (let corner = 0; corner < 3; corner++) {
-                const index = at + corner;
-                const localU = uvs.getX(index) - tileU;
-                const localV = uvs.getY(index) - tileV;
-                // Crossing more than a boundary vertex requires cutting the triangle,
-                // which this exporter cannot do. Refuse instead of silently misplacing
-                // part of its texture.
-                if (localU < -E || localU > 1 + E || localV < -E || localV > 1 + E) {
-                    throw new Error(`A triangle spans multiple UDIM tiles near tile ${tile}; split its UVs along the tile border before exporting.`);
+        for (const { layout, start, end } of selected) {
+            for (let at = start; at + 2 < end; at += 3) {
+                const averageU = (uvs.getX(at) + uvs.getX(at + 1) + uvs.getX(at + 2)) / 3;
+                const averageV = (uvs.getY(at) + uvs.getY(at + 1) + uvs.getY(at + 2)) / 3;
+                const tileU = Math.floor(averageU);
+                const tileV = Math.floor(averageV);
+                const { index: cell, left, bottom } = atlasCell(layout, tileU, tileV);
+                for (let corner = 0; corner < 3; corner++) {
+                    const index = at + corner;
+                    const localU = atlasLocal(uvs.getX(index), tileU, layout.tiles[cell]);
+                    const localV = atlasLocal(uvs.getY(index), tileV, layout.tiles[cell]);
+                    uvs.setXY(index, (left + localU * layout.cell) / layout.width, (bottom + localV * layout.cell) / layout.height);
                 }
-                uvs.setXY(index,
-                    (left + Math.min(1, Math.max(0, localU)) * layout.cell) / width,
-                    (bottom + Math.min(1, Math.max(0, localV)) * layout.cell) / height);
             }
         }
         uvs.needsUpdate = true;
