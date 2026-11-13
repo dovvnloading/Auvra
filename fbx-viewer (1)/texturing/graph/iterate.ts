@@ -1,6 +1,6 @@
-import { INPUT_NODE_TYPE, ITERATE_NODE_TYPE, MATERIAL_INPUT_NODE_TYPE, MATERIAL_OUTPUT_NODE_TYPE, OUTPUT_NODE_TYPE, SUBGRAPH_SEED_KEY, subgraphParamDefs } from './nodes/io';
+import { CURVE_INPUT_NODE_TYPE, CURVE_OUTPUT_NODE_TYPE, INPUT_NODE_TYPE, ITERATE_NODE_TYPE, MATERIAL_INPUT_NODE_TYPE, MATERIAL_OUTPUT_NODE_TYPE, OUTPUT_NODE_TYPE, SUBGRAPH_SEED_KEY, subgraphParamDefs } from './nodes/io';
 import { MATERIAL_CHANNELS, materialKey } from './material';
-import { outputNodeKind, OUTPUT_CHANNEL_LABELS, type OutputChannel, type PortKind, type TexGraphNode, type TexNodeDef, type TexParamDef, type TexPortDef, type TextureGraph } from './types';
+import { outputNodeKind, OUTPUT_CHANNEL_LABELS, type CurvePaths, type OutputChannel, type PortKind, type TexGraphNode, type TexNodeDef, type TexParamDef, type TexPortDef, type TextureGraph } from './types';
 
 /**
  * ITERATE
@@ -27,16 +27,21 @@ const outputName = (node: TexGraphNode): string => {
 const inputName = (node: TexGraphNode): string => String(node.params.name || node.id);
 /** A Material output's name as the node shows it. */
 const materialOutputName = (node: TexGraphNode): string => (typeof node.params.name === 'string' ? node.params.name.trim() : '') || 'Material';
+const curveOutputName = (node: TexGraphNode): string => (typeof node.params.name === 'string' ? node.params.name.trim() : '') || 'Curve';
 const same = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
+
+interface FeedbackPair { output: string; input: string; material?: true; curve?: true }
 
 /**
  * Which Output feeds which Input on the next pass: those of the same name (letter case aside), each
- * Input once; a Material output feeds the Material input of its name.
+ * Input once; a Material output feeds the Material input of its name, and a Curve
+ * output feeds the Curve input of its name without ever converting paths to pixels.
  */
-export const feedbackPairs = (graph: Pick<TextureGraph, 'nodes'>): Array<{ output: string; input: string; material?: true }> => {
+export const feedbackPairs = (graph: Pick<TextureGraph, 'nodes'>): FeedbackPair[] => {
     const inputs = graph.nodes.filter((node) => node.type === INPUT_NODE_TYPE).map(inputName);
     const materialInputs = graph.nodes.filter((node) => node.type === MATERIAL_INPUT_NODE_TYPE).map(inputName);
-    const pairs: Array<{ output: string; input: string; material?: true }> = [];
+    const curveInputs = graph.nodes.filter((node) => node.type === CURVE_INPUT_NODE_TYPE).map(inputName);
+    const pairs: FeedbackPair[] = [];
     for (const node of graph.nodes) {
         if (node.type === OUTPUT_NODE_TYPE) {
             const input = inputs.find((name) => same(name, outputName(node)));
@@ -44,16 +49,21 @@ export const feedbackPairs = (graph: Pick<TextureGraph, 'nodes'>): Array<{ outpu
         } else if (node.type === MATERIAL_OUTPUT_NODE_TYPE) {
             const input = materialInputs.find((name) => same(name, materialOutputName(node)));
             if (input && !pairs.some((pair) => pair.input === input && pair.material)) pairs.push({ output: node.id, input, material: true });
+        } else if (node.type === CURVE_OUTPUT_NODE_TYPE) {
+            const input = curveInputs.find((name) => same(name, curveOutputName(node)));
+            if (input && !pairs.some((pair) => pair.input === input && pair.curve)) pairs.push({ output: node.id, input, curve: true });
         }
     }
     return pairs;
 };
 
 /** The pairs as the passes feed them: a material's pair once for each of its channels. */
-export const feedKeys = (pairs: ReadonlyArray<{ output: string; input: string; material?: true }>): Array<{ output: string; input: string }> =>
-    pairs.flatMap((pair) => (pair.material
-        ? MATERIAL_CHANNELS.map((channel) => ({ output: materialKey(pair.output, channel), input: materialKey(pair.input, channel) }))
-        : [{ output: pair.output, input: pair.input }]));
+export const feedKeys = (pairs: readonly FeedbackPair[]): Array<{ output: string; input: string }> =>
+    pairs.flatMap((pair) => (pair.curve
+        ? [] // CPU curves are passed between iterations separately from GPU image ownership.
+        : pair.material
+            ? MATERIAL_CHANNELS.map((channel) => ({ output: materialKey(pair.output, channel), input: materialKey(pair.input, channel) }))
+            : [{ output: pair.output, input: pair.input }]));
 
 /** How many passes a setting asks for, kept from 1 to MAX_PASSES. */
 export const passCount = (value: unknown): number => Math.max(1, Math.min(MAX_PASSES, Math.round(Number(value) || 1)));
@@ -93,18 +103,22 @@ const ITERATE_PARAMS: readonly TexParamDef[] = [
     { key: SUBGRAPH_SEED_KEY, label: 'Random seed', kind: 'int', default: 0, min: 0, max: 9999, step: 1 },
 ];
 
-/** An Iterate node's definition: the run graph's image Inputs and Outputs, its parameters, and the passes. */
+/** An Iterate node exposes image, material and CPU curve ports from the run graph. */
 export const iterateDefinition = (node: Pick<TexGraphNode, 'params'>, resolve: (id: string) => IterateGraphEntry | undefined): TexNodeDef => {
     const entry = typeof node.params.graph === 'string' && node.params.graph ? resolve(node.params.graph) : undefined;
     const graph = entry?.graph;
-    const inputs: TexPortDef[] = (graph?.nodes ?? []).filter((candidate) => candidate.type === INPUT_NODE_TYPE || candidate.type === MATERIAL_INPUT_NODE_TYPE)
+    const inputs: TexPortDef[] = (graph?.nodes ?? []).filter((candidate) => candidate.type === INPUT_NODE_TYPE || candidate.type === MATERIAL_INPUT_NODE_TYPE || candidate.type === CURVE_INPUT_NODE_TYPE)
         .map((candidate) => (candidate.type === MATERIAL_INPUT_NODE_TYPE
             ? { key: inputName(candidate), label: String(candidate.params.name || 'Material'), kind: 'material' as const }
-            : { key: inputName(candidate), label: inputName(candidate), kind: (candidate.params.kind === 'gray' ? 'gray' : 'color') as PortKind, fallback: 'black' as const }));
-    const outputs: TexPortDef[] = (graph?.nodes ?? []).filter((candidate) => candidate.type === OUTPUT_NODE_TYPE || candidate.type === MATERIAL_OUTPUT_NODE_TYPE)
+            : candidate.type === CURVE_INPUT_NODE_TYPE
+                ? { key: inputName(candidate), label: inputName(candidate), kind: 'curve' as const }
+                : { key: inputName(candidate), label: inputName(candidate), kind: (candidate.params.kind === 'gray' ? 'gray' : 'color') as PortKind, fallback: 'black' as const }));
+    const outputs: TexPortDef[] = (graph?.nodes ?? []).filter((candidate) => candidate.type === OUTPUT_NODE_TYPE || candidate.type === MATERIAL_OUTPUT_NODE_TYPE || candidate.type === CURVE_OUTPUT_NODE_TYPE)
         .map((candidate) => (candidate.type === MATERIAL_OUTPUT_NODE_TYPE
             ? { key: candidate.id, label: materialOutputName(candidate), kind: 'material' as const }
-            : { key: candidate.id, label: outputName(candidate), kind: outputNodeKind(candidate.params) }));
+            : candidate.type === CURVE_OUTPUT_NODE_TYPE
+                ? { key: candidate.id, label: curveOutputName(candidate), kind: 'curve' as const }
+                : { key: candidate.id, label: outputName(candidate), kind: outputNodeKind(candidate.params) }));
     const pairs = graph ? feedbackPairs(graph) : [];
     return {
         type: ITERATE_NODE_TYPE,
@@ -122,7 +136,9 @@ export const iterateDefinition = (node: Pick<TexGraphNode, 'params'>, resolve: (
         async run(context) {
             if (!entry) throw new Error(typeof node.params.graph === 'string' && node.params.graph ? 'The graph this node ran is no longer in the project.' : 'Choose the graph it runs in its settings.');
             const outer: Record<string, ReturnType<typeof context.input>> = {};
+            const outerCurves: Record<string, ReturnType<typeof context.curve>> = {};
             for (const input of inputs) {
+                if (input.kind === 'curve') { outerCurves[input.key] = context.curve(input.key); continue; }
                 if (input.kind !== 'material') { outer[input.key] = context.input(input.key); continue; }
                 // A material goes in as an image per channel, under its input's name and the channel's.
                 const material = context.material(input.key);
@@ -132,13 +148,26 @@ export const iterateDefinition = (node: Pick<TexGraphNode, 'params'>, resolve: (
             for (const parameter of graph!.parameters) values[parameter.name] = context.params[parameter.name];
             const count = passCount(context.params.passes);
             const fresh = context.params.newSeed !== false;
-            const results = await runPasses(count, outer, feedKeys(pairs), (given, pass) => context.subgraph(entry.id, values, given, {
-                iteration: { index: pass, count },
-                ...(fresh ? { seedOffset: pass + 1 } : {}),
-                owned: true,
-            }), (image) => context.gpu.release(image));
-            // Only its outputs are kept (a material output's channels under their keys): anything else the graph gave goes back.
-            const keys = new Set(outputs.flatMap((port) => (port.kind === 'material' ? MATERIAL_CHANNELS.map((channel) => materialKey(port.key, channel)) : [port.key])));
+            let previousCurves: Record<string, CurvePaths> = {};
+            const results = await runPasses(count, outer, feedKeys(pairs), async (given, pass) => {
+                const curveInputs: Record<string, CurvePaths | null> = { ...outerCurves };
+                if (pass > 0) for (const pair of pairs) {
+                    if (pair.curve && previousCurves[pair.output] !== undefined) curveInputs[pair.input] = previousCurves[pair.output];
+                }
+                const curves: Record<string, CurvePaths> = {};
+                const images = await context.subgraph(entry.id, values, given, {
+                    iteration: { index: pass, count },
+                    ...(fresh ? { seedOffset: pass + 1 } : {}),
+                    owned: true,
+                    curveInputs,
+                    onCurveOutput: (key, paths) => { curves[key] = paths; },
+                });
+                previousCurves = curves;
+                return images;
+            }, (image) => context.gpu.release(image));
+            for (const port of outputs) if (port.kind === 'curve') context.giveCurve(port.key, previousCurves[port.key] ?? []);
+            // Only its image/material outputs are kept; CPU curves are carried separately.
+            const keys = new Set(outputs.flatMap((port) => (port.kind === 'material' ? MATERIAL_CHANNELS.map((channel) => materialKey(port.key, channel)) : port.kind === 'curve' ? [] : [port.key])));
             const kept: typeof results = {};
             for (const [key, image] of Object.entries(results)) {
                 if (keys.has(key)) kept[key] = image;
