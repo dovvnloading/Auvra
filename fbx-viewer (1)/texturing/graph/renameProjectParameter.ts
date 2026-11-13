@@ -1,4 +1,5 @@
 import { materialAssetDocument, type MaterialAsset } from '../../runtime/materials/materialLibrary';
+import { materialGraphParameters } from '../../runtime/materials/materialGraph';
 import type { ProjectChange } from '../../utils/projectService';
 import { renameParameter, formulaNameProblem } from './parameters';
 import { readStoredGraph, withParameterPictures } from './stored';
@@ -98,7 +99,12 @@ const renamedGraphUser = (
     const nodes = graph.nodes.map((candidate) => {
         const node = record(candidate);
         const params = record(node?.params);
-        if (!node || !params || !GRAPH_USING_TYPES.has(String(node.type)) || params.graph !== sourceId || !owns(params, from)) return candidate;
+        if (!node || !params || params.graph !== sourceId || !owns(params, from)) return candidate;
+        // A future graph-user node may have a different type but carry the same
+        // public settings: do not leave its old value behind without warning.
+        if (!GRAPH_USING_TYPES.has(String(node.type))) {
+            throw new Error(`Graph node "${String(node.type)}" in "${material.name}" may reference this parameter, but this editor cannot rename it safely.`);
+        }
         if (graph.version !== 1) throw new Error(`Cannot edit a graph in "${material.name}": unsupported graph version.`);
         const next = { ...params };
         renameValueKey(next, from, to, `graph node ${String(node.id)} in "${material.name}"`);
@@ -214,7 +220,9 @@ export const planTextureParameterRename = (input: TextureParameterRenameInput): 
     const renamed = renameParameter(stored.graph, stored.values, from, to);
     const first: MaterialAsset = {
         ...source,
-        textureGraph: withParameterPictures({ ...stored, graph: renamed.graph, values: renamed.values }) as unknown as Record<string, unknown>,
+        // Retain recognized and unrecognized v1 stored fields, but update the
+        // graph/values and recomputed picture dependency record atomically.
+        textureGraph: { ...raw, ...withParameterPictures({ ...stored, graph: renamed.graph, values: renamed.values }) },
     };
     const nextMaterials = new Map<string, MaterialAsset>([[source.id, first]]);
     const impact: RenameImpact = {
@@ -242,11 +250,15 @@ export const planTextureParameterRename = (input: TextureParameterRenameInput): 
         changedMaterials.push(after);
         commit('materials', material.id, materialAssetDocument(material), materialAssetDocument(after));
     }
+    // Object/model parameter lists are shared by the shader and baked texture
+    // graph. A same-named shader parameter would be ambiguous to rename.
+    const sharedShaderName = materialGraphParameters(source.graph).some((parameter) => parameter.name === from);
     const nextModels = new Map<string, ProjectModelForRename>();
     for (const model of models) {
         const changed = renamedOverrideSettings(model.materialOverrides,
             (_name, entry) => entry.materialId === sourceMaterialId, from, to, `model ${model.id}`);
         if (!changed.count) continue;
+        if (sharedShaderName) throw new Error(`Cannot rename "${from}" in model overrides: a shader parameter in "${source.name}" has the same name.`);
         const next = { ...model, materialOverrides: changed.value };
         nextModels.set(model.id, next);
         impact.models.push(model.id);
@@ -255,11 +267,20 @@ export const planTextureParameterRename = (input: TextureParameterRenameInput): 
     }
     for (const object of objects) {
         const model = nextModels.get(object.modelId) ?? models.find((candidate) => candidate.id === object.modelId);
-        const assigned = record(model?.materialOverrides);
+        if (!model) {
+            const overrides = record(object.materialOverrides);
+            if (overrides && Object.values(overrides).some((entry) => {
+                const params = record(entry)?.parameters;
+                return Array.isArray(params) && params.some((value) => record(value)?.name === from);
+            })) throw new Error(`Cannot safely inspect object "${object.id}": its model is missing from the supplied snapshot.`);
+            continue;
+        }
+        const assigned = record(model.materialOverrides);
         const changed = renamedOverrideSettings(object.materialOverrides,
             (name) => record(assigned?.[name])?.materialId === sourceMaterialId,
             from, to, `object ${object.id}`);
         if (!changed.count) continue;
+        if (sharedShaderName) throw new Error(`Cannot rename "${from}" in object overrides: a shader parameter in "${source.name}" has the same name.`);
         const next = { ...object, materialOverrides: changed.value };
         impact.objects.push(object.id);
         impact.objectOverrides += changed.count;
