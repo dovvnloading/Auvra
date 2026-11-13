@@ -1,4 +1,5 @@
 import './instrument';
+import { clearcoatMapPixels } from './clearcoatMapPixels';
 import React, { useEffect } from 'react';
 import { createRoot } from 'react-dom/client';
 import { advance, useThree, type RootState } from '@react-three/fiber';
@@ -152,6 +153,10 @@ const capture = async (name: string) => {
   const { geometries, textures } = state.gl.info.memory;
   const programs = state.gl.info.programs?.length ?? 0;
   const bytes = onWebGpu ? webGpuBytes() : gpuBytes(state.gl.getContext() as WebGL2RenderingContext);
+  const clearcoatMap = name === 'physical-materials' ? await clearcoatMapPixels(state, async () => {
+    await nextTask();
+    if (onWebGpu) await settled();
+  }) : null;
   const cookBenchmark = name === 'texture-graph' ? textureGraphScene.benchmark : null;
   const standardCook = name === 'texture-graph' ? textureGraphScene.cook : null;
   const cookProblem = name === 'texture-graph' ? textureGraphScene.problem : null;
@@ -173,6 +178,7 @@ const capture = async (name: string) => {
   const deviceLoss = onWebGpu && name === 'texture-graph' && !new URLSearchParams(window.location.search).has('textureBench')
     ? await deviceLossPixels() : null;
   return { png, numbers: { ...(deviceLoss ? { deviceLoss } : {}), loadMs, frameMs, calls, triangles, geometries, textures, programs, gpuBytes: bytes,
+    ...(clearcoatMap ? { clearcoatMap } : {}),
     ...(cookBenchmark ? { textureCook: cookBenchmark, textureCookProblem: cookProblem } : {}),
     ...(standardCook ? { graphCook: standardCook, graphCookProblem: cookProblem } : {}),
     ...(bc1Parity ? { bc1Parity } : {}),
