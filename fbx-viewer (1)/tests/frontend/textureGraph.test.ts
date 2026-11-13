@@ -322,14 +322,16 @@ describe('texture graph undo', () => {
     });
 
     it('keeps each material\'s history while others are open, as long as it was touched lately', () => {
-        const bricks = materialHistory<number>('bricks-undo-test');
+        materialHistory<number>('bricks-undo-test', 0).record(37);
+        expect(materialHistory<number>('bricks-undo-test', 1).canUndo).toBe(false);
+        const bricks = materialHistory<number>('bricks-undo-test', 1);
         bricks.record(1, undefined, 0);
-        materialHistory<number>('tiles-undo-test').record(2, undefined, 0);
+        materialHistory<number>('tiles-undo-test', 1).record(2, undefined, 0);
         // Opening the material again (a new screen) finds its steps where they were.
-        expect(materialHistory<number>('bricks-undo-test')).toBe(bricks);
-        expect(materialHistory<number>('bricks-undo-test').canUndo).toBe(true);
-        for (let i = 0; i < 40; i++) materialHistory<number>(`other-${i}-undo-test`);
-        expect(materialHistory<number>('bricks-undo-test').canUndo).toBe(false);
+        expect(materialHistory<number>('bricks-undo-test', 1)).toBe(bricks);
+        expect(materialHistory<number>('bricks-undo-test', 1).canUndo).toBe(true);
+        for (let i = 0; i < 40; i++) materialHistory<number>(`other-${i}-undo-test`, 1);
+        expect(materialHistory<number>('bricks-undo-test', 1).canUndo).toBe(false);
     });
 });
 

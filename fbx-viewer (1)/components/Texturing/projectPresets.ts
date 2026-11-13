@@ -1,3 +1,4 @@
+import { materialLibrary } from '../../runtime/materials/materialLibrary';
 import { frontendDiagnostics } from '../../diagnostics/runtime';
 import { projectService } from '../../utils/projectService';
 import { MAX_PRESETS, putPreset, removePreset, renamePreset } from '../../texturing/graph/parameters';
@@ -43,7 +44,9 @@ export const sharedPresetsDocument = (presets: readonly SharedPreset[]): Record<
 class SharedPresets {
     private presets: SharedPreset[] = [];
     private project: string | null = null;
-    private loading: Promise<void> | null = null;
+    private generation = -1;
+    private loading: Promise<boolean> | null = null;
+    private writes: Promise<unknown> = Promise.resolve();
     private readonly listeners = new Set<() => void>();
     private version = 0;
 
@@ -59,58 +62,85 @@ class SharedPresets {
         for (const listener of this.listeners) listener();
     }
 
-    /** Reads them from the project the first time they are wanted there (again when another project is open). */
-    load(): void {
-        const project = projectService.getStatus().projectId ?? null;
-        if (!project || (project === this.project && this.loading)) return;
+    private current(project: string | null, generation: number): boolean {
+        return project !== null && project === projectService.getStatus().projectId && generation === materialLibrary.generation;
+    }
+
+    /** Reload even when the same project is reopened after an external edit. */
+    load(): Promise<boolean> {
+        const project = projectService.getStatus().projectId;
+        const generation = materialLibrary.generation;
+        if (!project) return Promise.resolve(false);
+        if (this.loading && this.project === project && this.generation === generation) return this.loading;
         this.project = project;
+        this.generation = generation;
         this.presets = [];
         this.loading = (async () => {
             try {
                 const snapshot = await projectService.getSnapshotAll('metadata');
-                const documents = (snapshot?.domains?.metadata ?? snapshot?.documents ?? []) as Array<{ id?: string; settings?: { presets?: unknown } }>;
-                const document = Array.isArray(documents) ? documents.find((candidate) => candidate?.id === SHARED_PRESETS_DOCUMENT) : undefined;
-                if (this.project === project) this.presets = readSharedPresets(document?.settings?.presets);
+                if (!this.current(project, generation)) return false;
+                if (!snapshot || snapshot.projectId !== project) throw new Error('The shared preset snapshot belongs to a different project.');
+                const documents = (snapshot.domains?.metadata ?? snapshot.documents) as Array<{ id?: string; settings?: { presets?: unknown } }>;
+                if (!Array.isArray(documents)) throw new Error('The project did not return its metadata documents.');
+                const document = documents.find(candidate => candidate?.id === SHARED_PRESETS_DOCUMENT);
+                this.presets = readSharedPresets(document?.settings?.presets);
+                this.changed();
+                return true;
             } catch (error) {
-                frontendDiagnostics.failure('texture_graph_shared_presets_read_failed', error);
+                if (this.current(project, generation)) {
+                    this.loading = null; // A later request can retry; never write from an unread inventory.
+                    frontendDiagnostics.failure('texture_graph_shared_presets_read_failed', error);
+                    this.changed();
+                }
+                return false;
             }
-            this.changed();
         })();
-    }
-
-    /** The shared presets for a graph. */
-    of(graphId: string): GraphPreset[] {
-        return this.presets.filter((preset) => preset.graphId === graphId);
-    }
-
-    private async write(next: SharedPreset[]): Promise<boolean> {
-        const before = this.presets;
-        this.presets = next;
         this.changed();
-        try {
-            await projectService.applyChanges([{ domain: 'metadata', operation: 'upsert', id: SHARED_PRESETS_DOCUMENT, value: sharedPresetsDocument(next) }]);
-            return true;
-        } catch (error) {
-            frontendDiagnostics.failure('texture_graph_shared_presets_write_failed', error);
-            this.presets = before;
-            this.changed();
-            return false;
-        }
+        return this.loading;
     }
 
-    /** Keeps a preset for a graph (a new one, or in place of the one of its id). */
+    of(graphId: string): GraphPreset[] {
+        return this.current(this.project, this.generation) ? this.presets.filter(preset => preset.graphId === graphId) : [];
+    }
+
+    /** Compute each edit after its generation's load and all older edits have settled. */
+    private write(update: (current: SharedPreset[]) => SharedPreset[]): Promise<boolean> {
+        const project = projectService.getStatus().projectId;
+        const generation = materialLibrary.generation;
+        const write = async () => {
+            if (!this.current(project, generation) || !await this.load() || !this.current(project, generation)) return false;
+            const next = update(this.presets);
+            try {
+                await projectService.applyChanges([{ domain: 'metadata', operation: 'upsert', id: SHARED_PRESETS_DOCUMENT, value: sharedPresetsDocument(next) }]);
+                if (!this.current(project, generation)) return false;
+                this.presets = next;
+                this.changed();
+                return true;
+            } catch (error) {
+                frontendDiagnostics.failure('texture_graph_shared_presets_write_failed', error);
+                return false;
+            }
+        };
+        const result = this.writes.then(write, write);
+        this.writes = result;
+        return result;
+    }
+
     put(graphId: string, preset: GraphPreset): Promise<boolean> {
-        const others = this.presets.filter((candidate) => candidate.graphId !== graphId);
-        const mine = putPreset(this.of(graphId), preset).map((candidate) => ({ ...candidate, graphId }));
-        return this.write([...others, ...mine]);
+        return this.write(current => {
+            const others = current.filter(candidate => candidate.graphId !== graphId);
+            const mine = putPreset(current.filter(candidate => candidate.graphId === graphId), preset)
+                .map(candidate => ({ ...candidate, graphId }));
+            return [...others, ...mine];
+        });
     }
 
     rename(id: string, name: string): Promise<boolean> {
-        return this.write(renamePreset(this.presets, id, name) as SharedPreset[]);
+        return this.write(current => renamePreset(current, id, name) as SharedPreset[]);
     }
 
     remove(id: string): Promise<boolean> {
-        return this.write(removePreset(this.presets, id) as SharedPreset[]);
+        return this.write(current => removePreset(current, id) as SharedPreset[]);
     }
 }
 

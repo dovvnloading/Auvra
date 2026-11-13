@@ -263,13 +263,18 @@ export class GraphHistory<T = TextureGraph> {
 /** Materials whose texture graph history is kept while another is open, the most recent last. */
 const KEPT_HISTORIES = 24;
 const histories = new Map<string, GraphHistory<unknown>>();
+let historyGeneration = -1;
 
 /**
  * The undo history of one material's texture graph. It lives outside the editor's screens, so it
  * survives switching to another material and back, and leaving the Materials tab; the histories of
  * the materials touched longest ago are let go once many are kept.
  */
-export const materialHistory = <T>(materialId: string): GraphHistory<T> => {
+export const materialHistory = <T>(materialId: string, generation: number): GraphHistory<T> => {
+    if (historyGeneration !== generation) {
+        histories.clear();
+        historyGeneration = generation;
+    }
     let found = histories.get(materialId);
     if (found) histories.delete(materialId);
     else found = new GraphHistory<unknown>();
