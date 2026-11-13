@@ -3,7 +3,7 @@ import { TextureGraphEvaluator } from '../../texturing/graph/evaluator';
 import { GRAPH_USING_TYPES, OUTPUT_NODE_TYPE } from '../../texturing/graph/nodes/io';
 import { PAINT_STACK_NODE_TYPE, paintBakedKey, paintStackEntry, PAINT_STACK_PREFIX } from '../../texturing/paint/stackNode';
 import { PAINT_CHANNELS, readPaintDocument } from '../../texturing/paint/paintTypes';
-import type { TextureGraph } from '../../texturing/graph/types';
+import type { TexGraphNode, TextureGraph } from '../../texturing/graph/types';
 import { flipbookFrameSize, flipbookGrid, frameTime, packFlipbook, readAnimation } from '../../texturing/graph/animation';
 import type { GpuImage } from '../../texturing/gpu/textureGpu';
 import { graphAnimates, type GraphResolver } from '../../texturing/graph/registry';
@@ -30,6 +30,20 @@ import type { MaterialAsset } from './materialLibrary';
  */
 
 const CHANNELS: ReadonlySet<string> = new Set<MaterialChannel>(['baseColor', 'normal', 'roughness', 'metallic', 'height', 'ambientOcclusion', 'emissive', 'opacity']);
+
+/**
+ * Explain which exact graph node forced a WebGPU cook to fall back to WebGL2.
+ * Node ids are stable in stored graphs; node types/names alone are ambiguous
+ * when many copies of a node exist. Kept pure so the diagnostic is testable.
+ */
+export const textureCookNodeFailure = (
+    node: Pick<TexGraphNode, 'id' | 'type' | 'name'> | undefined,
+    reason: string,
+): string => {
+    if (!node) return `A texture graph node could not be drawn: ${reason}`;
+    const shown = node.name ? `"${node.name}" ` : '';
+    return `Texture graph node ${shown}(${node.type}, id: ${node.id}) could not be drawn: ${reason}`;
+};
 
 /** Whether this device can cook: WebGL2 drawing into floating-point pictures, which the evaluator works in. */
 export const deviceCanCook = (): boolean => {
@@ -178,7 +192,7 @@ const cookOn = async (gpu: TexturingGpu, request: CookRequest, stored: ReturnTyp
             const states = await evaluator.evaluate({ graph, parameters: request.values, external, targets: outputs.map((node) => node.id), size: at, time, ...(request.seed !== undefined ? { seed: request.seed } : {}) });
             if (strict) {
                 for (const [id, state] of states) {
-                    if (state.error) throw new Error(`the node "${graph.nodes.find((node) => node.id === id)?.type ?? id}" could not be drawn: ${state.error}`);
+                    if (state.error) throw new Error(textureCookNodeFailure(graph.nodes.find((node) => node.id === id), state.error));
                 }
             }
             const images: ChannelImages = {};
