@@ -103,6 +103,13 @@ const main = async () => {
         if (!cost.bc1Parity) failures.push(`${name}: no BC1 parity result was returned`);
         else if (cost.bc1Parity.status === 'failed') failures.push(`${name}: ${cost.bc1Parity.reason}`);
       }
+      if (name === 'texture-graph' && !textureBench) {
+        const matrix = cost.materialCompression;
+        if (matrix?.backend !== renderer) failures.push(`${name}: missing ${renderer} material compression report`);
+        else for (const [format, result] of Object.entries(matrix.formats)) {
+          if (result.status === 'failed') failures.push(`${name}: ${renderer} ${format}: ${result.reason}`);
+        }
+      }
       const bytes = Buffer.from(png.split(',')[1], 'base64');
       const referenceFile = path.join(referenceDir, `${name}.png`);
       writeFileSync(path.join(outputDir, `${name}.actual.png`), bytes);
