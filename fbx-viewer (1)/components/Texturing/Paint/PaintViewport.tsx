@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExtern
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import type { GpuImage, TextureGpu } from '../../../texturing/gpu/textureGpu';
+import { paintViewTarget } from '../../../texturing/paint/paintViewTarget';
 import { tileGeometry } from '../../../texturing/mesh/partMesh';
 import type { MeshMapName } from '../../../texturing/graph/nodes/io';
 import type { BakeSettings, ExtraBakeMap } from '../../../texturing/bake/meshBaker';
@@ -97,27 +98,6 @@ const previewTarget = (size: number, kind: 'colour' | 'bytes' | 'half'): THREE.W
     anisotropy: 4,
     depthBuffer: false,
 });
-
-/**
- * Where the view is drawn before it reaches the screen: several samples per pixel, smoothed as it is
- * read. It is marked as a target three draws into as onto the screen (tone mapped and turned to sRGB
- * by each material, so materials that show raw values stay raw) and kept in plain bytes.
- */
-const viewTarget = (gpu: TextureGpu, width: number, height: number): THREE.WebGLRenderTarget => {
-    const samples = Math.min(width * height > 4_000_000 ? 2 : 4, gpu.renderer.capabilities.maxSamples);
-    const target = new THREE.WebGLRenderTarget(width, height, {
-        samples,
-        type: THREE.UnsignedByteType,
-        colorSpace: THREE.SRGBColorSpace,
-        minFilter: THREE.LinearFilter,
-        magFilter: THREE.LinearFilter,
-        generateMipmaps: false,
-        depthBuffer: true,
-    });
-    target.texture.internalFormat = 'RGBA8';
-    (target as THREE.WebGLRenderTarget & { isXRRenderTarget?: boolean }).isXRRenderTarget = true;
-    return target;
-};
 
 /** The room light, drawn once per GPU context (a reset loses it with everything else drawn on the GPU). */
 const environments = new WeakMap<TextureGpu, { texture: THREE.Texture; generation: number }>();
@@ -547,7 +527,7 @@ export const PaintViewport: React.FC<{
             let target = smooth.current;
             if (!target || target.width !== width || target.height !== height) {
                 target?.dispose();
-                target = smooth.current = viewTarget(gpu, width, height);
+                target = smooth.current = paintViewTarget(gpu.renderer, width, height);
             }
             const renderer = gpu.renderer;
             renderer.setRenderTarget(target);
@@ -558,7 +538,7 @@ export const PaintViewport: React.FC<{
                 let other = compareTarget.current;
                 if (!other || other.width !== width || other.height !== height) {
                     other?.dispose();
-                    other = compareTarget.current = viewTarget(gpu, width, height);
+                    other = compareTarget.current = paintViewTarget(gpu.renderer, width, height);
                 }
                 const lit = view === 'material';
                 for (const entry of world.tiles.values()) entry.mesh.material = lit ? entry.compareLit : entry.compareSingle;

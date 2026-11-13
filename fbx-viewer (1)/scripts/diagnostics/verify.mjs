@@ -220,6 +220,7 @@ const EXEMPT = new Map(Object.entries({
   'texturing/paint/seams.ts': 'pure-utility',
   'texturing/paint/photoMaterial.ts': 'pure-utility',
   'texturing/paint/photometricStereo.ts': 'pure-utility',
+  'texturing/paint/paintViewTarget.ts': 'pure-utility',
   'texturing/paint/captureMaps.ts': 'pure-utility',
   'texturing/paint/captureProtocol.ts': 'pure-utility',
   'texturing/paint/photoCapture.ts': 'worker-protocol',

@@ -1,3 +1,4 @@
+import { verifyPaintViewTarget } from './paintViewTarget';
 import './instrument';
 import { clearcoatMapPixels } from './clearcoatMapPixels';
 import React, { useEffect } from 'react';
@@ -231,4 +232,4 @@ const compare = async (actualUrl: string, referenceUrl: string, tolerance: numbe
   return { sameSize: true, share: differing / pixels, mean: sum / pixels, worst, diff: canvas.toDataURL('image/png') };
 };
 
-(window as unknown as { auvraVisual: unknown }).auvraVisual = { names: Object.keys(SCENES), capture, compare, verifyPhotoCaptureWorker };
+(window as unknown as { auvraVisual: unknown }).auvraVisual = { names: Object.keys(SCENES), capture, compare, verifyPaintViewTarget, verifyPhotoCaptureWorker };
