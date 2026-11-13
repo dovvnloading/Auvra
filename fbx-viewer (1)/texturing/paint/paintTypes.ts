@@ -406,8 +406,40 @@ export const readPaintLayers = (list: unknown[], depth = 0): PaintLayer[] => lis
     return [result];
 });
 
-/** A stored document made safe to use. */
+/**
+ * Future paint documents are not v1 documents. Do not silently coerce one to
+ * version 1 and discard channels this editor cannot parse.
+ */
+export const unsupportedPaintVersion = (value: unknown): unknown | null => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    const version = (value as Record<string, unknown>).version;
+    return version === undefined || version === 1 ? null : version;
+};
+
+/**
+ * A future painted set belonging to the model/material group about to be edited.
+ * Other assets may use `paint` for presets/templates; they must not block Paint.
+ * This is a pure preflight so PaintSession can refuse before creating or saving
+ * an empty replacement set.
+ */
+export const incompatiblePaintSetFor = (
+    assets: readonly { id: string; name: string; paint?: unknown }[],
+    target: { modelId: string; materialNames: readonly string[] },
+): { id: string; name: string; version: unknown } | null => {
+    for (const asset of assets) {
+        const version = unsupportedPaintVersion(asset.paint);
+        if (version === null) continue;
+        const doc = asset.paint as Record<string, unknown>;
+        if (doc.modelId !== target.modelId || !Array.isArray(doc.materialNames)) continue;
+        if (!doc.materialNames.some((name) => typeof name === 'string' && target.materialNames.includes(name))) continue;
+        return { id: asset.id, name: asset.name, version };
+    }
+    return null;
+};
+
+/** A stored v1 document made safe to use. Unsupported versions are left untouched. */
 export const readPaintDocument = (value: unknown): PaintDocument | null => {
+    if (unsupportedPaintVersion(value) !== null) return null;
     const raw = value as Partial<PaintDocument> | null;
     if (!raw || typeof raw !== 'object' || typeof raw.modelId !== 'string' || !Array.isArray(raw.layers)) return null;
     const channels = Array.isArray(raw.channels) ? raw.channels.filter((channel): channel is PaintChannel => (PAINT_CHANNELS as readonly string[]).includes(channel)) : [];
