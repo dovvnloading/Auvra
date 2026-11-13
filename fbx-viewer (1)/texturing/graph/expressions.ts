@@ -18,7 +18,7 @@ type Node =
     | { kind: 'ternary'; test: Node; then: Node; otherwise: Node }
     | { kind: 'call'; name: string; args: Node[] };
 
-const MAX_LENGTH = 512;
+export const MAX_EXPRESSION_LENGTH = 512;
 
 interface Token { kind: 'number' | 'name' | 'op'; text: string }
 
@@ -42,7 +42,7 @@ const tokenize = (source: string): Token[] => {
 const PRECEDENCE: Record<string, number> = { '||': 1, '&&': 2, '==': 3, '!=': 3, '<': 4, '>': 4, '<=': 4, '>=': 4, '+': 5, '-': 5, '*': 6, '/': 6, '%': 6, '^': 8 };
 
 const parse = (source: string): Node => {
-    if (source.length > MAX_LENGTH) throw new Error('The formula is too long');
+    if (source.length > MAX_EXPRESSION_LENGTH) throw new Error('The formula is too long');
     const tokens = tokenize(source);
     let at = 0;
     const peek = () => tokens[at];
@@ -235,6 +235,8 @@ export const evaluateExpression = (source: string, scope: Readonly<Record<string
  * function called by that name), its spacing and everything else kept as written.
  */
 export const renameInFormula = (source: string, from: string, to: string): string => {
+    // The evaluator resolves pi before inspecting the graph's parameter scope.
+    if (from === 'pi') return source;
     let out = '';
     let at = 0;
     while (at < source.length) {

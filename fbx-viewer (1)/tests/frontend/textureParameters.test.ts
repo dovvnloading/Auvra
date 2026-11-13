@@ -7,6 +7,7 @@ import {
     conditionHolds,
     conditionScope,
     formatCondition,
+    availableParameterName,
     formulaNameProblem,
     groupByLabelPrefix,
     hasLabelPrefixes,
@@ -225,6 +226,37 @@ describe('renaming a parameter\'s formula name', () => {
         expect(values).toEqual({ grit: 0.4, mortar: 0.1 });
         // A function of the same name is still called.
         expect(renameInFormula('min(min, 2)', 'min', 'least')).toBe('min(least, 2)');
+    });
+
+    it('keeps nested string parameters and the mathematical constant pi independent of a rename', () => {
+        for (const type of ['subgraph', 'iterate']) {
+            const node = { id: 'nested', type, x: 0, y: 0, params: { graph: 'other', visibleIf: 'dirt', amount: { $bind: 'dirt', info: 7 } } };
+            const graph = { ...createTextureGraph(), parameters, nodes: [node] };
+            expect(renameParameter(graph, {}, 'dirt', 'grit').graph.nodes[0].params)
+                .toEqual({ graph: 'other', visibleIf: 'dirt', amount: { $bind: 'grit', info: 7 } });
+        }
+        expect(renameInFormula('pi * 2', 'pi', 'angle')).toBe('pi * 2');
+        expect(renameInFormula('seed + $seed', 'seed', 'amount')).toBe('amount + $seed');
+    });
+
+    it('refuses a rename that would truncate a saved condition or invalidate a node formula', () => {
+        const longCondition = 'dirt+'.repeat(36) + '1';
+        const graph = { ...createTextureGraph(), parameters: [{ ...parameters[0], visibleIf: longCondition }] };
+        expect(() => renameParameter(graph, {}, 'dirt', 'newDirt')).toThrow(/200-character/);
+        const node = { ...createNode('blur', 0, 0), params: { radius: { $expr: 'dirt+'.repeat(82) + '1' } } };
+        expect(() => renameParameter({ ...graph, parameters, nodes: [node] }, {}, 'dirt', 'newDirt')).toThrow(/512-character/);
+    });
+
+    it('avoids collisions with graph settings and formula constants when renaming or exposing a setting', () => {
+        for (const name of ['graph', 'passes', 'newSeed', 'pi', 'constructor', '__proto__', 'toString']) {
+            expect(formulaNameProblem(name, parameters, 'dirt')).toMatch(/reserved/);
+            expect(availableParameterName(name, parameters)).toBe(name + '2');
+            expect(formulaNameProblem('grit', parameters, name)).toBeNull();
+        }
+        for (const name of ['seed', 'width', 'min']) expect(formulaNameProblem(name, parameters, 'dirt')).toBeNull();
+        const base = 'a'.repeat(48);
+        const exposed = availableParameterName(base, [{ ...parameters[0], name: base }]);
+        expect(exposed).toBe('a'.repeat(47) + '2');
     });
 
     it('refuses a name that is taken, empty or not a formula name', () => {
