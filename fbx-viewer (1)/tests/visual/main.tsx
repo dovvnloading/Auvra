@@ -145,7 +145,7 @@ const capture = async (name: string) => {
   }
   return { png, numbers: { loadMs, frameMs, calls, triangles, geometries, textures, programs, gpuBytes: bytes,
     ...(cookBenchmark ? { textureCook: cookBenchmark, textureCookProblem: cookProblem } : {}),
-    ...(standardCook ? { graphCook: standardCook } : {}),
+    ...(standardCook ? { graphCook: standardCook, graphCookProblem: cookProblem } : {}),
     ...(bc1Parity ? { bc1Parity } : {}),
   } };
 };

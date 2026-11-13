@@ -429,7 +429,10 @@ export const SCENES: Record<string, VisualScene> = {
     camera: { position: [0, 0.6, 5.2], fov: 45 },
     Scene: TextureGraphScene,
     settle: async ({ frames, until }) => {
-      await until(() => textureGraphScene.ready);
+      await until(() => {
+        if (textureGraphScene.failure) throw textureGraphScene.failure;
+        return textureGraphScene.ready;
+      });
       // The opt-in benchmark returns its own per-stage textureCook timings.
       // Regular fixed-resolution visual verification must have a real-clock
       // bake time, not a missing or silently virtualized measurement.

@@ -25,10 +25,10 @@ export interface TexturingGpu {
     drawInstances(target: GpuImage, options: InstanceOptions): Promise<void>;
     clear(target: GpuImage, value?: [number, number, number, number]): void;
     copy(from: PassInput, to: GpuImage): void;
-    /** An 8-bit colour image's pixels (bottom row first). */
+    /** The image as 8-bit RGBA pixels (bottom row first); grey expands to RGB with opaque alpha. */
     readRgba8Later(image: GpuImage): Promise<Uint8Array | null>;
     /** One pixel's four values as kept (x, y from the bottom left). */
-    readPixelLater(source: GpuImage, x: number, y: number): Promise<Float32Array | null>;
+    readPixelLater(source: GpuImage, x: number, y: number, timeoutMs?: number): Promise<Float32Array | null>;
     /** The image scaled to `width` x `height` as 16-bit values (one a pixel for grey, four for colour), top row first when `flipRows`. */
     readUint16Async(source: PassInput, width: number, height: number, encode: 'color' | 'gray', flipRows?: boolean): Promise<Uint16Array>;
     /** A PNG of the image (top row first), 8 bits a channel. */

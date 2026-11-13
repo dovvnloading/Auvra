@@ -55,6 +55,7 @@ export interface TextureGraphCookMeasurement {
 export const textureGraphScene = {
     ready: false,
     problem: null as string | null,
+    failure: null as Error | null,
     benchmark: null as TextureCookBenchmark | null,
     cook: null as TextureGraphCookMeasurement | null,
     bc1Parity: null as Bc1ParityResult | null,
@@ -239,7 +240,7 @@ const cook = async (gpu: TexturingGpu, logSize: number, allocationScope?: Alloca
                 throw new Error(`The benchmark adapter could not cook both outputs at ${resolution}×${resolution}`);
             }
             const syncStart = realNow();
-            if (!await gpu.readPixelLater(colour.outputs.out, 0, 0)) throw new Error('Cannot synchronize the texture-graph benchmark with its GPU.');
+            if (!await gpu.readPixelLater(colour.outputs.out, 0, 0, 60_000)) throw new Error('Cannot synchronize the texture-graph benchmark with its GPU.');
             coldSyncMs = realNow() - syncStart;
         }
         const encodeStart = realNow();
@@ -272,7 +273,7 @@ const cook = async (gpu: TexturingGpu, logSize: number, allocationScope?: Alloca
         const editedImage = edited.get('colour')?.outputs.out;
         if (!editedImage) throw new Error('Incremental graph did not produce the base colour.');
         const editSyncStart = realNow();
-        if (!await gpu.readPixelLater(editedImage, 0, 0)) throw new Error('Cannot synchronize incremental texture cooking.');
+        if (!await gpu.readPixelLater(editedImage, 0, 0, 60_000)) throw new Error('Cannot synchronize incremental texture cooking.');
         const editSyncMs = realNow() - editSyncStart;
         const allocationBytes = allocations.result();
         return {
@@ -374,6 +375,7 @@ export const TextureGraphScene: React.FC = () => {
         let gone = false;
         textureGraphScene.ready = false;
         textureGraphScene.problem = null;
+        textureGraphScene.failure = null;
         textureGraphScene.benchmark = null;
         textureGraphScene.cook = null;
         textureGraphScene.bc1Parity = null;
@@ -414,6 +416,7 @@ export const TextureGraphScene: React.FC = () => {
                     adapter: benchmarkAdapter(isGpuRenderer(gl) ? gl.core.adapter : undefined) };
             } catch (error) {
                 // The renderer's own GPU could not: keep why (textureGraphScene.problem), and show WebGL2's cook with the ball red.
+                if (!isGpuRenderer(gl)) throw error;
                 own = false;
                 textureGraphScene.problem = error instanceof Error ? error.message : String(error);
                 const fallbackStarted = realNow();
@@ -430,7 +433,9 @@ export const TextureGraphScene: React.FC = () => {
             const [colour, normal] = await Promise.all([load(pictures.colour, true), load(pictures.normal, false)]);
             if (gone) return;
             setMaps({ colour, normal, own });
-        })();
+        })().catch(error => {
+            if (!gone) textureGraphScene.failure = error instanceof Error ? error : new Error(String(error));
+        });
         return () => { gone = true; };
     }, [gl]);
     useEffect(() => {

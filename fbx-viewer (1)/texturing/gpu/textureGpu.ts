@@ -619,11 +619,32 @@ void main() {
     }
 
     /**
-     * Reads an 8-bit image's pixels (bottom row first) without holding up the GPU: the read is queued behind
+     * Reads the image's pixels as 8-bit RGBA (bottom row first) without holding up the GPU: the read is queued behind
      * its drawing and collected once a fence says it is done, so live edits keep flowing. The image may be
      * released (and reused) as soon as this returns. Resolves null if the context is lost meanwhile.
      */
     readRgba8Later(image: GpuImage): Promise<Uint8Array | null> {
+        if (image.kind === 'color' && image.precision === 8) return this.readRgba8TargetLater(image);
+        // RGBA/UNSIGNED_BYTE is portable for RGBA8 attachments. Float attachments require a
+        // different read type, and a scalar picture must appear in all three colour channels.
+        const rgba = this.image(image.width, image.height, 'color', 8);
+        try {
+            if (image.kind === 'gray') {
+                this.passNow(rgba, {
+                    fragment: 'void main() { float g = texture(source, vUv).r; outColor = vec4(g, g, g, 1.0); }',
+                    inputs: { source: image },
+                });
+            } else {
+                this.copy(image, rgba);
+            }
+            return this.readRgba8TargetLater(rgba);
+        } finally {
+            // The GPU read has already been queued into its own pixel pack buffer.
+            this.release(rgba);
+        }
+    }
+
+    private readRgba8TargetLater(image: GpuImage): Promise<Uint8Array | null> {
         const gl = this.renderer.getContext() as WebGL2RenderingContext;
         const { width, height } = image;
         const previous = this.renderer.getRenderTarget();
@@ -664,7 +685,7 @@ void main() {
      * up the GPU: the value is copied out behind the image's drawing and collected once a fence says it is
      * done. Resolves null if the context is lost meanwhile.
      */
-    readPixelLater(source: GpuImage, x: number, y: number): Promise<Float32Array | null> {
+    readPixelLater(source: GpuImage, x: number, y: number, timeoutMs = 2000): Promise<Float32Array | null> {
         const probe = this.image(1, 1, 'color', 32);
         this.passNow(probe, {
             fragment: 'uniform vec2 uAt;\nvoid main() { outColor = texelFetch(source, ivec2(uAt), 0); }',
@@ -694,7 +715,7 @@ void main() {
             const poll = () => {
                 if (gl.isContextLost() || !fence) { finish(null); return; }
                 const status = gl.clientWaitSync(fence, 0, 0);
-                if (status === gl.WAIT_FAILED || waited > 2000) { finish(null); return; }
+                if (status === gl.WAIT_FAILED || waited > timeoutMs) { finish(null); return; }
                 if (status === gl.TIMEOUT_EXPIRED) { waited += 4; setTimeout(poll, 4); return; }
                 const value = new Float32Array(4);
                 gl.bindBuffer(gl.PIXEL_PACK_BUFFER, buffer);
