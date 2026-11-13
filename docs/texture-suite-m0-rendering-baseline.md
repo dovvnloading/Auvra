@@ -158,3 +158,25 @@ Multiple samples produce one numbered directory per capture under a new `samples
 A maintainer can apply the `texture-benchmark` label to a same-repository pull request to request two independent software samples in each of four configurations (WebGL2 and WebGPU at 2K and 4K). The run checks out the labeled head commit. Its artifacts contain the raw samples and summary for each configuration. Reapply the label to measure a new commit. Two samples exercise the protocol and provide initial observations. Use the longer manual series on a controlled machine to establish latency budgets.
 
 The 4K software fixture allows up to 60 seconds of WebGL2 fence polling for the benchmark's one-pixel synchronization read. Interactive editor probes keep their existing deadline. A failed WebGL2 cook is reported immediately; it cannot fall back to itself.
+
+### Hosted 2K and 4K software measurements, 2026-11-13
+
+All eight proof-graph cooks finished on the requested backend with five cold nodes, zero unchanged nodes and four edited nodes. Each row covers two fresh browser processes at clean commit [`f06489c`](https://github.com/dovvnloading/Auvra/commit/f06489c999fa3d00ecdf3a618ee412f8bdddbd32). The two samples show an observed range. They are too few to establish a production percentile budget. [Benchmark run 43512197278](https://github.com/dovvnloading/Auvra/actions/runs/43512197278).
+
+Times are milliseconds, written as minimum–maximum. Evaluation, synchronization and encoding are separate phases. Peak graphics allocation is the maximum recorded by the scoped allocation counter, in MiB.
+
+| Backend / size | Cold evaluation | Cold sync | PNG encode | Cache hit | Edit evaluation | Edit sync | Peak allocation MiB | Raw samples |
+|---|---:|---:|---:|---:|---:|---:|---:|---|
+| WebGL2 2048 | 57.8–85.8 | 1105.5–1472.3 | 1267.5–1287.5 | 0.6 | 2.3–2.9 | 822.6–975.9 | 144.0 | [14079466285](https://github.com/dovvnloading/Auvra/actions/runs/43512197278/artifacts/14079466285) |
+| WebGL2 4096 | 2183.3–2237.4 | 1060.9–1073.4 | 3163.7–3257.7 | 0.7–0.8 | 17.1–28.5 | 2478.9–2616.6 | 576.0 | [14079246831](https://github.com/dovvnloading/Auvra/actions/runs/43512197278/artifacts/14079246831) |
+| WebGPU 2048 | 212.9–221.2 | 1220.1–1367.4 | 1600.8–1617.0 | 0.4–0.5 | 1.5–1.8 | 1108.3–1137.6 | 245.2 | [14079935165](https://github.com/dovvnloading/Auvra/actions/runs/43512197278/artifacts/14079935165) |
+| WebGPU 4096 | 6221.2–6362.7 | 23.6–27.6 | 6782.5–6784.9 | 0.9–1.0 | 4914.1–4939.1 | 3.7–7.5 | 893.2 | [14078214396](https://github.com/dovvnloading/Auvra/actions/runs/43512197278/artifacts/14078214396) |
+
+WebGL2 used Linux x64, HeadlessChrome 157 and ANGLE/Vulkan SwiftShader (SwANGLE driver 5.0.0). WebGPU used Windows x64, HeadlessChrome 156 and the Google SwiftShader adapter. Chromium separately reported Microsoft Basic Render Driver 10.0.26100.33648 in the Windows system device list. The two jobs ran on different operating systems and used different allocation scopes, so the rows cannot establish which backend is faster or uses less physical memory.
+
+| Resolution | Cold graph SHA-256 | Edited graph SHA-256 |
+|---:|---|---|
+| 2048 | `de4ef581b188aa50f3821cc40449807d42b66570c2c16210ca27409176286b98` | `608c34f29b2004d2884dc6688fb055d9830d8dd9f02cd7804ff81ce601a03f9e` |
+| 4096 | `e50b290f03c520901e7360e84634d34684b072d5bc3b57cff01e62d3228c72d2` | `b2e8469d75d8580d66468d12cb60687f3af3af70252037b299372203dc10b363` |
+
+The first run exposed a WebGL2 float-target readback discrepancy during the Windows paint parity check. Both Windows jobs retained their diagnostics and rejected the fallback. Linux WebGL2 at 4K also failed to finish within the earlier scene wait. The successful runs above include the corrected WebGL2 byte conversion, a longer benchmark-only fence wait and direct reporting of failed cooks. [Initial run 43511268158](https://github.com/dovvnloading/Auvra/actions/runs/43511268158).
