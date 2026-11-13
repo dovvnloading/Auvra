@@ -94,7 +94,7 @@ const stayAwake = (): void => {
   letGo = null;
 };
 
-const requestCore = async (): Promise<GpuCoreResult> => {
+const requestCore = async (onLost: () => void): Promise<GpuCoreResult> => {
   const gpu = typeof navigator === "undefined" ? undefined : navigator.gpu;
   if (!gpu) return { core: null, reason: "no-webgpu" };
   const adapter = await gpu.requestAdapter({ powerPreference: "high-performance" }).catch(() => null);
@@ -106,8 +106,7 @@ const requestCore = async (): Promise<GpuCoreResult> => {
   if (!device) return { core: null, reason: "device-failed" };
   const has = (feature: GPUFeatureName) => device.features.has(feature);
   const lost = device.lost.then((info) => {
-    // The next surface to ask gets a new device.
-    pending = null;
+    onLost();
     return info;
   });
   device.addEventListener("uncapturederror", (event) => {
@@ -137,7 +136,13 @@ const requestCore = async (): Promise<GpuCoreResult> => {
 /** The page's device, asked for the first time it is wanted. */
 export const acquireGpuCore = (): Promise<GpuCoreResult> => {
   stayAwake();
-  if (!pending) pending = requestCore();
+  if (!pending) {
+    const request = requestCore(() => {
+      // An idle device may report its destruction after another surface has requested its replacement.
+      if (pending === request) pending = null;
+    });
+    pending = request;
+  }
   return pending;
 };
 
@@ -156,7 +161,7 @@ export const releaseIdleGpuCore = async (): Promise<boolean> => {
 };
 
 /** Says a surface is drawing with the device, for as long as it takes to call what this returns. */
-export const holdGpuCore = (core: GpuCore): (() => void) => {
+export const holdGpuCore = (): (() => void) => {
   stayAwake();
   surfaces++;
   let held = true;
@@ -168,8 +173,8 @@ export const holdGpuCore = (core: GpuCore): (() => void) => {
     stayAwake();
     letGo = setTimeout(() => {
       letGo = null;
-      pending = null;
-      core.device.destroy();
+      // The final unmount can belong to a surface on a device that was already lost.
+      void releaseIdleGpuCore();
     }, LET_GO_AFTER_MS);
   };
 };

@@ -3,7 +3,10 @@ import { materialGraphParameters } from '../../runtime/materials/materialGraph';
 import type { ProjectChange } from '../../utils/projectService';
 import { renameParameter, formulaNameProblem } from './parameters';
 import { readStoredGraph, withParameterPictures } from './stored';
-import { GRAPH_USING_TYPES } from './nodes/io';
+import { GRAPH_USING_TYPES, ITERATE_NODE_TYPE } from './nodes/io';
+import { readTextureGraph } from './document';
+import type { TextureGraph } from './types';
+import { valuePinKey } from './nodeKit';
 
 /**
  * M0: A pure cross-document inventory/rename plan, not a UI save action.
@@ -45,6 +48,8 @@ export interface TextureParameterRenameInput {
     to: string;
     /** Complete authoritative contents of each domain, not just currently visible objects. */
     materials: readonly MaterialAsset[];
+    /** Original host records; loaded MaterialAssets contain only fields the runtime uses. */
+    materialDocuments?: ReadonlyMap<string, Record<string, unknown>>;
     models: readonly ProjectModelForRename[];
     objects: readonly ProjectObjectForRename[];
     prefabs: readonly ProjectPrefabForRename[];
@@ -102,8 +107,8 @@ const collision = (path: string, key: string): never => {
 
 /** One exact key only; substring matches and local parameter names must not be edited. */
 const renameValueKey = (values: Record<string, unknown>, from: string, to: string, path: string): boolean => {
-    if (!owns(values, from)) return false;
     if (owns(values, to)) collision(path, to);
+    if (!owns(values, from)) return false;
     values[to] = values[from];
     delete values[from];
     return true;
@@ -116,26 +121,49 @@ const renamedGraphUser = (
     const stored = record(material.textureGraph);
     const graph = record(stored?.graph);
     if (!graph || !Array.isArray(graph.nodes)) return null;
-    let count = 0;
-    const nodes = graph.nodes.map((candidate) => {
+    const oldPin = valuePinKey(from);
+    const newPin = valuePinKey(to);
+    const links = Array.isArray(graph.links) ? graph.links : [];
+    const wiredBefore = new Set<string>();
+    const wiredAfter = new Set<string>();
+    for (const candidate of links) {
+        const link = record(candidate);
+        if (typeof link?.to !== 'string') continue;
+        if (link.toInput === oldPin) wiredBefore.add(link.to);
+        if (link.toInput === newPin) wiredAfter.add(link.to);
+    }
+    const changed = new Set<string>();
+    const nodes = graph.nodes.map(candidate => {
         const node = record(candidate);
         const params = record(node?.params);
-        if (!node || !params || params.graph !== sourceId || !owns(params, from)) return candidate;
-        // A future graph-user node may have a different type but carry the same
-        // public settings: do not leave its old value behind without warning.
+        if (!node || typeof node.id !== 'string' || !params || params.graph !== sourceId) return candidate;
+        const pins = Array.isArray(node.valuePins) ? node.valuePins : [];
+        const path = `graph node ${node.id} in "${material.name}"`;
+        // Even when the old input takes its default, a stale destination value
+        // or wire would take effect as soon as the graph exposes the new name.
+        if (owns(params, to) || pins.includes(to) || wiredAfter.has(node.id)) collision(path, to);
+        if (!owns(params, from) && !pins.includes(from) && !wiredBefore.has(node.id)) return candidate;
         if (!GRAPH_USING_TYPES.has(String(node.type))) {
             throw new Error(`Graph node "${String(node.type)}" in "${material.name}" may reference this parameter, but this editor cannot rename it safely.`);
         }
+        if (from === 'graph' || (node.type === ITERATE_NODE_TYPE && ['passes', 'newSeed'].includes(from))) {
+            throw new Error(`"${from}" also controls ${path}. This parameter cannot be renamed unambiguously.`);
+        }
         if (graph.version !== 1) throw new Error(`Cannot edit a graph in "${material.name}": unsupported graph version.`);
         const next = { ...params };
-        renameValueKey(next, from, to, `graph node ${String(node.id)} in "${material.name}"`);
-        count++;
-        return { ...node, params: next };
+        renameValueKey(next, from, to, path);
+        changed.add(node.id);
+        return { ...node, params: next, ...(pins.includes(from) ? { valuePins: pins.map(key => key === from ? to : key) } : {}) };
     });
-    if (!count) return null;
+    if (!changed.size) return null;
+    const nextLinks = links.map(candidate => {
+        const link = record(candidate);
+        return typeof link?.to === 'string' && changed.has(link.to) && link.toInput === oldPin
+            ? { ...link, toInput: newPin } : candidate;
+    });
     return {
-        asset: { ...material, textureGraph: { ...stored, graph: { ...graph, nodes } } },
-        count,
+        asset: { ...material, textureGraph: { ...stored, graph: { ...graph, nodes, ...(graph.links !== undefined ? { links: nextLinks } : {}) } } },
+        count: changed.size,
     };
 };
 
@@ -194,8 +222,8 @@ const renamedOverrideSettings = (
         const entry = record(candidate);
         if (!entry || !relevant(name, entry) || !Array.isArray(entry.parameters)) continue;
         const fields = entry.parameters.map((item) => record(item));
-        if (!fields.some((item) => item?.name === from)) continue;
         if (fields.some((item) => item?.name === to)) collision(`${path} material "${name}"`, to);
+        if (!fields.some((item) => item?.name === from)) continue;
         count += fields.filter((item) => item?.name === from).length;
         next[name] = {
             ...entry,
@@ -218,10 +246,10 @@ const renamedSharedPresets = (
     let count = 0;
     const presets = settings.presets.map((candidate) => {
         const preset = record(candidate), values = record(preset?.values);
-        if (!preset || preset.graphId !== sourceId || !values || !owns(values, from)) return candidate;
+        if (!preset || preset.graphId !== sourceId || !values) return candidate;
         if (settings.version !== 1) throw new Error('Shared graph presets use an unsupported version.');
         const copied = { ...values };
-        renameValueKey(copied, from, to, 'project-shared graph preset');
+        if (!renameValueKey(copied, from, to, 'project-shared graph preset')) return candidate;
         count++;
         return { ...preset, values: copied };
     });
@@ -240,17 +268,34 @@ export const planTextureParameterRename = (input: TextureParameterRenameInput): 
     if (materials.filter((candidate) => candidate.id === sourceMaterialId).length !== 1) throw new Error('Duplicate source material id.');
     const raw = record(source.textureGraph);
     const rawGraph = record(raw?.graph);
-    if (!rawGraph || rawGraph.version !== 1) throw new Error('The source texture graph has an unsupported version.');
+    if (!raw || !rawGraph || rawGraph.version !== 1) throw new Error('The source texture graph has an unsupported version.');
     const stored = readStoredGraph(source.textureGraph);
     if (!stored.graph.parameters.some((parameter) => parameter.name === from)) throw new Error(`No parameter named "${from}" exists in this graph.`);
     const problem = formulaNameProblem(to, stored.graph.parameters, from);
     if (problem) throw new Error(problem);
-    const renamed = renameParameter(stored.graph, stored.values, from, to);
+    // The reader supplies defaults, coerces values and drops unknown v1 fields.
+    // Validate with it but rename the original JSON so the transaction changes only references.
+    const sourceValues = raw?.values === undefined ? {} : record(raw.values);
+    const parsed = readTextureGraph(rawGraph);
+    if (!sourceValues || parsed.problems.length || !Array.isArray(rawGraph.nodes)
+        || rawGraph.nodes.some(node => !record(record(node)?.params))
+        || !Array.isArray(rawGraph.parameters) || rawGraph.parameters.length !== parsed.graph.parameters.length
+        || rawGraph.parameters.some((param, index) => record(param)?.name !== parsed.graph.parameters[index]?.name)
+        || (rawGraph.presets !== undefined && (!Array.isArray(rawGraph.presets)
+            || rawGraph.presets.some(preset => !record(record(preset)?.values))))) {
+        throw new Error('The source texture graph contains unreadable nodes, parameters, presets or values.');
+    }
+    if (owns(sourceValues, to)) collision('source material values', to);
+    // All fields read by renameParameter have been checked; untouched fields stay in their original form.
+    const authored = rawGraph as unknown as TextureGraph;
+    for (const preset of authored.presets ?? []) if (owns(preset.values, to)) collision('source graph preset', to);
+    const renamed = renameParameter(authored, sourceValues, from, to);
+    const { textures } = withParameterPictures({ ...stored, ...renamed });
+    const { textures: _previousIndex, ...kept } = raw;
     const first: MaterialAsset = {
         ...source,
-        // Retain recognized and unrecognized v1 stored fields, but update the
-        // graph/values and recomputed picture dependency record atomically.
-        textureGraph: { ...raw, ...withParameterPictures({ ...stored, graph: renamed.graph, values: renamed.values }) },
+        textureGraph: { ...kept, graph: renamed.graph, ...(raw.values !== undefined ? { values: renamed.values } : {}),
+            ...(textures ? { textures } : {}) },
     };
     const nextMaterials = new Map<string, MaterialAsset>([[source.id, first]]);
     const impact: RenameImpact = {
@@ -276,7 +321,14 @@ export const planTextureParameterRename = (input: TextureParameterRenameInput): 
         if (!after) continue;
         impact.materials.push(material.id);
         changedMaterials.push(after);
-        commit('materials', material.id, materialAssetDocument(material), materialAssetDocument(after));
+        const original = input.materialDocuments?.get(material.id) ?? materialAssetDocument(material);
+        // No texture ID changes during a rename. Keep the host's shader, physical
+        // factors, texture index and all unrelated fields exactly as they were.
+        commit('materials', material.id, original, {
+            ...original,
+            ...(after.textureGraph !== material.textureGraph ? { textureGraph: after.textureGraph } : {}),
+            ...(after.paint !== material.paint ? { paint: after.paint } : {}),
+        });
     }
     // Object/model parameter lists are shared by the shader and baked texture
     // graph. A same-named shader parameter would be ambiguous to rename.

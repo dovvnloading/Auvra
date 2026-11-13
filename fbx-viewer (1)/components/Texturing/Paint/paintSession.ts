@@ -13,7 +13,7 @@ import { buildHighPoly, buildPartMesh, buildWholeMesh, type PartMesh } from '../
 import { averagedNormals, meshCage } from '../../../texturing/bake/bakeSetup';
 import type { SurfacePicker } from '../../../texturing/mesh/picker';
 import { SurfaceSelector } from '../../../texturing/paint/selection';
-import { DEEP_EXPORT, ROLE_LABELS, encodeChannels, rewriteMaterialPictures, tileAtlas, tileAtlasLayout, type ChannelTextureIds, type PictureLayout, type TileLayout } from '../../../texturing/materialOutput';
+import { DEEP_EXPORT, ROLE_LABELS, encodeChannels, rewriteMaterialPictures, tileAtlas, type ChannelTextureIds, type PictureLayout, type TileLayout } from '../../../texturing/materialOutput';
 import { GpuResetError, PaintStack, pictureOwners, type StackHost } from '../../../texturing/paint/paintStack';
 import { BUILTIN_GRAPHS } from '../../../texturing/paint/smartLibrary';
 import { applyPixelHistory, trimmedHistory, type HistoryEntry } from '../../../texturing/paint/strokes';
@@ -22,7 +22,7 @@ import { PAINT_CHANNELS, castsFromThreeSides, incompatiblePaintSetFor, paintedSe
 import { download, makeZip } from '../../../texturing/zip';
 import { fileName, holdsNormalGreen, planPicture, type ChannelSource, type ExportPicture, type ExportSource, type ExportTemplate } from '../../../texturing/paint/exportTemplates';
 import { colourChannels, extensionOf, linearChannels, writePicture, type PictureData } from '../../../texturing/paint/pictureFiles';
-import { atlasGeometryUvCorners, atlasMesh, markPaintedMaterials, surfaceOfGraph, withPaintedMaterials, writePaintedGlb, type GltfPictures, type GltfSurface, type PaintedMaterial } from '../../../texturing/paint/gltfExport';
+import { appliedAtlasLayout, atlasMesh, markPaintedMaterials, surfaceOfGraph, withPaintedMaterials, writePaintedGlb, type GltfPictures, type GltfSurface, type PaintedMaterial } from '../../../texturing/paint/gltfExport';
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js';
 import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { graphPictureLookup } from './graphPictures';
@@ -826,7 +826,10 @@ export class PaintSession {
                 ids[picture.role] = await this.host.storeTexture(picture.blob, `${this.target.partName} ${ROLE_LABELS[picture.role]}`, { width, height }, folder);
             }
             const previous = Object.values(this.stack.document.applied?.textures ?? {}).filter((id): id is string => Boolean(id));
-            const document: PaintDocument = { ...this.stack.document, applied: { textures: ids, at: Date.now() } };
+            const layout: TileLayout | null = atlas && { tiles: atlas.tiles, columns: atlas.columns, rows: atlas.rows,
+                cell: atlas.cell, gutter: atlas.gutter, width: atlas.width, height: atlas.height };
+            const document: PaintDocument = { ...this.stack.document,
+                applied: { textures: ids, at: Date.now(), atlas: layout } };
             this.stack.setDocument(document);
             this.asset = {
                 ...(materialLibrary.get(this.asset.id) ?? this.asset),
@@ -953,7 +956,7 @@ export class PaintSession {
      * The painted pictures another texture set of the model wears (those its painting was last put on
      * with), as a glTF material; null when it has none or they have not loaded yet.
      */
-    private async keptGltfParts(asset: MaterialAsset): Promise<{ surface: GltfSurface; pictures: GltfPictures } | null> {
+    private async keptGltfParts(asset: MaterialAsset): Promise<Omit<PaintedMaterial, 'name'> | null> {
         const document = asset.paint ? readPaintDocument(asset.paint) : null;
         const ids = document?.applied?.textures;
         if (!ids) return null;
@@ -961,6 +964,9 @@ export class PaintSession {
         const loaded = (texture: THREE.Texture | null): texture is THREE.Texture => Boolean((texture?.image as { width?: number } | undefined)?.width);
         const base = textureOf('baseColor'), opacity = textureOf('opacity'), orm = textureOf('orm'), normal = textureOf('normal'), emissive = textureOf('emissive');
         const painted = new Set<ExportSource>();
+        // A partially loaded set must keep its original material as a whole.
+        const maps = { baseColor: base, opacity, orm, normal, emissive };
+        if ((Object.keys(maps) as (keyof typeof maps)[]).some(role => ids[role] && !loaded(maps[role]))) return null;
         if (loaded(base)) painted.add('baseColor');
         if (loaded(opacity)) painted.add('opacity');
         if (loaded(orm)) { painted.add('roughness'); painted.add('metallic'); painted.add('ambientOcclusion'); }
@@ -969,13 +975,13 @@ export class PaintSession {
         if (!painted.size) return null;
         let surface = surfaceOfGraph(asset.graph, asset.name, painted);
         // Each picture drawn as it is laid (its rows read as the model reads them) and written for glTF.
-        const write = async (inputs: { a: THREE.Texture; b?: THREE.Texture | null }, channels: 3 | 4): Promise<Uint8Array> => {
+        const write = async (inputs: { a: THREE.Texture; b?: THREE.Texture | null }, channels: 3 | 4, white = false): Promise<Uint8Array> => {
             const image = inputs.a.image as { width: number; height: number };
             const out = this.gpu.image(image.width, image.height, 'color', 32);
             this.gpu.passNow(out, {
-                fragment: 'uniform int uHasB;\nvoid main() { vec4 c = texture(a, vUv); outColor = vec4(c.rgb, uHasB == 1 ? texture(b, vUv).r : 1.0); }',
+                fragment: 'uniform int uHasB;\nuniform int uWhite;\nvoid main() { vec4 c = texture(a, vUv); outColor = vec4(uWhite == 1 ? vec3(1.0) : c.rgb, uHasB == 1 ? texture(b, vUv).r : 1.0); }',
                 inputs: { a: inputs.a, b: inputs.b ?? this.gpu.constant('white') },
-                uniforms: { uHasB: inputs.b ? 1 : 0 },
+                uniforms: { uHasB: inputs.b ? 1 : 0, uWhite: white ? 1 : 0 },
             });
             const floats = this.gpu.readFloat(out);
             this.gpu.release(out);
@@ -984,11 +990,14 @@ export class PaintSession {
             return new Uint8Array(await (await writePicture({ width: image.width, height: image.height, channels, data }, 'png8')).arrayBuffer());
         };
         const pictures: GltfPictures = {};
-        if (loaded(base)) pictures.baseColor = await write({ a: base, b: loaded(opacity) ? opacity : null }, loaded(opacity) ? 4 : 3);
+        if (loaded(base) || loaded(opacity)) {
+            const dimensions = loaded(base) ? base : opacity!;
+            pictures.baseColor = await write({ a: dimensions, b: loaded(opacity) ? opacity : null }, loaded(opacity) ? 4 : 3, !loaded(base));
+        }
         if (loaded(orm)) { pictures.orm = { png: await write({ a: orm }, 3), occlusion: true, metallicRoughness: true }; surface = { ...surface, roughness: 1, metalness: 1 }; }
         if (loaded(normal)) pictures.normal = await write({ a: normal }, 3);
         if (loaded(emissive)) pictures.emissive = await write({ a: emissive }, 3);
-        return { surface, pictures };
+        return { surface, pictures, atlas: appliedAtlasLayout(document?.applied?.atlas, asset.graph) };
     }
 
     /**
@@ -1035,6 +1044,7 @@ export class PaintSession {
             // Which painted material each of the model's materials becomes: this set's, or another set's kept one.
             const mine = new Set(this.target.materialNames);
             const others = new Map<string, MaterialAsset>();
+            const keysByMaterial = new Map<THREE.Material, string | null>();
             const keyOf = (material: THREE.Material): string | null => {
                 if (mine.has(material.name)) return 'open';
                 const asset = findPaintAsset({ modelId: this.target.modelId, materialNames: [material.name] });
@@ -1042,25 +1052,17 @@ export class PaintSession {
                 others.set(`asset:${asset.id}`, asset);
                 return `asset:${asset.id}`;
             };
-            // Meshes of this set over several tiles read the atlas.
-            const tiles = this.stack.tiles;
-            const atlasLayout = tiles.length > 1 ? tileAtlasLayout(tiles, this.stack.size, this.gpu.maxSize) : null;
-            if (atlasLayout) {
-                copy.traverse((node) => {
-                    const mesh = node as THREE.Mesh;
-                    if (!mesh.isMesh) return;
-                    const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-                    if (!materials.some((material) => mine.has(material.name))) return;
-                    const uv = mesh.geometry.getAttribute('uv');
-                    if (!uv) return;
-                    // An integer-edge UV can belong to either adjacent triangle's
-                    // tile. The per-corner remap splits shared vertices as needed,
-                    // retaining skin attributes and other material groups' UVs.
-                    mesh.geometry = atlasGeometryUvCorners(mesh.geometry, atlasLayout,
-                        (materialIndex) => mine.has(materials[materialIndex]?.name ?? ''));
-                });
-            }
-            const keys = markPaintedMaterials(copy, keyOf);
+            const keys = new Set<string>();
+            copy.traverse(node => {
+                const mesh = node as THREE.Mesh;
+                if (!mesh.isMesh) return;
+                for (const material of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) {
+                    if (keysByMaterial.has(material)) continue;
+                    const key = keyOf(material);
+                    keysByMaterial.set(material, key);
+                    if (key) keys.add(key);
+                }
+            });
             const painted = new Map<string, PaintedMaterial>();
             const name = fileName('$model_$set', { set: this.target.partName, model, tile: 1001, size: 0 });
             if (keys.has('open')) {
@@ -1074,6 +1076,10 @@ export class PaintSession {
                 if (parts) painted.set(key, { name: fileName(asset.name, { set: '', model, tile: 1001, size: 0 }), ...parts });
                 else waiting.push(asset.name);
             }
+            markPaintedMaterials(copy, material => {
+                const key = keysByMaterial.get(material);
+                return key && painted.has(key) ? key : null;
+            }, material => painted.get(keysByMaterial.get(material) ?? '')?.atlas ?? null);
             const exported = await new GLTFExporter().parseAsync(copy, { binary: true, animations: copy.animations, onlyVisible: false }) as ArrayBuffer;
             const glb = withPaintedMaterials(exported, painted);
             const file = `${fileName('$model', { set: '', model, tile: 1001, size: 0 })}.glb`;

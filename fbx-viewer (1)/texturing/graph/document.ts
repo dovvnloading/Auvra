@@ -3,7 +3,7 @@ import { readPoints, type Point } from './curves';
 import { evaluateExpression, type ExprValue } from './expressions';
 import { GRAPH_USING_TYPES, INPUT_NODE_TYPE, MESH_READING_NODE_TYPES, OUTPUT_NODE_TYPE, SUBGRAPH_NODE_TYPE } from './nodes/io';
 import { migrateProcessorParams } from './nodes/processors';
-import { PARAMETER_KINDS, RANGED_KINDS, coerceParameter, conditionScope, readGroups, readPresets } from './parameters';
+import { FORMULA_NAME, MAX_CONDITION_LENGTH, PARAMETER_KINDS, RANGED_KINDS, coerceParameter, conditionScope, readGroups, readPresets } from './parameters';
 import { textureNodeDefinitionByType } from './registry';
 import {
     isParamLink,
@@ -32,7 +32,6 @@ export const MAX_PARAMETERS = 128;
 export const MIN_SIZE_LOG2 = 4;
 export const MAX_SIZE_LOG2 = 13;
 export const DEFAULT_SIZE_LOG2 = 10;
-const PARAMETER_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,47}$/;
 
 // ---------------------------------------------------------------------------
 // Seeds
@@ -139,7 +138,7 @@ export { coerceParameter } from './parameters';
 
 const readParameter = (value: unknown): GraphParameter | null => {
     const parameter = value as Partial<GraphParameter> | null;
-    if (!parameter || typeof parameter.name !== 'string' || !PARAMETER_NAME.test(parameter.name)) return null;
+    if (!parameter || typeof parameter.name !== 'string' || !FORMULA_NAME.test(parameter.name)) return null;
     const kind = PARAMETER_KINDS.includes(parameter.kind as GraphParameterKind) ? parameter.kind as GraphParameterKind : 'float';
     const options = Array.isArray(parameter.options)
         ? parameter.options.filter((option) => option && typeof option.value === 'string').slice(0, 32).map((option) => ({ value: option.value.slice(0, 64), label: String(option.label ?? option.value).slice(0, 64) }))
@@ -164,7 +163,7 @@ const readParameter = (value: unknown): GraphParameter | null => {
         if (softMax !== undefined && (result.softMin === undefined || inside(softMax) > result.softMin)) result.softMax = inside(softMax);
     }
     if (typeof parameter.step === 'number' && Number.isFinite(parameter.step) && parameter.step > 0) result.step = parameter.step;
-    if (typeof parameter.visibleIf === 'string' && parameter.visibleIf.trim()) result.visibleIf = parameter.visibleIf.trim().slice(0, 200);
+    if (typeof parameter.visibleIf === 'string' && parameter.visibleIf.trim()) result.visibleIf = parameter.visibleIf.trim().slice(0, MAX_CONDITION_LENGTH);
     if (options?.length) result.options = options;
     if (typeof parameter.group === 'string' && parameter.group.trim()) result.group = parameter.group.trim().slice(0, 64);
     if (typeof parameter.description === 'string' && parameter.description.trim()) result.description = parameter.description.trim().slice(0, 256);

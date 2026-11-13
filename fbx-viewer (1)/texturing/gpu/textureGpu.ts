@@ -619,11 +619,32 @@ void main() {
     }
 
     /**
-     * Reads an 8-bit image's pixels (bottom row first) without holding up the GPU: the read is queued behind
+     * Reads the image's pixels as 8-bit RGBA (bottom row first) without holding up the GPU: the read is queued behind
      * its drawing and collected once a fence says it is done, so live edits keep flowing. The image may be
      * released (and reused) as soon as this returns. Resolves null if the context is lost meanwhile.
      */
     readRgba8Later(image: GpuImage): Promise<Uint8Array | null> {
+        if (image.kind === 'color' && image.precision === 8) return this.readRgba8TargetLater(image);
+        // RGBA/UNSIGNED_BYTE is portable for RGBA8 attachments. Float attachments require a
+        // different read type, and a scalar picture must appear in all three colour channels.
+        const rgba = this.image(image.width, image.height, 'color', 8);
+        try {
+            if (image.kind === 'gray') {
+                this.passNow(rgba, {
+                    fragment: 'void main() { float g = texture(source, vUv).r; outColor = vec4(g, g, g, 1.0); }',
+                    inputs: { source: image },
+                });
+            } else {
+                this.copy(image, rgba);
+            }
+            return this.readRgba8TargetLater(rgba);
+        } finally {
+            // The GPU read has already been queued into its own pixel pack buffer.
+            this.release(rgba);
+        }
+    }
+
+    private readRgba8TargetLater(image: GpuImage): Promise<Uint8Array | null> {
         const gl = this.renderer.getContext() as WebGL2RenderingContext;
         const { width, height } = image;
         const previous = this.renderer.getRenderTarget();

@@ -4,6 +4,7 @@ import { createRoot } from 'react-dom/client';
 import { advance, useThree, type RootState } from '@react-three/fiber';
 import { gpuBytes, realNow, resetClock, seedChance, stepClock, virtualSeconds, webGpuBytes, webGpuWaiting } from './instrument';
 import { AuvraCanvas, readRequestedRendererBackend } from '../../renderer/AuvraCanvas';
+import { deviceLossPixels } from './deviceLossPixels';
 import { acceptSoftwareAdapter, acquireGpuCore, releaseIdleGpuCore } from '../../renderer/gpu/device';
 import { isGpuRenderer } from '../../renderer/gpu/frame';
 import type { GpuRenderer } from '../../renderer/gpu/GpuRenderer';
@@ -168,9 +169,11 @@ const capture = async (name: string) => {
       await new Promise((resolve) => setTimeout(resolve, 20));
     }
   }
-  return { png, numbers: { loadMs, frameMs, calls, triangles, geometries, textures, programs, gpuBytes: bytes,
+  const deviceLoss = onWebGpu && name === 'texture-graph' && !new URLSearchParams(window.location.search).has('textureBench')
+    ? await deviceLossPixels() : null;
+  return { png, numbers: { ...(deviceLoss ? { deviceLoss } : {}), loadMs, frameMs, calls, triangles, geometries, textures, programs, gpuBytes: bytes,
     ...(cookBenchmark ? { textureCook: cookBenchmark, textureCookProblem: cookProblem } : {}),
-    ...(standardCook ? { graphCook: standardCook } : {}),
+    ...(standardCook ? { graphCook: standardCook, graphCookProblem: cookProblem } : {}),
     ...(bc1Parity ? { bc1Parity } : {}),
     ...(compression ? { materialCompression: compression } : {}),
   } };

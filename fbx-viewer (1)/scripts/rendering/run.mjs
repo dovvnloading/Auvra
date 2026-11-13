@@ -101,6 +101,9 @@ const main = async () => {
       });
       numbers[name] = cost;
       if (onWebGpu && name === 'texture-graph') {
+        if (!textureBench && (cost.graphCook?.backend !== 'webgpu' || cost.graphCook.fallback)) {
+          failures.push(`${name}: expected the proof graph to cook on WebGPU: ${cost.graphCookProblem ?? 'missing WebGPU result'}`);
+        }
         if (!cost.bc1Parity) failures.push(`${name}: no BC1 parity result was returned`);
         else if (cost.bc1Parity.status === 'failed') failures.push(`${name}: ${cost.bc1Parity.reason}`);
       }
