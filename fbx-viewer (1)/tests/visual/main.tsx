@@ -1,10 +1,10 @@
 import './instrument';
+import { clearcoatMapPixels } from './clearcoatMapPixels';
 import React, { useEffect } from 'react';
 import { createRoot } from 'react-dom/client';
 import { advance, useThree, type RootState } from '@react-three/fiber';
 import { gpuBytes, realNow, resetClock, seedChance, stepClock, virtualSeconds, webGpuBytes, webGpuWaiting } from './instrument';
 import { AuvraCanvas, readRequestedRendererBackend } from '../../renderer/AuvraCanvas';
-import { clearcoatMapPixels } from './clearcoatMapPixels';
 import { deviceLossPixels } from './deviceLossPixels';
 import { acceptSoftwareAdapter, acquireGpuCore, releaseIdleGpuCore } from '../../renderer/gpu/device';
 import { isGpuRenderer } from '../../renderer/gpu/frame';
@@ -177,10 +177,10 @@ const capture = async (name: string) => {
   const deviceLoss = onWebGpu && name === 'texture-graph' && !new URLSearchParams(window.location.search).has('textureBench')
     ? await deviceLossPixels() : null;
   return { png, numbers: { ...(deviceLoss ? { deviceLoss } : {}), loadMs, frameMs, calls, triangles, geometries, textures, programs, gpuBytes: bytes,
+    ...(clearcoatMap ? { clearcoatMap } : {}),
     ...(cookBenchmark ? { textureCook: cookBenchmark, textureCookProblem: cookProblem } : {}),
     ...(standardCook ? { graphCook: standardCook, graphCookProblem: cookProblem } : {}),
     ...(bc1Parity ? { bc1Parity } : {}),
-    ...(clearcoatMap ? { clearcoatMap } : {}),
     ...(compression ? { materialCompression: compression } : {}),
   } };
 };
