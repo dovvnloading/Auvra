@@ -7,6 +7,7 @@ import { frontendDiagnostics } from '../../diagnostics/runtime';
 import { OUTPUT_NODE_TYPE, getMaterialNodeDefinition } from '../../runtime/materials/materialGraph';
 import { MATERIALS_DOMAIN, materialAssetDocument, materialLibrary, type MaterialAsset } from '../../runtime/materials/materialLibrary';
 import { materialFromMaterialX, materialToMaterialX, materialXPictures, type MaterialXSurface } from '../../texturing/materialX';
+import { readMaterialXZip } from '../../texturing/materialXZip';
 import { download, makeZip } from '../../texturing/zip';
 import { projectService } from '../../utils/projectService';
 
@@ -77,8 +78,9 @@ export interface MaterialXImportHandle { pick(): void }
 const fileName = (path: string): string => path.split(/[\\/]/).pop()!.toLowerCase();
 
 /**
- * A hidden file picker reading a .mtlx file and the pictures picked with it into a new material (and the
- * pictures into the project's textures). `pick` opens it.
+ * A hidden file picker reading either one MaterialX ZIP with its pictures or a
+ * .mtlx document and manually selected pictures into a new project material.
+ * `pick` opens it.
  */
 export const MaterialXImport = React.forwardRef<MaterialXImportHandle, { onImported: (asset: MaterialAsset) => void }>(({ onImported }, ref) => {
     const input = useRef<HTMLInputElement>(null);
@@ -87,24 +89,35 @@ export const MaterialXImport = React.forwardRef<MaterialXImportHandle, { onImpor
     useImperativeHandle(ref, () => ({ pick: () => input.current?.click() }), []);
 
     const read = async (files: File[]) => {
+        const archive = files.find(file => /\.zip$/i.test(file.name));
         const document = files.find(file => /\.mtlx$/i.test(file.name));
-        if (!document) {
-            addNotification({ message: 'Pick a .mtlx file, together with the pictures it reads.', type: 'error' });
+        if (archive && files.length !== 1) {
+            addNotification({ message: 'Choose one MaterialX ZIP, or pick a .mtlx file together with its pictures.', type: 'error' });
+            return;
+        }
+        if (!archive && !document) {
+            addNotification({ message: 'Pick a MaterialX .zip, or a .mtlx file together with the pictures it reads.', type: 'error' });
             return;
         }
         try {
             projectService.assertWritable();
-            const xml = await document.text();
+            // Read all referenced archive members and verify their CRC before
+            // uploading anything, keeping standalone .mtlx selection unchanged.
+            const packed = archive ? await readMaterialXZip(archive) : null;
+            const xml = packed?.xml ?? await document!.text();
             const wanted = materialXPictures(xml);
+            const pictures = packed ? new Map(packed.pictures.map(({ path, file }) => [path, file])) : null;
             const ids = new Map<string, string>();
-            const missing: string[] = [];
+            const missing: string[] = [...(packed?.missing ?? [])];
             for (const picture of wanted) {
-                const file = files.find(candidate => candidate.name.toLowerCase() === fileName(picture.path));
+                const file = pictures ? pictures.get(picture.path)
+                    : files.find(candidate => candidate.name.toLowerCase() === fileName(picture.path));
                 const id = file ? await addTexture(file) : null;
                 if (id) ids.set(picture.path, id);
-                else missing.push(fileName(picture.path));
+                else if (!missing.includes(picture.path)) missing.push(picture.path);
             }
-            const { asset, leftOut } = materialFromMaterialX(xml, (path) => ids.get(path) ?? null, crypto.randomUUID(), document.name.replace(/\.mtlx$/i, ''));
+            const sourceName = packed?.documentName.split('/').pop() ?? document!.name;
+            const { asset, leftOut } = materialFromMaterialX(xml, (path) => ids.get(path) ?? null, crypto.randomUUID(), sourceName.replace(/\.mtlx$/i, ''));
             await projectService.applyChanges([{ domain: MATERIALS_DOMAIN, operation: 'upsert', id: asset.id, value: materialAssetDocument(asset) }]);
             materialLibrary.upsert(asset);
             onImported(asset);
@@ -122,7 +135,7 @@ export const MaterialXImport = React.forwardRef<MaterialXImportHandle, { onImpor
     };
 
     return (
-        <input ref={input} type="file" multiple hidden aria-hidden accept=".mtlx,.png,.jpg,.jpeg,.webp,.tif,.tiff,.tga,.psd,.exr,.hdr"
+        <input ref={input} type="file" multiple hidden aria-hidden accept=".zip,.mtlx,.png,.jpg,.jpeg,.webp,.tif,.tiff,.tga,.psd,.exr,.hdr"
             onChange={(event) => {
                 const picked = Array.from(event.target.files ?? []);
                 event.target.value = '';
