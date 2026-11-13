@@ -6,6 +6,7 @@ import { useScene } from '../../context/SceneContext';
 import { frontendDiagnostics } from '../../diagnostics/runtime';
 import { projectService } from '../../utils/projectService';
 import { planTextureParameterRename, requiresProjectWideParameterRename } from '../../texturing/graph/renameProjectParameter';
+import { ParameterRenamePreview, projectRenamePreview, type ProjectRenamePreview } from './ParameterRenamePreview';
 import { readTextureRenameInventory } from '../../texturing/graph/renameSnapshot';
 import { materialLibrary, type MaterialAsset } from '../../runtime/materials/materialLibrary';
 import { AbortedError, unknownNodeMessage, type ExternalImage, type TextureGraphEvaluator } from '../../texturing/graph/evaluator';
@@ -269,7 +270,7 @@ const Workspace: React.FC<{
     onOpenGraph: (graphId: string, nodeId: string) => void;
 }> = ({ hidden, asset, onSave, onOpenAsset, session, entries, resolve, libraryVersion, path, onClose, outer, onOpenGraph }) => {
     const { textures } = useAssets();
-    const { models } = useScene();
+    const { models, projectStatus } = useScene();
     const textureStore = useTextureStore();
     const pictureLookup = useMemo(() => materialLibrary.textureLookup(false), []);
     const lookup = useMemo(() => deepPictures.lookup((id: string) => pictureLookup(id, 'map')), [pictureLookup]);
@@ -305,6 +306,7 @@ const Workspace: React.FC<{
     const [problems, setProblems] = useState(() => readTextureGraph((asset.textureGraph as { graph?: unknown } | undefined)?.graph ?? null).problems);
     const dragBase = useRef<GraphSnapshot | null>(null);
     const renamingParameter = useRef(false);
+    const [renamePreview, setRenamePreview] = useState<ProjectRenamePreview | null>(null);
     const [, setHistoryVersion] = useState(0);
     // Kept outside this screen, so it survives switching material and leaving the tab.
     const generation = materialLibrary.generation;
@@ -963,6 +965,49 @@ const Workspace: React.FC<{
         );
     };
 
+    const checkParameterRename = (from: string, to: string, previewOnly = false) => {
+        if (renamingParameter.current) return;
+        renamingParameter.current = true;
+        setRenamePreview(null);
+        setMessage({ text: 'Checking this parameter’s references across the project…', tone: 'info' });
+        void (async () => {
+            const status = projectService.getStatus();
+            if (!status.projectId) throw new Error('Open a project to check its parameter references.');
+            const before = currentStored();
+            // Graph-local undo cannot restore dependent materials/models/objects.
+            // Check the COMPLETE host snapshot, not only loaded scene objects.
+            const snapshot = await projectService.getSnapshotAll();
+            const inventory = readTextureRenameInventory(snapshot, materialLibrary.list(), {
+                projectId: status.projectId, revision: status.revision,
+            });
+            const plan = planTextureParameterRename({
+                sourceMaterialId: asset.id, from, to, ...inventory,
+            });
+            const sharedInMemory = sharedPresets.of(asset.id).filter(preset => Object.hasOwn(preset.values, from) || Object.hasOwn(preset.values, to)).length;
+            const currentStatus = projectService.getStatus();
+            const latest = currentStored();
+            if (currentStatus.projectId !== status.projectId || currentStatus.revision !== status.revision
+                || JSON.stringify(latest.graph) !== JSON.stringify(before.graph)
+                || JSON.stringify(latest.values) !== JSON.stringify(before.values)) {
+                throw new Error('The project changed while references were being checked. Nothing was renamed; try again.');
+            }
+            if (sharedInMemory !== plan.impact.sharedPresets) {
+                throw new Error('The shared presets in the editor differ from the saved project. Finish saving or reload before renaming.');
+            }
+            if (previewOnly || currentStatus.readOnly || requiresProjectWideParameterRename(plan.impact)) {
+                setRenamePreview(projectRenamePreview(plan, status.projectId, status.revision, materialLibrary.version, sharedPresets.getVersion()));
+                setMessage(null);
+                return;
+            }
+            // No external references: the existing graph-local history is valid.
+            const renamed = renameParameter(before.graph, before.values, from, to);
+            change({ graph: renamed.graph, values: renamed.values });
+            setMessage({ text: `Parameter "${from}" renamed to "${to}" inside this graph.`, tone: 'info' });
+        })().catch((error: unknown) => {
+            setMessage({ tone: 'error', text: error instanceof Error ? error.message : 'Parameter rename could not be verified; no changes were made.' });
+        }).finally(() => { renamingParameter.current = false; });
+    };
+
     const graphInspector = () => (
         <div className="space-y-3">
             <div className="grid grid-cols-[1fr_auto] items-center gap-x-2 gap-y-1.5">
@@ -1064,44 +1109,7 @@ const Workspace: React.FC<{
                             const { groups: _old, ...rest } = graph;
                             update(groups.length ? { ...rest, parameters, groups } : { ...rest, parameters }, true);
                         }}
-                        onRename={(from, to) => {
-                            if (renamingParameter.current) return;
-                            renamingParameter.current = true;
-                            setMessage({ text: 'Checking this parameter’s references across the project…', tone: 'info' });
-                            void (async () => {
-                                const status = projectService.getStatus();
-                                if (!status.projectId || status.readOnly) throw new Error('Open a writable project to rename a public graph parameter safely.');
-                                const before = currentStored();
-                                // Graph-local undo cannot restore dependent materials/models/objects.
-                                // Check the COMPLETE host snapshot, not only loaded scene objects.
-                                const snapshot = await projectService.getSnapshotAll();
-                                const inventory = readTextureRenameInventory(snapshot, materialLibrary.list(), {
-                                    projectId: status.projectId, revision: status.revision,
-                                });
-                                const plan = planTextureParameterRename({
-                                    sourceMaterialId: asset.id, from, to, ...inventory,
-                                });
-                                const sharedInMemory = sharedPresets.of(asset.id).filter((preset) => Object.hasOwn(preset.values, from)).length;
-                                if (requiresProjectWideParameterRename(plan.impact) || sharedInMemory > 0) {
-                                    const otherMaterials = plan.impact.materials.filter((id) => id !== asset.id).length;
-                                    setMessage({ tone: 'error', text: `Rename blocked: ${otherMaterials} dependent material(s), ${plan.impact.nestedNodes} subgraph/Iterate node(s), ${plan.impact.paintReferences} paint reference(s), ${plan.impact.modelOverrides} model override(s), ${plan.impact.objectOverrides} placed-object override(s), and ${plan.impact.prefabOverrides} override(s) in ${plan.impact.prefabs.length} saved prefab(s). Shared presets using this parameter: ${plan.impact.sharedPresets} saved, ${sharedInMemory} in the editor. Save and close this project, then preview the cross-asset rename with the rename-parameter material command.` });
-                                    return;
-                                }
-                                const currentStatus = projectService.getStatus();
-                                const latest = currentStored();
-                                if (currentStatus.readOnly || currentStatus.projectId !== status.projectId || currentStatus.revision !== status.revision
-                                    || JSON.stringify(latest.graph) !== JSON.stringify(before.graph)
-                                    || JSON.stringify(latest.values) !== JSON.stringify(before.values)) {
-                                    throw new Error('The project changed while references were being checked. Nothing was renamed; try again.');
-                                }
-                                // No external references: the existing graph-local history is valid.
-                                const renamed = renameParameter(before.graph, before.values, from, to);
-                                change({ graph: renamed.graph, values: renamed.values });
-                                setMessage({ text: `Parameter "${from}" renamed to "${to}" inside this graph.`, tone: 'info' });
-                            })().catch((error: unknown) => {
-                                setMessage({ tone: 'error', text: error instanceof Error ? error.message : 'Parameter rename could not be verified; no changes were made.' });
-                            }).finally(() => { renamingParameter.current = false; });
-                        }}
+                        onRename={(from, to) => checkParameterRename(from, to)}
                         onRemove={(index) => {
                             const parameter = graph.parameters[index];
                             // Settings that followed it keep the value it had.
@@ -1267,6 +1275,11 @@ const Workspace: React.FC<{
                     <Segmented value={tab} options={[{ value: 'node', label: 'Node' }, { value: 'graph', label: 'Graph' }, { value: 'material', label: 'Material' }]} onChange={setTab} label="Inspector" />
                 </div>
                 <div className="min-h-0 flex-1 overflow-y-auto p-3">
+                    {tab === 'graph' && renamePreview && renamePreview.projectId === projectStatus.projectId &&
+                        <ParameterRenamePreview preview={renamePreview}
+                            stale={renamePreview.revision !== projectStatus.revision || renamePreview.libraryVersion !== materialLibrary.version || renamePreview.presetsVersion !== sharedVersion}
+                            onRefresh={() => checkParameterRename(renamePreview.impact.from, renamePreview.impact.to, true)}
+                            onDismiss={() => setRenamePreview(null)} />}
                     {message && <p className={`mb-2 text-2xs ${message.tone === 'error' ? 'text-bad' : 'text-accent'}`}>{message.text}</p>}
                     {tab === 'node' ? nodeInspector() : tab === 'graph' ? graphInspector() : materialInspector()}
                 </div>

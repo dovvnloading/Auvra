@@ -8,6 +8,8 @@
 
 ## Rename a parameter across a saved project
 
+In Materials, open the texture graph, select the Graph inspector, choose Edit under Parameters, and change the formula name. If there are cross-asset references, the inspector shows the saved revision, reference counts and affected document IDs. Enter the project folder and copy the PowerShell preview command. A changed project revision or material/preset state requires refreshing the preview.
+
 Close the project in the editor so the command can acquire the native writer lock. Install the editor dependencies with `npm ci` in `fbx-viewer (1)`. From the repository root, preview the affected assets and note the revision returned.
 
 ```sh
