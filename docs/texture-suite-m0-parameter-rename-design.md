@@ -1,10 +1,28 @@
 # M0 — Exposed Texture Parameter Rename: Cross-Document Plan
 
-> **Status:** Source-level transactional rename planner and regression fixtures; **not yet connected to the editor UI or the project's undo manager**.
+> **Status:** Cross-asset rename with preview and undo/redo through the closed-project material command. The live editor still uses the reference guard.
 >
 > **Tracking:** [M0 issue #279](https://github.com/dovvnloading/Auvra/issues/279), [rename defect #291](https://github.com/dovvnloading/Auvra/issues/291).
 >
 > **Implementation:** `fbx-viewer (1)/texturing/graph/renameProjectParameter.ts` and `tests/frontend/textureParameterRenamePlan.test.ts`.
+
+## Rename a parameter across a saved project
+
+Close the project in the editor so the command can acquire the native writer lock. Install the editor dependencies with `npm ci` in `fbx-viewer (1)`. From the repository root, preview the affected assets and note the revision returned.
+
+```sh
+python -m Auvra.project.material_commands ./MyProject rename-parameter living-crate Wetness Patina
+```
+
+If the preview reports revision 7, the following applies that exact revision. Choose a new receipt file outside the project. The receipt contains the previous versions of affected documents and is written before the native transaction begins.
+
+```sh
+python -m Auvra.project.material_commands ./MyProject rename-parameter living-crate Wetness Patina --apply-revision 7 --receipt ./rename.json
+python -m Auvra.project.material_commands ./MyProject undo-rename ./rename.json
+python -m Auvra.project.material_commands ./MyProject redo-rename ./rename.json
+```
+
+Each operation saves one native project revision. Undo and redo recheck the project ID, all five reference-bearing domains, and replay of the original plan. They refuse to overwrite later edits to those domains. Reopen the project to hydrate all editor caches from the committed documents. The cross-document command uses the same TypeScript planner as the editor preflight, including promoted parameter pins and their incoming wires.
 
 ## Why the old local rename is unsafe
 

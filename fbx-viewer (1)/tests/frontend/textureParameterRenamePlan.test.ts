@@ -116,6 +116,39 @@ describe('M0 transactional texture parameter rename planner', () => {
         expect(plan.undoChanges.at(-1)?.value).toEqual(input.metadata[0]);
     });
 
+    it('includes graph users with only a promoted setting or wire and keeps other endpoints and caller bindings intact', () => {
+        const input = fixture();
+        const wire = (to: string, toInput: string) => ({ from: 'value', fromOutput: '@wear', to, toInput });
+        const nodes = [
+            { ...createNode('subgraph', 0, 0, { graph: 'source' }), id: 'wired', valuePins: ['wear', 'other'] },
+            { ...createNode('iterate', 0, 0, { graph: 'source' }), id: 'pin', valuePins: ['wear'] },
+            { ...createNode('subgraph', 0, 0, { graph: 'source', wear: { $bind: 'wear' } }), id: 'bound' },
+            { ...createNode('subgraph', 0, 0, { graph: 'other' }), id: 'other', valuePins: ['wear'] },
+            { ...createNode('subgraph', 0, 0, { graph: 'source' }), id: 'wire-only' },
+        ];
+        const links = [wire('wired', '@wear'), wire('wired', 'wear'), wire('wire-only', '@wear'), wire('other', '@wear')];
+        input.materials[1].textureGraph = { graph: { ...graph(nodes), links } };
+        const plan = planTextureParameterRename(input);
+        expect(plan.impact.nestedNodes).toBe(4);
+        const saved = plan.changedMaterials[1].textureGraph!.graph as ReturnType<typeof graph>;
+        expect(saved.nodes.map(node => node.valuePins)).toEqual([['patina', 'other'], ['patina'], undefined, ['wear'], undefined]);
+        expect(saved.nodes[2].params).toMatchObject({ patina: { $bind: 'wear' } });
+        expect(saved.links).toEqual([wire('wired', '@patina'), wire('wired', 'wear'), wire('wire-only', '@patina'), wire('other', '@wear')]);
+        expect((plan.undoChanges[1].value as MaterialAsset).textureGraph).toEqual(input.materials[1].textureGraph);
+    });
+
+    it('blocks destination settings, pins and wires that would take over an inherited default', () => {
+        for (const kind of ['value', 'pin', 'wire']) {
+            const input = fixture();
+            const node = { ...createNode('subgraph', 0, 0, { graph: 'source' }), id: 'used', valuePins: [] as string[] };
+            if (kind === 'value') node.params.patina = 0;
+            if (kind === 'pin') node.valuePins = ['patina'];
+            const links = kind === 'wire' ? [{ from: 'other', fromOutput: 'value', to: 'used', toInput: '@patina' }] : [];
+            input.materials[1].textureGraph = { graph: { ...graph([node]), links } };
+            expect(() => planTextureParameterRename(input)).toThrow(/already exists in graph node used/);
+        }
+    });
+
     it('requires the full plan for paint references on the source material itself', () => {
         const source = material('source', { graph: graph(), values: {} }, {
             version: 1, layers: [{
@@ -162,6 +195,20 @@ describe('M0 transactional texture parameter rename planner', () => {
         const modelCollision = fixture();
         (modelCollision.models[0].materialOverrides as any).Wood.parameters.push({ name: 'patina', value: 5 });
         expect(() => planTextureParameterRename(modelCollision)).toThrow(/already exists in model/);
+    });
+
+    it('rejects stale destination keys in source values, local presets and inactive dependent overrides', () => {
+        const source = fixture();
+        source.materials[0].textureGraph!.values = { patina: 0.8 };
+        expect(() => planTextureParameterRename(source)).toThrow(/source material values/);
+        const preset = fixture();
+        (preset.materials[0].textureGraph!.graph as ReturnType<typeof graph>).presets = [
+            { id: 'old', name: 'Old', values: { patina: 0.9 } },
+        ];
+        expect(() => planTextureParameterRename(preset)).toThrow(/source graph preset/);
+        const shared = fixture();
+        shared.metadata[0].settings.presets[0].values = { patina: 0.9 } as any;
+        expect(() => planTextureParameterRename(shared)).toThrow(/project-shared graph preset/);
     });
 
     it('refuses newer paint or graph schema where a matching reference would be rewritten', () => {
