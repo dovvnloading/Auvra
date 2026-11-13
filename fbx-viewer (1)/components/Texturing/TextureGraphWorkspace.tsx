@@ -1077,16 +1077,17 @@ const Workspace: React.FC<{
                                 // Check the COMPLETE host snapshot, not only loaded scene objects.
                                 const snapshot = await projectService.getSnapshotAll();
                                 if (!snapshot?.domains) throw new Error('The project reference inventory could not be loaded.');
-                                const documents = (domain: string): Record<string, unknown>[] => {
+                                const documents = (domain: string): Array<Record<string, unknown> & { id: string }> => {
                                     const value = snapshot.domains?.[domain];
-                                    const list = Array.isArray(value) ? value : value && typeof value === 'object'
+                                    const list: unknown[] = Array.isArray(value) ? value : value && typeof value === 'object'
                                         ? (value as { documents?: unknown[] }).documents ?? [] : [];
-                                    return list.filter((candidate): candidate is Record<string, unknown> =>
+                                    return list.filter((candidate): candidate is Record<string, unknown> & { id: string } =>
                                         Boolean(candidate && typeof candidate === 'object' && !Array.isArray(candidate) && typeof (candidate as { id?: unknown }).id === 'string'));
                                 };
-                                const models = documents('models') as ProjectModelForRename[];
-                                const objects = documents('objects').filter((entry) => typeof entry.modelId === 'string') as ProjectObjectForRename[];
-                                const metadata = documents('metadata') as ProjectMetadataForRename[];
+                                const models: ProjectModelForRename[] = documents('models');
+                                const objects: ProjectObjectForRename[] = documents('objects')
+                                    .filter((entry): entry is Record<string, unknown> & { id: string; modelId: string } => typeof entry.modelId === 'string');
+                                const metadata: ProjectMetadataForRename[] = documents('metadata');
                                 const plan = planTextureParameterRename({
                                     sourceMaterialId: asset.id, from, to,
                                     materials: materialLibrary.list(), models, objects, metadata,
