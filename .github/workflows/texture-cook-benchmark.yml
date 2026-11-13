@@ -1,9 +1,11 @@
-name: Texture cooking benchmark (manual)
+name: Texture cooking benchmark (opt-in)
 
 # Optional measurements rather than a required CI check. The normal visual
 # comparison remains part of Verify; this workflow intentionally changes the
 # proof graph's resolution and therefore does not update reference screenshots.
 on:
+  pull_request:
+    types: [labeled]
   workflow_dispatch:
     inputs:
       renderer:
@@ -39,10 +41,18 @@ permissions:
 
 jobs:
   texture-cook:
-    name: Texture cook ${{ inputs.renderer }} 2^${{ inputs.size }}
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.label.name == 'texture-benchmark' && github.event.pull_request.head.repo.full_name == github.repository)
+    strategy:
+      fail-fast: false
+      matrix:
+        renderer: ${{ github.event_name == 'pull_request' && fromJSON('["webgl2","webgpu"]') || fromJSON(format('["{0}"]', inputs.renderer)) }}
+        size: ${{ github.event_name == 'pull_request' && fromJSON('["11","12"]') || fromJSON(format('["{0}"]', inputs.size)) }}
+    name: Texture cook ${{ matrix.renderer }} 2^${{ matrix.size }}
     # Headless Linux can lose the software Vulkan WebGPU device before a frame.
     # Mirror Verify's known-good Windows WebGPU and Linux WebGL2 runners.
-    runs-on: ${{ inputs.renderer == 'webgpu' && 'windows-latest' || 'ubuntu-latest' }}
+    runs-on: ${{ matrix.renderer == 'webgpu' && 'windows-latest' || 'ubuntu-latest' }}
     timeout-minutes: 180
     defaults:
       run:
@@ -50,6 +60,9 @@ jobs:
     steps:
       - name: Check out the selected revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
 
       - name: Set up Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
@@ -65,13 +78,13 @@ jobs:
         run: node --test tests/rendering/textureBenchmark.test.mjs
 
       - name: Measure texture-graph cooking on the requested software backend
-        run: npm run texture:benchmark -- --texture-size ${{ inputs.size }} --renderer ${{ inputs.renderer }} --samples ${{ inputs.samples }}
+        run: npm run texture:benchmark -- --texture-size ${{ matrix.size }} --renderer ${{ matrix.renderer }} --samples ${{ inputs.samples || '2' }}
 
       - name: Keep benchmark metrics and output picture
         if: ${{ always() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: texture-cook-${{ inputs.renderer }}-2pow${{ inputs.size }}
+          name: texture-cook-${{ matrix.renderer }}-2pow${{ matrix.size }}
           path: |
             fbx-viewer (1)/tests/visual/output/**/numbers.json
             fbx-viewer (1)/tests/visual/output/**/summary.json
