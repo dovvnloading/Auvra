@@ -149,6 +149,9 @@ const main = async () => {
       rows.push({ name, verdict, differs: shareText, 'load ms': Math.round(cost.loadMs), 'frame ms': +cost.frameMs.toFixed(1), 'graph cook ms': cost.graphCook ? +cost.graphCook.milliseconds.toFixed(1) : '-', draws: cost.calls, triangles: cost.triangles, programs: cost.programs, 'GPU MB': +(cost.gpuBytes / 1048576).toFixed(1) });
       console.log(`${name}: ${verdict}`);
     }
+    if (!textureBench && !onWebGpu && names.includes('texture-graph')) {
+      numbers['texture-graph'].photoCapture = await run('window.auvraVisual.verifyPhotoCaptureWorker()');
+    }
     console.table(rows);
     if (textureBench) {
       const cooked = numbers['texture-graph']?.textureCook;

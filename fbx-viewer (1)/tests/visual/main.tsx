@@ -1,9 +1,11 @@
 import './instrument';
+import { clearcoatMapPixels } from './clearcoatMapPixels';
 import React, { useEffect } from 'react';
 import { createRoot } from 'react-dom/client';
 import { advance, useThree, type RootState } from '@react-three/fiber';
 import { gpuBytes, realNow, resetClock, seedChance, stepClock, virtualSeconds, webGpuBytes, webGpuWaiting } from './instrument';
 import { AuvraCanvas, readRequestedRendererBackend } from '../../renderer/AuvraCanvas';
+import { verifyPhotoCaptureWorker } from './photoCaptureWorker';
 import { deviceLossPixels } from './deviceLossPixels';
 import { acceptSoftwareAdapter, acquireGpuCore, releaseIdleGpuCore } from '../../renderer/gpu/device';
 import { isGpuRenderer } from '../../renderer/gpu/frame';
@@ -152,6 +154,10 @@ const capture = async (name: string) => {
   const { geometries, textures } = state.gl.info.memory;
   const programs = state.gl.info.programs?.length ?? 0;
   const bytes = onWebGpu ? webGpuBytes() : gpuBytes(state.gl.getContext() as WebGL2RenderingContext);
+  const clearcoatMap = name === 'physical-materials' ? await clearcoatMapPixels(state, async () => {
+    await nextTask();
+    if (onWebGpu) await settled();
+  }) : null;
   const cookBenchmark = name === 'texture-graph' ? textureGraphScene.benchmark : null;
   const standardCook = name === 'texture-graph' ? textureGraphScene.cook : null;
   const cookProblem = name === 'texture-graph' ? textureGraphScene.problem : null;
@@ -174,6 +180,7 @@ const capture = async (name: string) => {
     ? await deviceLossPixels() : null;
   const udimMip = !onWebGpu && name === 'materials' ? await checkUdimMip() : null;
   return { png, numbers: { ...(udimMip ? { udimMip } : {}), ...(deviceLoss ? { deviceLoss } : {}), loadMs, frameMs, calls, triangles, geometries, textures, programs, gpuBytes: bytes,
+    ...(clearcoatMap ? { clearcoatMap } : {}),
     ...(cookBenchmark ? { textureCook: cookBenchmark, textureCookProblem: cookProblem } : {}),
     ...(standardCook ? { graphCook: standardCook, graphCookProblem: cookProblem } : {}),
     ...(bc1Parity ? { bc1Parity } : {}),
@@ -220,4 +227,4 @@ const compare = async (actualUrl: string, referenceUrl: string, tolerance: numbe
   return { sameSize: true, share: differing / pixels, mean: sum / pixels, worst, diff: canvas.toDataURL('image/png') };
 };
 
-(window as unknown as { auvraVisual: unknown }).auvraVisual = { names: Object.keys(SCENES), capture, compare };
+(window as unknown as { auvraVisual: unknown }).auvraVisual = { names: Object.keys(SCENES), capture, compare, verifyPhotoCaptureWorker };

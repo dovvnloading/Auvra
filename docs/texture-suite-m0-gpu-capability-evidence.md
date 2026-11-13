@@ -80,6 +80,10 @@ The ordinary `texture-graph` capture also writes `materialCompression` to the sc
 
 For each supported format Auvra encodes an 8×8 two-stripe picture, loads it through the saved material texture path, samples the texture into an RGBA8 target, and compares all 64 pixels with the expected channels. The tolerance is four byte levels per component. A missing feature yields `not-tested`. A readback or assertion error yields `failed` with a diagnostic and fails the run. The six fixtures use a single mip level and a linear data texture. They run after the scene screenshot and timed frames. The opt-in benchmarks omit these extra draws.
 
+### Clearcoat texture controls
+
+In the ordinary `physical-materials` capture, `clearcoatMap` compares an opaque physical sphere at coat factors zero and one to the same sphere drawn with a texture in the clearcoat slot. The two 1×1 data maps use red values zero and one, with green and blue set to the opposite value. On each renderer the central sample region must contain at least 32 pixels where the two scalar controls differ by eight byte levels. Mean RGB error for each map against its own scalar must be at most one fourth of the scalar contrast. The report records the sample count, scalar contrast and both errors. WebGPU approximates coat by modifying roughness and albedo, so a match on these controls establishes map binding and red-channel sampling within each renderer. It does not compare the two renderers' BRDFs.
+
 ## 5. Gates still needed before M0.4 can close
 
 - [ ] Generate or curate an explicit per-node-family WebGL2 vs WebGPU **code/capability** matrix. Unsupported and fallback must be recorded separately.
