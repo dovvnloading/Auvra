@@ -130,6 +130,7 @@ const capture = async (name: string) => {
   const cookBenchmark = name === 'texture-graph' ? textureGraphScene.benchmark : null;
   const standardCook = name === 'texture-graph' ? textureGraphScene.cook : null;
   const cookProblem = name === 'texture-graph' ? textureGraphScene.problem : null;
+  const bc1Parity = name === 'texture-graph' && onWebGpu ? textureGraphScene.bc1Parity : null;
   if (onWebGpu) await settled();
   root.unmount();
   // Lets the canvas and what it holds go before the next scene.
@@ -145,6 +146,7 @@ const capture = async (name: string) => {
   return { png, numbers: { loadMs, frameMs, calls, triangles, geometries, textures, programs, gpuBytes: bytes,
     ...(cookBenchmark ? { textureCook: cookBenchmark, textureCookProblem: cookProblem } : {}),
     ...(standardCook ? { graphCook: standardCook } : {}),
+    ...(bc1Parity ? { bc1Parity } : {}),
   } };
 };
 

@@ -11,6 +11,7 @@ import { webgpuTexturing, type WgpuDevice } from '../../texturing/gpu/webgpuText
 import { encodeChannels } from '../../texturing/materialOutput';
 import { paintBakedKey } from '../../texturing/paint/stackNode';
 import { realNow } from './instrument';
+import { checkBc1Parity, compareBc1Pixels, type Bc1ParityResult } from './bc1Parity';
 
 /**
  * ONE TEXTURE GRAPH COOKED ON THE RENDERER'S OWN GPU
@@ -52,6 +53,7 @@ export const textureGraphScene = {
     problem: null as string | null,
     benchmark: null as TextureCookBenchmark | null,
     cook: null as TextureGraphCookMeasurement | null,
+    bc1Parity: null as Bc1ParityResult | null,
 };
 
 const node = (id: string, type: string, params: Record<string, unknown> = {}) => ({ id, type, x: 0, y: 0, params });
@@ -154,9 +156,7 @@ const checkScatterParity = async (webgpu: TexturingGpu): Promise<void> => {
 /** Compare a real compressed BC1 input read through the texturing pass on both backends.
  * This leaves the visual reference unchanged, and runs only if both adapters expose BC/S3TC.
  */
-const checkCompressedParity = async (webgpu: TexturingGpu): Promise<void> => {
-    const glgpu = textureGpu();
-    if (!glgpu.renderer.getContext().getExtension('WEBGL_compressed_texture_s3tc')) return;
+const checkCompressedParity = async (webgpu: TexturingGpu, glgpu: TexturingGpu): Promise<void> => {
     const blocks = new Uint8Array(32);
     for (let i = 0; i < 4; i++) {
         // Two vertical stripes, each a solid RGB565 colour: red or green.
@@ -182,15 +182,8 @@ const checkCompressedParity = async (webgpu: TexturingGpu): Promise<void> => {
         }
     };
     try {
-        const [actual, expected] = await Promise.all([sample(webgpu), sample(glgpu)]);
-        for (const x of [1, 6]) for (const y of [1, 6]) {
-            const at = (y * 8 + x) * 4;
-            for (let channel = 0; channel < 3; channel++) {
-                if (Math.abs(actual[at + channel] - expected[at + channel]) > 4) {
-                    throw new Error('Compressed BC1 differs between WebGPU and WebGL2 at (' + x + ', ' + y + ') channel ' + channel);
-                }
-            }
-        }
+        const [webgpuPixels, webgl2Pixels] = await Promise.all([sample(webgpu), sample(glgpu)]);
+        compareBc1Pixels(webgpuPixels, webgl2Pixels);
     } finally {
         compressed.dispose();
     }
@@ -353,6 +346,7 @@ export const TextureGraphScene: React.FC = () => {
         textureGraphScene.problem = null;
         textureGraphScene.benchmark = null;
         textureGraphScene.cook = null;
+        textureGraphScene.bc1Parity = null;
         const options = new URLSearchParams(window.location.search);
         const benchmark = options.has('textureBench');
         const requestedSize = Number(options.get('textureSize') ?? 9);
@@ -363,8 +357,15 @@ export const TextureGraphScene: React.FC = () => {
             let pictures: Awaited<ReturnType<typeof cook>>;
             try {
                 if (isGpuRenderer(gl)) {
+                    const glgpu = textureGpu();
+                    const bc1 = await checkBc1Parity({
+                        webgpuBC: gl.core.device.features.has('texture-compression-bc'),
+                        webgl2S3TC: Boolean(glgpu.renderer.getContext().getExtension('WEBGL_compressed_texture_s3tc')),
+                    }, () => checkCompressedParity(gpu, glgpu));
+                    if (gone) return;
+                    textureGraphScene.bc1Parity = bc1;
+                    if (bc1.status === 'failed') throw new Error(bc1.reason);
                     await checkScatterParity(gpu);
-                    if (gl.core.device.features.has('texture-compression-bc')) await checkCompressedParity(gpu);
                     await checkPaintSnapshotParity(gpu);
                 }
                 const cookStarted = realNow();
