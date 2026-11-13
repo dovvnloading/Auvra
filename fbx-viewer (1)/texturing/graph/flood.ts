@@ -103,6 +103,59 @@ export const islandSpan = (places: readonly number[], root: number, size: number
 };
 
 /**
+ * Exact CPU oracle for an island's minimum circular covering span, used to
+ * test the current GPU four-seam approximation before replacing it.
+ *
+ * On a repeating axis, the minimum covering interval is the complement of
+ * the largest consecutive run of EMPTY pixel positions on the circle.
+ * A tie is resolved by the smallest start coordinate, so results do not
+ * depend on JS iteration order. The returned low is relative to root and
+ * may be negative where the island wraps across the image border.
+ *
+ * This sorts coordinates on the CPU: DO NOT invoke it for every GPU pixel.
+ * M0 #305 will need a bounded, measured GPU equivalent before changing the
+ * production flood-box shader.
+ */
+export const exactIslandSpan = (
+    places: readonly number[], root: number, size: number, repeats: boolean,
+): { low: number; size: number } => {
+    if (!Number.isSafeInteger(size) || size <= 0) throw new Error('Island axis length must be a positive integer.');
+    if (!Number.isSafeInteger(root)) throw new Error('Island root must be an integer pixel coordinate.');
+    for (const value of places) {
+        if (!Number.isSafeInteger(value)) throw new Error('Island places must be integer pixel coordinates.');
+    }
+    if (!places.length) return { low: 0, size: 0 };
+    if (!repeats) {
+        let low = Infinity;
+        let high = -Infinity;
+        for (const place of places) {
+            low = Math.min(low, place - root);
+            high = Math.max(high, place - root);
+        }
+        return { low, size: high - low + 1 };
+    }
+
+    const mod = (value: number): number => ((value % size) + size) % size;
+    const occupied = [...new Set(places.map(mod))].sort((a, b) => a - b);
+    let largestGap = -1;
+    let firstAfterGap = 0;
+    for (let index = 0; index < occupied.length; index++) {
+        const current = occupied[index];
+        const next = index === occupied.length - 1 ? occupied[0] + size : occupied[index + 1];
+        const empty = next - current - 1;
+        const start = mod(next);
+        if (empty > largestGap || (empty === largestGap && start < firstAfterGap)) {
+            largestGap = empty;
+            firstAfterGap = start;
+        }
+    }
+
+    let low = firstAfterGap - mod(root);
+    if (low > 0) low -= size;
+    return { low, size: size - largestGap };
+};
+
+/**
  * A bounding box's size kept in one float exactly: 12 bits each of its width and height, as parts of the
  * image (so to 1/4095 of the image each way).
  */

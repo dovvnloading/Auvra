@@ -115,6 +115,12 @@ These rows describe **potential capabilities**, not passing end-to-end tests. Fi
 
 This is **a hardware feature-reporting primitive, not a verified node/backend matrix**. Real image comparisons, format uploads, cancellation, device loss and per-node fallback fixtures remain required for M0.4.
 
+### M0.2 flood-box oracle (historical defect #2)
+
+`texturing/graph/flood.ts::exactIslandSpan` is a **CPU-only correctness oracle**, computing the minimum covering interval on a cyclic axis from the complement of the largest unoccupied run of pixels. It handles full occupancy, 1-pixel islands, wrap-boundary roots, and deterministic gap ties.
+
+The adversarial test explicitly demonstrates that the current four-quarter-seam `islandSpan` approximation can return **100 pixels** for an island whose exact width is **95 pixels**, when the only empty gap lies away from the tested seams. The **GPU shader is unchanged**; a bounded exact implementation with WebGL2/WebGPU image comparisons remains open under [#305](https://github.com/dovvnloading/Auvra/issues/305).
+
 ## 5. Proposed M0.3 channel-descriptor decisions
 
 The paint document currently declares seven channels at `texturing/paint/paintTypes.ts::PAINT_CHANNELS`, while `runtime/materials/materialGraph.ts` exposes additional physical-surface features. Before adding channels, specify one metadata-driven contract that can describe:
