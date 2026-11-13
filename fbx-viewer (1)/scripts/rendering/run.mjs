@@ -18,12 +18,18 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import react from '@vitejs/plugin-react';
 import { build } from 'vite';
+import { summarizeTextureSamples, validateTextureSample } from './textureBenchmark.mjs';
 import { SOFTWARE_WEBGL, closeBrowser, openPage, pageErrors, pageSaid as saidSince, serve } from './browser.mjs';
 
 const args = process.argv.slice(2);
 const updating = args.includes('--update');
 const realGpu = args.includes('--gpu');
 const textureBench = args.includes('--texture-bench');
+const samplesAt = args.indexOf('--samples');
+const samples = samplesAt < 0 ? 1 : Number(args[samplesAt + 1]);
+if (samplesAt >= 0 && (!textureBench || !Number.isSafeInteger(samples) || samples < 1)) {
+  throw new Error('--samples requires --texture-bench and a positive integer.');
+}
 const textureSizeAt = args.indexOf('--texture-size');
 const textureSize = textureSizeAt >= 0 ? Number(args[textureSizeAt + 1]) : 9;
 if (textureBench && ![9, 11, 12].includes(textureSize)) throw new Error('Texture benchmark size must be 9, 11 or 12 (512/2048/4096 pixels).');
@@ -46,24 +52,10 @@ const PIXEL_TOLERANCE = 10;
 const MOST_DIFFERING = 0.005;
 const SCENE_LIMIT_MS = 600_000;
 
-const main = async () => {
-  const siteDir = mkdtempSync(path.join(tmpdir(), 'auvra-visual-site-'));
+const captureScenes = async (server, outputDir) => {
   const profileDir = mkdtempSync(path.join(tmpdir(), 'auvra-visual-profile-'));
   let browser = null;
-  let server = null;
   try {
-    console.log('Building the test page...');
-    await build({
-      configFile: false,
-      root: visualDir,
-      base: './',
-      logLevel: 'error',
-      plugins: [react()],
-      resolve: { alias: { '@': projectDir } },
-      build: { outDir: siteDir, emptyOutDir: true, chunkSizeWarningLimit: 100000, minify: false },
-    });
-    server = await serve(siteDir);
-
     // WebGPU on the processor goes through Vulkan's SwiftShader, which the browser brings along. Asking for GL's
     // SwiftShader as well leaves the browser with no WebGPU adapter at all.
     // A headless Linux browser has no window surface for Vulkan, and loses its device without being told not to want one.
@@ -126,14 +118,10 @@ const main = async () => {
       let shareText = '-';
       if (textureBench) {
         verdict = 'BENCHMARK (not reference-compared)';
-        if (!cost.textureCook) failures.push(`${name}: no texture graph benchmark results were returned`);
-        else {
-          if (cost.textureCook.backend !== renderer || cost.textureCookProblem) {
-            failures.push(`${name}: requested ${renderer} but benchmark used ${cost.textureCook.backend}: ${cost.textureCookProblem ?? 'unexpected fallback'}`);
-          }
-          if (cost.textureCook.firstNodes < 1) failures.push(`${name}: the cold graph evaluation did not run any nodes`);
-          if (cost.textureCook.cachedNodes !== 0) failures.push(`${name}: unchanged graph recomputed ${cost.textureCook.cachedNodes} cached nodes`);
-          if (cost.textureCook.editNodes < 1) failures.push(`${name}: changing the noise parameter did not recompute dependent nodes`);
+        try {
+          validateTextureSample(cost, renderer, 2 ** textureSize);
+        } catch (error) {
+          failures.push(`${name}: ${error.message}`);
         }
       } else if (updating) {
         writeFileSync(referenceFile, bytes);
@@ -161,7 +149,7 @@ const main = async () => {
     console.table(rows);
     if (textureBench) {
       const cooked = numbers['texture-graph']?.textureCook;
-      if (cooked) {
+      if (cooked && failures.length === 0) {
         console.table([{
           backend: cooked.backend,
           resolution: `${cooked.resolution}×${cooked.resolution}`,
@@ -182,6 +170,7 @@ const main = async () => {
       const git = (...args) => spawnSync('git', args, { cwd: projectDir, encoding: 'utf8' });
       const head = git('rev-parse', '--verify', 'HEAD');
       const status = git('status', '--porcelain', '--untracked-files=normal', '--', ':/');
+      const system = await client.send('SystemInfo.getInfo').catch(() => null);
       numbers._benchmark = {
         sourceCommit: head.status === 0 ? head.stdout.trim() : null,
         workingTreeDirty: status.status === 0 ? Boolean(status.stdout.trim()) : null,
@@ -189,6 +178,9 @@ const main = async () => {
         rendererRequested: renderer,
         gpuSelection: realGpu ? 'hardware-requested' : 'software-requested',
         resolution: 2 ** textureSize,
+        // Chromium can list multiple devices. Keep the list distinct from the adapter that cooked the graph.
+        browserGpuDevices: system?.gpu?.devices?.map(({ vendorId, deviceId, vendorString, deviceString, driverVendor, driverVersion }) =>
+          ({ vendorId, deviceId, vendorString, deviceString, driverVendor, driverVersion })) ?? null,
         browserUserAgent: await run('navigator.userAgent'),
         operatingSystem: process.platform,
         architecture: process.arch,
@@ -204,12 +196,51 @@ const main = async () => {
     client.close();
     if (failures.length) {
       const again = onWebGpu ? ' --renderer webgpu' : '';
-      console.error(`Rendering has changed on ${renderer}:\n  ${failures.join('\n  ')}\nThe pictures are in ${path.relative(projectDir, outputDir)}/. If the change is meant, keep them with: npm run rendering:verify -- --update${again}`);
+      if (textureBench) console.error(`Texture benchmark failed on ${renderer}:\n  ${failures.join('\n  ')}`);
+      else console.error(`Rendering has changed on ${renderer}:\n  ${failures.join('\n  ')}\nThe pictures are in ${path.relative(projectDir, outputDir)}/. If the change is meant, keep them with: npm run rendering:verify -- --update${again}`);
       process.exitCode = 1;
     }
+    return { numbers, failures };
+  } finally {
+    await closeBrowser(browser, profileDir);
+  }
+};
+
+const main = async () => {
+  const siteDir = mkdtempSync(path.join(tmpdir(), 'auvra-visual-site-'));
+  let server = null;
+  try {
+    console.log('Building the test page...');
+    await build({
+      configFile: false,
+      root: visualDir,
+      base: './',
+      logLevel: 'error',
+      plugins: [react()],
+      resolve: { alias: { '@': projectDir } },
+      build: { outDir: siteDir, emptyOutDir: true, chunkSizeWarningLimit: 100000, minify: false },
+    });
+    server = await serve(siteDir);
+
+    if (samples === 1) {
+      await captureScenes(server, outputDir);
+      return;
+    }
+    mkdirSync(outputDir, { recursive: true });
+    const seriesDir = mkdtempSync(path.join(outputDir, 'samples-'));
+    console.log(`Writing ${samples} independent browser samples to ${seriesDir}`);
+    const results = [];
+    for (let index = 1; index <= samples; index++) {
+      // Each process starts with a new profile, device and graph evaluator. Keep the built page identical.
+      const { numbers, failures } = await captureScenes(server, path.join(seriesDir, String(index)));
+      if (failures.length) throw new Error(`Sample ${index} failed: ${failures.join(', ')}`);
+      results.push(numbers);
+    }
+    const summary = summarizeTextureSamples(results);
+    writeFileSync(path.join(seriesDir, 'summary.json'), JSON.stringify(summary, null, 2) + '\n');
+    console.table(summary.phases);
   } finally {
     server?.close();
-    await closeBrowser(browser, profileDir);
     rmSync(siteDir, { recursive: true, force: true });
   }
 };

@@ -685,7 +685,7 @@ void main() {
      * up the GPU: the value is copied out behind the image's drawing and collected once a fence says it is
      * done. Resolves null if the context is lost meanwhile.
      */
-    readPixelLater(source: GpuImage, x: number, y: number): Promise<Float32Array | null> {
+    readPixelLater(source: GpuImage, x: number, y: number, timeoutMs = 2000): Promise<Float32Array | null> {
         const probe = this.image(1, 1, 'color', 32);
         this.passNow(probe, {
             fragment: 'uniform vec2 uAt;\nvoid main() { outColor = texelFetch(source, ivec2(uAt), 0); }',
@@ -715,7 +715,7 @@ void main() {
             const poll = () => {
                 if (gl.isContextLost() || !fence) { finish(null); return; }
                 const status = gl.clientWaitSync(fence, 0, 0);
-                if (status === gl.WAIT_FAILED || waited > 2000) { finish(null); return; }
+                if (status === gl.WAIT_FAILED || waited > timeoutMs) { finish(null); return; }
                 if (status === gl.TIMEOUT_EXPIRED) { waited += 4; setTimeout(poll, 4); return; }
                 const value = new Float32Array(4);
                 gl.bindBuffer(gl.PIXEL_PACK_BUFFER, buffer);

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { CameraState, type ProjectTemplate } from '../types';
 import { ProjectStatus, projectService } from '../utils/projectService';
 import { useNotification } from '../context/NotificationContext';
+import { flushMaterialEditorWrites } from '../components/Materials/materialEditorWrites';
 import { dbOperations } from '../utils/db';
 import { OperationHandle, useOperationActions } from '../context/OperationContext';
 import { frontendDiagnostics, type DiagnosticAttributes, type DiagnosticContext } from '../diagnostics/runtime';
@@ -91,10 +92,10 @@ export const useProjectManager = ({
     let previous: EditorSessionReadyLease | null = null;
     setIsLoading(true);
     try {
-      // Debounced level edits belong to the current session: write them (and
-      // wait) before saving, exporting or replacing it. A failed flush keeps
-      // the edits pending and cancels the operation instead of losing them.
+      // Level and material edits must reach their original project before a save,
+      // export or replacement. A failed flush leaves the project open for retry.
       await flushPendingLevelEdits({ notify: false });
+      await flushMaterialEditorWrites();
       // The transition is begun before the operation's first host request. It
       // synchronously invalidates every old World Editor lease, including
       // delayed writes.
