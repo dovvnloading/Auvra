@@ -5,6 +5,7 @@ import { advance, useThree, type RootState } from '@react-three/fiber';
 import { gpuBytes, realNow, resetClock, seedChance, stepClock, virtualSeconds, webGpuBytes, webGpuWaiting } from './instrument';
 import { AuvraCanvas, readRequestedRendererBackend } from '../../renderer/AuvraCanvas';
 import { sourceEditPixels } from './sourceEditPixels';
+import { verifyPhotoCaptureWorker } from './photoCaptureWorker';
 import { deviceLossPixels } from './deviceLossPixels';
 import { acceptSoftwareAdapter, acquireGpuCore, releaseIdleGpuCore } from '../../renderer/gpu/device';
 import { isGpuRenderer } from '../../renderer/gpu/frame';
@@ -176,7 +177,7 @@ const capture = async (name: string) => {
     ? await deviceLossPixels() : null;
   return { png, numbers: { ...(deviceLoss ? { deviceLoss } : {}), loadMs, frameMs, calls, triangles, geometries, textures, programs, gpuBytes: bytes,
     ...(cookBenchmark ? { textureCook: cookBenchmark, textureCookProblem: cookProblem } : {}),
-    ...(standardCook ? { graphCook: standardCook } : {}),
+    ...(standardCook ? { graphCook: standardCook, graphCookProblem: cookProblem } : {}),
     ...(bc1Parity ? { bc1Parity } : {}),
     ...(compression ? { materialCompression: compression } : {}),
     ...(sourceEdit ? { sourceEdit } : {}),
@@ -222,4 +223,4 @@ const compare = async (actualUrl: string, referenceUrl: string, tolerance: numbe
   return { sameSize: true, share: differing / pixels, mean: sum / pixels, worst, diff: canvas.toDataURL('image/png') };
 };
 
-(window as unknown as { auvraVisual: unknown }).auvraVisual = { names: Object.keys(SCENES), capture, compare };
+(window as unknown as { auvraVisual: unknown }).auvraVisual = { names: Object.keys(SCENES), capture, compare, verifyPhotoCaptureWorker };

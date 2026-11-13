@@ -125,7 +125,8 @@ const graphOutputs = (resolve: GraphResolver, graphId: string): Array<{ value: s
  * (its own and those shared in the project) to apply.
  */
 const GraphValues: React.FC<{ resolve: GraphResolver; graphId: string; values: Record<string, unknown>; textures: ReadonlyArray<{ id: string; name: string }>; onChange: (values: Record<string, unknown>) => void }> = ({ resolve, graphId, values, textures, onChange }) => {
-    useEffect(() => { sharedPresets.load(); }, []);
+    const generation = materialLibrary.generation;
+    useEffect(() => { void sharedPresets.load(); }, [generation]);
     const sharedVersion = useSyncExternalStore(sharedPresets.subscribe, sharedPresets.getVersion);
     const graph = resolve(graphId)?.graph;
     const presets = useMemo<PlacedPreset[]>(() => {

@@ -1,12 +1,14 @@
-import React, { useImperativeHandle, useRef, useState } from 'react';
+import React, { useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { frontendDiagnostics } from '../../../diagnostics/runtime';
 import type { MaterialAsset } from '../../../runtime/materials/materialLibrary';
 import { RotateIcon, WarningIcon } from '../../UI/Icons';
 import { Button, Spinner } from '../../UI/kit';
 import { useTextureStore } from '../useTextureStore';
-import { CAPTURE_FEWEST, CAPTURE_MOST, createCaptureMaterial, readCaptureSet, type CaptureSet } from './captureImport';
+import { CAPTURE_FEWEST, CAPTURE_MOST, type CaptureSet } from '../../../texturing/paint/captureProtocol';
+import { PhotoCapture } from '../../../texturing/paint/photoCapture';
+import { storeCaptureMaterial } from './captureImport';
 import { SliderRow } from './PaintFields';
-import { PHOTO_ACCEPT } from './photoImport';
+import { isPhotoFile, PHOTO_ACCEPT } from './photoImport';
 
 export interface CaptureMaterialPickerHandle {
     pick: () => void;
@@ -60,45 +62,74 @@ export const CaptureMaterialPicker = React.forwardRef<CaptureMaterialPickerHandl
     const [set, setSet] = useState<CaptureSet | null>(null);
     const [azimuths, setAzimuths] = useState<number[]>([]);
     const [elevation, setElevation] = useState(40);
-    const [working, setWorking] = useState(false);
+    const [phase, setPhase] = useState<'reading' | 'ready' | 'rendering' | 'saving'>('ready');
     const [failure, setFailure] = useState<string | null>(null);
-    useImperativeHandle(ref, () => ({ pick: () => input.current?.click() }));
+    const task = useRef<PhotoCapture | null>(null);
+    const saving = useRef(false);
+    const working = phase === 'rendering' || phase === 'saving';
+    useImperativeHandle(ref, () => ({ pick: () => { if (!saving.current) input.current?.click(); } }));
+    useEffect(() => () => { task.current?.close(); task.current = null; }, []);
 
-    const read = (files: File[]) => {
-        setStatus(`Reading ${files.length} photos…`);
-        void readCaptureSet(files).then((read) => {
+    const close = () => {
+        if (saving.current) return;
+        task.current?.close();
+        task.current = null;
+        setSet(null);
+        setStatus(null);
+        setPhase('ready');
+    };
+    const read = async (files: File[]) => {
+        if (saving.current) return;
+        close();
+        let capture: PhotoCapture | null = null;
+        try {
+            capture = new PhotoCapture();
+            task.current = capture;
+            const chosen = files.filter(isPhotoFile);
+            setStatus(`Reading ${chosen.length} photos…`);
+            setPhase('reading');
+            const result = await capture.read(chosen);
+            if (task.current !== capture) return;
             setStatus(null);
             setFailure(null);
-            setSet(read);
-            setAzimuths(read.estimate.azimuths);
-        }, (error: unknown) => {
+            setSet(result);
+            setAzimuths(result.estimate.azimuths);
+            setPhase('ready');
+        } catch (error) {
+            if (task.current !== capture) return;
+            close();
             frontendDiagnostics.failure('capture_material_read_failed', error);
             setStatus(error instanceof Error ? error.message : 'The photos could not be read.');
-        });
+        }
     };
-    const close = () => { if (!working) setSet(null); };
-    const make = () => {
-        if (!set) return;
-        setWorking(true);
+    const make = async () => {
+        const capture = task.current;
+        if (!set || !capture || phase !== 'ready') return;
+        setPhase('rendering');
         setFailure(null);
-        // A frame first, so the dialog says it is working before the sums take the thread.
-        window.setTimeout(() => {
-            void createCaptureMaterial(set, azimuths, elevation * DEGREES, store).then((asset) => {
-                setWorking(false);
-                setSet(null);
-                onMade(asset);
-            }, (error: unknown) => {
-                frontendDiagnostics.failure('capture_material_failed', error);
-                setWorking(false);
-                setFailure(error instanceof Error ? error.message : 'The material could not be made from these photos.');
-            });
-        }, 30);
+        try {
+            const pictures = await capture.render(azimuths, elevation * DEGREES);
+            if (task.current !== capture) return;
+            saving.current = true;
+            setPhase('saving');
+            const asset = await storeCaptureMaterial(set, pictures, store);
+            if (task.current !== capture) return;
+            saving.current = false;
+            close();
+            onMade(asset);
+        } catch (error) {
+            if (task.current !== capture) return;
+            saving.current = false;
+            setPhase('ready');
+            frontendDiagnostics.failure('capture_material_failed', error);
+            setFailure(error instanceof Error ? error.message : 'The material could not be made from these photos.');
+        }
     };
 
     return (
         <>
-            <input ref={input} type="file" multiple accept={PHOTO_ACCEPT} className="hidden" onChange={(event) => { const files = Array.from(event.target.files ?? []); event.target.value = ''; if (files.length) read(files); }} />
-            {status && <p className={`text-2xs leading-snug text-ink-3 ${className}`} role="status">{status}</p>}
+            <input ref={input} type="file" multiple accept={PHOTO_ACCEPT} className="hidden" onChange={(event) => { const files = Array.from(event.target.files ?? []); event.target.value = ''; if (files.length) void read(files); }} />
+            {status && <p className={`text-2xs leading-snug text-ink-3 ${className}`} role="status">{status} {phase === 'reading' && <button type="button" onClick={close} className="underline">Cancel</button>}</p>}
             {set && (
                 <div
                     className="fixed inset-0 z-[200] flex items-center justify-center bg-black/60 p-4"
@@ -108,7 +139,7 @@ export const CaptureMaterialPicker = React.forwardRef<CaptureMaterialPickerHandl
                     <div role="dialog" aria-modal="true" aria-labelledby="capture-title" className="max-h-full w-[560px] max-w-full space-y-3 overflow-y-auto rounded-lg border border-gray-700 bg-gray-900 p-4 shadow-2xl">
                         <h2 id="capture-title" className="text-sm font-semibold text-ink">Material from photos lit from several sides</h2>
                         <p className="text-xs leading-snug text-ink-2">
-                            The light directions below were worked out from the photos. If one looks wrong, drag on that photo towards the side its light came from.
+                            The material uses the middle square of each photo at {set.size} × {set.size} pixels. If a light direction looks wrong, drag on that photo towards the side its light came from.
                         </p>
                         {!set.sameSize && (
                             <p className="flex items-start gap-1.5 text-2xs leading-snug text-warn"><WarningIcon size={12} className="mt-px shrink-0" />These photos are not all one size. They need to be taken from one spot, with the camera held still.</p>
@@ -131,9 +162,9 @@ export const CaptureMaterialPicker = React.forwardRef<CaptureMaterialPickerHandl
                                 title="For a relief that reads inside out, raised parts sunk: every light turned to the opposite side"
                                 onClick={() => setAzimuths((list) => list.map((azimuth) => azimuth + Math.PI))}>Turn all lights round</Button>
                             <span className="flex-1" />
-                            {working && <span className="flex items-center gap-1.5 text-2xs text-ink-2"><Spinner />Working out the normal and colour…</span>}
-                            <Button variant="ghost" disabled={working} onClick={close}>Cancel</Button>
-                            <Button variant="primary" disabled={working} onClick={make}>Make the material</Button>
+                            {working && <span className="flex items-center gap-1.5 text-2xs text-ink-2"><Spinner />{phase === 'saving' ? 'Saving material…' : 'Working out the normal and colour…'}</span>}
+                            <Button variant="ghost" disabled={phase === 'saving'} onClick={close}>Cancel</Button>
+                            <Button variant="primary" disabled={working} onClick={() => void make()}>Make the material</Button>
                         </div>
                     </div>
                 </div>

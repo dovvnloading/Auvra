@@ -307,7 +307,8 @@ const Workspace: React.FC<{
     const renamingParameter = useRef(false);
     const [, setHistoryVersion] = useState(0);
     // Kept outside this screen, so it survives switching material and leaving the tab.
-    const history = useMemo(() => materialHistory<GraphSnapshot>(asset.id), [asset.id]);
+    const generation = materialLibrary.generation;
+    const history = useMemo(() => materialHistory<GraphSnapshot>(asset.id, generation), [asset.id, generation]);
     const meshMaps = usePreviewMeshMaps(session, graph, resolve, shape, surfaceId, libraryVersion);
 
     // A processor's function graph, opened in place of the graph's canvas.
@@ -333,7 +334,7 @@ const Workspace: React.FC<{
     // The graph's parameters: shown as a finished panel, or edited; and its presets.
     const [parameterView, setParameterView] = useState<'panel' | 'edit'>('panel');
     const [variations, setVariations] = useState(false);
-    useEffect(() => { sharedPresets.load(); }, []);
+    useEffect(() => { void sharedPresets.load(); }, [generation]);
     const sharedVersion = useSyncExternalStore(sharedPresets.subscribe, sharedPresets.getVersion);
     const placedPresets = useMemo<PlacedPreset[]>(() => {
         void sharedVersion;
@@ -1083,7 +1084,7 @@ const Workspace: React.FC<{
                                 const sharedInMemory = sharedPresets.of(asset.id).filter((preset) => Object.hasOwn(preset.values, from)).length;
                                 if (requiresProjectWideParameterRename(plan.impact) || sharedInMemory > 0) {
                                     const otherMaterials = plan.impact.materials.filter((id) => id !== asset.id).length;
-                                    setMessage({ tone: 'error', text: `Rename blocked: ${otherMaterials} dependent material(s), ${plan.impact.nestedNodes} subgraph/Iterate node(s), ${plan.impact.paintReferences} paint reference(s), ${plan.impact.modelOverrides} model override(s), ${plan.impact.objectOverrides} placed-object override(s), and ${plan.impact.prefabOverrides} override(s) in ${plan.impact.prefabs.length} saved prefab(s). Shared presets using this parameter: ${plan.impact.sharedPresets} saved, ${sharedInMemory} in the editor. These references need coordinated project-wide save and undo.` });
+                                    setMessage({ tone: 'error', text: `Rename blocked: ${otherMaterials} dependent material(s), ${plan.impact.nestedNodes} subgraph/Iterate node(s), ${plan.impact.paintReferences} paint reference(s), ${plan.impact.modelOverrides} model override(s), ${plan.impact.objectOverrides} placed-object override(s), and ${plan.impact.prefabOverrides} override(s) in ${plan.impact.prefabs.length} saved prefab(s). Shared presets using this parameter: ${plan.impact.sharedPresets} saved, ${sharedInMemory} in the editor. Save and close this project, then preview the cross-asset rename with the rename-parameter material command.` });
                                     return;
                                 }
                                 const currentStatus = projectService.getStatus();

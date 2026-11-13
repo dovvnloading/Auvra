@@ -100,6 +100,9 @@ const main = async () => {
       });
       numbers[name] = cost;
       if (onWebGpu && name === 'texture-graph') {
+        if (!textureBench && (cost.graphCook?.backend !== 'webgpu' || cost.graphCook.fallback)) {
+          failures.push(`${name}: expected the proof graph to cook on WebGPU: ${cost.graphCookProblem ?? 'missing WebGPU result'}`);
+        }
         if (!cost.bc1Parity) failures.push(`${name}: no BC1 parity result was returned`);
         else if (cost.bc1Parity.status === 'failed') failures.push(`${name}: ${cost.bc1Parity.reason}`);
       }
@@ -145,6 +148,9 @@ const main = async () => {
       }
       rows.push({ name, verdict, differs: shareText, 'load ms': Math.round(cost.loadMs), 'frame ms': +cost.frameMs.toFixed(1), 'graph cook ms': cost.graphCook ? +cost.graphCook.milliseconds.toFixed(1) : '-', draws: cost.calls, triangles: cost.triangles, programs: cost.programs, 'GPU MB': +(cost.gpuBytes / 1048576).toFixed(1) });
       console.log(`${name}: ${verdict}`);
+    }
+    if (!textureBench && !onWebGpu && names.includes('texture-graph')) {
+      numbers['texture-graph'].photoCapture = await run('window.auvraVisual.verifyPhotoCaptureWorker()');
     }
     console.table(rows);
     if (textureBench) {

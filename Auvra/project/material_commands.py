@@ -3,6 +3,9 @@
     python -m Auvra.project.material_commands PROJECT list
     python -m Auvra.project.material_commands PROJECT set-value MATERIAL NAME VALUE
     python -m Auvra.project.material_commands PROJECT apply-preset MATERIAL PRESET
+    python -m Auvra.project.material_commands PROJECT rename-parameter MATERIAL OLD NEW [--apply-revision REV --receipt FILE]
+    python -m Auvra.project.material_commands PROJECT undo-rename FILE
+    python -m Auvra.project.material_commands PROJECT redo-rename FILE
     python -m Auvra.project.material_commands PROJECT cook MATERIAL [--size N] [--out FOLDER] [--into-project]
     python -m Auvra.project.material_commands PROJECT ball MATERIAL [--size PIXELS] [--out FOLDER] [--into-project]
     python -m Auvra.project.material_commands PROJECT bake-mesh-maps MODEL [--size N] [--samples N] [--out FOLDER] [--into-project]
@@ -30,7 +33,9 @@ from __future__ import annotations
 
 import argparse
 import copy
+import hashlib
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -38,6 +43,7 @@ import tempfile
 from pathlib import Path
 from typing import Any, Sequence
 
+from .errors import AuvraProjectError
 from .repository import ProjectRepository
 from .schemas import DOMAIN_NAMES
 
@@ -263,6 +269,138 @@ def draw(repository: ProjectRepository, command: str, target: str, *, size: int 
     return result
 
 
+_RENAME_DOMAINS = ("materials", "models", "objects", "prefabs", "metadata")
+
+
+def _rename_inventory(repository: ProjectRepository) -> dict[str, list[dict[str, Any]]]:
+    return {domain: repository.get_domain(domain)["documents"] for domain in _RENAME_DOMAINS}
+
+
+def _fingerprint(domains: dict) -> str:
+    """Hash JSON numbers consistently across JS and Python (e.g. 0 and 0.0)."""
+    def canonical(value):
+        if isinstance(value, dict):
+            return {key: canonical(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [canonical(item) for item in value]
+        if isinstance(value, float) and value.is_integer():
+            return int(value)
+        return value
+
+    ordered = {domain: sorted(documents, key=lambda doc: doc["id"]) for domain, documents in domains.items()}
+    return hashlib.sha256(json.dumps(canonical(ordered), sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
+def _rename_plan(repository: ProjectRepository, domains: dict, source: str, old: str, new: str) -> dict:
+    node = shutil.which("node")
+    if not node or not (_EDITOR_ROOT / "node_modules" / "esbuild").is_dir():
+        raise HeadlessUnavailable("Parameter renaming needs Node and the editor's packages. Run npm ci in fbx-viewer (1).")
+    request = {"snapshot": {"projectId": repository.project_id, "revision": repository.revision, "domains": domains},
+               "sourceMaterialId": source, "from": old, "to": new}
+    result = subprocess.run([node, str(_EDITOR_ROOT / "scripts/materials/rename.mjs")],
+                            input=json.dumps(request, allow_nan=False), text=True, encoding="utf-8",
+                            capture_output=True, timeout=120)
+    if result.returncode:
+        raise MaterialCommandError(result.stderr.strip() or "The parameter rename planner failed.")
+    plan = json.loads(result.stdout)
+    # Never round an exact host integer, or accept a normalized document as an inverse.
+    saved = {domain: {doc["id"]: doc for doc in documents} for domain, documents in domains.items()}
+    for change in plan["undoChanges"]:
+        before = saved[change["domain"]][change["id"]]
+        if before != change["value"]:
+            raise MaterialCommandError(f'The planner could not preserve {change["domain"]}/{change["id"]} exactly.')
+    return plan
+
+
+def _rename_domains(domains: dict, changes: list[dict]) -> dict:
+    touched: dict[str, dict[str, dict]] = {}
+    if not isinstance(changes, list) or not changes:
+        raise MaterialCommandError("The rename receipt has no document changes.")
+    for change in changes:
+        if not isinstance(change, dict):
+            raise MaterialCommandError("The rename receipt contains an invalid change.")
+        domain, key, value = change.get("domain"), change.get("id"), change.get("value")
+        if (not isinstance(domain, str) or domain not in domains or not isinstance(key, str)
+                or change.get("operation") != "upsert" or not isinstance(value, dict) or value.get("id") != key
+                or key in touched.get(domain, {})):
+            raise MaterialCommandError("The rename receipt contains an invalid document.")
+        touched.setdefault(domain, {})[key] = value
+    result = {}
+    for domain, updates in touched.items():
+        documents = domains[domain]
+        if updates.keys() - {doc["id"] for doc in documents}:
+            raise MaterialCommandError("A document in the rename receipt is missing from this project.")
+        result[domain] = [updates.get(doc["id"], doc) for doc in documents]
+    return result
+
+
+def _apply_rename(repository: ProjectRepository, changed: dict, revision: int) -> None:
+    # Keep changed documents within the desktop host's single-document paging limit.
+    from Auvra.desktop.project_host import DOCUMENT_LOAD_LIMIT
+
+    for domain, docs in changed.items():
+        previous = {doc["id"]: doc for doc in repository.get_domain(domain)["documents"]}
+        for doc in docs:
+            if doc != previous.get(doc["id"]) and len(json.dumps(doc, separators=(",", ":"), ensure_ascii=False).encode()) > DOCUMENT_LOAD_LIMIT:
+                raise MaterialCommandError(f'The renamed {domain}/{doc["id"]} document is too large to reopen in the editor.')
+    revision = repository.apply_changes(changed, expected_revision=revision)
+    try:
+        repository.save(expected_revision=revision)
+    except (OSError, AuvraProjectError) as error:
+        raise MaterialCommandError(f"Transaction committed at revision {revision}, but its recovery point could not be saved: {error}") from error
+
+
+def rename_parameter(repository: ProjectRepository, material: str, old: str, new: str,
+                     apply_revision: int | None, receipt_path: Path | None) -> dict:
+    revision = repository.revision
+    if apply_revision is not None and apply_revision != revision:
+        raise MaterialCommandError("The project revision changed. Preview this rename again.")
+    domains = _rename_inventory(repository)
+    source = _find(domains["materials"], material, "material")["id"]
+    if receipt_path is not None and apply_revision is None:
+        raise MaterialCommandError("Use --receipt with --apply-revision to commit this rename.")
+    plan = _rename_plan(repository, domains, source, old, new)
+    if apply_revision is None:
+        return {"revision": revision, "impact": plan["impact"], "applied": False}
+    if receipt_path is None:
+        raise MaterialCommandError("Specify --receipt FILE to keep the complete undo record.")
+    if receipt_path.resolve().is_relative_to(repository.path.resolve()):
+        raise MaterialCommandError("Keep the undo receipt outside the project folder.")
+    changed = _rename_domains(domains, plan["changes"])
+    receipt = {"format": "auvra.parameter-rename/1", "projectId": repository.project_id, "source": source,
+               "from": old, "to": new, "before": _fingerprint(domains), "after": _fingerprint(domains | changed),
+               "undo": plan["undoChanges"]}
+    # Write the inverse before the transaction. Even an interruption immediately after
+    # the host commit leaves a usable receipt. Existing user files are never replaced.
+    with receipt_path.open("x", encoding="utf-8") as stream:
+        json.dump(receipt, stream, ensure_ascii=False)
+        stream.flush()
+        os.fsync(stream.fileno())
+    _apply_rename(repository, changed, revision)
+    return {"revision": repository.revision, "impact": plan["impact"], "applied": True, "receipt": str(receipt_path)}
+
+
+def travel_rename(repository: ProjectRepository, receipt_path: Path, undo: bool) -> dict:
+    revision = repository.revision
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    if (not isinstance(receipt, dict) or receipt.get("format") != "auvra.parameter-rename/1"
+            or receipt.get("projectId") != repository.project_id or not isinstance(receipt.get("undo"), list)
+            or not all(isinstance(receipt.get(key), str) for key in ("source", "from", "to", "before", "after"))):
+        raise MaterialCommandError("This rename receipt does not belong to this project.")
+    domains = _rename_inventory(repository)
+    if _fingerprint(domains) != receipt.get("after" if undo else "before"):
+        raise MaterialCommandError("The project's rename references differ from this receipt. No documents were changed.")
+    before = domains | _rename_domains(domains, receipt["undo"]) if undo else domains
+    # Replan from the original documents. Only apply an inverse whose forward
+    # replay reproduces the exact authored state; the receipt cannot add a change.
+    plan = _rename_plan(repository, before, receipt["source"], receipt["from"], receipt["to"])
+    after = before | _rename_domains(before, plan["changes"])
+    if _fingerprint(before) != receipt["before"] or _fingerprint(after) != receipt["after"] or plan["undoChanges"] != receipt["undo"]:
+        raise MaterialCommandError("The saved rename no longer reproduces both project states.")
+    _apply_rename(repository, _rename_domains(domains, plan["undoChanges" if undo else "changes"]), revision)
+    return {"revision": repository.revision, "impact": plan["impact"], "undone": undo}
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python -m Auvra.project.material_commands", description="Batch work on a project's materials.")
     parser.add_argument("project", type=Path, help="the project's folder")
@@ -276,6 +414,15 @@ def _parser() -> argparse.ArgumentParser:
     preset = sub.add_parser("apply-preset", help="set every value one of a texture graph's presets holds")
     preset.add_argument("material")
     preset.add_argument("preset")
+    rename = sub.add_parser("rename-parameter", help="preview a project-wide parameter rename, or apply the previewed revision")
+    rename.add_argument("material")
+    rename.add_argument("old")
+    rename.add_argument("new")
+    rename.add_argument("--apply-revision", type=int, help="apply at the exact revision printed by the preview")
+    rename.add_argument("--receipt", type=Path, help="a new undo receipt file outside the project")
+    for command in ("undo-rename", "redo-rename"):
+        history = sub.add_parser(command, help="restore all affected documents using a parameter rename receipt")
+        history.add_argument("receipt", type=Path)
     helps = {
         "cook": ("a texture graph's pictures, as Update material makes them", "a power of two (9 or 512): the material's own when not given"),
         "ball": ("a material's preview ball, as a PNG", "pixels across (160 when not given)"),
@@ -312,6 +459,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 raise MaterialCommandError("The project is open elsewhere (the editor holds it): close it there first.")
             if args.command == "list":
                 result: Any = list_materials(repository)
+            elif args.command == "rename-parameter":
+                result = rename_parameter(repository, args.material, args.old, args.new, args.apply_revision, args.receipt)
+            elif args.command in ("undo-rename", "redo-rename"):
+                result = travel_rename(repository, args.receipt, args.command == "undo-rename")
             elif args.command == "set-value":
                 try:
                     value = json.loads(args.value)
@@ -329,7 +480,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     except HeadlessFailed as error:
         print(str(error), file=sys.stderr)
         return 4
-    except MaterialCommandError as error:
+    except (MaterialCommandError, AuvraProjectError, OSError, ValueError, subprocess.TimeoutExpired) as error:
         print(str(error), file=sys.stderr)
         return 2
     if args.json:
