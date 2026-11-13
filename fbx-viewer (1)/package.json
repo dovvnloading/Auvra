@@ -25,6 +25,7 @@
     "diagnostics:verify": "node scripts/diagnostics/verify.mjs",
     "player:verify": "node scripts/player/verify.mjs",
     "rendering:verify": "node scripts/rendering/run.mjs",
+    "texture:matrix": "node scripts/rendering/capability-matrix.mjs",
     "texture:benchmark": "node scripts/rendering/run.mjs --texture-bench",
     "lint": "eslint ."
   },

@@ -12,6 +12,7 @@
 //                                             measure cold/cache/incremental graph cook at 2K,
 //                                             without comparing an intentionally resized image
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -108,6 +109,23 @@ const captureScenes = async (server, outputDir) => {
       const bytes = Buffer.from(png.split(',')[1], 'base64');
       const referenceFile = path.join(referenceDir, `${name}.png`);
       writeFileSync(path.join(outputDir, `${name}.actual.png`), bytes);
+      if (name === 'texture-graph' && !textureBench) {
+        const digest = value => createHash('sha256').update(value).digest('hex');
+        const browserInfo = await client.send('Browser.getVersion');
+        const system = await client.send('SystemInfo.getInfo').catch(() => null);
+        const head = spawnSync('git', ['rev-parse', '--verify', 'HEAD'], { cwd: projectDir, encoding: 'utf8' });
+        cost.provenance = {
+          sourceCommit: head.status === 0 ? head.stdout.trim() : null,
+          browser: browserInfo.product,
+          // Chromium's process inventory may also list adapters not selected by the texture context.
+          browserDevices: (system?.gpu?.devices ?? []).map(({ deviceString, driverVendor, driverVersion }) =>
+            ({ device: deviceString, driverVendor, driverVersion })),
+          runnerOS: process.platform,
+          gpuSelection: realGpu ? 'hardware-requested' : 'software-requested',
+          screenshotSha256: digest(bytes),
+          referenceSha256: updating ? digest(bytes) : existsSync(referenceFile) ? digest(readFileSync(referenceFile)) : null,
+        };
+      }
       let verdict = 'kept';
       let shareText = '-';
       if (textureBench) {
