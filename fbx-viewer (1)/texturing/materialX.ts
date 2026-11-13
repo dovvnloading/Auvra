@@ -141,6 +141,25 @@ const sourceOf = (graph: MaterialGraph, toNode: string, toInput: string): { node
 };
 
 const CHANNELS: Record<string, number> = { r: 0, g: 1, b: 2, a: 3 };
+type UvPair = [number, number];
+interface UvTransform { tiling: UvPair; offset: UvPair }
+const DEFAULT_UV: UvTransform = { tiling: [1, 1], offset: [0, 0] };
+const uvPair = (value: unknown): UvPair | null =>
+    (Array.isArray(value) && value.length === 2 && value.every((v) => typeof v === 'number' && Number.isFinite(v))
+        ? [value[0], value[1]] : null);
+
+/**
+ * The UV transform for a texture/normal-map sample, when expressible as MaterialX's
+ * image uvtiling + uvoffset. An arbitrary shader UV graph cannot safely be flattened.
+ */
+const sourceUvTransform = (graph: MaterialGraph, node: MaterialGraphNode): UvTransform | null => {
+    const source = sourceOf(graph, node.id, 'uv');
+    if (!source || (source.node.type === 'uv' && source.output === 'out')) return DEFAULT_UV;
+    if (source.node.type !== 'tilingOffset' || source.output !== 'out' || sourceOf(graph, source.node.id, 'uv')) return null;
+    const tiling = uvPair(source.node.params.tiling);
+    const offset = uvPair(source.node.params.offset);
+    return tiling && offset ? { tiling, offset } : null;
+};
 
 export interface MaterialXExport {
     /** The .mtlx document. */
@@ -194,17 +213,27 @@ export const materialToMaterialX = (asset: MaterialAsset, surface: MaterialXSurf
             const { node } = source;
             const textureId = typeof node.params.texture === 'string' ? node.params.texture : '';
             const reads = node.type === 'texture' || node.type === 'normalMap' || node.type === MATERIAL_PICTURE_NODE_TYPE;
+            const uv = sourceUvTransform(graph, node);
+            // An unsupported UV graph must not be silently exported as an untransformed picture.
+            if (!uv) {
+                leftOut.push(key);
+                continue;
+            }
             const path = reads && textureId ? pathOf(textureId) : null;
             if (!path) {
                 leftOut.push(key);
                 continue;
             }
+            const uvInputs = [
+                ...(uv.tiling[0] !== 1 || uv.tiling[1] !== 1 ? [`    <input name="uvtiling" type="vector2" value="${uv.tiling.map(round).join(', ')}" />`] : []),
+                ...(uv.offset[0] !== 0 || uv.offset[1] !== 0 ? [`    <input name="uvoffset" type="vector2" value="${uv.offset.map(round).join(', ')}" />`] : []),
+            ];
             const colour = textureSlot(node) === 'map' && target.type !== 'vector3';
             const colourSpace = colour ? ' colorspace="srgb_texture"' : '';
             const imageName = `${key}_image`;
             if (target.type === 'vector3') {
                 const scale = node.type === 'normalMap' ? num(node.params.strength, 1) : 1;
-                lines.push(`  <image name="${imageName}" type="vector3">`, `    <input name="file" type="filename" value="${escape(path)}" />`, '  </image>');
+                lines.push(`  <image name="${imageName}" type="vector3">`, `    <input name="file" type="filename" value="${escape(path)}" />`, ...uvInputs, '  </image>');
                 lines.push(`  <normalmap name="${key}_map" type="vector3">`, `    <input name="in" type="vector3" nodename="${imageName}" />`, `    <input name="scale" type="float" value="${written(scale)}" />`, '  </normalmap>');
                 inputs.set(inputName, `    <input name="${inputName}" type="vector3" nodename="${key}_map" />`);
                 continue;
@@ -215,10 +244,10 @@ export const materialToMaterialX = (asset: MaterialAsset, surface: MaterialXSurf
             let type: 'float' | 'color3' = single ? 'float' : 'color3';
             if (!single || channel === undefined || channel === 0) {
                 // The whole picture (colour), or its first channel (one value).
-                lines.push(`  <image name="${imageName}" type="${type}">`, `    <input name="file" type="filename" value="${escape(path)}"${colourSpace} />`, '  </image>');
+                lines.push(`  <image name="${imageName}" type="${type}">`, `    <input name="file" type="filename" value="${escape(path)}"${colourSpace} />`, ...uvInputs, '  </image>');
             } else {
                 // One channel of a packed picture.
-                lines.push(`  <image name="${imageName}" type="color4">`, `    <input name="file" type="filename" value="${escape(path)}"${colourSpace} />`, '  </image>');
+                lines.push(`  <image name="${imageName}" type="color4">`, `    <input name="file" type="filename" value="${escape(path)}"${colourSpace} />`, ...uvInputs, '  </image>');
                 lines.push(`  <extract name="${key}_channel" type="float">`, `    <input name="in" type="color4" nodename="${imageName}" />`, `    <input name="index" type="integer" value="${channel}" />`, '  </extract>');
                 from = `${key}_channel`;
             }
@@ -267,7 +296,15 @@ const parseValue = (text: string | null): number[] | null => {
 };
 
 /** Where an input's picture is: its file, which channel, whether it is colour, and a normal map's strength. */
-interface PictureSource { file: string; channel: 'rgb' | 'r' | 'g' | 'b' | 'a'; colour: boolean; normalScale?: number }
+interface PictureSource {
+    file: string;
+    channel: 'rgb' | 'r' | 'g' | 'b' | 'a';
+    colour: boolean;
+    normalScale?: number;
+    uv: UvTransform;
+    /** A connected/invalid UV source needs an explicit loss report, never a silent identity. */
+    unsupportedUv?: boolean;
+}
 
 const elementNamed = (root: Element, name: string): Element | null => {
     for (const child of Array.from(root.children)) if (child.getAttribute('name') === name) return child;
@@ -297,7 +334,18 @@ const pictureOf = (root: Element, input: Element, scope: Element = root, depth =
             if (!path) return null;
             const space = file?.getAttribute('colorspace') ?? node.getAttribute('colorspace') ?? '';
             const type = node.getAttribute('type') ?? 'color3';
-            return { file: path, channel: type === 'float' ? 'r' : 'rgb', colour: /srgb/i.test(space) };
+            const tilingField = inputOf('uvtiling');
+            const offsetField = inputOf('uvoffset');
+            const tiling = tilingField ? uvPair(parseValue(tilingField.getAttribute('value'))) : DEFAULT_UV.tiling;
+            const offset = offsetField ? uvPair(parseValue(offsetField.getAttribute('value'))) : DEFAULT_UV.offset;
+            // A linked texcoord cannot be represented by just uvtiling/uvoffset. Keep
+            // its source picture but report the coordinate loss when creating an asset.
+            const unsupportedUv = !tiling || !offset || Boolean(inputOf('texcoord'));
+            return {
+                file: path, channel: type === 'float' ? 'r' : 'rgb', colour: /srgb/i.test(space),
+                uv: { tiling: tiling ?? DEFAULT_UV.tiling, offset: offset ?? DEFAULT_UV.offset },
+                ...(unsupportedUv ? { unsupportedUv: true } : {}),
+            };
         }
         case 'normalmap': {
             const from = inputOf('in');
@@ -402,8 +450,15 @@ export const materialFromMaterialX = (xml: string, textureFor: (path: string) =>
             leftOut.push(inputName);
             continue;
         }
+        if (picture.unsupportedUv) leftOut.push(`${inputName} UV coordinates`);
         const nodeId = `${key}_picture`;
         const y = 40 + row++ * 150;
+        if (picture.uv.tiling[0] !== 1 || picture.uv.tiling[1] !== 1 || picture.uv.offset[0] !== 0 || picture.uv.offset[1] !== 0) {
+            // Texture Sample and Normal Map both accept a typed UV input.
+            const uvId = `${nodeId}_uv`;
+            graph.nodes.push({ id: uvId, type: 'tilingOffset', x: -140, y, params: { ...defaultParams('tilingOffset'), ...picture.uv } });
+            graph.links.push({ fromNode: uvId, fromOutput: 'out', toNode: nodeId, toInput: 'uv' });
+        }
         if (key === 'normal' || key === 'coatNormal') {
             graph.nodes.push({ id: nodeId, type: 'normalMap', x: 120, y, params: { ...defaultParams('normalMap'), texture: textureId, strength: picture.normalScale ?? 1 } });
             graph.links.push({ fromNode: nodeId, fromOutput: 'out', toNode: output.id, toInput: key });
