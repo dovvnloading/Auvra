@@ -63,6 +63,8 @@ The visual harness is `scripts/rendering/run.mjs` and its graph scene lives at `
 
 For every new device-backed claim, record exact commit, OS/driver, browser version, GPU/adapter and capabilities, chosen renderer, graph hash and output size, test command, screenshots/PNG hashes and failure/recovery logs. Mark unexecuted conditional operations **not tested**, rather than treating a scene's success as proof of absent adapter features.
 
+New WebGPU `texture-graph` captures write `bc1Parity` under `texture-graph` in `tests/visual/output/webgpu/numbers.json`. The report records `webgpuBC` from the active device and `webgl2S3TC` from the WebGL2 texturing context. A missing feature yields `not-tested` with a reason. With both features, `verified` means four sampled pixels from the BC1 fixture matched across both backends and reproduced the fixture’s red and green stripes within four byte levels per RGB channel. A drawing, readback or comparison error yields `failed` with the diagnostic and fails the rendering check. The historical CI run above predates this report.
+
 ## 5. Gates still needed before M0.4 can close
 
 - [ ] Generate or curate an explicit per-node-family WebGL2 vs WebGPU **code/capability** matrix. Unsupported and fallback must be recorded separately.

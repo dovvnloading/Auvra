@@ -98,6 +98,10 @@ const main = async () => {
         throw new Error(`${name}: ${error.message}${said(pageSaid(sceneStart))}`);
       });
       numbers[name] = cost;
+      if (onWebGpu && name === 'texture-graph') {
+        if (!cost.bc1Parity) failures.push(`${name}: no BC1 parity result was returned`);
+        else if (cost.bc1Parity.status === 'failed') failures.push(`${name}: ${cost.bc1Parity.reason}`);
+      }
       const bytes = Buffer.from(png.split(',')[1], 'base64');
       const referenceFile = path.join(referenceDir, `${name}.png`);
       writeFileSync(path.join(outputDir, `${name}.actual.png`), bytes);
