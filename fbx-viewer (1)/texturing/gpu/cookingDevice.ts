@@ -26,6 +26,22 @@ export const cookingDevice = (): unknown => device;
 /** Why each graph (by material id) was drawn with WebGL2 instead of WebGPU, the last time it was cooked. */
 export const webgpuFallbacks = new Map<string, string>();
 
+/**
+ * Async cooks may finish after the runtime switched to a new GPU or WebGL2.
+ * Only a cook started on the CURRENT device may update its diagnostic map.
+ */
+export const recordWebgpuFallback = (targetDevice: unknown, materialId: string, reason: string): boolean => {
+    if (!targetDevice || device !== targetDevice) return false;
+    webgpuFallbacks.set(materialId, reason);
+    return true;
+};
+
+export const clearWebgpuFallback = (targetDevice: unknown, materialId: string): boolean => {
+    if (!targetDevice || device !== targetDevice) return false;
+    webgpuFallbacks.delete(materialId);
+    return true;
+};
+
 export interface TextureCookingCapabilitySnapshot {
     backend: 'webgl2' | 'webgpu';
     /** Hardware-reported limit, not proof every graph size can run. */
