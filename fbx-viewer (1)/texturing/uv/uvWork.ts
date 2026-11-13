@@ -58,17 +58,20 @@ export const measureLayout = (topology: UvTopology, cornerUv: Float32Array, char
     // An island laid out mirrored as a whole (glTF counts texture rows from the top) is fine: a triangle is
     // folded only when it faces against the rest of its own island.
     const signedArea = (f: number) => ((cornerUv[f * 6 + 2] - cornerUv[f * 6]) * (cornerUv[f * 6 + 5] - cornerUv[f * 6 + 1]) - (cornerUv[f * 6 + 4] - cornerUv[f * 6]) * (cornerUv[f * 6 + 3] - cornerUv[f * 6 + 1])) / 2;
-    const orientation = new Float32Array(faceCount).fill(1);
+    const orientation = new Int8Array(faceCount).fill(1);
     for (const chart of chartFaces) {
         let sum = 0;
-        for (let i = 0; i < chart.length; i++) sum += signedArea(chart[i]);
+        for (let i = 0; i < chart.length; i++) {
+            const face = chart[i];
+            if (!Number.isInteger(face) || face < 0 || face >= faceCount) {
+                throw new Error('The UV chart contains an invalid face index.');
+            }
+            sum += signedArea(face);
+        }
         const sign = sum < 0 ? -1 : 1;
         for (let i = 0; i < chart.length; i++) {
             const face = chart[i];
-            if (typeof face !== 'number' || !Number.isInteger(face) || face < 0 || face >= faceCount) {
-                throw new Error('The UV chart contains an invalid face index.');
-            }
-            orientation[face] = sign;
+            orientation.fill(sign, face, face + 1);
         }
     }
     for (let f = 0; f < faceCount; f++) {

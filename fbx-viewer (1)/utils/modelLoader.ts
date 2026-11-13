@@ -509,7 +509,7 @@ const POSE_CLIP_SECONDS = 1 / 30;
 
 const isGenericClipName = (name: string): boolean => {
   const trimmed = name.trim();
-  return !trimmed || trimmed.toLowerCase().includes('mixamo.com') || /^take\s*0*\d+$/i.test(trimmed);
+  return !trimmed || /mixamo\.com/i.test(trimmed) || /^take\s*0*\d+$/i.test(trimmed);
 };
 
 /**

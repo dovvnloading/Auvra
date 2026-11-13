@@ -57,7 +57,7 @@ describe('UV work requests', () => {
         const part = sphere();
         const topology = buildTopology(part.positions, part.indices);
         const cornerUv = new Float32Array(topology.faceCount * 6);
-        for (const face of [-1, 0.5, topology.faceCount]) {
+        for (const face of [-1, 0.5, NaN, Infinity, -Infinity, topology.faceCount]) {
             expect(() => measureLayout(topology, cornerUv, [[face]], 1, 64, false)).toThrow('invalid face index');
         }
     });
