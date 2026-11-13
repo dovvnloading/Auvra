@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { BookIcon, CameraIcon, ChipIcon, CommentAddIcon, CrossIcon, ExternalLinkIcon, FlowIcon, GraphIcon, ImageIcon, PackagePlusIcon, PlusIcon, TrashIcon, WarningIcon } from '../UI/Icons';
 import { useAssets } from '../../context/AssetContext';
-import { projectService } from '../../utils/projectService';
+import { canSaveMaterialEditorEdit, cancelMaterialEditorWrite, flushMaterialEditorWrites, saveMaterialEditorEdit } from './materialEditorWrites';
 import { frontendDiagnostics } from '../../diagnostics/runtime';
 import {
     MAX_COMMENT_LENGTH,
@@ -14,7 +14,7 @@ import {
     type MaterialGraph,
     type MaterialGraphNode,
 } from '../../runtime/materials/materialGraph';
-import { MATERIALS_DOMAIN, materialAssetDocument, materialAssetUse, materialLibrary, type MaterialAsset } from '../../runtime/materials/materialLibrary';
+import { materialAssetUse, materialLibrary, type MaterialAsset } from '../../runtime/materials/materialLibrary';
 import { LIBRARY_DRAG_TYPE, MyLibraryPanel, useAddToLibrary, useBringIn, useUserLibrary } from './MyLibrary';
 import { MaterialXExportButton, MaterialXImport, type MaterialXImportHandle } from './MaterialXFiles';
 import { MaterialPackageExportButton, MaterialPackageImport, type MaterialPackageImportHandle } from './MaterialPackageFiles';
@@ -55,8 +55,6 @@ import { CAPTURE_MENU_TEXT, CaptureMaterialPicker, type CaptureMaterialPickerHan
  * node into the pictures the material draws with.
  */
 
-// Edits made in quick succession (dragging a slider) are saved together.
-const SAVE_DELAY_MS = 400;
 const PREVIEWS_KEY = 'auvra.materialNodePreviews';
 
 /** The material assets, re-rendering when they change. */
@@ -146,7 +144,8 @@ export const MaterialGraphEditor: React.FC = () => {
         window.addEventListener(OPEN_MATERIAL_EVENT, takeRequest);
         return () => window.removeEventListener(OPEN_MATERIAL_EVENT, takeRequest);
     }, []);
-    const pending = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+    const writingProject = projectStatus.projectId;
+    const writingGeneration = materialLibrary.generation;
     /** The graph before a drag began, recorded for undo when the drag ends. */
     const dragBase = useRef(new Map<string, MaterialGraph>());
 
@@ -154,28 +153,11 @@ export const MaterialGraphEditor: React.FC = () => {
 
     /** Saves the material, at once or shortly; saved at once, it settles when the project has it (true) or refused it (false). */
     const save = useCallback((next: MaterialAsset, immediately = false): Promise<boolean> => {
-        const timers = pending.current;
-        clearTimeout(timers.get(next.id));
-        const write = () => {
-            timers.delete(next.id);
-            return projectService.applyChanges([{ domain: MATERIALS_DOMAIN, operation: 'upsert', id: next.id, value: materialAssetDocument(next) }])
-                .then(() => { setError(null); return true; }, (failure: unknown) => {
-                    frontendDiagnostics.failure('material_save_failed', failure);
-                    setError('The material could not be saved: is a project open?');
-                    return false;
-                });
-        };
-        if (immediately) return write();
-        timers.set(next.id, setTimeout(() => { void write(); }, SAVE_DELAY_MS));
-        return Promise.resolve(true);
-    }, []);
+        return saveMaterialEditorEdit(next, writingProject, writingGeneration, immediately, failure =>
+            setError(failure ? `Material save failed: ${failure instanceof Error ? failure.message : 'the project refused the edit.'}` : null));
+    }, [writingProject, writingGeneration]);
     useEffect(() => () => {
-        // Leaving the tab saves what is waiting.
-        for (const [id, timer] of pending.current) {
-            clearTimeout(timer);
-            const waiting = materialLibrary.get(id);
-            if (waiting) void projectService.applyChanges([{ domain: MATERIALS_DOMAIN, operation: 'upsert', id, value: materialAssetDocument(waiting) }]).catch(() => undefined);
-        }
+        void flushMaterialEditorWrites().catch(() => undefined);
     }, []);
 
     const update = useCallback((graph: MaterialGraph, commit: boolean, coalesce?: string) => {
@@ -268,10 +250,10 @@ export const MaterialGraphEditor: React.FC = () => {
         const uses = materialUses(asset.id, models, levelObjects);
         const question = deleteMaterialQuestion(asset.name, uses);
         if (!await appConfirm(question.title, { message: question.message, acceptLabel: 'Delete', danger: true })) return;
+        if (!canSaveMaterialEditorEdit(writingProject, writingGeneration)) return;
         const kept = materialLibrary.get(asset.id) ?? asset;
         // A save still waiting would bring it back.
-        clearTimeout(pending.current.get(asset.id));
-        pending.current.delete(asset.id);
+        cancelMaterialEditorWrite(asset.id, writingProject, writingGeneration);
         sessionHistories.delete(asset.id);
         removeMaterialAsset(asset.id).then(() => {
             setError(null);
