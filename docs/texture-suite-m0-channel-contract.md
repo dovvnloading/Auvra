@@ -16,19 +16,17 @@ This stage establishes stable naming, physical semantics, non-destructive migrat
 
 ## Current paint v1: preserve exactly
 
-| Serialized key | Artist label | Existing RGB representation | Existing default RGB | Shader surface connection |
-|---|---|---|---|---|
-| `baseColor` | Base colour | RGB | (0.5, 0.5, 0.5) | `baseColor` |
-| `roughness` | Roughness | scalar replicated in RGB | (0.6, 0.6, 0.6) | `roughness` |
-| `metallic` | Metallic | scalar replicated in RGB | (0, 0, 0) | `metalness` |
-| `height` | Height | scalar replicated in RGB | (0.5, 0.5, 0.5) | Parallax/height path; **not** a direct surface socket |
-| `normal` | Normal | tangent-space RGB | (0.5, 0.5, 1) | `normal` |
-| `emissive` | Emissive | RGB | (0, 0, 0) | `emissive` |
-| `opacity` | Opacity | scalar replicated in RGB | (1, 1, 1) | `opacity` |
+| Paint v1 key | Default RGB | Data role | Sparse picture bits/component | Shader socket | Painted glTF texture component |
+|---|---|---|---:|---|---|
+| `baseColor` | (0.5, 0.5, 0.5) | Colour | 8 | `baseColor` | `baseColorTexture` RGB |
+| `roughness` | (0.6, 0.6, 0.6) | Linear scalar | 8 | `roughness` | `metallicRoughnessTexture` G |
+| `metallic` | (0, 0, 0) | Linear scalar | 8 | `metalness` | `metallicRoughnessTexture` B |
+| `height` | (0.5, 0.5, 0.5) | Linear scalar | 16 | Parallax/height path | No independent slot. Keep a separate height map for displacement workflows. |
+| `normal` | (0.5, 0.5, 1) | Tangent-space normal | 16 | `normal` | `normalTexture` RGB |
+| `emissive` | (0, 0, 0) | Colour | 8 | `emissive` | `emissiveTexture` RGB |
+| `opacity` | (1, 1, 1) | Linear scalar | 8 | `opacity` | `baseColorTexture` A |
 
-**Do not rename** `metallic` to `metalness` inside paint documents merely because the material graph uses the latter name. The importer/exporter resolves aliases at an explicit boundary.
-
-**Do not change** the interpretation of existing normal images. A tangent-space normal map is data, not sRGB color, and blending/normals need purpose-built handling.
+Precision here describes an editable sparse picture. The painted GLB writer encodes its exported pictures as PNG8. Occlusion can share the ORM texture's red component as a baked mesh map. The seven editable channels retain their existing identifiers and order.
 
 ## Proposed extended physical families (not enabled)
 
@@ -67,7 +65,7 @@ Prefer a descriptor registry over another collection of channel-specific switche
 1. **Paint v1 remains v1.** Keep the legacy seven keys, order, defaults and channel naming. Continue reading existing v1 documents without a different visual result.
 2. **No accidental upgrade.** Importing or opening a v1 project does not manufacture default coat/sheen/anisotropy data or change the pictures it applies. An explicit new-channel action is required.
 3. **Write v2 only when supported.** A new version (if required) should add descriptors/capability negotiation, per-channel storage metadata, and explicit serialization tests; do not force an upgrade for code that only adds a read-only catalog.
-4. **Unknown fields are not throwaway data.** Before shipping v2, decide whether an older editor can preserve unknown channels as opaque read-only assets or must block destructive saves with an actionable warning. Current v1 `readPaintDocument` filters unknown channels; do not send a v2 document through it in a way that silently deletes data.
+4. **Version and unknown-channel policy.** Versionless records use the v1 reader. For explicit v1 and versionless records, it exposes recognized channels and filters unknown channel names. Producers that add a channel must bump the document version. An explicit unsupported version makes `readPaintDocument` return null. When that set matches the model and material being opened, Paint refuses the edit before creating or saving a replacement. The source remains available to a compatible editor. See [the reader and open guard](../fbx-viewer%20(1)/texturing/paint/paintTypes.ts) and [version compatibility fixtures](../fbx-viewer%20(1)/tests/frontend/paintVersionGuard.test.ts).
 5. **One authoritative source.** Source material remains a material asset plus authoring document; per-model painted copies, streamed runtime pages, and temporary GPU targets are not new master authorities.
 6. **Undo and save:** changes to channel definitions, layer values, masks, texture assets and presets belong in the same logical undo transaction and complete project save.
 7. **Versioned project fixtures:** old v1 layers, sparse-page masks, normal/height workflows, UDIMs, smart materials, paint-as-graph nodes, and import/export use cases must survive before a v2 writer is enabled.
@@ -87,7 +85,35 @@ If a project contains a channel/feature that the current editor or target export
 | MaterialX | Standard Surface/OpenPBR mapping in `texturing/materialX.ts` | Unit conversion, image channels, tiling/UV transform, package dependencies |
 | `.auvramat` | Package with graph/dependencies | Persist extended channel descriptors and their version when actually implemented |
 
-Do not equate a glTF **factor** with a texture slot: a material may export a scalar clearcoat value today without exporting a clearcoat texture. Test them separately.
+### Physical texture destinations and omissions
+
+The painted GLB writer currently emits base colour/opacity, ORM, normal and emission pictures. It can also emit constant physical extension factors. All physical **texture** slots below are destinations for a future exporter. It must report each authored varying input it cannot encode. A constant factor cannot preserve spatial variation.
+
+The MaterialX columns describe the current `materialToMaterialX` surface mapping. **Image** means a supported direct image connection can be emitted. **Value** means the writer can export a uniform or derived value and a varying input needs an omission report. The Standard Surface and OpenPBR names are given in that order where they differ.
+
+| Auvra output | glTF extension and texture destination | MaterialX writer input or omission |
+|---|---|---|
+| `specularWeight` | `KHR_materials_specular.specularTexture` A | Value · `specular` / `specular_weight` |
+| `specularColor` | `KHR_materials_specular.specularColorTexture` RGB, sRGB | Image · `specular_color` |
+| `ior` | `KHR_materials_ior.ior` is uniform only | Value · `specular_IOR` / `specular_ior` |
+| `coat` | `KHR_materials_clearcoat.clearcoatTexture` R | Image · `coat` / `coat_weight` |
+| `coatRoughness` | `KHR_materials_clearcoat.clearcoatRoughnessTexture` G | Image · `coat_roughness` |
+| `coatColor` | Clearcoat has no tint slot. Report omission. | Image · `coat_color` |
+| `coatNormal` | `KHR_materials_clearcoat.clearcoatNormalTexture` RGB, tangent normal | Image via normalmap · `coat_normal` / `geometry_coat_normal` |
+| `sheenColor` | `KHR_materials_sheen.sheenColorTexture` RGB, sRGB | Image · `sheen_color` / `fuzz_color` with a separate weight |
+| `sheenRoughness` | `KHR_materials_sheen.sheenRoughnessTexture` A | Value · `sheen_roughness` / `fuzz_roughness` |
+| `anisotropy` | `KHR_materials_anisotropy.anisotropyTexture` B | Value · `specular_anisotropy` / `specular_roughness_anisotropy` |
+| `anisotropyRotation` | Same texture's RG encodes tangent-space direction. Convert degrees to a unit vector, then encode XY into [0, 1]. The uniform rotation uses radians. | Value · Standard `specular_rotation` in turns. OpenPBR uses the surface tangent and this writer reports nonzero rotation as omitted. |
+| `thinFilm` | `KHR_materials_iridescence.iridescenceTexture` R | Value · Standard folds weight into `thin_film_thickness`. OpenPBR writes `thin_film_weight`. |
+| `thinFilmThickness` | `KHR_materials_iridescence.iridescenceThicknessTexture` G, normalized over the declared minimum and maximum thickness in nm | Value · `thin_film_thickness`, nm for Standard and µm for OpenPBR |
+| `transmission` | `KHR_materials_transmission.transmissionTexture` R | Image · `transmission` / `transmission_weight` |
+| `thickness` | `KHR_materials_volume.thicknessTexture` G scales the uniform thickness in mesh space | No distance-through-geometry input mapped. Report omission. |
+| `attenuationColor` | `KHR_materials_volume.attenuationColor` is uniform only | Value · `transmission_color` |
+| `attenuationDistance` | `KHR_materials_volume.attenuationDistance` is uniform only | Value · `transmission_depth` |
+| `dispersion` | `KHR_materials_dispersion.dispersion` is uniform only. Current GLB writer omits this extension. | Value · `transmission_dispersion` / `transmission_dispersion_scale` and `transmission_dispersion_abbe_number` |
+| `flakeDensity`, `flakeSize`, `flakeColor` | No direct procedural-flake slot in these extensions. Report each authored omission. | No mapped inputs. Report each authored omission. |
+
+The glTF components above follow the [Khronos extension schemas](https://github.com/KhronosGroup/glTF/tree/main/extensions/2.0/Khronos). The implemented output paths are [painted glTF](../fbx-viewer%20(1)/texturing/paint/gltfExport.ts) and [MaterialX](../fbx-viewer%20(1)/texturing/materialX.ts).
 
 ## Required M2 vertical slices (before enabling the full catalog)
 
@@ -102,7 +128,9 @@ Only after those slices succeed should M2 convert the proposal catalog into a ru
 ## M0.3 acceptance gate
 
 - [x] Legacy seven-channel identifiers/defaults/order locked in a read-only catalog and unit-test assertions.
-- [x] Physical candidate names checked against the shader graph's declared feature-output list.
+- [x] Every physical candidate accounted for against the shader graph output list, including eight feature families.
+- [x] Sparse picture precision and painted GLB roles recorded for all seven v1 channels.
+- [x] Per-output glTF texture destinations, factor-only cases, MaterialX image/value mappings and omission requirements documented.
 - [x] No paint-v1 serialization, migration, renderer, compressor or exporter code changed by the catalog.
 - [ ] Review/approve physical units, channel default values, and backend-supported texture-vs-uniform decisions.
 - [ ] Approve unknown-v2-data behavior with migration and rollback tests.

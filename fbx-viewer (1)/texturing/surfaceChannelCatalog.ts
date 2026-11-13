@@ -14,6 +14,10 @@ export const SURFACE_CHANNEL_CONTRACT_VERSION = 1;
 export type SurfaceValueKind = 'scalar' | 'colour' | 'tangentNormal';
 export type SurfaceDataRole = 'colour' | 'data' | 'normal';
 export type SurfaceUnit = 'normalized' | 'dimensionless' | 'degrees' | 'nanometres' | 'scene-units';
+export type GltfPaintTextureRole =
+    | 'baseColorTexture.rgb' | 'baseColorTexture.a'
+    | 'metallicRoughnessTexture.g' | 'metallicRoughnessTexture.b'
+    | 'normalTexture.rgb' | 'emissiveTexture.rgb';
 
 export interface PaintV1ChannelDescriptor {
     readonly key: PaintChannel;
@@ -24,6 +28,10 @@ export interface PaintV1ChannelDescriptor {
     readonly defaultValue: readonly [number, number, number];
     /** True for channels whose pixel representation is RGB, including tangent normals. */
     readonly rgb: boolean;
+    /** Bits per component in the editable sparse paint picture. */
+    readonly paintBits: 8 | 16;
+    /** Destination in the painted GLB. Null denotes a channel without a direct glTF slot. */
+    readonly gltfTexture: GltfPaintTextureRole | null;
     /** Existing material output socket, if directly representable without a special operation. */
     readonly materialInput: string | null;
     readonly storage: 'paint-v1';
@@ -54,32 +62,34 @@ const VALUE_KIND_OF: Record<PaintChannel, SurfaceValueKind> = {
  * A typed, indexed view over the existing paint constants. It mirrors the old
  * values, not the other way around, so this addition cannot migrate a document.
  */
-const descriptorOf = (key: PaintChannel): PaintV1ChannelDescriptor => ({
+const descriptorOf = (key: PaintChannel, paintBits: 8 | 16, gltfTexture: GltfPaintTextureRole | null): PaintV1ChannelDescriptor => Object.freeze({
     key,
     label: CHANNEL_LABELS[key],
     valueKind: VALUE_KIND_OF[key],
     role: key === 'normal' ? 'normal' : CHANNEL_IS_COLOR[key] ? 'colour' : 'data',
-    defaultValue: [...CHANNEL_DEFAULT[key]] as [number, number, number],
+    defaultValue: Object.freeze([...CHANNEL_DEFAULT[key]] as [number, number, number]),
     rgb: CHANNEL_IS_COLOR[key],
+    paintBits,
+    gltfTexture,
     materialInput: MATERIAL_INPUT_OF[key],
     storage: 'paint-v1',
 });
 
-export const PAINT_V1_CHANNEL_CATALOG: Readonly<Record<PaintChannel, PaintV1ChannelDescriptor>> = {
-    baseColor: descriptorOf('baseColor'),
-    roughness: descriptorOf('roughness'),
-    metallic: descriptorOf('metallic'),
-    height: descriptorOf('height'),
-    normal: descriptorOf('normal'),
-    emissive: descriptorOf('emissive'),
-    opacity: descriptorOf('opacity'),
-};
+export const PAINT_V1_CHANNEL_CATALOG: Readonly<Record<PaintChannel, PaintV1ChannelDescriptor>> = Object.freeze({
+    baseColor: descriptorOf('baseColor', 8, 'baseColorTexture.rgb'),
+    roughness: descriptorOf('roughness', 8, 'metallicRoughnessTexture.g'),
+    metallic: descriptorOf('metallic', 8, 'metallicRoughnessTexture.b'),
+    height: descriptorOf('height', 16, null),
+    normal: descriptorOf('normal', 16, 'normalTexture.rgb'),
+    emissive: descriptorOf('emissive', 8, 'emissiveTexture.rgb'),
+    opacity: descriptorOf('opacity', 8, 'baseColorTexture.a'),
+});
 
 /**
  * The contract for M2 design work, deliberately NOT included in PAINT_CHANNELS.
  * None of these keys may be stored in PaintDocument v1 by this catalog.
  */
-export const PROPOSED_PHYSICAL_CHANNELS = [
+export const PROPOSED_PHYSICAL_CHANNELS = Object.freeze([
     { key: 'specularWeight', kind: 'scalar', unit: 'normalized', feature: 'specular' },
     { key: 'specularColor', kind: 'colour', unit: 'normalized', feature: 'specular' },
     { key: 'ior', kind: 'scalar', unit: 'dimensionless', feature: 'specular' },
@@ -103,7 +113,8 @@ export const PROPOSED_PHYSICAL_CHANNELS = [
     { key: 'flakeColor', kind: 'colour', unit: 'normalized', feature: 'flakes' },
 ] as const satisfies readonly {
     key: string; kind: SurfaceValueKind; unit: SurfaceUnit; feature: keyof typeof PHYSICAL_FEATURE_OUTPUTS;
-}[];
+}[]);
+for (const descriptor of PROPOSED_PHYSICAL_CHANNELS) Object.freeze(descriptor);
 
 export type ProposedPhysicalChannel = typeof PROPOSED_PHYSICAL_CHANNELS[number]['key'];
 
