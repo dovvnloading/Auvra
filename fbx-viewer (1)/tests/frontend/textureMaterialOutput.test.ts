@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { compileMaterialGraph, normalizeMaterialGraph } from '../../runtime/materials/materialGraph';
+import { compileGraphWgsl } from '../../renderer/gpu/surfaces/materialWgsl';
 import { readUdimTiles } from '../../runtime/materials/materialNodes';
 import { encodeChannels, materialGraphForTextures, materialReadsPicture, tileAtlasLayout, udimAtlasPoint, type ChannelImages } from '../../texturing/materialOutput';
 import type { GpuImage, TextureGpu } from '../../texturing/gpu/textureGpu';
@@ -113,7 +114,24 @@ describe('a UDIM tile atlas', () => {
         const code = compileMaterialGraph(normalizeMaterialGraph(graph)).statements.join('\n');
         // 1010 is the second cell.
         expect(code).toMatch(/if \(abs\(mg_udimTiles_tile - 1010\.0\) < 0\.5\) mg_udimTiles_cell = 1\.0;/);
-        for (const id of ['baseColor', 'normal', 'orm', 'emissive']) expect(code).toMatch(new RegExp(`texture\\(mg_${id}_texture, mg_udimTiles_out_out_`));
+        for (const id of ['baseColor', 'normal', 'orm', 'emissive']) expect(code).toMatch(new RegExp(`textureGrad\\(mg_${id}_texture, mg_udimTiles_out_out_`));
+    });
+
+    it('retains continuous atlas gradients through height parallax, the normal map and material pictures', () => {
+        const layout = tileAtlasLayout([1001, 1002, 1011], 256, 4096);
+        const graph = normalizeMaterialGraph(materialGraphForTextures({ baseColor: 'colour', normal: 'normal', height: 'height' }, { tiles: layout }));
+        const colour = graph.nodes.find(node => node.id === 'baseColor')!;
+        colour.type = 'materialPicture';
+        const compiled = compileMaterialGraph(graph).statements.join('\n');
+        const dx = 'dFdx((mg_udimTiles_uv * mg_udimTiles_tileSize';
+        expect(compiled).toContain('textureGrad(mg_baseColor_texture');
+        expect(compiled).toContain('textureGrad(mg_normal_texture');
+        expect(compiled.split(dx).length - 1).toBeGreaterThanOrEqual(4);
+        const wgsl = compileGraphWgsl(graph).wgsl;
+        expect(wgsl).toContain('textureSampleGrad(');
+        expect(wgsl).toContain('dpdx(');
+        const vertex = compileMaterialGraph(graph, { stage: 'vertex', outputs: ['baseColor'] }).statements.join('\n');
+        expect(vertex).not.toMatch(/dFdx|textureGrad/);
     });
 
     it('reads one tile as it is', () => {

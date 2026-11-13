@@ -265,9 +265,7 @@ vec3 mgNormalFromHeight(float height, vec2 uv, float strength) {
     // field's shadow toward the light, both marched in the surface's own (tangent) space. ---
     mgParallaxUv: {
         source: `
-vec2 mgParallaxUv(sampler2D heightMap, vec2 uv, vec3 view, float depth, float layers) {
-    vec2 dx = dFdx(uv);
-    vec2 dy = dFdy(uv);
+vec2 mgParallaxUv(sampler2D heightMap, vec2 uv, vec3 view, float depth, float layers, vec2 dx, vec2 dy) {
     // Fewer steps head-on, where the view crosses few heights.
     float steps = max(mix(layers, layers * 0.5, abs(view.z)), 1.0);
     float stepDepth = 1.0 / steps;
@@ -290,11 +288,9 @@ vec2 mgParallaxUv(sampler2D heightMap, vec2 uv, vec3 view, float depth, float la
     },
     mgParallaxShadow: {
         source: `
-float mgParallaxShadow(sampler2D heightMap, vec2 uv, vec3 light, float depth, float layers) {
+float mgParallaxShadow(sampler2D heightMap, vec2 uv, vec3 light, float depth, float layers, vec2 dx, vec2 dy) {
     // A light below the surface leaves it unlit anyway.
     if (light.z <= 0.0) return 1.0;
-    vec2 dx = dFdx(uv);
-    vec2 dy = dFdy(uv);
     float height = textureGrad(heightMap, uv, dx, dy).r;
     float steps = max(layers, 1.0);
     float rise = (1.0 - height) / steps;

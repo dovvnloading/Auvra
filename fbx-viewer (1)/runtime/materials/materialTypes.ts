@@ -108,6 +108,8 @@ export interface NodeEmitContext {
     readonly auto: MaterialValueType;
     /** True where screen-space derivatives (dFdx, dFdy, fwidth) exist: the surface's pixels. */
     readonly derivatives: boolean;
+    /** A continuous UV coordinate giving the sampling footprint for an atlas input, if any. */
+    footprint(uv: string): string | undefined;
     /** The uniform holding this node's param `key` (a uniform kind). */
     param(key: string): string;
     /** The value of a static (select, boolean or code) param, written into the shader. */
@@ -163,5 +165,5 @@ export interface MaterialNodeDef {
      * GLSL statements computing the outputs, given each input as an expression of its type;
      * returns each output as an expression (of its type) the statements made available.
      */
-    emit(inputs: Record<string, string>, context: NodeEmitContext): { statements?: string[]; outputs: Record<string, string> };
+    emit(inputs: Record<string, string>, context: NodeEmitContext): { statements?: string[]; outputs: Record<string, string>; footprints?: Record<string, string> };
 }

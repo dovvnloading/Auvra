@@ -1071,10 +1071,15 @@ export class GlslTranslator {
       }
       case "texture":
       case "texture2D":
+      case "textureGrad":
       case "textureLod":
       case "texture2DLodEXT": {
         const texture = args[0]?.texture;
         if (!texture) this.fail(`${name}() needs a texture`);
+        if (name === "textureGrad") {
+          this.countArguments(name, args, 4);
+          return { code: `textureSampleGrad(${texture.texture}, ${texture.sampler}, ${this.fit(args[1], "vec2")}, ${this.fit(args[2], "vec2")}, ${this.fit(args[3], "vec2")})`, type: "vec4", constant: false };
+        }
         const uv = this.fit(args[1], "vec2");
         const lod = name === "textureLod" || name === "texture2DLodEXT";
         if (lod) return { code: `textureSampleLevel(${texture.texture}, ${texture.sampler}, ${uv}, ${this.fit(args[2], "float")})`, type: "vec4", constant: false };

@@ -12,6 +12,7 @@ import { SCENES, type SceneSteps, type VisualScene } from './scenes';
 import { textureGraphScene } from './textureGraphScene';
 import { textureGpu } from '../../texturing/gpu/textureGpu';
 import { webgpuTexturing, type WgpuDevice } from '../../texturing/gpu/webgpuTexturing';
+import { checkUdimMip } from './udimMip';
 import { checkMaterialCompression, readMaterialTexture } from './materialCompression';
 
 /**
@@ -171,7 +172,8 @@ const capture = async (name: string) => {
   }
   const deviceLoss = onWebGpu && name === 'texture-graph' && !new URLSearchParams(window.location.search).has('textureBench')
     ? await deviceLossPixels() : null;
-  return { png, numbers: { ...(deviceLoss ? { deviceLoss } : {}), loadMs, frameMs, calls, triangles, geometries, textures, programs, gpuBytes: bytes,
+  const udimMip = !onWebGpu && name === 'materials' ? await checkUdimMip() : null;
+  return { png, numbers: { ...(udimMip ? { udimMip } : {}), ...(deviceLoss ? { deviceLoss } : {}), loadMs, frameMs, calls, triangles, geometries, textures, programs, gpuBytes: bytes,
     ...(cookBenchmark ? { textureCook: cookBenchmark, textureCookProblem: cookProblem } : {}),
     ...(standardCook ? { graphCook: standardCook, graphCookProblem: cookProblem } : {}),
     ...(bc1Parity ? { bc1Parity } : {}),
