@@ -65,6 +65,13 @@ export const readMaterialXZip = async (archive: Blob | Uint8Array): Promise<Mate
             : 'The MaterialX ZIP contains no .mtlx file.');
     }
     const documentName = documents[0];
+    // Reject by validated ZIP metadata *before* invoking deflate/read. Otherwise
+    // a 128 MB compressed XML member could consume memory just to be rejected
+    // against the tighter 4 MB MaterialX document budget.
+    const documentInfo = zip.memberInfo(documentName);
+    if (!documentInfo || documentInfo.size > MAX_MTLX_BYTES) {
+        throw new Error('The MaterialX document is missing or exceeds the 4 MB safety limit.');
+    }
     const documentBytes = await zip.read(documentName);
     if (!documentBytes || documentBytes.byteLength > MAX_MTLX_BYTES) {
         throw new Error('The MaterialX document is missing or exceeds the 4 MB safety limit.');

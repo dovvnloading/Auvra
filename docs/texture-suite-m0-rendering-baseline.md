@@ -85,6 +85,14 @@ The renderer script writes output pictures and `numbers.json` under `tests/visua
 
 For **each** new run, record OS, browser/WebView2 version, GPU/adapter and driver, backend, device features, relevant library/Three version, output resolution, graph/material hash, cold/warm cache state, run count and specific time measurement scope. Exclude metrics that cannot be reproduced or whose units are ambiguous.
 
+## 3A. Live editor graph-cook timing (new M0.5 instrumentation)
+
+`texturing/graph/cookTiming.ts` provides a **bounded 64-sample** window of successful authoring graph-evaluation timings. `TextureGraphSession` records elapsed wall-clock time through evaluation and preview/thumbnail update; the graph editor reports p50/p95 after at least five successful runs that actually recomputed nodes.
+
+These are **local observations**, not cross-machine benchmark results, GPU hardware timestamps, or game-frame times. A run that only hits the graph cache (zero recomputed nodes) is counted separately and **excluded from the latency percentiles**. A changed graph topology or evaluation resolution resets the comparison window to avoid mixing unrelated workloads.
+
+The existing visual software-GPU scene values in Section 1 are distinct from these live-editor measurements. To meet the M0.5 exit gate, a benchmark run must still export reproducible values, record hardware/browser/driver settings, control cold/warm caches, and compare the specified 512/2K/4K fixtures on selected machines.
+
 ## 4. Performance gate policy
 
 - Set numeric budgets **only after** controlled reference runs across chosen device tiers. A 10% p50/p95 regression is a **review trigger**, not a universal automatic failure threshold.
@@ -94,3 +102,33 @@ For **each** new run, record OS, browser/WebView2 version, GPU/adapter and drive
 - Preserve independent WebGL2 editor compatibility tests even while WebGPU is extended.
 
 **M0.5 is still open:** a historic software-GPU scene table is useful evidence, but it is insufficient for texture authoring latency, real-GPU budgets or runtime streaming gates.
+
+## 5. Opt-in current texture-graph cook benchmark
+
+The visual harness includes an **opt-in GPU texture cooking benchmark** using the existing brick/noise/normal/Pixel Processor proof graph. It runs at 512, 2048, or 4096 pixels and measures:
+
+- Cold evaluation wall time and number of nodes actually executed.
+- A separately timed one-pixel GPU synchronization readback.
+- Packing/encoding the base-color and normal PNG maps.
+- An identical request's evaluation time and cache hit (cached nodes must equal zero).
+- Evaluation and GPU synchronization after changing one upstream noise parameter, including recomputed-node count.
+
+Measurements appear in `tests/visual/output/numbers.json` under `texture-graph.textureCook`. The `_benchmark` section records the request's renderer, hardware/software selection, user agent, OS, architecture and resolution. These are **separate authoring-workload measurements**, not part of the historic scene-render table.
+
+Run from `fbx-viewer (1)`:
+
+```powershell
+npm ci
+npm run texture:benchmark -- --texture-size 9
+npm run texture:benchmark -- --texture-size 11
+npm run texture:benchmark -- --texture-size 12
+npm run texture:benchmark -- --texture-size 11 --renderer webgpu
+# Ask for actual hardware instead of software SwiftShader on supported machines:
+npm run texture:benchmark -- --texture-size 11 --gpu
+```
+
+The size argument is log2: 9 = 512, 11 = 2048, 12 = 4096. This mode runs only the `texture-graph` scene and **does not compare** an intentionally resized screenshot with the fixed visual reference or modify reference PNGs. Run `npm run rendering:verify` separately for image parity.
+
+**Provenance:** Requested GPU mode and user agent **do not establish the actual GPU vendor/driver**. Record adapter details independently before describing these results as hardware-specific. Repeat each configuration on a controlled device and report p50/p95 for each phase, holding resolution, OS, browser, backend, driver, graph hash and cache conditions constant. The benchmark's cold evaluation is **not** an editor's full first-preview latency; UI mount, upstream project loading and texture presentation must be measured separately.
+
+This opt-in mode adds graph evaluations only when requested. M0.5 remains incomplete until 300-node/iteration workloads, paint-stack and UDIM updates, capture, true GPU residency and real-device comparisons are measured.

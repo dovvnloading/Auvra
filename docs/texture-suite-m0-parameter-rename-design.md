@@ -58,6 +58,19 @@ The preflight also refuses to rename if project identity/revision or the graph c
 
 **The cross-document project transaction and unified undo/redo are still unfinished.** The guard must be removed/replaced once a full atomic rename action has been implemented and tested; do not turn failed checks into best-effort changes.
 
+## M0.2 host transaction and immediate-undo primitive
+
+`texturing/graph/renameTransaction.ts` adds the project-host commit/undo boundary. Given a **complete impact plan computed against a specific project revision**, `commitTextureParameterRename(plan, host, expected, afterCommit)`:
+
+- Verifies the active project, write permission and the **exact snapshot revision** before mutation.
+- Sends the entire planned set of materials/models/objects/presets through **one** `project.applyChanges` call; the host owns the atomic project revision.
+- Calls `afterCommit` only after the host acknowledges the batch. A rejected write never publishes optimistic model, object or material updates.
+- Returns one receipt with complete inverse snapshots, suitable for a guarded immediate `undoTextureParameterRename`.
+
+The immediate inverse call **refuses** to run if the project has changed since the original commit. Blindly restoring old model/object snapshots after newer edits would erase legitimate work. A failure to refresh local state after the host accepted a transaction is reported as **saved but requiring rehydration**, not as an invitation to retry a possibly duplicated mutation.
+
+This is not yet wired into the editor. A complete user-facing implementation still needs local material/model/object/preset publication as one coordinated action, pending-edit fencing, and integration with project-level undo/redo across later revisions. Until that exists, the [interim local-rename guard](../fbx-viewer%20(1)/components/Texturing/TextureGraphWorkspace.tsx) protects dependent values by refusing unsafe graph-local renames.
+
 ## Limitations and future gates
 
 - **Not yet wired into UI:** simply adding the pure planner does not fix the user-facing Rename button; issue #291 stays open.

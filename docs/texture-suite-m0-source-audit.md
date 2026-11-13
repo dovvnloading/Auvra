@@ -109,6 +109,12 @@ These statuses are **triage, not closure**:
 
 These rows describe **potential capabilities**, not passing end-to-end tests. Fill in driver, browser, adapter, supported feature flags, and actual failures before M0.4 is complete.
 
+### M0.4 — Device capability snapshot (implementation follow-up)
+
+`texturing/gpu/cookingDevice.ts::textureCookingCapabilities()` supplies a serializable diagnostic snapshot with the selected runtime cooking backend, device-reported maximum texture dimension, BC/ETC2/ASTC and float32-filterable flags, and current per-material fallback reasons. On WebGL2 or without a valid WebGPU device, feature support is **unknown** (`null`), not wrongly reported as unsupported. Stored fallback reasons are cleared when the runtime cooking device changes, including device loss and WebGL2 fallback. Late asynchronous cooks from a previously active device are fenced: they cannot publish a new fallback reason or clear a valid reason belonging to the replacement device.
+
+This is **a hardware feature-reporting primitive, not a verified node/backend matrix**. Real image comparisons, format uploads, cancellation, device loss and per-node fallback fixtures remain required for M0.4.
+
 ### M0.2 flood-box oracle (historical defect #2)
 
 `texturing/graph/flood.ts::exactIslandSpan` is a **CPU-only correctness oracle**, computing the minimum covering interval on a cyclic axis from the complement of the largest unoccupied run of pixels. It handles full occupancy, 1-pixel islands, wrap-boundary roots, and deterministic gap ties.
