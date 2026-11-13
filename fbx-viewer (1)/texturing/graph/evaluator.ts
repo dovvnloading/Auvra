@@ -9,7 +9,7 @@ import { withNamedLinks } from './namedLinks';
 import { resolvePrecision, resolveSeed, resolveSize, resolveTiling, tilingAxes } from './inherit';
 import { nodeBindings, valuePinKey } from './nodeKit';
 import { PROCESSOR_TYPES } from './nodes/processors';
-import { ALL_MESH_MAPS, GRAPH_USING_TYPES, INPUT_NODE_TYPE, MATERIAL_INPUT_NODE_TYPE, MATERIAL_OUTPUT_NODE_TYPE, MESH_MAP_NODE_TYPE, MESH_READING_NODE_TYPES, OUTPUT_NODE_TYPE, SUBGRAPH_SEED_KEY, SUBGRAPH_VARY_KEY, meshMapKey } from './nodes/io';
+import { ALL_MESH_MAPS, CURVE_INPUT_NODE_TYPE, CURVE_OUTPUT_NODE_TYPE, GRAPH_USING_TYPES, INPUT_NODE_TYPE, MATERIAL_INPUT_NODE_TYPE, MATERIAL_OUTPUT_NODE_TYPE, MESH_MAP_NODE_TYPE, MESH_READING_NODE_TYPES, OUTPUT_NODE_TYPE, SUBGRAPH_SEED_KEY, SUBGRAPH_VARY_KEY, meshMapKey } from './nodes/io';
 import { graphAnimates, textureNodeDefinition, type GraphResolver } from './registry';
 import { outputNodeKind, type CurvePaths, type NodeRunContext, type PortKind, type TexGraphLink, type TexGraphNode, type TexNodeDef, type TextureGraph, type TilingMode } from './types';
 
@@ -33,6 +33,8 @@ export interface EvaluateRequest {
     parameters?: Readonly<Record<string, unknown>>;
     /** Images for Input nodes (by name) and mesh maps ('mesh:curvature', ...). */
     external?: Readonly<Record<string, ExternalImage | null | undefined>>;
+    /** CPU paths for Curve input nodes, named as the graph's curve boundary inputs. */
+    externalCurves?: Readonly<Record<string, CurvePaths | null | undefined>>;
     /** Changes whenever an external image's pixels change (a re-bake), so results built on it redraw. */
     externalVersion?: string;
     /** The nodes wanted (all their outputs); every Output node when left out. */
@@ -325,6 +327,12 @@ export class TextureGraphEvaluator {
             const extras: string[] = [];
             let innerSeed: number | undefined;
             if (node.type === INPUT_NODE_TYPE) extras.push(externalToken(String(params.name || 'input')));
+            if (node.type === CURVE_INPUT_NODE_TYPE) {
+                // CPU paths have no GPU image identity. Hash their actual coordinates so an
+                // updated external path invalidates just the nodes that depend on it.
+                const paths = request.externalCurves?.[String(params.name || 'curve')];
+                extras.push(paths ? hashText(JSON.stringify(paths)) : '-');
+            }
             if (node.type === MATERIAL_INPUT_NODE_TYPE) for (const channel of MATERIAL_CHANNELS) extras.push(externalToken(materialKey(String(params.name || 'material'), channel)));
             if (node.type === MESH_MAP_NODE_TYPE) extras.push(externalToken(`mesh:${String(params.map)}`));
             else if (MESH_READING_NODE_TYPES.has(node.type)) {
@@ -585,6 +593,7 @@ export class TextureGraphEvaluator {
             },
             texture: this.texture,
             external: (name) => external[name] ?? null,
+            externalCurve: (name) => request.externalCurves?.[name] ?? null,
             note: (text) => { if (!notes.includes(text)) notes.push(text); },
             material: (key) => {
                 const link = links?.get(key);
@@ -611,11 +620,12 @@ export class TextureGraphEvaluator {
                 for (const [key, value] of Object.entries(inputs)) given[key] = value;
                 const result: Record<string, GpuImage> = {};
                 try {
-                    const outputs = entry.graph.nodes.filter((candidate) => candidate.type === OUTPUT_NODE_TYPE || candidate.type === MATERIAL_OUTPUT_NODE_TYPE);
+                    const outputs = entry.graph.nodes.filter((candidate) => candidate.type === OUTPUT_NODE_TYPE || candidate.type === MATERIAL_OUTPUT_NODE_TYPE || candidate.type === CURVE_OUTPUT_NODE_TYPE);
                     const states = await nested.evaluate({
                         graph: entry.graph,
                         parameters: params,
                         external: given,
+                        externalCurves: options.curveInputs,
                         externalVersion: request.externalVersion,
                         targets: outputs.map((candidate) => candidate.id),
                         size: { w: Math.log2(details.width), h: Math.log2(details.height) },
@@ -629,6 +639,11 @@ export class TextureGraphEvaluator {
                     for (const output of outputs) {
                         const state = states.get(output.id);
                         if (state?.error) throw new Error(`Inside "${entry.name}": ${state.error}`);
+                        if (output.type === CURVE_OUTPUT_NODE_TYPE) {
+                            // A CPU path stays a path at the boundary; no unnecessary GPU picture.
+                            options.onCurveOutput?.(output.id, state?.curves?.path ?? []);
+                            continue;
+                        }
                         if (output.type === MATERIAL_OUTPUT_NODE_TYPE) {
                             // A whole material comes out as an image per channel under the output's pin.
                             const material = state ? materialOf(state.outputs, 'out') : null;
