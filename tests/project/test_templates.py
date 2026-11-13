@@ -77,7 +77,7 @@ class TemplateTests(unittest.TestCase):
         apply_template(repository, "starter", project_name="Starter")
         objects = documents(repository, "objects")
         kinds = {item["type"] for item in objects}
-        self.assertTrue({"terrain", "sky_sphere", "player_start", "prop"} <= kinds)
+        self.assertLessEqual({"terrain", "sky_sphere", "player_start", "prop"}, kinds)
         level_ids = {item["id"] for item in documents(repository, "levels")}
         self.assertTrue(all(item["levelId"] in level_ids for item in objects))
         model_ids = {item["id"] for item in documents(repository, "models")}
@@ -164,8 +164,10 @@ class TemplateTests(unittest.TestCase):
         repository = self.arena()
         arena, finish = self.arena_levels(repository)
         objects = documents(repository, "objects")
-        self.assertTrue({"terrain", "sky_sphere", "player_start", "prop", "spawn_point"}
-                        <= {item["type"] for item in objects})
+        self.assertLessEqual(
+            {"terrain", "sky_sphere", "player_start", "prop", "spawn_point"},
+            {item["type"] for item in objects},
+        )
         for level in (arena, finish):
             kinds = [item["type"] for item in objects if item["levelId"] == level["id"]]
             for kind in ("terrain", "sky_sphere", "player_start"):
@@ -194,8 +196,10 @@ class TemplateTests(unittest.TestCase):
         self.assertGreater(config["maxSpawns"], 0)
         enemy = blueprints[config["blueprintId"]]
         self.assertEqual(enemy["type"], "Enemy Controller")
-        self.assertTrue({"Health", "Speed", "Attack Range", "Attack Cooldown", "Sight Range"}
-                        <= {stat["name"] for stat in enemy["stats"]})
+        self.assertLessEqual(
+            {"Health", "Speed", "Attack Range", "Attack Cooldown", "Sight Range"},
+            {stat["name"] for stat in enemy["stats"]},
+        )
 
         # Sounds the blueprint plays, levels it opens and menus it shows all exist.
         for level in (arena, finish):

@@ -10,7 +10,7 @@ from pathlib import Path
 import tarfile
 import tempfile
 import unittest
-from unittest import mock
+import unittest.mock as mock
 
 from release import notices, pipeline
 from release.notices import (
@@ -434,7 +434,7 @@ class ReleasePackageNoticesTests(unittest.TestCase):
             output = root / "package"
             manifest = assemble(inputs, output, channel="dev", version="1.0.0")
             listed = {entry["path"] for entry in manifest["files"]}
-            self.assertTrue({NOTICES_FILE, f"game-player/{NOTICES_FILE}"} <= listed)
+            self.assertLessEqual({NOTICES_FILE, f"game-player/{NOTICES_FILE}"}, listed)
             text = (output / NOTICES_FILE).read_text(encoding="utf-8")
             self.assertEqual(verify_editor_notices(text),
                              {"frontend": 1, "python": 1, "native": 1, "player": 1, "runtimes": 3})

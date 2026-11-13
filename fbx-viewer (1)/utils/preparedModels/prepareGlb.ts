@@ -77,10 +77,12 @@ interface Document {
 const COMPRESSED_GEOMETRY_EXTENSIONS = ['KHR_draco_mesh_compression', 'EXT_meshopt_compression'];
 /** Extensions of a texture that hold an image of their own, each read in place of its `source`. */
 const IMAGE_EXTENSIONS = ['KHR_texture_basisu', 'EXT_texture_webp', 'EXT_texture_avif'];
-const COMPONENT_ARRAYS: Record<number, { new (buffer: ArrayBuffer): THREE.TypedArray; BYTES_PER_ELEMENT: number }> = {
-  5120: Int8Array, 5121: Uint8Array, 5122: Int16Array, 5123: Uint16Array, 5125: Uint32Array, 5126: Float32Array,
-};
-const ITEM_SIZES: Record<string, number> = { SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4, MAT2: 4, MAT3: 9, MAT4: 16 };
+const COMPONENT_ARRAYS = new Map<number, { new (buffer: ArrayBuffer): THREE.TypedArray; BYTES_PER_ELEMENT: number }>([
+  [5120, Int8Array], [5121, Uint8Array], [5122, Int16Array], [5123, Uint16Array], [5125, Uint32Array], [5126, Float32Array],
+]);
+const ITEM_SIZES = new Map<string, number>([
+  ['SCALAR', 1], ['VEC2', 2], ['VEC3', 3], ['VEC4', 4], ['MAT2', 4], ['MAT3', 9], ['MAT4', 16],
+]);
 const TRIANGLES = 4;
 const ELEMENT_ARRAY_BUFFER = 34963;
 const UNSIGNED_SHORT = 5123;
@@ -140,8 +142,8 @@ const readAccessor = (json: Document, views: View[], index: number, cache: Map<n
   if (cache.has(index)) return cache.get(index) ?? null;
   const accessor = json.accessors?.[index];
   let attribute: THREE.BufferAttribute | null = null;
-  const TypedArray = accessor && COMPONENT_ARRAYS[accessor.componentType];
-  const itemSize = accessor && ITEM_SIZES[accessor.type];
+  const TypedArray = accessor && COMPONENT_ARRAYS.get(accessor.componentType);
+  const itemSize = accessor && ITEM_SIZES.get(accessor.type);
   if (accessor && TypedArray && itemSize && accessor.bufferView !== undefined && !accessor.sparse) {
     const view = views[accessor.bufferView];
     const itemBytes = TypedArray.BYTES_PER_ELEMENT * itemSize;

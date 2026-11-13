@@ -4,6 +4,7 @@ import { spawn } from 'node:child_process';
 import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { createServer } from 'node:http';
 import path from 'node:path';
+import { createInterface } from 'node:readline';
 
 export const browserPath = () => {
   const candidates = [
@@ -40,26 +41,28 @@ export const serve = (root, route = () => false) => new Promise((resolve) => {
   server.listen(0, '127.0.0.1', () => resolve(server));
 });
 
-// On Windows a file the browser is still writing cannot be opened at all (EBUSY): it is read again, as one not there yet.
-const readIfReady = (file) => {
-  try {
-    return existsSync(file) ? readFileSync(file, 'utf8') : '';
-  } catch (error) {
-    if (error.code === 'EBUSY' || error.code === 'EPERM' || error.code === 'EACCES') return '';
-    throw error;
+// Chromium announces its own debugging endpoint on stderr after binding the ephemeral loopback port.
+const waitForDebugger = (browser, limitMs) => new Promise((resolve, reject) => {
+  const lines = createInterface({ input: browser.stderr });
+  const timer = setTimeout(() => finish(new Error('The browser did not start')), limitMs);
+  function finish(error, url) {
+    clearTimeout(timer);
+    browser.off('error', onError);
+    lines.off('close', onClose);
+    lines.close();
+    browser.stderr.resume();
+    if (error) reject(error);
+    else resolve(url);
   }
-};
-
-const waitForFile = async (file, limitMs) => {
-  const start = Date.now();
-  let text = readIfReady(file);
-  while (!text.includes('\n')) {
-    if (Date.now() - start > limitMs) throw new Error('The browser did not start');
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    text = readIfReady(file);
-  }
-  return text;
-};
+  const onError = (error) => finish(error);
+  const onClose = () => finish(new Error('The browser closed before its debugger was ready'));
+  browser.once('error', onError);
+  lines.once('close', onClose);
+  lines.on('line', (line) => {
+    const match = /^DevTools listening on (ws:\/\/(?:127\.0\.0\.1|\[::1\]):\d{1,5}\/devtools\/browser\/[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12})$/i.exec(line);
+    if (match) finish(null, match[1]);
+  });
+});
 
 /** Just enough of the browser's debugging protocol: one page, and running script in it. */
 const connect = async (url) => {
@@ -116,11 +119,9 @@ export const openPage = async ({ profileDir, gpuFlags, url, windowSize = '800,60
     ...(process.env.CI ? ['--no-sandbox'] : []),
     ...gpuFlags,
     'about:blank',
-  ], { stdio: 'ignore' });
+  ], { stdio: ['ignore', 'ignore', 'pipe'] });
   try {
-    const portLines = await waitForFile(path.join(profileDir, 'DevToolsActivePort'), 30_000);
-    const [port, browserPathPart] = portLines.split('\n');
-    const client = await connect(`ws://127.0.0.1:${port}${browserPathPart}`);
+    const client = await connect(await waitForDebugger(browser, 30_000));
     const { targetId } = await client.send('Target.createTarget', { url: 'about:blank' });
     const { sessionId } = await client.send('Target.attachToTarget', { targetId, flatten: true });
     const send = (method, params) => client.send(method, params, sessionId);

@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
-from unittest import mock
+import unittest.mock as mock
 
 from Auvra.desktop.assets import AssetTransferRegistry, AssetTransportError, AssetUpload
 from Auvra.desktop.dialogs import DialogSelection, WinFormsProjectDialogs
@@ -411,6 +411,29 @@ class BuildGameHostTests(unittest.TestCase):
                 body=io.BytesIO(b"too long"),
             )
         self.assertEqual(self._query(KEY), [])
+
+    def test_trimming_counts_only_removed_model_bytes(self) -> None:
+        cache = self.root / "trimmed"
+        store = PreparedModelStore(cache, capacity_bytes=8)
+        keys = ["1" * 64, "2" * 64]
+        for age, key in enumerate(keys):
+            source = self.root / "upload"
+            data = bytes(8)
+            source.write_bytes(data)
+            store.ingest(key, AssetUpload(source, len(data), hashlib.sha256(data).hexdigest(), "model/gltf-binary"))
+            os.utime(cache / f"{key}.glb", (1000 + age, 1000 + age))
+        locked = cache / f"{keys[0]}.glb"
+        unlink = Path.unlink
+
+        def remove(path: Path, *, missing_ok: bool = False) -> None:
+            if path == locked:
+                raise PermissionError("file is in use")
+            unlink(path, missing_ok=missing_ok)
+
+        with mock.patch.object(Path, "unlink", remove), self.assertLogs("Auvra.desktop.prepared_models", level="WARNING"):
+            store.trim()
+        self.assertTrue(locked.is_file())
+        self.assertFalse((cache / f"{keys[1]}.glb").exists())
 
     def test_the_store_trims_what_was_used_longest_ago_and_keeps_this_builds_models(self) -> None:
         store = PreparedModelStore(self.root / "trimmed", capacity_bytes=20)

@@ -1,10 +1,10 @@
 from __future__ import annotations
 import json, tempfile, unittest
 from pathlib import Path
-from unittest import mock
+import unittest.mock as mock
 
 from Auvra.project import ProjectRepository
-import Auvra.project.migrations as migrations
+from Auvra.project import migrations
 import Auvra.project.repository as repository_module
 from Auvra.project.errors import InvalidProjectError, UnsupportedVersionError
 from Auvra.project.migrations import (ENGINE_VERSION, Migration, MigrationRegistry,

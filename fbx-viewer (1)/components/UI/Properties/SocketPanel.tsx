@@ -1,5 +1,5 @@
 
-import React, { useMemo, useState, useEffect, useRef } from 'react';
+import React, { useMemo } from 'react';
 import * as THREE from 'three';
 import { BoltIcon, CrosshairIcon, EyeIcon, EyeOffIcon, FlameIcon, ImageIcon, PlayIcon, PlusIcon, TargetIcon, TrashIcon, UploadIcon } from '../Icons';
 import { useScene } from '../../../context/SceneContext';

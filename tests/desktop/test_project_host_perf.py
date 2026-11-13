@@ -9,7 +9,7 @@ import struct
 import tempfile
 from types import SimpleNamespace
 import unittest
-from unittest import mock
+import unittest.mock as mock
 
 from Auvra.desktop.assets import AssetTransferRegistry
 from Auvra.desktop.dialogs import DialogSelection

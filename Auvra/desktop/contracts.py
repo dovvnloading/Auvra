@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+from abc import abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
 import os
 from pathlib import Path
 import tempfile
 from typing import Any, Callable, Mapping, Protocol
+
+from .policy import FrameMode, validate_origin
 
 
 _REPO_FRONTEND_DIST = Path(__file__).resolve().parents[2] / "fbx-viewer (1)" / "dist"
@@ -64,11 +67,6 @@ class FrameClosedError(FrameError):
     """An operation was attempted after the frame was closed."""
 
 
-class FrameMode(str, Enum):
-    DEVELOPMENT = "development"
-    PACKAGED = "packaged"
-
-
 class FrameState(str, Enum):
     NEW = "new"
     STARTING = "starting"
@@ -94,8 +92,13 @@ AssetResourceCallback = Callable[[Any], Any]
 
 
 class Frame(Protocol):
-    def start(self) -> None: ...
-    def close(self, timeout: float = 5.0) -> None: ...
+    @abstractmethod
+    def start(self) -> None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def close(self, timeout: float = 5.0) -> None:
+        raise NotImplementedError
 
 
 def _immutable_root(value: Path | str | None) -> Path | None:
@@ -125,11 +128,8 @@ def _immutable_root(value: Path | str | None) -> Path | None:
         for descendant in path.rglob("*"):
             if descendant.is_symlink() or (hasattr(descendant, "is_junction") and descendant.is_junction()):
                 raise FrameConfigurationError("packaged root cannot contain descendant links")
-            try:
-                if descendant.stat().st_file_attributes & 0x400:
-                    raise FrameConfigurationError("packaged root cannot contain descendant reparse points")
-            except AttributeError:
-                pass
+            if getattr(descendant.stat(), "st_file_attributes", 0) & 0x400:
+                raise FrameConfigurationError("packaged root cannot contain descendant reparse points")
     except OSError as exc:
         raise FrameConfigurationError("packaged root could not be inspected safely") from exc
     # A virtual HTTPS host is a privileged content boundary.  Development may
@@ -237,8 +237,6 @@ class FrameConfig:
     _root_ready: bool = field(init=False, repr=False, default=False)
 
     def __post_init__(self) -> None:
-        from .policy import validate_origin
-
         mode = self.mode if isinstance(self.mode, FrameMode) else FrameMode(self.mode)
         object.__setattr__(self, "mode", mode)
         try:

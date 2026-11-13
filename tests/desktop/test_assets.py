@@ -186,17 +186,13 @@ class AssetTransferRegistryTests(unittest.TestCase):
         unrelated = parent / "asset-transfer-not-ours"
         unrelated.mkdir()
         (unrelated / "keep").write_bytes(b"x")
-        other = AssetTransferRegistry(parent, session_id="session-other", trusted_origin="http://127.0.0.1:3000")
-        try:
+        with AssetTransferRegistry(parent, session_id="session-other", trusted_origin="http://127.0.0.1:3000") as other:
             self.assertFalse(crashed.exists())
             self.assertTrue((unrelated / "keep").exists())
             self.assertTrue(self.registry.root.exists(), "a session still running keeps its folder")
             self.assertTrue((self.registry.root / ".auvra-asset-transfer").exists())
-            third = AssetTransferRegistry(parent, session_id="session-third", trusted_origin="http://127.0.0.1:3000")
-            self.assertTrue(other.root.exists())
-            third.close()
-        finally:
-            other.close()
+            with AssetTransferRegistry(parent, session_id="session-third", trusted_origin="http://127.0.0.1:3000"):
+                self.assertTrue(other.root.exists())
 
     def _ask_for_piece(self, ticket, first: int, last: int):
         return self.registry.handle(

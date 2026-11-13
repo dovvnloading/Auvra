@@ -411,6 +411,18 @@ describe('prepared animation assets', () => {
 describe('what stays unprepared', () => {
   const gltfUsing = (extension: string): ArrayBuffer => new TextEncoder().encode(JSON.stringify({ asset: { version: '2.0' }, extensionsUsed: [extension] })).buffer;
 
+  it('skips detail levels for accessors with unrecognized component types', async () => {
+    const source = new TextEncoder().encode(JSON.stringify({
+      asset: { version: '2.0' },
+      buffers: [{ uri: 'data:application/octet-stream;base64,AAAAAA==', byteLength: 4 }],
+      bufferViews: [{ buffer: 0, byteLength: 4 }],
+      accessors: [{ bufferView: 0, componentType: 'toString', type: 'SCALAR', count: 1 }],
+      meshes: [{ primitives: [{ attributes: { POSITION: 0 }, indices: 0 }] }],
+    })).buffer;
+    const prepared = documentOf(await prepareGlb(source, 'gltf', modelOptions(), neverCompress));
+    expect(prepared.meshes[0].primitives[0].extensions).toBeUndefined();
+  });
+
   it('is a model with compressed geometry, without calling that a failure', async () => {
     for (const extension of ['KHR_draco_mesh_compression', 'EXT_meshopt_compression']) {
       await expect(prepareGlb(gltfUsing(extension), 'gltf', modelOptions(), neverCompress)).rejects.toBeInstanceOf(UnpreparableModelError);

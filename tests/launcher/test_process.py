@@ -7,7 +7,7 @@ import sys
 import tempfile
 import time
 import unittest
-from unittest import mock
+import unittest.mock as mock
 
 from Auvra.launcher.process import OwnedProcess, ProcessCleanupError, run_owned_command
 from Auvra.launcher.platform import PosixProcessGroup
@@ -27,7 +27,7 @@ def _wait_for_file(path: Path, process: OwnedProcess, timeout: float = 3.0) -> N
 def _pid_exists(pid: int) -> bool:
     if os.name == "nt":
         import ctypes
-        from ctypes import wintypes
+        import ctypes.wintypes as wintypes
 
         process_query_limited_information = 0x1000
         still_active = 259

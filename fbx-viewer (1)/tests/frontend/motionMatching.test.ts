@@ -198,7 +198,7 @@ describe('matcher', () => {
     for (let i = 0; i < 30; i++) choice = matcher.step(1 / 60, walk, walk, 0);
     expect(matcher.database.clips[choice.clip].name).toBe('walk');
     let jumps = 0;
-    let time = choice.time;
+    const time = choice.time;
     for (let i = 0; i < 120; i++) {
       choice = matcher.step(1 / 60, walk, walk, 0);
       if (choice.jumped) jumps++;
@@ -207,7 +207,6 @@ describe('matcher', () => {
     expect(jumps).toBe(0);
     expect(matcher.database.clips[choice.clip].name).toBe('walk');
     expect(choice.time).not.toBe(time);
-    time = choice.time;
 
     // Asked to run, the character speeds up (as its controller would), and the matcher follows.
     const run = { x: 0, z: 4.5 };

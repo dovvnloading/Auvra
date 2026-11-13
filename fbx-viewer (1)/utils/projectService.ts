@@ -1,7 +1,7 @@
 import { getHostTransport } from '../host/bootstrap';
 import type { ProjectStatus } from './projectStatus';
 import type { ProjectTemplate } from '../types';
-import type { Event, Response } from '../host/generated/protocolV1';
+import type { Event, Response as HostResponse } from '../host/generated/protocolV1';
 import { frontendDiagnostics, type DiagnosticContext } from '../diagnostics/runtime';
 import type { PreparedModels } from './preparedModels/format';
 
@@ -36,7 +36,7 @@ type HostLike = {
   session?: string | null;
   currentRevision: number;
   ready?: () => Promise<unknown>;
-  request: (request: unknown) => Promise<Response>;
+  request: (request: unknown) => Promise<HostResponse>;
   subscribe: (listener: (event: Event) => void) => () => void;
 };
 
@@ -275,7 +275,7 @@ export class ProjectService {
   }
 
   /** A stored file as a response. A large one comes a piece at a time, and a piece the host refuses is the answer. */
-  async fetchAsset(assetId: string, options: { signal?: AbortSignal; diagnostics?: DiagnosticContext } = {}): Promise<globalThis.Response> {
+  async fetchAsset(assetId: string, options: { signal?: AbortSignal; diagnostics?: DiagnosticContext } = {}): Promise<Response> {
     const { url, size, mime } = await this.assetTicket(assetId, options.diagnostics);
     if (!size || size <= ASSET_PIECE_BYTES) return fetch(url, { method: 'GET', signal: options.signal });
     const pieces: Blob[] = [];

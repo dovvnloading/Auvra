@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+from contextlib import suppress
 import json
 import re
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 from urllib.parse import unquote, urlsplit
 
 from .commands import CommandProposal, provider_command_schema, validate_provider_command
@@ -61,13 +62,14 @@ class MediaJob:
 @trace_public_class("provider_adapter", concise=("health", "list_models"))
 class Adapter:
     def __init__(self, transport: Transport, *, credential_store: Any = None,
-                 registry: ProviderRegistry | None = None, endpoint: str | None = None) -> None:
+                 registry: ProviderRegistry | None = None, endpoint: str | None = None,
+                 error_detail: Callable[[bytes], str | None] | None = None) -> None:
         self.registry = registry or ProviderRegistry()
         self.descriptor = self.registry.get(self.provider_id)
         self.credentials = credential_store
         self.endpoint = endpoint or self.descriptor.origins[0]
         _validate_endpoint(self.descriptor, self.endpoint)
-        self.transport = BoundedTransport(transport, allowed_origins=self.descriptor.origins)
+        self.transport = BoundedTransport(transport, allowed_origins=self.descriptor.origins, error_detail=error_detail)
         self._raw_transport = transport
         self._models = set(self.descriptor.models)
 
@@ -100,7 +102,7 @@ class Adapter:
 
     def list_models(self) -> tuple[str, ...]:
         """Refresh a process-local allowlist; never accepts model names blindly."""
-        try:
+        with suppress(ProviderError):
             value = self._json("GET", self._models_path())
             candidates = value.get("data", value.get("models", []))
             discovered = []
@@ -110,8 +112,6 @@ class Adapter:
                     if isinstance(name, str) and 0 < len(name) <= 200: discovered.append(name)
             self._models.update(discovered)
             if discovered: self.registry.discover_models(self.provider_id, self._models)
-        except ProviderError:
-            pass
         return tuple(sorted(self._models))
 
     @property
@@ -284,8 +284,8 @@ class FalAdapter(TextAdapter):
 
     def __init__(self, transport: Transport, *, credential_store: Any = None, registry: ProviderRegistry | None = None,
                  endpoint: str | None = None, catalog_path: Any = None) -> None:
-        super().__init__(transport, credential_store=credential_store, registry=registry, endpoint=endpoint)
-        self.transport = BoundedTransport(transport, allowed_origins=self.descriptor.origins, error_detail=_fal_error_detail)
+        super().__init__(transport, credential_store=credential_store, registry=registry, endpoint=endpoint,
+                         error_detail=_fal_error_detail)
         self.catalog = FalCatalog(transport, key=self._catalog_key, cache_path=catalog_path)
         self.registry.discover_models(self.provider_id, self.registry.models(self.provider_id), SEED_MODELS)
 

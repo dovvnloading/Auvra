@@ -10,12 +10,13 @@ from __future__ import annotations
 import hashlib
 import json
 import copy
+import logging
 import os
 from pathlib import Path
 import threading
 import time
 import uuid
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import CancelledError, Future, ThreadPoolExecutor
 from Auvra.diagnostics import trace_public_class
 from typing import Any, Callable, Mapping
 
@@ -37,6 +38,8 @@ from Auvra.providers.transport import StdlibTransport
 from .previews import PreviewError
 from .credential_prompt import CredentialPromptUnavailableError, WinFormsCredentialPrompt
 
+
+_LOG = logging.getLogger(__name__)
 
 _ADAPTERS = {
     "openai": OpenAIAdapter,
@@ -330,7 +333,7 @@ class NativeProviderHost:
                 self.jobs.transition(job_id, "failed", message="provider recovery failed")
                 self._queue_job_event(job_id, "failed", None, self.registry.get("fal"), message=self._map_error(error).code)
             except Exception:
-                pass
+                _LOG.warning("Could not report the failed provider recovery job")
 
     def _close_stores(self) -> None:
         with self._lock:
@@ -353,8 +356,10 @@ class NativeProviderHost:
         for future in futures:
             try:
                 future.result()
+            except CancelledError:
+                continue
             except Exception:
-                pass
+                _LOG.debug("Provider task ended with an error during shutdown")
         self._close_stores()
 
     def shutdown(self) -> None:
@@ -374,8 +379,10 @@ class NativeProviderHost:
                 break
             try:
                 future.result(timeout=remaining)
+            except (CancelledError, TimeoutError):
+                continue
             except Exception:
-                pass
+                _LOG.debug("Provider task ended with an error during the shutdown grace period")
         if self._owns_executor:
             # Running provider calls may be inside an uninterruptible network
             # operation.  Never make host shutdown wait on those threads.
@@ -461,7 +468,7 @@ class NativeProviderHost:
                 try:
                     store.write(descriptor.credential_name, value)
                 finally:
-                    value = ""
+                    del value
         except CredentialPromptUnavailableError:
             operation, message = "key.failed", "The key window could not open on this computer."
         except Exception:
@@ -629,7 +636,7 @@ class NativeProviderHost:
                     if catalog.refresh_prices(self._shutdown_event):
                         self._queue("provider.status", {"providerId": provider_id, "status": "ready"})
                 except Exception:
-                    pass
+                    _LOG.warning("Could not refresh provider prices")
 
             self._price_refresh = threading.Thread(target=run, daemon=True, name="auvra-provider-prices")
             self._price_refresh.start()
@@ -896,7 +903,7 @@ class NativeProviderHost:
                     try:
                         active.discard_asset_if_unreferenced(artifact_id)
                     except (OSError, ValueError):
-                        pass
+                        _LOG.warning("Could not remove the unreferenced generated asset after ingestion failed")
                 raise
         try:
             status = self.project_host.service.apply_changes(
@@ -909,7 +916,7 @@ class NativeProviderHost:
                 try:
                     active.discard_asset_if_unreferenced(artifact_id)
                 except (OSError, ValueError):
-                    pass
+                    _LOG.warning("Could not remove the unreferenced generated asset after the project update failed")
             raise
         try:
             if preview is not None:
@@ -1184,7 +1191,7 @@ class NativeProviderHost:
                                      reconcile={"provider": provider_id, "error_code": meta["errorCode"], "retryable": bool(error.retryable)})
                 self._queue_job_event(job_id, "failed", None, self.registry.get(provider_id), message=meta["errorCode"], retryable=bool(error.retryable))
             except Exception:
-                pass
+                _LOG.warning("Could not report the failed provider job")
 
     def _ingest_media(self, job_id: str, output: Mapping[str, Any], adapter: Any, meta: dict[str, Any]) -> None:
         if self.preview_store is None:

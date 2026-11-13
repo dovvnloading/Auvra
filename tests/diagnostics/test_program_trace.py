@@ -7,7 +7,7 @@ import re
 import tempfile
 import time
 import unittest
-from unittest import mock
+import unittest.mock as mock
 
 from Auvra.diagnostics.core import (
     DiagnosticsSession,

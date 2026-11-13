@@ -74,7 +74,7 @@ const dropCapture = (capture: Capture): void => {
 const workedColour = (material: THREE.Material, look: string): [number, number, number] | null => {
     const renderer = graphRenderer(material);
     if (!renderer) return captures.get(material)?.colour ?? null;
-    let capture = captures.get(material);
+    const capture = captures.get(material);
     if (!capture || (capture.look !== look && (capture.ready || capture.failed))) {
         const previous = capture?.colour ?? null;
         if (capture) dropCapture(capture);
@@ -84,7 +84,6 @@ const workedColour = (material: THREE.Material, look: string): [number, number, 
         mesh.frustumCulled = false;
         scene.add(mesh);
         const made: Capture = { look, colour: previous, scene, material: flat, ready: false, failed: false };
-        capture = made;
         captures.set(material, made);
         // Compiled for the target it is drawn into, without holding the frame up where the GPU allows; drawn on a later look.
         const previousTarget = renderer.getRenderTarget();

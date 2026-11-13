@@ -81,6 +81,10 @@ class CatalogParsingTests(unittest.TestCase):
         writer, claude = parse_router_model(ROUTER_ROWS[0]), parse_router_model(ROUTER_ROWS[2])
         self.assertEqual((writer.price_micro_usd, writer.output_price_micro_usd), (100_000, 200_000))
         self.assertIsNone(claude.price_micro_usd)
+        for price in ("NaN", "Infinity", "1e299", 10**512):
+            with self.subTest(price=price):
+                model = parse_router_model({"id": "acme/writer", "pricing": {"prompt": price}})
+                self.assertIsNone(model.price_micro_usd)
 
     def test_router_models_that_write_no_text_or_cannot_be_named_are_left_out(self):
         self.assertIsNone(parse_router_model(ROUTER_ROWS[3]))

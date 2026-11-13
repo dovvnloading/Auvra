@@ -62,7 +62,7 @@ class CngSignatureVerifier:
             return False
         try:
             import ctypes
-            from ctypes import wintypes
+            import ctypes.wintypes as wintypes
             bcrypt = ctypes.WinDLL("bcrypt", use_last_error=True)
             bcrypt.BCryptOpenAlgorithmProvider.argtypes = [ctypes.POINTER(wintypes.HANDLE), wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.ULONG]
             bcrypt.BCryptOpenAlgorithmProvider.restype = ctypes.c_long

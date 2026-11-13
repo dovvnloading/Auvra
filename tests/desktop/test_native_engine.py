@@ -9,7 +9,7 @@ import textwrap
 import unittest
 import hashlib
 import io
-from unittest import mock
+import unittest.mock as mock
 
 from Auvra.diagnostics.core import DiagnosticsSession, bind_diagnostic_context
 from Auvra.host.validation import validate_message
@@ -417,6 +417,21 @@ class NativeEngineTests(unittest.TestCase):
         for forbidden in ({"asset_path": "asset"}, {"binary": "AQ=="}, {"note": "C:\\private\\asset"}):
             with self.assertRaisesRegex(Exception, "paths or binary"):
                 engine.call("world.hydrate", forbidden)
+
+    def test_asset_staging_closes_directory_handle_when_sync_is_unavailable(self) -> None:
+        source = Path(self.temp.name) / "native-source"
+        host = NativeEngineHost(self.make_engine(), source_root=source)
+        payload = b"model-source"
+        asset_id = hashlib.sha256(payload).hexdigest()
+        directory_fd = 123456
+        with (
+            mock.patch("Auvra.desktop.native_engine.os.open", return_value=directory_fd),
+            mock.patch("Auvra.desktop.native_engine.os.fsync", side_effect=[None, OSError("directory sync unavailable")]),
+            mock.patch("Auvra.desktop.native_engine.os.close") as close,
+        ):
+            host.stage_asset(asset_id, io.BytesIO(payload))
+        close.assert_called_once_with(directory_fd)
+        self.assertEqual((source / asset_id).read_bytes(), payload)
 
     def test_hydration_is_retained_for_editor_reload_and_native_restart(self) -> None:
         engine = self.make_engine()

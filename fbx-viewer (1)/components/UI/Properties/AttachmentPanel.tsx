@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useEffect, useRef } from 'react';
+import React, { useMemo, useState } from 'react';
 import { ComponentsIcon, CrossIcon, CrosshairIcon, PaperclipIcon, SearchIcon, SwordsIcon, TrashIcon, UploadIcon } from '../Icons';
 import { useScene } from '../../../context/SceneContext';
 import { LoadedModelData } from '../../../types';

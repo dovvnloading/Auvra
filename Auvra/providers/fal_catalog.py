@@ -7,6 +7,7 @@ and everything is kept in one file beside the provider's other state, so the lis
 
 from __future__ import annotations
 
+from contextlib import suppress
 import json
 import os
 import math
@@ -79,9 +80,10 @@ class CatalogModel:
 def _micro_usd(value: Any) -> int | None:
     try:
         number = float(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
-    return round(number * 1_000_000) if number >= 0 and number == number and number != float("inf") else None
+    micro_usd = number * 1_000_000
+    return round(micro_usd) if micro_usd >= 0 and math.isfinite(micro_usd) else None
 
 
 def _text(value: Any, limit: int) -> str:
@@ -136,7 +138,7 @@ def parse_router_model(row: Any) -> CatalogModel | None:
 def _scaled(per_token: Any) -> float | None:
     try:
         return float(per_token) * _TOKENS_PRICED
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
 
 
@@ -179,10 +181,8 @@ class FalCatalog:
         with self._lock:
             fresh = self._models and self._now() - self._fetched_at < _STALE_SECONDS
         if not fresh:
-            try:
+            with suppress(ProviderError):
                 self.refresh()
-            except ProviderError:
-                pass
         with self._lock:
             return tuple(self._models.values())
 
@@ -325,10 +325,8 @@ class FalCatalog:
             temporary.write_text(json.dumps(value, separators=(",", ":")), encoding="utf-8")
             os.replace(temporary, path)
         except OSError:
-            try:
+            with suppress(OSError):
                 temporary.unlink(missing_ok=True)
-            except OSError:
-                pass
 
 
 def input_schema(openapi: Any, model_id: str) -> Mapping[str, Any] | None:

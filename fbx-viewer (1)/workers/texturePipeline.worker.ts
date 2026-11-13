@@ -1,3 +1,4 @@
+import { isDedicatedWorkerMessage } from './dedicatedWorkerMessage';
 import { decodePicture } from '../texturing/textureDecode';
 import { encodeMaterialTexture, type MaterialTextureFormat, type MaterialTextureKind } from '../utils/textureCompression/materialTextureEncoder';
 
@@ -13,6 +14,7 @@ type Request =
 const reply = (message: unknown, transfer: Transferable[] = []) => (self as unknown as Worker).postMessage(message, transfer);
 
 self.onmessage = async (event: MessageEvent<Request>) => {
+    if (!isDedicatedWorkerMessage(event)) return;
     const request = event.data;
     try {
         if (request.op === 'decode') {

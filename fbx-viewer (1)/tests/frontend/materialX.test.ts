@@ -115,6 +115,13 @@ describe('reading MaterialX from elsewhere', () => {
         expect(outputOf(asset.graph).params.metalness).toBe(0);
     });
 
+    it('reads markup-shaped attribute values as text and keeps imported elements off the page', () => {
+        const xml = '<materialx><standard_surface name="&lt;Copper&gt;"/><aside id="materialx-import-test"/></materialx>';
+        const { asset } = materialFromMaterialX(xml, () => null, 'm1');
+        expect(asset.name).toBe('<Copper>');
+        expect(document.getElementById('materialx-import-test')).toBeNull();
+    });
+
     it('refuses what is not MaterialX', () => {
         expect(() => materialFromMaterialX('<svg></svg>', () => null, 'x')).toThrow('not a MaterialX file');
     });

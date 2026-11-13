@@ -1377,9 +1377,6 @@ def _apply_outpost(repository: Any, project_name: str) -> None:
 # makes every crate's wood, and each crate cooks its own pictures from it. The back rows give each crate a seed of its
 # own; the middle row a wetness of its own; the front row's wetness the level blueprint steps up and down over time.
 
-_LIVING_GRAPH_SEED = "Graph seed"
-
-
 def _tex_node(node_id: str, node_type: str, x: float, y: float, **params: Any) -> dict[str, Any]:
     return {"id": node_id, "type": node_type, "x": x, "y": y, "params": params}
 

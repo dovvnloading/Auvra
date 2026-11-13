@@ -11,9 +11,9 @@ import stat
 import tempfile
 import unittest
 from pathlib import Path
-from unittest import mock
+import unittest.mock as mock
 
-import Auvra.desktop.project_host as project_host_module
+from Auvra.desktop import project_host as project_host_module
 from Auvra.desktop.assets import AssetTransferRegistry
 from Auvra.desktop.dialogs import DialogSelection
 from Auvra.desktop.project_host import NativeProjectHost, player_executable_candidates

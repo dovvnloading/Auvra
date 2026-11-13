@@ -440,7 +440,7 @@ export const EnvironmentViewport: React.FC<EnvironmentViewportProps> = ({
     showNavigation = false
 }) => {
     const { models } = useAssets();
-    const { levelObjects, addLevelObject, addLevelObjects, removeLevelObjects, updateLevelObject, snapshotHistory } = useLevel();
+    const { levelObjects, addLevelObject, updateLevelObject, snapshotHistory } = useLevel();
     const navMesh = useEditorNavMesh(showNavigation ? levelObjects : null, models);
     const containerRef = useRef<HTMLDivElement>(null);
     // The view draws with the renderer the project is set to, as Play does. The canvas waits for the setting the first

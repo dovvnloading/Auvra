@@ -12,6 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import errno
 import hashlib
+import logging
 import os
 from pathlib import Path
 import re
@@ -25,6 +26,8 @@ import time
 from typing import Any, BinaryIO, Callable, Mapping
 from urllib.parse import urlsplit
 
+
+_LOG = logging.getLogger(__name__)
 
 ASSET_ORIGIN = "https://assets.auvra.local"
 _TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{43}$")
@@ -787,7 +790,7 @@ class AssetTransferRegistry:
         try:
             path.unlink(missing_ok=True)
         except OSError:
-            pass
+            _LOG.warning("Could not remove a staged asset from the transfer directory")
 
     def _release_download(self, path: Path, stream: _EphemeralDownloadStream) -> None:
         self._cleanup_staged_path(path)
@@ -826,7 +829,7 @@ class AssetTransferRegistry:
             try:
                 stream.close()
             except OSError:
-                pass
+                _LOG.debug("Could not close a download stream during transfer shutdown")
         root = self._root
         marker = root / _MARKER_NAME
         try:

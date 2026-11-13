@@ -560,6 +560,7 @@ const EXEMPT = new Map(Object.entries({
   'utils/preparedModels/preparedLoader.ts': 'import-child-phase',
   'utils/gltfDecoders.ts': 'import-child-phase',
   'utils/thumbnailGenerator.ts': 'import-child-phase',
+  'workers/dedicatedWorkerMessage.ts': 'worker-protocol',
   'workers/autoRig.worker.ts': 'worker-protocol',
   'workers/fbxImport.worker.ts': 'worker-protocol',
   'workers/textureCompress.worker.ts': 'worker-protocol',

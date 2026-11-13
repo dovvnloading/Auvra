@@ -67,14 +67,20 @@ const centreAlong = (grid: VoxelGrid, mask: Uint8Array, point: Point, axis: 0 | 
 
 /** A reading's points through a turn. */
 const turnPoints = <T extends object>(points: T, turn: (point: Point) => Point): T => {
-  const out: Record<string, unknown> = {};
-  for (const [name, value] of Object.entries(points)) {
-    if (typeof value === 'number') out[name] = value;
-    else if (Array.isArray(value) && Array.isArray(value[0])) out[name] = (value as Point[]).map(turn);
-    else if (Array.isArray(value)) out[name] = turn(value as Point);
-    else out[name] = value;
-  }
-  return out as T;
+  return Object.fromEntries(Object.entries(points).map(([name, value]) => {
+    if (Array.isArray(value) && Array.isArray(value[0])) return [name, (value as Point[]).map(turn)];
+    if (Array.isArray(value)) return [name, turn(value as Point)];
+    return [name, value];
+  })) as T;
+};
+
+/** Re-centre only the moved points present in this reading. */
+const centreMovedMarkers = <T extends RigMarkers>(markers: T, moved: readonly RigMarkerName[], grid: VoxelGrid, axis: 0 | 2): T => {
+  const mask = largestPiece(grid);
+  const names = new Set<string>(moved);
+  return Object.fromEntries(Object.entries(markers).map(([name, point]) => [
+    name, names.has(name) && Array.isArray(point) ? centreAlong(grid, mask, point as Point, axis) : point,
+  ])) as T;
 };
 
 /**
@@ -251,14 +257,11 @@ export interface RiggedBody {
 
 /** The skeleton of a person from their markers, in a body turned to face +Z. */
 const personJoints = (triangles: TriangleSoup, reading: BodyReading, up: (point: Point) => Point, moved: readonly RigMarkerName[], original: RigMarkers | undefined, withFingers: boolean): RigJoint[] => {
-  const markers = turnPoints(reading.markers, up);
+  let markers = turnPoints(reading.markers, up);
   const extents = turnPoints(reading.extents, up);
   if (moved.length) {
     const grid = voxelize(triangles, CENTRING_RESOLUTION);
-    if (grid) {
-      const mask = largestPiece(grid);
-      for (const name of moved as MarkerName[]) markers[name] = centreAlong(grid, mask, markers[name], 2);
-    }
+    if (grid) markers = centreMovedMarkers(markers, moved, grid, 2);
     if (original) {
       const before = original as BodyMarkers;
       if (moved.includes('leftWrist') || moved.includes('leftElbow')) extents.leftHandTip = followForearm(up(before.leftElbow), up(before.leftWrist), markers.leftElbow, markers.leftWrist, extents.leftHandTip);
@@ -278,17 +281,11 @@ const FOUR_LEG_MIDDLE = new Set<RigMarkerName>(['nose', 'head', 'neck', 'hips', 
 
 /** The skeleton of an animal from its markers, in a body turned to face +Z. */
 const fourLegJoints = (triangles: TriangleSoup, reading: FourLegReading, up: (point: Point) => Point, moved: readonly RigMarkerName[], original: RigMarkers | undefined, withTail: boolean): RigJoint[] => {
-  const markers = turnPoints(reading.markers, up);
+  let markers = turnPoints(reading.markers, up);
   const extents = turnPoints(reading.extents, up);
   if (moved.length) {
     const grid = voxelize(triangles, CENTRING_RESOLUTION);
-    if (grid) {
-      const mask = largestPiece(grid);
-      for (const name of moved as FourLegMarkerName[]) {
-        const place = markers[name];
-        if (place && !FOUR_LEG_MIDDLE.has(name)) markers[name] = centreAlong(grid, mask, place, 0);
-      }
-    }
+    if (grid) markers = centreMovedMarkers(markers, moved.filter((name) => !FOUR_LEG_MIDDLE.has(name)), grid, 0);
     if (original) {
       const before = original as FourLegMarkers;
       if (moved.includes('leftFrontPaw')) extents.leftFrontToe = followAnkle(up(before.leftFrontPaw), markers.leftFrontPaw, extents.leftFrontToe);

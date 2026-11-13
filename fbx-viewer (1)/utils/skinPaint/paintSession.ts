@@ -805,6 +805,8 @@ export const skinPaintSession = (root: THREE.Object3D): SkinPaintSession => {
 };
 
 /** Resolves once a model's painted weights are stored, if it has been painted at all. */
-export const flushSkinPaint = (root: THREE.Object3D): Promise<void> => sessions.get(root)?.flush() ?? Promise.resolve();
+export const flushSkinPaint = async (root: THREE.Object3D): Promise<void> => {
+  await sessions.get(root)?.flush();
+};
 
 export const useSkinPaintStatus = (session: SkinPaintSession): SkinPaintStatus => useSyncExternalStore(session.subscribe, session.getStatus);

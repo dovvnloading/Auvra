@@ -1,6 +1,7 @@
 """Deterministic JSON serialization used by every project document."""
 from __future__ import annotations
 
+from contextlib import suppress
 import json
 import math
 import os
@@ -35,6 +36,15 @@ def dump_json(path: str | os.PathLike[str], value: Any, *, fsync: bool = True) -
         if fsync:
             os.fsync(stream.fileno())
 
+def sync_directory(path: Path) -> None:
+    """Flush directory entries where supported, closing the handle even on failure."""
+    with suppress(OSError):
+        fd = os.open(path, os.O_RDONLY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+
 def atomic_dump_json(path: str | os.PathLike[str], value: Any) -> None:
     """Write and publish a JSON file atomically on its containing volume."""
     target = Path(path)
@@ -42,13 +52,9 @@ def atomic_dump_json(path: str | os.PathLike[str], value: Any) -> None:
     try:
         dump_json(temp, value, fsync=True)
         os.replace(temp, target)
-        try:
-            fd = os.open(target.parent, os.O_RDONLY); os.fsync(fd); os.close(fd)
-        except OSError:
-            pass
+        sync_directory(target.parent)
     finally:
-        try: temp.unlink()
-        except FileNotFoundError: pass
+        temp.unlink(missing_ok=True)
 
 def load_json(path: str | os.PathLike[str]) -> Any:
     with Path(path).open("r", encoding="utf-8", newline="") as stream:

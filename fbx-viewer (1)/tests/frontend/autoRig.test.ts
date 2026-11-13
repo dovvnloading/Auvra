@@ -410,7 +410,7 @@ describe('the skeleton fitted to an animal', () => {
   it('keeps a leg marker moved side on in the middle of the leg, and a paw\'s toes with it', () => {
     const moved: Point = [0.13, reading.markers.leftWrist[1] + 0.03, reading.markers.leftWrist[2]];
     const part = { positions: soup, indices: null };
-    const { joints: rigged } = rigBody(soup, [part], { ...reading, markers: { ...reading.markers, leftWrist: moved } }, ['leftWrist'], undefined, reading.markers);
+    const { joints: rigged } = rigBody(soup, [part], { ...reading, markers: { ...reading.markers, leftWrist: moved } }, ['leftWrist', 'groin'], undefined, reading.markers);
     const hand = rigged.find((joint) => joint.name === 'LeftHand')!;
     expect(hand.position[1]).toBeCloseTo(moved[1], 5);
     expect(hand.position[0]).toBeCloseTo(0.1, 1);
@@ -660,7 +660,7 @@ describe('placing the markers by hand', () => {
     const soup = figure();
     const reading = readBody(soup)!;
     const moved: Point = [reading.markers.leftElbow[0] + 0.03, reading.markers.leftElbow[1], 0.04];
-    const { joints } = rigBody(soup, [partOf(soup)], { ...reading, markers: { ...reading.markers, leftElbow: moved } }, ['leftElbow'], undefined, reading.markers, false);
+    const { joints } = rigBody(soup, [partOf(soup)], { ...reading, markers: { ...reading.markers, leftElbow: moved } }, ['leftElbow', 'leftFrontPaw'], undefined, reading.markers, false);
     const elbow = joints.find((joint) => joint.name === 'LeftForeArm')!;
     expect(elbow.position[0]).toBeCloseTo(moved[0], 5);
     // Dropped towards the front of the arm, it goes back to the middle.

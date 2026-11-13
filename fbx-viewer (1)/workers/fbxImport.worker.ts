@@ -1,5 +1,6 @@
 /// <reference lib="webworker" />
 
+import { isDedicatedWorkerMessage } from './dedicatedWorkerMessage';
 import { TGALoader } from 'three/examples/jsm/loaders/TGALoader.js';
 import { TIFFLoader } from 'three/examples/jsm/loaders/TIFFLoader.js';
 import { buildImportedGlb, describeImages, type DecodeImage, type DecodeLegacyImage } from '../utils/fbxImport/importedModel';
@@ -59,6 +60,7 @@ const decodeLegacyImage: DecodeLegacyImage = (bytes, kind) => {
 };
 
 scope.onmessage = async (event: MessageEvent<ImportRequest>) => {
+  if (!isDedicatedWorkerMessage(event)) return;
   const request = event.data;
   if ((request?.type !== 'parse' && request?.type !== 'inspect') || !(request.buffer instanceof ArrayBuffer)) return;
   const format: ImportFormat = request.format === 'obj' ? 'obj' : 'fbx';

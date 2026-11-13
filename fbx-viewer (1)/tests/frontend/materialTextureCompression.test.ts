@@ -32,6 +32,15 @@ const ALL: { bptc: boolean; rgtc: boolean } = { bptc: true, rgtc: true };
 afterEach(() => clearTextureSettings());
 
 describe('material texture compression', () => {
+    it('rejects format names outside the supported block codecs', () => {
+        const bytes = new Uint8Array(64);
+        for (const name of ['unknown', 'constructor']) {
+            const format = name as Parameters<typeof encodeLevel>[3];
+            expect(() => encodeLevel(bytes, 4, 4, format)).toThrow('Unsupported material texture format');
+            expect(() => decodeLevel(bytes, 4, 4, format)).toThrow('Unsupported material texture format');
+        }
+    });
+
     it('keeps colour and alpha close in BC7', () => {
         // Along one line of colour in each block (as most blocks are), sixteen steps keep it within a few levels.
         const ramp = new Uint8Array(16 * 16 * 4);

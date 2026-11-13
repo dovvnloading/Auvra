@@ -107,7 +107,7 @@ class BootstrapTests(unittest.TestCase):
         interpreter.write_text("python", encoding="ascii")
         (environment / "pyvenv.cfg").write_text("home = C:\\Python314\n", encoding="ascii")
         runner = FakeRunner(self.paths.repo_root)
-        with patch.object(module.shutil, "which", return_value="C:\\uv.exe"):
+        with patch("shutil.which", return_value="C:\\uv.exe"):
             managed = module.bootstrap(paths=self.paths, runner=runner, reexec=False)
         self.assertEqual(managed, interpreter)
         sync_calls = [call["argv"] for call in runner.calls if "sync" in call["argv"]]
@@ -119,20 +119,20 @@ class BootstrapTests(unittest.TestCase):
     def test_interrupted_new_environment_retains_recoverable_initializing_marker(self):
         runner = FakeRunner(self.paths.repo_root)
         runner.fail_sync = True
-        with patch.object(module.shutil, "which", return_value="C:\\uv.exe"):
+        with patch("shutil.which", return_value="C:\\uv.exe"):
             with self.assertRaises(module.BootstrapError):
                 module.bootstrap(paths=self.paths, runner=runner, reexec=False)
         self.assertTrue((self.paths.target_env / module.INITIALIZING_MARKER_NAME).is_file())
         self.assertFalse((self.paths.target_env / module.OWNERSHIP_MARKER_NAME).exists())
         runner.fail_sync = False
-        with patch.object(module.shutil, "which", return_value="C:\\uv.exe"):
+        with patch("shutil.which", return_value="C:\\uv.exe"):
             module.bootstrap(paths=self.paths, runner=runner, reexec=False)
         self.assertTrue((self.paths.target_env / module.OWNERSHIP_MARKER_NAME).is_file())
         self.assertFalse((self.paths.target_env / module.INITIALIZING_MARKER_NAME).exists())
 
     def test_marked_environment_sync_binds_to_verified_target_interpreter(self):
         runner = FakeRunner(self.paths.repo_root)
-        with patch.object(module.shutil, "which", return_value="C:\\uv.exe"):
+        with patch("shutil.which", return_value="C:\\uv.exe"):
             module.bootstrap(paths=self.paths, runner=runner, reexec=False)
             before = len(runner.calls)
             module.bootstrap(paths=self.paths, runner=runner, reexec=False)
@@ -142,10 +142,10 @@ class BootstrapTests(unittest.TestCase):
 
     def test_completed_marker_recovers_if_crash_left_initializing_marker(self):
         runner = FakeRunner(self.paths.repo_root)
-        with patch.object(module.shutil, "which", return_value="C:\\uv.exe"):
+        with patch("shutil.which", return_value="C:\\uv.exe"):
             managed = module.bootstrap(paths=self.paths, runner=runner, reexec=False)
         module._write_initializing_marker(self.paths, interpreter=sys.executable)
-        with patch.object(module.shutil, "which", return_value="C:\\uv.exe"):
+        with patch("shutil.which", return_value="C:\\uv.exe"):
             recovered = module.bootstrap(paths=self.paths, runner=runner, reexec=False)
         self.assertEqual(recovered, managed)
         self.assertTrue((self.paths.target_env / module.OWNERSHIP_MARKER_NAME).is_file())
@@ -153,7 +153,7 @@ class BootstrapTests(unittest.TestCase):
 
     def test_warm_exact_uv_syncs_locked_environment_and_supports_spaces(self):
         runner = FakeRunner(self.paths.repo_root)
-        with patch.object(module.shutil, "which", return_value=None):
+        with patch("shutil.which", return_value=None):
             managed = module.bootstrap(paths=self.paths, runner=runner, reexec=False)
         self.assertEqual(managed, module._managed_python(self.paths.target_env))
         sync = next(call for call in runner.calls if "sync" in call["argv"])
@@ -163,7 +163,7 @@ class BootstrapTests(unittest.TestCase):
 
     def test_path_uv_is_never_trusted_and_exact_module_is_used(self):
         runner = FakeRunner(self.paths.repo_root, uv_version="0.12.4", module_version="0.12.5")
-        with patch.object(module.shutil, "which", return_value="C:\\wrong\\uv.exe"):
+        with patch("shutil.which", return_value="C:\\wrong\\uv.exe"):
             module.bootstrap(paths=self.paths, runner=runner, reexec=False)
         probes = [call["argv"] for call in runner.calls if call["argv"][-1:] == ["--version"]]
         self.assertNotIn(["C:\\wrong\\uv.exe", "--version"], probes)
@@ -171,7 +171,7 @@ class BootstrapTests(unittest.TestCase):
 
     def test_missing_uv_uses_noninteractive_binary_only_no_deps_install(self):
         runner = FakeRunner(self.paths.repo_root, uv_version="0.0.0")
-        with patch.object(module.shutil, "which", return_value=None):
+        with patch("shutil.which", return_value=None):
             module.bootstrap(paths=self.paths, runner=runner, reexec=False)
         pip = next(call["argv"] for call in runner.calls if "pip" in call["argv"] and "install" in call["argv"])
         self.assertIn("--no-input", pip)
@@ -182,7 +182,7 @@ class BootstrapTests(unittest.TestCase):
     def test_reexec_preserves_arguments_and_sets_exact_loop_marker(self):
         runner = FakeRunner(self.paths.repo_root)
         interpreter = str(environment_interpreter(self.paths.target_env))
-        with patch.object(module.shutil, "which", return_value=None), patch.object(
+        with patch("shutil.which", return_value=None), patch.object(
             module.sys, "argv", [str(self.paths.entrypoint), "start", "--port", "3010"]
         ):
             if os.name == "nt":

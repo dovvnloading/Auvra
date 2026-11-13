@@ -6,8 +6,8 @@ import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
-import Auvra.desktop.contracts as contracts
-import Auvra.desktop.controller as controller_module
+from Auvra.desktop import contracts
+from Auvra.desktop import controller as controller_module
 from Auvra.desktop.contracts import FrameConfig, FrameConfigurationError, FrameMode, FrameState
 from Auvra.desktop.controller import FrameController
 

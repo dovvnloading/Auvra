@@ -76,9 +76,7 @@ export const ScrubbableInput: React.FC<ScrubbableInputProps> = ({
         const deltaX = e.clientX - startX.current;
         
         // Sensitivity
-        let sensitivity = step;
-        if (step >= 1) sensitivity = 0.5; // Scale down for large steps
-        else sensitivity = step * 0.5; // Fine tune
+        let sensitivity = Math.min(step, 1) * 0.5;
         
         if (e.shiftKey) sensitivity *= 0.1;
 

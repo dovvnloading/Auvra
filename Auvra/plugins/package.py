@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from abc import abstractmethod
 from dataclasses import dataclass
 import base64
 import hashlib
@@ -35,7 +36,9 @@ class PackageError(ValueError):
 
 
 class SignatureVerifier(Protocol):
-    def verify(self, *, key_id: str, signed: bytes, signature: bytes) -> bool: ...
+    @abstractmethod
+    def verify(self, *, key_id: str, signed: bytes, signature: bytes) -> bool:
+        raise NotImplementedError
 
 
 def canonical_json(value: Any) -> bytes:

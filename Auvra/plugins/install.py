@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import suppress
 from dataclasses import dataclass
 import hashlib
 import os
@@ -71,15 +72,13 @@ def _remove_staging(path: Path) -> None:
     """Remove a failed staging tree even after immutable modes were applied."""
     if not path.exists():
         return
-    for item in sorted(path.rglob("*"), key=lambda value: len(value.parts), reverse=True):
-        try:
+    # Restoring permissions is best effort. The removal check below detects a
+    # staging tree that still cannot be deleted.
+    items = sorted(path.rglob("*"), key=lambda value: len(value.parts), reverse=True)
+    items.append(path)
+    for item in items:
+        with suppress(OSError):
             item.chmod(0o700)
-        except OSError:
-            pass
-    try:
-        path.chmod(0o700)
-    except OSError:
-        pass
     shutil.rmtree(path, ignore_errors=True)
     if path.exists():
         raise InstallError("failed plugin installation left staging data")
@@ -169,7 +168,7 @@ def _grant_appcontainer_read_execute(directory: Path, package: PluginPackage) ->
     if sys.platform != "win32":
         raise InstallError("Windows AppContainer ACLs are unavailable")
     import ctypes
-    from ctypes import wintypes
+    import ctypes.wintypes as wintypes
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
     userenv = ctypes.WinDLL("userenv", use_last_error=True)
     advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)

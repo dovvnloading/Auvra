@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 import unittest
-from unittest import mock
+import unittest.mock as mock
 
 from Auvra.desktop.credential_prompt import WinFormsCredentialPrompt
 
@@ -16,8 +16,8 @@ class _Controls:
 
 
 class _Control:
-    def __init__(self) -> None:
-        self.Text = ""
+    def __init__(self, text: str = "") -> None:
+        self.Text = text
 
     def __getattr__(self, name: str):
         # Styling and events: the fake takes whatever a real control would.
@@ -48,8 +48,7 @@ class _Secret(_Control):
     entered = "secret-value"
 
     def __init__(self) -> None:
-        super().__init__()
-        self.Text = self.entered
+        super().__init__(self.entered)
         self.instances.append(self)
 
 

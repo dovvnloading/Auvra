@@ -19,7 +19,7 @@ export const EnvironmentEditor: React.FC = () => {
     const isReadyNow = () => editorSession.captureReady() !== null;
     const { 
         levelObjects, models, removeLevelObject, updateLevelObject, 
-        undo, redo, canUndo, canRedo, snapshotHistory 
+        undo, redo, canUndo, canRedo
     } = useScene();
     
     // --- State Hook ---

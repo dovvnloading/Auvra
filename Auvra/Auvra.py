@@ -6,6 +6,7 @@ implementation lives in :mod:`launcher` so it can be tested without starting
 the editor.
 """
 
+from contextlib import suppress
 from pathlib import Path
 import sys
 
@@ -13,10 +14,8 @@ import sys
 # shadow the ``Auvra`` namespace package. Establish the repository package root
 # so launcher, desktop, and host modules always have one import identity.
 _REPO_ROOT = str(Path(__file__).resolve().parent.parent)
-try:
+if _REPO_ROOT in sys.path:
     sys.path.remove(_REPO_ROOT)
-except ValueError:
-    pass
 sys.path.insert(0, _REPO_ROOT)
 
 from Auvra.launcher.bootstrap import BOOTSTRAP_EXIT_CODE, BootstrapError, bootstrap
@@ -27,10 +26,8 @@ def _configure_console_output() -> None:
     for stream in (sys.stdout, sys.stderr):
         reconfigure = getattr(stream, "reconfigure", None)
         if callable(reconfigure):
-            try:
+            with suppress(OSError, ValueError):
                 reconfigure(errors="backslashreplace")
-            except (OSError, ValueError):
-                pass
 
 
 def main() -> int:

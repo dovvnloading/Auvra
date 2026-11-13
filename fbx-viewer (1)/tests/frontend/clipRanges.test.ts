@@ -277,6 +277,7 @@ describe('what a clip is called when it first comes in', () => {
 
   it('fills in only what a glTF leaves generic', () => {
     expect(names(['Take 001'], 'Hero.glb', 'glb')).toEqual(['Hero']);
+    expect(names(['Armature|MIXAMO.COM', 'Stride'], 'Hero.glb', 'glb')).toEqual(['Hero 1', 'Stride']);
     expect(names(['Walk', 'Take 001'], 'Hero.glb', 'glb')).toEqual(['Walk', 'Hero 2']);
   });
 });

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import json
 import math
 import re
@@ -318,7 +319,8 @@ class SQLiteJobStore:
             # a NULL owner.  Never attach those rows to the next open project.
             if not job.project_id:
                 try: self.transition(job.job_id, JobState.FAILED, message="restart requires project ownership", reconcile={"restart_pending": True})
-                except ValueError: pass
+                except ValueError:
+                    logging.getLogger(__name__).debug("Job changed before recovery could mark it failed")
                 continue
             # Reframe owns a local child process, not a remotely resumable job.
             # Older versions incorrectly stored durable=True for it. Fal also
@@ -332,7 +334,8 @@ class SQLiteJobStore:
                         job.job_id, JobState.FAILED, message="job interrupted by restart",
                         reconcile={"restart_pending": True, "error_code": "restart_interrupted", "retryable": False},
                     )
-                except ValueError: pass
+                except ValueError:
+                    logging.getLogger(__name__).debug("Job changed before restart reconciliation finished")
         return tuple(durable)
 
     def reconcile(self, job_id: str, *, remote_state: str, remote_id: str | None = None,

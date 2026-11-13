@@ -1,7 +1,7 @@
 from __future__ import annotations
 import io, json, os, subprocess, sys, tempfile, time, unittest, zipfile
 from pathlib import Path
-from unittest import mock
+import unittest.mock as mock
 
 from Auvra.project import ProjectRepository, ProjectIndex, ProjectService, canonical_json
 import Auvra.project.repository as repository_module
@@ -101,12 +101,10 @@ class ProjectTests(unittest.TestCase):
         self.assertEqual(self.repo.revision, 2)
 
     def test_revision_and_readonly_lock(self):
-        second = ProjectRepository(self.root)
-        try:
+        with ProjectRepository(self.root) as second:
             self.assertTrue(second.read_only)
             with self.assertRaises(ReadOnlyError): second.apply_changes({"metadata": []}, expected_revision=0)
             with self.assertRaises(RevisionConflictError): self.repo.apply_changes({"metadata": []}, expected_revision=2)
-        finally: second.close()
 
     def test_existing_project_rejects_linked_authority_before_locking(self):
         self.repo.close()
@@ -312,25 +310,25 @@ class ProjectTests(unittest.TestCase):
         # injected fault must be observed, and recovery must leave either the
         # complete old generation or the complete new generation—never a mix.
         for failure_at in range(1, 6):
-            root = Path(self.tmp.name) / f"fault-{failure_at}"; repo = ProjectRepository.create(root, "fault")
-            repo.apply_changes({"metadata": [{"id":"old"}]}, expected_revision=0)
-            original = repository_module.os.replace; calls = {"n": 0}
+            root = Path(self.tmp.name) / f"fault-{failure_at}"
+            with ProjectRepository.create(root, "fault") as repo:
+                repo.apply_changes({"metadata": [{"id":"old"}]}, expected_revision=0)
+                original = repository_module.os.replace; calls = {"n": 0}
 
-            def fail(source, target):
-                calls["n"] += 1
-                if calls["n"] == failure_at:
-                    raise OSError("injected failure")
-                return original(source, target)
+                def fail(source, target):
+                    calls["n"] += 1
+                    if calls["n"] == failure_at:
+                        raise OSError("injected failure")
+                    return original(source, target)
 
-            with mock.patch.object(repository_module.os, "replace", side_effect=fail):
-                with self.assertRaises(OSError):
-                    repo.apply_changes(
-                        {"metadata": [{"id":"new"}], "levels": [{"id":"l","name":"L"}]},
-                        expected_revision=1,
-                    )
-            self.assertEqual(calls["n"], failure_at)
-            repo.close(); repo = ProjectRepository(root)
-            try:
+                with mock.patch.object(repository_module.os, "replace", side_effect=fail):
+                    with self.assertRaises(OSError):
+                        repo.apply_changes(
+                            {"metadata": [{"id":"new"}], "levels": [{"id":"l","name":"L"}]},
+                            expected_revision=1,
+                        )
+                self.assertEqual(calls["n"], failure_at)
+            with ProjectRepository(root) as repo:
                 expected_id = "new" if failure_at == 5 else "old"
                 expected_revision = 2 if failure_at == 5 else 1
                 self.assertEqual(repo.revision, expected_revision, f"failure_at={failure_at}, calls={calls}")
@@ -339,8 +337,7 @@ class ProjectTests(unittest.TestCase):
                 self.assertEqual(levels, [{"id":"l","name":"L"}] if expected_id == "new" else [])
                 self.assertEqual(list((root / ".auvra" / "transactions").glob("*.json")), [])
                 self.assertEqual(list((root / ".auvra").glob("tx-*")), [])
-            finally:
-                repo.close()
+
     def test_save_as_failure_leaves_no_partial_destination(self):
         destination = Path(self.tmp.name) / "save-as-target"
         with mock.patch.object(repository_module.shutil, "copytree", side_effect=OSError("disk full")):
@@ -366,25 +363,20 @@ class ProjectTests(unittest.TestCase):
         self.assertTrue(staging.is_dir())
         (staging / "asset-unfinished").write_bytes(b"half an upload")
         destination = Path(self.tmp.name) / "imported-copy"
-        copy = self.repo.save_as(destination)
-        try:
+        with self.repo.save_as(destination) as copy:
             self.assertFalse((destination / "Content" / "sha256" / ".incoming").exists())
             self.assertTrue(copy.assets.verify(reference.asset_id))
             # A copy can take imports of its own, and the source keeps what it was doing.
             imported = copy.assets.put_stream(io.BytesIO(b"another model"), mime="application/octet-stream")
             self.assertTrue(copy.assets.verify(imported.asset_id))
             self.assertTrue((staging / "asset-unfinished").is_file())
-        finally: copy.close()
-        reopened = ProjectRepository(destination)
-        try: self.assertTrue(reopened.assets.verify(reference.asset_id))
-        finally: reopened.close()
+        with ProjectRepository(destination) as reopened:
+            self.assertTrue(reopened.assets.verify(reference.asset_id))
 
     def test_save_as_same_name_keeps_descriptor(self):
         destination = Path(self.tmp.name) / "same-name"
-        copy = self.repo.save_as(destination, name=self.repo.name)
-        try:
+        with self.repo.save_as(destination, name=self.repo.name):
             self.assertTrue((destination / f"{self.repo.name}.auvra").is_file())
-        finally: copy.close()
 
     def test_save_as_and_import_publish_authority_directories_with_rename(self):
         original_replace = repository_module.os.replace
@@ -634,9 +626,8 @@ class ProjectTests(unittest.TestCase):
     def test_pack_and_failed_import_isolated(self):
         self.repo.apply_changes({"metadata": [{"id":"m", "name":"x"}]}, expected_revision=0)
         archive = Path(self.tmp.name) / "x.auvrapack"; self.repo.export_pack(archive)
-        imported = ProjectRepository.import_pack(archive, Path(self.tmp.name) / "imported")
-        try: self.assertEqual(imported.get_domain("metadata")["documents"][0]["id"], "m")
-        finally: imported.close()
+        with ProjectRepository.import_pack(archive, Path(self.tmp.name) / "imported") as imported:
+            self.assertEqual(imported.get_domain("metadata")["documents"][0]["id"], "m")
         bad = Path(self.tmp.name) / "bad.auvrapack"
         with zipfile.ZipFile(bad, "w") as z: z.writestr("../escape", "bad")
         with self.assertRaises(ArchiveValidationError): ProjectRepository.import_pack(bad, Path(self.tmp.name) / "bad-import")
@@ -654,13 +645,12 @@ class ProjectTests(unittest.TestCase):
             observed.append(source)
             return original_validator(source, **kwargs)
 
-        with mock.patch.object(repository_module, "validate_archive", side_effect=observe):
-            imported = ProjectRepository.import_pack(archive, Path(self.tmp.name) / "same-handle-import")
-        try:
+        with (
+            mock.patch.object(repository_module, "validate_archive", side_effect=observe),
+            ProjectRepository.import_pack(archive, Path(self.tmp.name) / "same-handle-import") as imported,
+        ):
             self.assertEqual(len(observed), 1)
             self.assertEqual(imported.get_domain("metadata")["documents"][0]["id"], "same-handle")
-        finally:
-            imported.close()
 
     def test_failed_service_import_keeps_active_project(self):
         service = ProjectService(index=ProjectIndex(Path(self.tmp.name) / "index.sqlite"))

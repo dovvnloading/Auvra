@@ -10,7 +10,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from unittest import mock
+import unittest.mock as mock
 import xml.etree.ElementTree as ET
 
 from Auvra.project.schemas import DOMAIN_NAMES, PROJECT_SCHEMA_NAME
@@ -718,15 +718,18 @@ class ReleasePipelineTests(unittest.TestCase):
             script.write_text(WINDOWS_LIFECYCLE_SCRIPT, encoding="utf-8")
             environment = os.environ.copy()
             environment["AUVRA_LIFECYCLE_PARSE_TARGET"] = str(script)
+            parse_command = (
+                "$tokens=$null; $errors=$null; "
+                "[System.Management.Automation.Language.Parser]::ParseFile($env:AUVRA_LIFECYCLE_PARSE_TARGET,[ref]$tokens,[ref]$errors) | Out-Null; "
+                "if($errors.Count){$errors | ForEach-Object Message; exit 1}; exit 0"
+            )
             parse = subprocess.run(
                 [
                     powershell,
                     "-NoProfile",
                     "-NonInteractive",
                     "-Command",
-                    "$tokens=$null; $errors=$null; "
-                    "[System.Management.Automation.Language.Parser]::ParseFile($env:AUVRA_LIFECYCLE_PARSE_TARGET,[ref]$tokens,[ref]$errors) | Out-Null; "
-                    "if($errors.Count){$errors | ForEach-Object Message; exit 1}; exit 0",
+                    parse_command,
                 ],
                 capture_output=True,
                 text=True,

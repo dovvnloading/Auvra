@@ -7,7 +7,7 @@ import tempfile
 import threading
 import time
 import unittest
-from unittest import mock
+import unittest.mock as mock
 from types import SimpleNamespace
 
 from Auvra.desktop.credential_prompt import CredentialPromptUnavailableError
