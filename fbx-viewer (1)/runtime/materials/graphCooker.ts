@@ -10,7 +10,7 @@ import { graphAnimates, type GraphResolver } from '../../texturing/graph/registr
 import { readStoredGraph } from '../../texturing/graph/stored';
 import { textureGpu } from '../../texturing/gpu/textureGpu';
 import type { TexturingGpu } from '../../texturing/gpu/texturingGpu';
-import { cookingDevice, webgpuFallbacks } from '../../texturing/gpu/cookingDevice';
+import { clearWebgpuFallback, cookingDevice, recordWebgpuFallback } from '../../texturing/gpu/cookingDevice';
 import { webgpuTexturing, type WgpuDevice } from '../../texturing/gpu/webgpuTexturing';
 import { frontendDiagnostics } from '../../diagnostics/runtime';
 import { encodeChannels, flipbookEdgeOf, type ChannelImages, type MaterialChannel } from '../../texturing/materialOutput';
@@ -158,12 +158,15 @@ export const createGraphCooker = (source: GraphCookerSource): Cooker => ({
                     // A pass drawn at once that the device refused is heard of only afterwards.
                     const problems = webgpu.takeProblems();
                     if (problems.length) throw new Error(problems[0]);
-                    webgpuFallbacks.delete(request.asset.id);
+                    clearWebgpuFallback(device, request.asset.id);
                     return pictures;
                 } catch (error) {
                     const reason = error instanceof Error ? error.message : String(error);
-                    webgpuFallbacks.set(request.asset.id, reason);
-                    frontendDiagnostics.failure('texture_graph_webgpu_fallback', new Error(`${request.asset.name}: ${reason}`));
+                    // A late failed cook from a disposed device must not
+                    // reintroduce a stale fallback reason for the next scene.
+                    if (recordWebgpuFallback(device, request.asset.id, reason)) {
+                        frontendDiagnostics.failure('texture_graph_webgpu_fallback', new Error(`${request.asset.name}: ${reason}`));
+                    }
                 }
             }
             return await cookOn(textureGpu(), request, stored, resolve, loaded, paintInputs);
