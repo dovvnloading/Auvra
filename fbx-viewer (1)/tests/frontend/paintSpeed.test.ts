@@ -124,6 +124,49 @@ describe('painted pictures kept only where painted', () => {
         expect(picture.pagesIn(rect(0, 0, 4096, 4096))).toHaveLength(4);
     });
 
+    it('keeps a 4K UV dab on its active UDIM and reuses its edge pages on a repeated stroke', () => {
+        const { gpu, made, released } = fakeGpu();
+        const size = 4096;
+        const pictures = new Map([1001, 1002, 1011].map(tile =>
+            [tile, new SparsePicture(gpu, size, 16, [0, 0, 0, 0])] as const));
+        const dabAt = (tile: number, x: number, y: number) => {
+            const view = { tile, toUv: (sx: number, sy: number): [number, number] => [sx / size, sy / size], pixelsPerUv: size };
+            const footprint = uvFootprint(size, view, [{ x, y, radius: 8, angle: 0, flow: 1 }], 'round');
+            expect([...footprint.keys()]).toEqual([tile]);
+            for (const [id, areas] of footprint) {
+                for (const area of areas) pictures.get(id)!.pagesIn(area, true);
+            }
+        };
+
+        // Two sides of the horizontal UDIM seam, each straddling page rows 7 and 8.
+        dabAt(1001, size - 1, size / 2);
+        dabAt(1002, 0, size / 2);
+        dabAt(1001, size - 1, size / 2);
+        expect(pictures.get(1001)!.entries().map(({ px, py }) => [px, py])).toEqual([[15, 7], [15, 8]]);
+        expect(pictures.get(1002)!.entries().map(({ px, py }) => [px, py])).toEqual([[0, 7], [0, 8]]);
+        expect(pictures.get(1011)!.pageCount).toBe(0);
+        expect(made).toHaveLength(4);
+        expect([...pictures.values()].reduce((bytes, picture) => bytes + picture.bytes, 0)).toBe(2 * 1024 * 1024);
+
+        for (const picture of pictures.values()) picture.dispose();
+        expect(released).toEqual(made);
+    });
+
+    it('releases a newly allocated page on a failed fill and retries with no stale page', () => {
+        const { gpu, made, released } = fakeGpu();
+        const pass = gpu.passNow;
+        gpu.passNow = () => { throw new Error('fill failed'); };
+        const picture = new SparsePicture(gpu, 4096, 8, [0, 0, 0, 0]);
+        expect(() => picture.pageAt(15, 8, true)).toThrow('fill failed');
+        expect(picture.pageCount).toBe(0);
+        expect(released).toEqual([made[0]]);
+
+        gpu.passNow = pass;
+        expect(picture.pageAt(15, 8, true)).toBe(made[1]);
+        picture.dispose();
+        expect(released).toEqual(made);
+    });
+
     it('draws an area as its fill with the kept pages over it, and lets go of pages', () => {
         const { gpu, released, passes } = fakeGpu();
         const picture = new SparsePicture(gpu, 1024, 16, [1, 1, 1, 1]);
