@@ -2,7 +2,7 @@ import { ADJUST_NODES } from './nodes/adjust';
 import { DISTANCE_NODES } from './nodes/distance';
 import { GENERATOR_NODES } from './nodes/generators';
 import { materialKey, MATERIAL_CHANNELS } from './material';
-import { INPUT_NODE_TYPE, IO_NODES, ITERATE_NODE_TYPE, MATERIAL_INPUT_NODE_TYPE, MATERIAL_OUTPUT_NODE_TYPE, OUTPUT_NODE_TYPE, SUBGRAPH_NODE_TYPE, SUBGRAPH_SEED_KEY, SUBGRAPH_VARY_KEY, subgraphParamDefs } from './nodes/io';
+import { CURVE_INPUT_NODE_TYPE, CURVE_OUTPUT_NODE_TYPE, INPUT_NODE_TYPE, IO_NODES, ITERATE_NODE_TYPE, MATERIAL_INPUT_NODE_TYPE, MATERIAL_OUTPUT_NODE_TYPE, OUTPUT_NODE_TYPE, SUBGRAPH_NODE_TYPE, SUBGRAPH_SEED_KEY, SUBGRAPH_VARY_KEY, subgraphParamDefs } from './nodes/io';
 import { MATERIAL_NODES } from './nodes/materials';
 import { PROCESSOR_NODES, PROCESSOR_TYPES, processorDefinition } from './nodes/processors';
 import { ITERATE_PLACEHOLDER, iterateDefinition } from './iterate';
@@ -62,17 +62,21 @@ const subgraphDefinition = (node: TexGraphNode, resolve: GraphResolver): TexNode
     // A pin whose condition does not hold for the node's values is hidden (unless a wire still runs to it).
     const scope = conditionScope(graph?.parameters ?? [], node.params);
     const hide = (candidate: TexGraphNode) => (conditionHolds(typeof candidate.params.visibleIf === 'string' ? candidate.params.visibleIf : '', scope) ? {} : { hidden: true });
-    // Its inputs and outputs: images, and whole materials (a material wire each).
+    // Image, whole-material and CPU curve-path wires each keep their own pin kind.
     const inputs: TexPortDef[] = (graph?.nodes ?? [])
-        .filter((candidate) => candidate.type === INPUT_NODE_TYPE || candidate.type === MATERIAL_INPUT_NODE_TYPE)
+        .filter((candidate) => candidate.type === INPUT_NODE_TYPE || candidate.type === MATERIAL_INPUT_NODE_TYPE || candidate.type === CURVE_INPUT_NODE_TYPE)
         .map((candidate) => (candidate.type === MATERIAL_INPUT_NODE_TYPE
             ? { key: String(candidate.params.name || candidate.id), label: String(candidate.params.name || 'Material'), kind: 'material' as const, ...hide(candidate) }
-            : { key: String(candidate.params.name || candidate.id), label: String(candidate.params.name || 'Input'), kind: (candidate.params.kind === 'gray' ? 'gray' : 'color') as PortKind, fallback: 'black' as const, ...hide(candidate) }));
+            : candidate.type === CURVE_INPUT_NODE_TYPE
+                ? { key: String(candidate.params.name || candidate.id), label: String(candidate.params.name || 'Curve'), kind: 'curve' as const, ...hide(candidate) }
+                : { key: String(candidate.params.name || candidate.id), label: String(candidate.params.name || 'Input'), kind: (candidate.params.kind === 'gray' ? 'gray' : 'color') as PortKind, fallback: 'black' as const, ...hide(candidate) }));
     const outputs: TexPortDef[] = (graph?.nodes ?? [])
-        .filter((candidate) => candidate.type === OUTPUT_NODE_TYPE || candidate.type === MATERIAL_OUTPUT_NODE_TYPE)
+        .filter((candidate) => candidate.type === OUTPUT_NODE_TYPE || candidate.type === MATERIAL_OUTPUT_NODE_TYPE || candidate.type === CURVE_OUTPUT_NODE_TYPE)
         .map((candidate) => (candidate.type === MATERIAL_OUTPUT_NODE_TYPE
             ? { key: candidate.id, label: String(candidate.params.name || '').trim() || 'Material', kind: 'material' as const, ...hide(candidate) }
-            : { key: candidate.id, label: outputLabel(candidate), kind: outputNodeKind(candidate.params), ...hide(candidate) }));
+            : candidate.type === CURVE_OUTPUT_NODE_TYPE
+                ? { key: candidate.id, label: String(candidate.params.name || '').trim() || 'Curve', kind: 'curve' as const, ...hide(candidate) }
+                : { key: candidate.id, label: outputLabel(candidate), kind: outputNodeKind(candidate.params), ...hide(candidate) }));
     return {
         type: SUBGRAPH_NODE_TYPE,
         label: entry?.name ?? 'Missing graph',
@@ -85,7 +89,9 @@ const subgraphDefinition = (node: TexGraphNode, resolve: GraphResolver): TexNode
         async run(context) {
             if (!entry) throw new Error('The graph this node used is no longer in the project.');
             const given: Record<string, ReturnType<typeof context.input>> = {};
+            const givenCurves: Record<string, ReturnType<typeof context.curve>> = {};
             for (const input of inputs) {
+                if (input.kind === 'curve') { givenCurves[input.key] = context.curve(input.key); continue; }
                 if (input.kind !== 'material') { given[input.key] = context.input(input.key); continue; }
                 // A material goes in as an image per channel, under its input's name and the channel's.
                 const material = context.material(input.key);
@@ -93,7 +99,10 @@ const subgraphDefinition = (node: TexGraphNode, resolve: GraphResolver): TexNode
             }
             const values: Record<string, unknown> = {};
             for (const parameter of graph!.parameters) values[parameter.name] = context.params[parameter.name];
-            return context.subgraph(entry.id, values, given);
+            return context.subgraph(entry.id, values, given, {
+                curveInputs: givenCurves,
+                onCurveOutput: (id, paths) => context.giveCurve(id, paths),
+            });
         },
     };
 };
