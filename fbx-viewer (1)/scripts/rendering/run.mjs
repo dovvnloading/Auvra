@@ -11,6 +11,7 @@
 //   node scripts/rendering/run.mjs --texture-bench --texture-size 11
 //                                             measure cold/cache/incremental graph cook at 2K,
 //                                             without comparing an intentionally resized image
+import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -158,7 +159,13 @@ const main = async () => {
       }
     }
     if (textureBench) {
+      // Source archives can run the harness even when Git metadata is unavailable.
+      const git = (...args) => spawnSync('git', args, { cwd: projectDir, encoding: 'utf8' });
+      const head = git('rev-parse', '--verify', 'HEAD');
+      const status = git('status', '--porcelain', '--untracked-files=normal', '--', ':/');
       numbers._benchmark = {
+        sourceCommit: head.status === 0 ? head.stdout.trim() : null,
+        workingTreeDirty: status.status === 0 ? Boolean(status.stdout.trim()) : null,
         createdAt: new Date().toISOString(),
         rendererRequested: renderer,
         gpuSelection: realGpu ? 'hardware-requested' : 'software-requested',
@@ -166,7 +173,7 @@ const main = async () => {
         browserUserAgent: await run('navigator.userAgent'),
         operatingSystem: process.platform,
         architecture: process.arch,
-        note: 'Requested GPU mode does not establish a vendor/driver; record the adapter separately before hardware comparisons. Eval and readback are independently timed.',
+        note: 'textureCook.adapter describes the cooking context. Unavailable adapter fields are null. Evaluation and readback are timed independently.',
       };
     }
     writeFileSync(path.join(outputDir, 'numbers.json'), `${JSON.stringify(numbers, null, 2)}\n`);

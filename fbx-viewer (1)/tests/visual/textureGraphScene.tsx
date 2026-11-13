@@ -28,6 +28,9 @@ import { checkBc1Parity, compareBc1Pixels, type Bc1ParityResult } from './bc1Par
 export interface TextureCookBenchmark {
     resolution: number;
     backend: 'webgl2' | 'webgpu' | 'webgl2-fallback';
+    graphSha256: string;
+    editedGraphSha256: string;
+    adapter: { vendor: string | null; renderer: string | null; architecture?: string | null; device?: string | null };
     firstNodes: number;
     coldEvalMs: number;
     coldSyncMs: number;
@@ -189,11 +192,30 @@ const checkCompressedParity = async (webgpu: TexturingGpu, glgpu: TexturingGpu):
     }
 };
 
+/** Record the context that drew the benchmark, including a WebGL fallback. */
+const benchmarkAdapter = (adapter?: GPUAdapter): TextureCookBenchmark['adapter'] => {
+    if (adapter) {
+        const info = adapter.info;
+        return { vendor: info?.vendor || null, renderer: info?.description || null,
+            architecture: info?.architecture || null, device: info?.device || null };
+    }
+    const gl = textureGpu().renderer.getContext();
+    const debug = gl.getExtension('WEBGL_debug_renderer_info');
+    return { vendor: debug ? gl.getParameter(debug.UNMASKED_VENDOR_WEBGL) : null,
+        renderer: debug ? gl.getParameter(debug.UNMASKED_RENDERER_WEBGL) : null };
+};
+
+const graphSha256 = async (graph: ReturnType<typeof proofGraph>): Promise<string> => {
+    const bytes = new TextEncoder().encode(JSON.stringify(graph));
+    const digest = await crypto.subtle.digest('SHA-256', bytes);
+    return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+};
+
 /** The graph's base colour and normal on `gpu`, as PNG pictures the way a game cooks them. */
 const cook = async (gpu: TexturingGpu, benchmark = false, logSize = 9): Promise<{
     colour: Blob;
     normal: Blob;
-    timings?: Omit<TextureCookBenchmark, 'backend'>;
+    timings?: Omit<TextureCookBenchmark, 'backend' | 'adapter'>;
 }> => {
     const evaluator = new TextureGraphEvaluator(gpu, () => undefined, () => null);
     const graph = proofGraph(logSize);
@@ -249,7 +271,8 @@ const cook = async (gpu: TexturingGpu, benchmark = false, logSize = 9): Promise<
         const editSyncMs = realNow() - editSyncStart;
         return {
             ...result,
-            timings: { resolution, firstNodes, coldEvalMs, coldSyncMs, encodeMs,
+            timings: { graphSha256: await graphSha256(graph), editedGraphSha256: await graphSha256(editedGraph),
+                resolution, firstNodes, coldEvalMs, coldSyncMs, encodeMs,
                 cachedNodes, cachedEvalMs, editNodes, editEvalMs, editSyncMs },
         };
     } finally {
@@ -379,7 +402,8 @@ export const TextureGraphScene: React.FC = () => {
                     fallback: false,
                     pixels: 512 * 512,
                 };
-                if (pictures.timings) textureGraphScene.benchmark = { ...pictures.timings, backend: isGpuRenderer(gl) ? 'webgpu' : 'webgl2' };
+                if (pictures.timings) textureGraphScene.benchmark = { ...pictures.timings, backend: isGpuRenderer(gl) ? 'webgpu' : 'webgl2',
+                    adapter: benchmarkAdapter(isGpuRenderer(gl) ? gl.core.adapter : undefined) };
             } catch (error) {
                 // The renderer's own GPU could not: keep why (textureGraphScene.problem), and show WebGL2's cook with the ball red.
                 own = false;
@@ -392,7 +416,7 @@ export const TextureGraphScene: React.FC = () => {
                     fallback: isGpuRenderer(gl),
                     pixels: 512 * 512,
                 };
-                if (pictures.timings) textureGraphScene.benchmark = { ...pictures.timings, backend: 'webgl2-fallback' };
+                if (pictures.timings) textureGraphScene.benchmark = { ...pictures.timings, backend: 'webgl2-fallback', adapter: benchmarkAdapter() };
             }
             const [colour, normal] = await Promise.all([load(pictures.colour, true), load(pictures.normal, false)]);
             if (gone) return;
