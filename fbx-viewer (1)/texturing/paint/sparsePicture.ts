@@ -104,7 +104,12 @@ export class SparsePicture {
         let image = this.kept.get(index) ?? null;
         if (!image && create) {
             image = this.gpu.image(this.page, this.page, 'color', this.precision);
-            this.gpu.passNow(image, { fragment: FILL, uniforms: { uValue: new THREE.Vector4(...this.fill) } });
+            try {
+                this.gpu.passNow(image, { fragment: FILL, uniforms: { uValue: new THREE.Vector4(...this.fill) } });
+            } catch (error) {
+                this.gpu.release(image);
+                throw error;
+            }
             this.kept.set(index, image);
         }
         return image;
