@@ -430,6 +430,12 @@ export const SCENES: Record<string, VisualScene> = {
     Scene: TextureGraphScene,
     settle: async ({ frames, until }) => {
       await until(() => textureGraphScene.ready);
+      // The timing field must come from the completed graph cook, not from
+      // a virtual clock or a failed/unfinished frame.
+      const metric = textureGraphScene.cook;
+      if (!metric || !Number.isFinite(metric.milliseconds) || metric.milliseconds < 0 || metric.pixels !== 512 * 512) {
+        throw new Error('Texture graph proof scene did not record a valid GPU-cook timing.');
+      }
       await frames(6);
     },
   },
