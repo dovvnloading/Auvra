@@ -410,10 +410,10 @@ export const readPaintLayers = (list: unknown[], depth = 0): PaintLayer[] => lis
  * Future paint documents are not v1 documents. Do not silently coerce one to
  * version 1 and discard channels this editor cannot parse.
  */
-export const unsupportedPaintVersion = (value: unknown): unknown | null => {
+export const unsupportedPaintVersion = (value: unknown): { version: unknown } | null => {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
     const version = (value as Record<string, unknown>).version;
-    return version === undefined || version === 1 ? null : version;
+    return version === undefined || version === 1 ? null : { version };
 };
 
 /**
@@ -427,19 +427,19 @@ export const incompatiblePaintSetFor = (
     target: { modelId: string; materialNames: readonly string[] },
 ): { id: string; name: string; version: unknown } | null => {
     for (const asset of assets) {
-        const version = unsupportedPaintVersion(asset.paint);
-        if (version === null) continue;
+        const unsupported = unsupportedPaintVersion(asset.paint);
+        if (!unsupported) continue;
         const doc = asset.paint as Record<string, unknown>;
         if (doc.modelId !== target.modelId || !Array.isArray(doc.materialNames)) continue;
         if (!doc.materialNames.some((name) => typeof name === 'string' && target.materialNames.includes(name))) continue;
-        return { id: asset.id, name: asset.name, version };
+        return { id: asset.id, name: asset.name, version: unsupported.version };
     }
     return null;
 };
 
 /** A stored v1 document made safe to use. Unsupported versions are left untouched. */
 export const readPaintDocument = (value: unknown): PaintDocument | null => {
-    if (unsupportedPaintVersion(value) !== null) return null;
+    if (unsupportedPaintVersion(value)) return null;
     const raw = value as Partial<PaintDocument> | null;
     if (!raw || typeof raw !== 'object' || typeof raw.modelId !== 'string' || !Array.isArray(raw.layers)) return null;
     const channels = Array.isArray(raw.channels) ? raw.channels.filter((channel): channel is PaintChannel => (PAINT_CHANNELS as readonly string[]).includes(channel)) : [];
