@@ -51,6 +51,12 @@ jobs:
           echo "Changed paths:" >&2
           printf '%s\n' "$changed" >&2
           printf '%s\n' "$changed" | python3 tools/ci/select_checks.py --event "$EVENT_NAME" >> "$GITHUB_OUTPUT"
+          for check in editor browser python native player smoke; do
+            if ! grep -Eq "^$check=(true|false)$" "$GITHUB_OUTPUT"; then
+              echo "::error::Path selector did not emit valid $check" >&2
+              exit 1
+            fi
+          done
 
   editor-build:
     name: Editor build (Node ${{ matrix.node-version }})
@@ -117,7 +123,9 @@ jobs:
 
   rendering:
     needs: changes
-    if: needs.changes.outputs.browser == 'true'
+    # This REQUIRED check must fail, not silently pass as skipped, if the path
+    # selector itself failed. !cancelled() still permits obsolete runs to stop.
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.browser == 'true') }}
     name: Rendering pictures
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -125,6 +133,10 @@ jobs:
       run:
         working-directory: fbx-viewer (1)
     steps:
+      - name: Block the merge if change selection failed
+        if: needs.changes.result != 'success'
+        run: exit 1
+
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
