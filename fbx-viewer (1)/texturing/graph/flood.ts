@@ -84,6 +84,44 @@ export const seamOffset = (d: number, size: number, seam: number, repeats: boole
 };
 
 /**
+ * Exact CPU oracle for the minimum interval covering a component on a repeating
+ * axis. Sort its *occupied* pixel positions, then exclude the largest circular
+ * gap. The GPU's four fixed seams do NOT yet compute this exact answer.
+ *
+ * This oracle is deliberately separate from islandSpan (which reproduces the
+ * current GPU approximation). It must not be used as evidence of GPU parity
+ * until device-backed tests compare the GPU's resulting boxes against it.
+ */
+export const exactIslandSpan = (
+    places: readonly number[], root: number, size: number, repeats: boolean,
+): { low: number; size: number } => {
+    if (!places.length) return { low: 0, size: 0 };
+    if (!Number.isInteger(size) || size < 1) throw new Error('An island axis must have a positive integer size.');
+    if (!repeats) {
+        const low = Math.min(...places) - root;
+        return { low, size: Math.max(...places) - Math.min(...places) + 1 };
+    }
+    const mod = (n: number) => ((n % size) + size) % size;
+    const unique = [...new Set(places.map(mod))].sort((a, b) => a - b);
+    const rooted = mod(root);
+    let largestGap = -1;
+    let rootDistance = Infinity;
+    for (let i = 0; i < unique.length; i++) {
+        const next = i === unique.length - 1 ? unique[0] + size : unique[i + 1];
+        const gap = next - unique[i] - 1;
+        const start = mod(next);
+        const distance = mod(rooted - start);
+        // Equal largest gaps describe equivalent minimum-size boxes. Prefer
+        // the one closest to the root so completely filled axes have low=0.
+        if (gap > largestGap || (gap === largestGap && distance < rootDistance)) {
+            largestGap = gap;
+            rootDistance = distance;
+        }
+    }
+    return { low: -rootDistance, size: size - largestGap };
+};
+
+/**
  * One axis of an island's box as the shaders work it out: the low end (from the root) and the size, the
  * narrowest over the seams. `places` are the island's pixels along the axis; `root` its root's.
  */
