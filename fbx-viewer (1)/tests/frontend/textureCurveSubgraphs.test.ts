@@ -54,7 +54,7 @@ describe('curve graph boundaries', () => {
         expect(curveOut.inputs).toMatchObject([{ key: 'in', kind: 'curve' }]);
         expect(wireFits(curveIn.outputs[0].kind, curveOut.inputs[0])).toBe(true);
         expect(wireFits('gray', curveOut.inputs[0])).toBe(false);
-        expect(wireFits('curve', { key: 'in', label: 'Image', kind: 'color' })).toBe(false);
+        expect(wireFits('curve', { kind: 'color' })).toBe(false);
 
         const source = innerGraph();
         const resolve = (id: string) => id === 'inner' ? { id, name: 'Inner paths', graph: source } : undefined;
