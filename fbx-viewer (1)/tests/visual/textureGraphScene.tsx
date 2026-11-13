@@ -10,6 +10,7 @@ import type { TexturingGpu } from '../../texturing/gpu/texturingGpu';
 import { webgpuTexturing, type WgpuDevice } from '../../texturing/gpu/webgpuTexturing';
 import { encodeChannels } from '../../texturing/materialOutput';
 import { paintBakedKey } from '../../texturing/paint/stackNode';
+import { realNow } from './instrument';
 
 /**
  * ONE TEXTURE GRAPH COOKED ON THE RENDERER'S OWN GPU
@@ -23,7 +24,20 @@ import { paintBakedKey } from '../../texturing/paint/stackNode';
  */
 
 /** Seen by the scene's settle step: the cooked pictures are on the plane, and why the renderer's own GPU could not cook (if it could not). */
-export const textureGraphScene = { ready: false, problem: null as string | null };
+export interface TextureGraphCookMetric {
+    /** Actual browser wall-clock time through GPU graph cooking and PNG encoding. */
+    milliseconds: number;
+    /** Backend which actually cooked (not necessarily the one requested). */
+    backend: 'webgl2' | 'webgpu';
+    fallback: boolean;
+    pixels: number;
+}
+/** The scene's measured graph cook, or null before the cook finishes. */
+export const textureGraphScene = {
+    ready: false,
+    problem: null as string | null,
+    cook: null as TextureGraphCookMetric | null,
+};
 
 const node = (id: string, type: string, params: Record<string, unknown> = {}) => ({ id, type, x: 0, y: 0, params });
 
@@ -271,6 +285,7 @@ export const TextureGraphScene: React.FC = () => {
         let gone = false;
         textureGraphScene.ready = false;
         textureGraphScene.problem = null;
+        textureGraphScene.cook = null;
         const gpu: TexturingGpu = isGpuRenderer(gl) ? webgpuTexturing(gl.core.device as unknown as WgpuDevice) : textureGpu();
         void (async () => {
             let own = true;
@@ -281,12 +296,26 @@ export const TextureGraphScene: React.FC = () => {
                     if (gl.core.device.features.has('texture-compression-bc')) await checkCompressedParity(gpu);
                     await checkPaintSnapshotParity(gpu);
                 }
+                const cookStarted = realNow();
                 pictures = await cook(gpu);
+                textureGraphScene.cook = {
+                    milliseconds: realNow() - cookStarted,
+                    backend: isGpuRenderer(gl) ? 'webgpu' : 'webgl2',
+                    fallback: false,
+                    pixels: 512 * 512,
+                };
             } catch (error) {
                 // The renderer's own GPU could not: keep why (textureGraphScene.problem), and show WebGL2's cook with the ball red.
                 own = false;
                 textureGraphScene.problem = error instanceof Error ? error.message : String(error);
+                const fallbackStarted = realNow();
                 pictures = await cook(textureGpu());
+                textureGraphScene.cook = {
+                    milliseconds: realNow() - fallbackStarted,
+                    backend: 'webgl2',
+                    fallback: isGpuRenderer(gl),
+                    pixels: 512 * 512,
+                };
             }
             const [colour, normal] = await Promise.all([load(pictures.colour, true), load(pictures.normal, false)]);
             if (gone) return;
