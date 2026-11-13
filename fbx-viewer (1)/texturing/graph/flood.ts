@@ -98,8 +98,9 @@ export const exactIslandSpan = (
     if (!places.length) return { low: 0, size: 0 };
     if (!Number.isInteger(size) || size < 1) throw new Error('An island axis must have a positive integer size.');
     if (!repeats) {
-        const low = Math.min(...places) - root;
-        return { low, size: Math.max(...places) - Math.min(...places) + 1 };
+        let min = Infinity, max = -Infinity;
+        for (const place of places) { min = Math.min(min, place); max = Math.max(max, place); }
+        return { low: min - root, size: max - min + 1 };
     }
     const mod = (n: number) => ((n % size) + size) % size;
     const unique = [...new Set(places.map(mod))].sort((a, b) => a - b);
