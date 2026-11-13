@@ -1,8 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createMaterialGraph } from '../../runtime/materials/materialGraph';
 import { materialAssetDocument, type MaterialAsset } from '../../runtime/materials/materialLibrary';
 import { createNode, normalizeTextureGraph } from '../../texturing/graph/document';
 import { planTextureParameterRename, requiresProjectWideParameterRename } from '../../texturing/graph/renameProjectParameter';
+import { commitTextureParameterRename, undoTextureParameterRename } from '../../texturing/graph/renameTransaction';
 import { readTextureRenameInventory } from '../../texturing/graph/renameSnapshot';
 import type { ProjectSnapshot } from '../../utils/projectService';
 
@@ -135,23 +136,68 @@ describe('texture parameter rename host inventory safety', () => {
         expect(inventory(empty).metadata).toEqual([]);
     });
 
-    it('blocks a saved prefab override even when the prefab has no placed instances', () => {
+    it('includes unplaced prefab members in the source transaction and restores complete prefabs on undo', async () => {
+        const source = material('source', { graph: graph(), values: { wear: 0.7 } });
+        const other = material('other');
+        const entry = (name: string, value: number) => ({ parameters: [{ name, value }] });
+        const root = { id: 'root', type: 'light', color: [1, 1, 1, 1] };
+        const mesh = { id: 'mesh', parentId: root.id, modelId: 'model', scale: [2, 2, 2] };
+        const prefab = {
+            id: 'kit', rootId: root.id, name: 'Workshop', createdAt: 54321,
+            objects: [root,
+                { ...mesh, materialOverrides: { Wood: entry('wear', 0.3), Metal: entry('wear', 1) } },
+                { ...mesh, id: 'mesh2', materialOverrides: { Wood: entry('wear', 0.4) } },
+            ],
+        };
+        const unrelated = { ...prefab, id: 'other-kit', objects: [root, { ...mesh, materialOverrides: { Metal: entry('wear', 0.2) } }] };
+        const snapshot = { projectId: 'project-a', revision: 7, hasMore: false, domains: {
+            materials: [source, other].map(materialAssetDocument),
+            models: [{ id: 'model', materialOverrides: { Wood: { materialId: source.id }, Metal: { materialId: other.id } } }],
+            objects: [], metadata: [], prefabs: [prefab, unrelated],
+        } };
+        const original = structuredClone(snapshot);
+        const plan = planTextureParameterRename({ ...inventory({ snapshot, live: [source, other] }), sourceMaterialId: 'source', from: 'wear', to: 'patina' });
+        expect(plan.impact).toMatchObject({ prefabs: ['kit'], prefabOverrides: 2, objects: [], materials: ['source'] });
+        expect(requiresProjectWideParameterRename(plan.impact)).toBe(true);
+        expect(snapshot).toEqual(original);
+        const expectedPrefab = {
+            ...prefab, objects: [root,
+                { ...mesh, materialOverrides: { Wood: entry('patina', 0.3), Metal: entry('wear', 1) } },
+                { ...mesh, id: 'mesh2', materialOverrides: { Wood: entry('patina', 0.4) } },
+            ],
+        };
+        const status = { projectId: 'project-a', revision: 7, readOnly: false };
+        const host = { getStatus: () => status, applyChanges: vi.fn(async () => ({ revision: ++status.revision })) };
+        const receipt = await commitTextureParameterRename(plan, host, { ...status }, () => {});
+        expect(plan.changes.map(change => [change.domain, change.id])).toEqual([['materials', 'source'], ['prefabs', 'kit']]);
+        expect(plan.changes[1].value).toEqual(expectedPrefab);
+        expect(receipt.redoChanges).toEqual(plan.changes);
+        await undoTextureParameterRename(receipt, host, () => {});
+        expect(receipt.undoChanges.map(change => change.value)).toEqual([original.domains.materials[0], original.domains.prefabs[0]]);
+        expect(host.applyChanges.mock.calls).toEqual([[plan.changes], [receipt.undoChanges]]);
+    });
+
+    it('rejects a prefab rename when its model is missing or a parameter name collides', () => {
         const data = fixture();
         const saved = domains(data);
         saved.objects = [];
-        saved.models = [{ id: 'model', materialOverrides: { Wood: { materialId: 'source' }, Metal: { materialId: 'dependent' } } }];
+        saved.models = [{ id: 'model', materialOverrides: { Wood: { materialId: 'source' } } }];
         const member = { id: 'member', modelId: 'model', materialOverrides: { Wood: { parameters: [{ name: 'wear', value: 0.6 }] } } };
-        saved.prefabs = [{ id: 'kit', objects: [member] }];
-        const plan = () => planTextureParameterRename({
-            ...inventory(data), sourceMaterialId: 'source', from: 'wear', to: 'patina',
-        });
-        expect(plan).toThrow(/prefab "kit" object "member" overrides "wear"/);
-
-        saved.prefabs = [{ id: 'kit', objects: [{ ...member, materialOverrides: { Metal: member.materialOverrides.Wood } }] }];
-        expect(plan).not.toThrow();
-
+        const plan = () => planTextureParameterRename({ ...inventory(data), sourceMaterialId: 'source', from: 'wear', to: 'patina' });
         saved.prefabs = [{ id: 'kit', objects: [{ ...member, modelId: 'missing-model' }] }];
-        expect(plan).toThrow(/model is missing/);
+        expect(plan).toThrow(/prefab "kit" object "member".*model is missing/);
+
+        saved.prefabs = [{ id: 'kit', objects: [member] }];
+        member.materialOverrides.Wood.parameters.push({ name: 'patina', value: 0.8 });
+        expect(plan).toThrow(/"patina" already exists in prefab "kit" object "member"/);
+        member.materialOverrides.Wood.parameters.pop();
+        for (const parameter of ['wear', 'patina']) {
+            const shader = createMaterialGraph();
+            shader.nodes.push({ id: 'float', type: 'float', x: 0, y: 0, params: { value: 1 }, parameter });
+            data.live[0].graph = shader;
+            saved.materials = data.live.map(materialAssetDocument);
+            expect(plan).toThrow(/prefab "kit" object "member".*shader parameter/);
+        }
     });
 
     it('rejects malformed prefab members before planning', () => {

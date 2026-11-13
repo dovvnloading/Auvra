@@ -17,7 +17,7 @@ const after: ProjectChange[] = [
 const plan = (): TextureParameterRenamePlan => ({
     impact: {
         sourceMaterialId: 'mat', from: 'wear', to: 'patina', materials: ['mat'], models: ['model'],
-        objects: [], metadata: [], nestedNodes: 0, paintReferences: 0, modelOverrides: 1, objectOverrides: 0, sharedPresets: 0,
+        objects: [], prefabs: [], metadata: [], nestedNodes: 0, paintReferences: 0, modelOverrides: 1, objectOverrides: 0, prefabOverrides: 0, sharedPresets: 0,
     },
     changes: after,
     undoChanges: before,
