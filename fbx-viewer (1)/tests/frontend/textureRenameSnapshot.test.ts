@@ -35,7 +35,7 @@ const fixture = (): { snapshot: ProjectSnapshot; live: MaterialAsset[] } => {
         snapshot: {
             projectId: 'project-a', revision: 7, hasMore: false,
             domains: {
-                materials: live.map(materialAssetDocument),
+                materials: live.map(value => JSON.parse(JSON.stringify(materialAssetDocument(value)))),
                 models: [{ id: 'model', materialOverrides: {
                     Wood: { materialId: 'source', parameters: [{ name: 'wear', value: 0.1 }] },
                 } }],
