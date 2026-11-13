@@ -128,6 +128,7 @@ const capture = async (name: string) => {
   const programs = state.gl.info.programs?.length ?? 0;
   const bytes = onWebGpu ? webGpuBytes() : gpuBytes(state.gl.getContext() as WebGL2RenderingContext);
   const cookBenchmark = name === 'texture-graph' ? textureGraphScene.benchmark : null;
+  const standardCook = name === 'texture-graph' ? textureGraphScene.cook : null;
   const cookProblem = name === 'texture-graph' ? textureGraphScene.problem : null;
   if (onWebGpu) await settled();
   root.unmount();
@@ -143,6 +144,7 @@ const capture = async (name: string) => {
   }
   return { png, numbers: { loadMs, frameMs, calls, triangles, geometries, textures, programs, gpuBytes: bytes,
     ...(cookBenchmark ? { textureCook: cookBenchmark, textureCookProblem: cookProblem } : {}),
+    ...(standardCook ? { graphCook: standardCook } : {}),
   } };
 };
 

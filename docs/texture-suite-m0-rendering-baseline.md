@@ -68,6 +68,12 @@ node scripts/rendering/run.mjs --gpu
 
 The renderer script writes output pictures and `numbers.json` under `tests/visual/output/` (the WebGPU reference has its own subdirectory). Visual baseline updates are **not** an appropriate way to accept an unintended visual regression.
 
+## 2A. Real-clock 512px cook measurement in regular visual verification
+
+The standard `texture-graph` scene now records `graphCook` in `tests/visual/output/numbers.json` after its 512×512 procedural graph has evaluated and its base-color and normal PNG maps have been encoded. Its `milliseconds` is real elapsed browser wall-clock time (not the harness's virtual scene clock), and `pixels`, `backend` and `fallback` identify the completed bake. These values are distinct from renderer frame times.
+
+This is recorded only during ordinary visual verification, with no extra graph evaluations or screenshot/reference threshold changes. Use `npm run rendering:verify` or `npm run rendering:verify -- --renderer webgpu` to collect it. The opt-in `texture:benchmark` added later measures cold/cache/incremental stages at 512/2048/4096 under the separate `textureCook` key. Historical archived scene measurements predate `graphCook` and are not retroactive evidence.
+
 ## 3. The missing M0.5 measurement set
 
 **These are still required and are not represented by the table above:**

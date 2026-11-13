@@ -430,6 +430,16 @@ export const SCENES: Record<string, VisualScene> = {
     Scene: TextureGraphScene,
     settle: async ({ frames, until }) => {
       await until(() => textureGraphScene.ready);
+      // The opt-in benchmark returns its own per-stage textureCook timings.
+      // Regular fixed-resolution visual verification must have a real-clock
+      // bake time, not a missing or silently virtualized measurement.
+      if (!new URLSearchParams(window.location.search).has('textureBench')) {
+        const cooked = textureGraphScene.cook;
+        if (!cooked || !Number.isFinite(cooked.milliseconds) || cooked.milliseconds < 0
+          || cooked.pixels !== 512 * 512) {
+          throw new Error('Texture graph scene did not record a valid 512px GPU cook timing.');
+        }
+      }
       await frames(6);
     },
   },

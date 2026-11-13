@@ -38,11 +38,20 @@ export interface TextureCookBenchmark {
     editSyncMs: number;
 }
 
+/** Total time of the ordinary 512px graph bake, including PNG encoding. */
+export interface TextureGraphCookMeasurement {
+    milliseconds: number;
+    pixels: number;
+    backend: 'webgl2' | 'webgpu';
+    fallback: boolean;
+}
+
 /** Optional measurements, only when ?textureBench=1; default screenshots do not run extra cooks. */
 export const textureGraphScene = {
     ready: false,
     problem: null as string | null,
     benchmark: null as TextureCookBenchmark | null,
+    cook: null as TextureGraphCookMeasurement | null,
 };
 
 const node = (id: string, type: string, params: Record<string, unknown> = {}) => ({ id, type, x: 0, y: 0, params });
@@ -343,6 +352,7 @@ export const TextureGraphScene: React.FC = () => {
         textureGraphScene.ready = false;
         textureGraphScene.problem = null;
         textureGraphScene.benchmark = null;
+        textureGraphScene.cook = null;
         const options = new URLSearchParams(window.location.search);
         const benchmark = options.has('textureBench');
         const requestedSize = Number(options.get('textureSize') ?? 9);
@@ -357,13 +367,30 @@ export const TextureGraphScene: React.FC = () => {
                     if (gl.core.device.features.has('texture-compression-bc')) await checkCompressedParity(gpu);
                     await checkPaintSnapshotParity(gpu);
                 }
+                const cookStarted = realNow();
                 pictures = await cook(gpu, benchmark, logSize);
+                // Only time the normal visual bake; the opt-in benchmark has
+                // separate cold/cache/incremental durations and should not
+                // aggregate those phases into a misleading single number.
+                if (!benchmark) textureGraphScene.cook = {
+                    milliseconds: realNow() - cookStarted,
+                    backend: isGpuRenderer(gl) ? 'webgpu' : 'webgl2',
+                    fallback: false,
+                    pixels: 512 * 512,
+                };
                 if (pictures.timings) textureGraphScene.benchmark = { ...pictures.timings, backend: isGpuRenderer(gl) ? 'webgpu' : 'webgl2' };
             } catch (error) {
                 // The renderer's own GPU could not: keep why (textureGraphScene.problem), and show WebGL2's cook with the ball red.
                 own = false;
                 textureGraphScene.problem = error instanceof Error ? error.message : String(error);
+                const fallbackStarted = realNow();
                 pictures = await cook(textureGpu(), benchmark, logSize);
+                if (!benchmark) textureGraphScene.cook = {
+                    milliseconds: realNow() - fallbackStarted,
+                    backend: 'webgl2',
+                    fallback: isGpuRenderer(gl),
+                    pixels: 512 * 512,
+                };
                 if (pictures.timings) textureGraphScene.benchmark = { ...pictures.timings, backend: 'webgl2-fallback' };
             }
             const [colour, normal] = await Promise.all([load(pictures.colour, true), load(pictures.normal, false)]);
