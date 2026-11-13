@@ -269,7 +269,7 @@ void main() { float d = texture(distanceMap, vUv).r; outColor = vec4(1.0 - smoot
         type: 'floodFill',
         label: 'Flood fill',
         category: 'Edges and distance',
-        description: 'Finds every separate white island of a mask (tiles, cells, planks), all on the GPU, so the Flood fill nodes after it can give each its own value, colour, gradient, index, position or pattern. Where the image tiles, an island over an edge is one island.',
+        description: 'Finds separate white islands on the GPU for per-island values, colours and patterns. Where the image tiles, an island over an edge is one island. A very large tiling island with a small empty gap may have an approximate bounding box until exact wrap bounds are supported.',
         keywords: ['islands', 'connected', 'label', 'per tile', 'shape id'],
         inputs: [grayIn('mask', 'Mask')],
         outputs: [out('color', 'out', 'Islands')],
@@ -284,8 +284,9 @@ void main() { float d = texture(distanceMap, vUv).r; outColor = vec4(1.0 - smoot
             const labels = await labelIslandsGpu(context, mask, Number(context.params.threshold) || 0.5);
             const wrapAxes = [context.tiling[0] ? 1 : 0, context.tiling[1] ? 1 : 0];
             // Each island's box: every pixel adds its offset from the root into the root, largest each way.
-            // Where the image tiles, once for each place offsets can wrap round (the narrowest box wins), so
-            // an island more than half the picture across gets its own box.
+            // For tiling masks, try four candidate wrap seams and keep the narrowest.
+            // This is exact only if an unoccupied gap contains a candidate seam;
+            // a nearly full-size island can still be overestimated (M0 #305).
             const seams = wrapAxes[0] || wrapAxes[1] ? FLOOD_SEAMS : [0.5];
             const boxes: GpuImage[] = [];
             for (const seam of seams) {
