@@ -85,6 +85,14 @@ The renderer script writes output pictures and `numbers.json` under `tests/visua
 
 For **each** new run, record OS, browser/WebView2 version, GPU/adapter and driver, backend, device features, relevant library/Three version, output resolution, graph/material hash, cold/warm cache state, run count and specific time measurement scope. Exclude metrics that cannot be reproduced or whose units are ambiguous.
 
+## 3A. Live editor graph-cook timing (new M0.5 instrumentation)
+
+`texturing/graph/cookTiming.ts` provides a **bounded 64-sample** window of successful authoring graph-evaluation timings. `TextureGraphSession` records elapsed wall-clock time through evaluation and preview/thumbnail update; the graph editor reports p50/p95 after at least five successful runs that actually recomputed nodes.
+
+These are **local observations**, not cross-machine benchmark results, GPU hardware timestamps, or game-frame times. A run that only hits the graph cache (zero recomputed nodes) is counted separately and **excluded from the latency percentiles**. A changed graph topology or evaluation resolution resets the comparison window to avoid mixing unrelated workloads.
+
+The existing visual software-GPU scene values in Section 1 are distinct from these live-editor measurements. To meet the M0.5 exit gate, a benchmark run must still export reproducible values, record hardware/browser/driver settings, control cold/warm caches, and compare the specified 512/2K/4K fixtures on selected machines.
+
 ## 4. Performance gate policy
 
 - Set numeric budgets **only after** controlled reference runs across chosen device tiers. A 10% p50/p95 regression is a **review trigger**, not a universal automatic failure threshold.
