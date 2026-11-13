@@ -37,7 +37,7 @@ export interface RenameTransactionReceipt {
 export class RenameProjectSyncError extends Error {
     readonly committed = true;
 
-    constructor(message: string, readonly cause: unknown) {
+    constructor(message: string, readonly originalFailure: unknown) {
         super(message);
         this.name = 'RenameProjectSyncError';
     }
