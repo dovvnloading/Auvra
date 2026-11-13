@@ -1,5 +1,6 @@
 /// <reference lib="webworker" />
 
+import { isDedicatedWorkerMessage } from './dedicatedWorkerMessage';
 import { readAnyBody, readAs, rigBody, type BodyKind, type RigMarkerName, type RigMarkers, type RigReading } from '../utils/autoRig/rigBody';
 import type { RigJoint } from '../utils/autoRig/bodySkeleton';
 import type { PartWeights, SkinnedPart } from '../utils/autoRig/skinWeights';
@@ -20,6 +21,7 @@ export type AutoRigResponse =
 const scope = self as unknown as DedicatedWorkerGlobalScope;
 
 scope.onmessage = (event: MessageEvent<AutoRigRequest>) => {
+  if (!isDedicatedWorkerMessage(event)) return;
   const request = event.data;
   try {
     if (request.type === 'read') {

@@ -63,7 +63,13 @@ export const measureLayout = (topology: UvTopology, cornerUv: Float32Array, char
         let sum = 0;
         for (let i = 0; i < chart.length; i++) sum += signedArea(chart[i]);
         const sign = sum < 0 ? -1 : 1;
-        for (let i = 0; i < chart.length; i++) orientation[chart[i]] = sign;
+        for (let i = 0; i < chart.length; i++) {
+            const face = chart[i];
+            if (typeof face !== 'number' || !Number.isInteger(face) || face < 0 || face >= faceCount) {
+                throw new Error('The UV chart contains an invalid face index.');
+            }
+            orientation[face] = sign;
+        }
     }
     for (let f = 0; f < faceCount; f++) {
         local.set(cornerUv.subarray(f * 6, f * 6 + 6));

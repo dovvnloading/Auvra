@@ -1,5 +1,6 @@
 /// <reference lib="webworker" />
 
+import { isDedicatedWorkerMessage } from './dedicatedWorkerMessage';
 import { prepareGlb, UnpreparableModelError, type CompressImage, type PrepareOptions } from '../utils/preparedModels/prepareGlb';
 import { compressBitmap, isCompressibleSize } from '../utils/textureCompression/textureEncoding';
 
@@ -14,6 +15,7 @@ export type ModelPrepareResponse =
 const scope = self as unknown as DedicatedWorkerGlobalScope;
 
 scope.onmessage = async (event: MessageEvent<ModelPrepareRequest>) => {
+    if (!isDedicatedWorkerMessage(event)) return;
     const { glb, format, options, textureVersion } = event.data;
     // The pixels a loading model would read: GLTFLoader decodes its images with these same options.
     const compress: CompressImage = async (bytes, mimeType, kind) => {

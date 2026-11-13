@@ -19,7 +19,7 @@ describe('foot locking', () => {
         // The body turns on the spot: the animated foot is carried round quickly, but stays down: it stays planted.
         for (let i = 1; i <= 8; i++) {
             const angle = (i / 8) * 0.5;
-            held = stepFootLock(lock, new THREE.Vector3(0.15 + 0.15 * Math.sin(angle), ANKLE, 0.15 * (1 - Math.cos(angle))), 0, 1, FRAME);
+            expect(stepFootLock(lock, new THREE.Vector3(0.15 + 0.15 * Math.sin(angle), ANKLE, 0.15 * (1 - Math.cos(angle))), 0, 1, FRAME)).toBe(1);
         }
         expect(lock.locked).toBe(true);
         expect(lock.anchor.x).toBeCloseTo(0.15, 6);

@@ -54,11 +54,9 @@ export const SandboxScene: React.FC<SandboxSceneProps> = ({ visible }) => {
 
     // 6. Session Management (Reset Logic)
     const [sessionId, setSessionId] = useState(0);
-    const [enemyDespawned, setEnemyDespawned] = useState(false);
 
     const handleStartSession = () => {
         setSessionId(prev => prev + 1); // Triggers remount of entities to reset health/materials
-        setEnemyDespawned(false);
         startGame();
     };
 

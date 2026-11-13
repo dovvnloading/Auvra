@@ -1,5 +1,6 @@
 /// <reference lib="webworker" />
 
+import { isDedicatedWorkerMessage } from "./dedicatedWorkerMessage";
 import { buildClusterHierarchy, clusterBuilderReady, weldClusterSource, type ClusterSourceMesh } from "../renderer/gpu/clusters/clusterBuild";
 
 /** Builds a big mesh's cluster hierarchy off the main thread (renderer/gpu/clusters/clusterRegistry.ts asks); one mesh per request. */
@@ -58,6 +59,7 @@ const sourceMesh = ({ positions, normals, uvs }: ClusterBuildRequest): ClusterSo
 const scope = self as unknown as DedicatedWorkerGlobalScope;
 
 scope.onmessage = async (event: MessageEvent<ClusterBuildRequest>) => {
+  if (!isDedicatedWorkerMessage(event)) return;
   const request = event.data;
   try {
     await clusterBuilderReady();

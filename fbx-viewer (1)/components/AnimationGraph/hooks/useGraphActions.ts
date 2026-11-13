@@ -28,7 +28,7 @@ export const useGraphActions = ({
             parentState = graph.states.find(s => s.isRoot);
         }
 
-        let newPosition = { x: 0, y: 0 };
+        let newPosition: GraphState['position'];
         
         // Auto-layout logic
         if (parentState) {

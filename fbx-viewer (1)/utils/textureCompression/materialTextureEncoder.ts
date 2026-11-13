@@ -618,22 +618,24 @@ const decodeBc4Block = (bytes: Uint8Array, out: Uint8Array): void => {
 
 // --- Whole textures ------------------------------------------------------------------------------
 
-const BLOCK_SIZE: Record<MaterialTextureFormat, number> = { bc7: 16, bc5: 16, bc4: 8, astc: ASTC_BLOCK_BYTES, etc2: ETC2_BLOCK_BYTES, etc2a: ETC2A_BLOCK_BYTES };
+interface BlockCodec {
+    size: number;
+    encode(block: Uint8Array): Uint8Array;
+    decode(bytes: Uint8Array, out: Uint8Array): void;
+}
 
-const ENCODE_BLOCK: Record<Exclude<MaterialTextureFormat, 'bc5'>, (block: Uint8Array) => Uint8Array> = {
-    bc7: (block) => encodeBc7Block(block),
-    bc4: (block) => encodeBc4Block(block),
-    astc: encodeAstcBlock,
-    etc2: encodeEtc2Block,
-    etc2a: encodeEtc2AlphaBlock,
-};
+const BLOCK_CODECS = new Map<Exclude<MaterialTextureFormat, 'bc5'>, BlockCodec>([
+    ['bc7', { size: 16, encode: encodeBc7Block, decode: decodeBc7Block }],
+    ['bc4', { size: 8, encode: encodeBc4Block, decode: decodeBc4Block }],
+    ['astc', { size: ASTC_BLOCK_BYTES, encode: encodeAstcBlock, decode: decodeAstcBlock }],
+    ['etc2', { size: ETC2_BLOCK_BYTES, encode: encodeEtc2Block, decode: decodeEtc2Block }],
+    ['etc2a', { size: ETC2A_BLOCK_BYTES, encode: encodeEtc2AlphaBlock, decode: decodeEtc2AlphaBlock }],
+]);
 
-const DECODE_BLOCK: Record<Exclude<MaterialTextureFormat, 'bc5'>, (bytes: Uint8Array, out: Uint8Array) => void> = {
-    bc7: (bytes, out) => decodeBc7Block(bytes, out),
-    bc4: (bytes, out) => decodeBc4Block(bytes, out),
-    astc: decodeAstcBlock,
-    etc2: decodeEtc2Block,
-    etc2a: decodeEtc2AlphaBlock,
+const blockCodec = (format: Exclude<MaterialTextureFormat, 'bc5'>): BlockCodec => {
+    const codec = BLOCK_CODECS.get(format);
+    if (!codec) throw new Error('Unsupported material texture format.');
+    return codec;
 };
 
 /** One level's blocks in the format. */
@@ -641,13 +643,13 @@ export const encodeLevel = (rgba: Uint8Array, width: number, height: number, for
     if (format === 'bc5') return encodeBlocks(rgba, width, height, 'bc5');
     const columns = Math.ceil(width / 4);
     const rows = Math.ceil(height / 4);
-    const size = BLOCK_SIZE[format];
+    const { size, encode } = blockCodec(format);
     const out = new Uint8Array(columns * rows * size);
     const block = new Uint8Array(64);
     for (let by = 0; by < rows; by++) {
         for (let bx = 0; bx < columns; bx++) {
             readBlock(rgba, width, height, bx, by, block);
-            out.set(ENCODE_BLOCK[format](block), (by * columns + bx) * size);
+            out.set(encode(block), (by * columns + bx) * size);
         }
     }
     return out;
@@ -667,13 +669,13 @@ export const decodeLevel = (data: Uint8Array, width: number, height: number, for
         return rg;
     }
     const columns = Math.ceil(width / 4);
+    const { size, decode } = blockCodec(format);
     const out = new Uint8Array(width * height * 4);
     const block = new Uint8Array(64);
-    const size = BLOCK_SIZE[format];
     for (let by = 0; by < Math.ceil(height / 4); by++) {
         for (let bx = 0; bx < columns; bx++) {
             const bytes = data.subarray((by * columns + bx) * size, (by * columns + bx + 1) * size);
-            DECODE_BLOCK[format](bytes, block);
+            decode(bytes, block);
             for (let y = 0; y < 4; y++) for (let x = 0; x < 4; x++) {
                 const px = bx * 4 + x, py = by * 4 + y;
                 if (px < width && py < height) out.set(block.subarray((y * 4 + x) * 4, (y * 4 + x) * 4 + 4), (py * width + px) * 4);

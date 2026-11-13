@@ -9,10 +9,9 @@ import { SandboxEntity, SandboxEntityHandle } from './SandboxEntity';
 import { PlayerController } from './PlayerController';
 import { AIController } from './AIController';
 import { AudioSystem } from '../Environment/AudioSystem'; // Import AudioSystem
-import { Canvas } from '@react-three/fiber'; // Required for type safety implicitly or if reused
 import { BloodSystem, BloodSystemHandle } from './BloodSystem';
 import { GraphRuntimeAPI } from '../AnimationGraph/GraphRuntime';
-import { useSandboxConfiguration, SandboxConfiguration } from './hooks/useSandboxConfiguration';
+import type { SandboxConfiguration } from './hooks/useSandboxConfiguration';
 import { useScene } from '../../context/SceneContext'; // Import context to access audioAssets
 import { applyMeleeHit, resolveBlueprintDamage } from './combat';
 

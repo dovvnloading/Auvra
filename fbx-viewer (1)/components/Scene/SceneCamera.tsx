@@ -1,4 +1,4 @@
-import React, { useRef, useState, useEffect } from 'react';
+import React, { useRef, useEffect } from 'react';
 import { OrbitControls } from '@react-three/drei';
 import { useThree, useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
@@ -16,7 +16,6 @@ const FreeCameraControls: React.FC<{
     onUpdate: (pos: THREE.Vector3, target: THREE.Vector3) => void 
 }> = ({ initialPosition, initialTarget, onUpdate }) => {
   const { camera, gl } = useThree();
-  const [isRightMouseDown, setIsRightMouseDown] = useState(false);
   
   // Use refs for state accessed in event handlers/render loop
   const isDragging = useRef(false);
@@ -42,7 +41,6 @@ const FreeCameraControls: React.FC<{
     const onMouseDown = (e: MouseEvent) => {
       if (e.button === 2) { // Right Click
         isDragging.current = true;
-        setIsRightMouseDown(true);
         Promise.resolve(gl.domElement.requestPointerLock()).catch(() => undefined);
       }
     };
@@ -50,7 +48,6 @@ const FreeCameraControls: React.FC<{
     const onMouseUp = (e: MouseEvent) => {
       if (e.button === 2) {
         isDragging.current = false;
-        setIsRightMouseDown(false);
         document.exitPointerLock();
       }
     };

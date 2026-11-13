@@ -10,7 +10,7 @@ import { AiRouteBar } from '../Settings/AiRouteBar';
 import { Button, IconButton, PanelEdge, PanelTitle, Section, Segmented, Spinner, TextArea, Tooltip, usePanelWidth } from '../UI/kit';
 import { AssetRail } from './Retexture/AssetRail';
 import { RetextureStage, type StageLighting } from './Retexture/RetextureStage';
-import { capabilityOfMode, retextureSessions, startingLookName, useRetextureSessions, type RetextureMode, type SessionPart, type SurfaceRole, type Take } from './Retexture/retextureSession';
+import { capabilityOfMode, startingLookName, useRetextureSessions, type RetextureMode, type SessionPart, type SurfaceRole, type Take } from './Retexture/retextureSession';
 import { STATE_WORDS, TakesStrip } from './Retexture/TakesStrip';
 import { expandPaintedCopies } from '../../utils/paintedCopies';
 
