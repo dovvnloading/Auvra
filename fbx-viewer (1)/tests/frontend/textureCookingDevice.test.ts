@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { cookingDevice, setCookingDevice, webgpuFallbacks } from '../../texturing/gpu/cookingDevice';
+import { cookingDevice, setCookingDevice, textureCookingCapabilities, webgpuFallbacks } from '../../texturing/gpu/cookingDevice';
 
 afterEach(() => {
     setCookingDevice(null);
@@ -28,6 +28,30 @@ describe('runtime GPU texture-cooking device lifecycle', () => {
         expect(webgpuFallbacks.size).toBe(0);
         setCookingDevice(gpu);
         expect(webgpuFallbacks.has('shared-id')).toBe(false);
+    });
+
+    it('reports actual device feature flags without claiming support for untested graph families', () => {
+        expect(textureCookingCapabilities()).toMatchObject({
+            backend: 'webgl2',
+            maxTextureDimension2D: null,
+            compression: { bc: null, etc2: null, astc: null },
+            float32Filterable: null,
+        });
+        const mock = {
+            limits: { maxTextureDimension2D: 4096 },
+            features: { has: (name: string) => ['texture-compression-bc', 'float32-filterable'].includes(name) },
+        };
+        setCookingDevice(mock);
+        webgpuFallbacks.set('stone', 'node pathWarp did not compile');
+        expect(textureCookingCapabilities()).toEqual({
+            backend: 'webgpu',
+            maxTextureDimension2D: 4096,
+            compression: { bc: true, etc2: false, astc: false },
+            float32Filterable: true,
+            fallbacks: [{ materialId: 'stone', reason: 'node pathWarp did not compile' }],
+        });
+        setCookingDevice(null);
+        expect(textureCookingCapabilities().fallbacks).toEqual([]);
     });
 
     it('does not mistake an identical device setting for a device reset', () => {
