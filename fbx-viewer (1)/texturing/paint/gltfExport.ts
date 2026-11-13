@@ -387,7 +387,7 @@ export const atlasGeometryUvCorners = (
         const selected = new Uint8Array(count);
         if (atlas.groups.length) {
             for (const group of atlas.groups) {
-                if (!isPaintedMaterial(group.materialIndex)) continue;
+                if (!isPaintedMaterial(group.materialIndex ?? 0)) continue;
                 const end = Math.min(uvs.count, group.start + group.count);
                 for (let corner = group.start; corner + 2 < end; corner += 3) selected[Math.floor(corner / 3)] = 1;
             }
