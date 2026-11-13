@@ -138,3 +138,9 @@ The size argument is log2: 9 = 512, 11 = 2048, 12 = 4096. This mode runs only th
 **Provenance:** Requested GPU mode and user agent **do not establish the actual GPU vendor/driver**. Record adapter details independently before describing these results as hardware-specific. Repeat each configuration on a controlled device and report p50/p95 for each phase, holding resolution, OS, browser, backend, driver, graph hash and cache conditions constant. The benchmark's cold evaluation is **not** an editor's full first-preview latency; UI mount, upstream project loading and texture presentation must be measured separately.
 
 This opt-in mode adds graph evaluations only when requested. M0.5 remains incomplete until 300-node/iteration workloads, paint-stack and UDIM updates, capture, true GPU residency and real-device comparisons are measured.
+
+### Reproducing an opt-in graph cook
+
+Each opt-in `numbers.json` records the checkout commit and whether the working tree had changes in `_benchmark`. The scene's `textureCook` entry records the backend that actually cooked the graph, the adapter details it exposed, and SHA-256 hashes of the normalized graph before and after the incremental edit. Compute the hashes over the UTF-8 JSON representation. Resolution is part of each graph. Missing Git or adapter information appears as `null`.
+
+Compare runs with the same input and edited hashes, resolution, backend and adapter. Use a clean checkout when attributing a measurement to a commit. A hardware comparison also needs the driver version from the test machine if its browser does not report one.
