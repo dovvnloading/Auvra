@@ -8,6 +8,9 @@
 //   node scripts/rendering/run.mjs --renderer webgpu
 //                                             the same on the WebGPU renderer, with pictures of its own in
 //                                             tests/visual/references/webgpu/ and its output in tests/visual/output/webgpu/
+//   node scripts/rendering/run.mjs --texture-bench --texture-size 11
+//                                             measure cold/cache/incremental graph cook at 2K,
+//                                             without comparing an intentionally resized image
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -19,8 +22,13 @@ import { SOFTWARE_WEBGL, closeBrowser, openPage, pageErrors, pageSaid as saidSin
 const args = process.argv.slice(2);
 const updating = args.includes('--update');
 const realGpu = args.includes('--gpu');
+const textureBench = args.includes('--texture-bench');
+const textureSizeAt = args.indexOf('--texture-size');
+const textureSize = textureSizeAt >= 0 ? Number(args[textureSizeAt + 1]) : 9;
+if (textureBench && ![9, 11, 12].includes(textureSize)) throw new Error('Texture benchmark size must be 9, 11 or 12 (512/2048/4096 pixels).');
+if (textureBench && updating) throw new Error('Benchmark mode cannot update visual reference pictures.');
 const onlyAt = args.indexOf('--only');
-const only = onlyAt >= 0 ? new Set(args[onlyAt + 1].split(',')) : null;
+const only = textureBench ? new Set(['texture-graph']) : onlyAt >= 0 ? new Set(args[onlyAt + 1].split(',')) : null;
 const rendererAt = args.indexOf('--renderer');
 const renderer = rendererAt >= 0 ? args[rendererAt + 1] : 'webgl2';
 if (renderer !== 'webgl2' && renderer !== 'webgpu') throw new Error(`No renderer called ${renderer}: webgl2 or webgpu`);
@@ -64,7 +72,8 @@ const main = async () => {
       : SOFTWARE_WEBGL;
     const gpuFlags = realGpu ? ['--ignore-gpu-blocklist', ...(onWebGpu ? ['--enable-unsafe-webgpu'] : [])] : softwareGpu;
     const { address, port: sitePort } = server.address();
-    const page = await openPage({ profileDir, gpuFlags, url: `http://${address}:${sitePort}/index.html?renderer=${renderer}` });
+    const benchQuery = textureBench ? `&textureBench=1&textureSize=${textureSize}` : '';
+    const page = await openPage({ profileDir, gpuFlags, url: `http://${address}:${sitePort}/index.html?renderer=${renderer}${benchQuery}` });
     browser = page.browser;
     const { client } = page;
     const run = (expression) => page.run(expression, SCENE_LIMIT_MS, 'A scene took too long');
@@ -94,7 +103,13 @@ const main = async () => {
       writeFileSync(path.join(outputDir, `${name}.actual.png`), bytes);
       let verdict = 'kept';
       let shareText = '-';
-      if (updating) {
+      if (textureBench) {
+        verdict = 'BENCHMARK (not reference-compared)';
+        if (!cost.textureCook) failures.push(`${name}: no texture graph benchmark results were returned`);
+        else if (renderer === 'webgpu' && cost.textureCook.backend !== 'webgpu') {
+          failures.push(`${name}: requested WebGPU but benchmark used ${cost.textureCook.backend}: ${cost.textureCookProblem ?? 'unknown fallback'}`);
+        }
+      } else if (updating) {
         writeFileSync(referenceFile, bytes);
       } else if (!realGpu) {
         if (!existsSync(referenceFile)) {
@@ -115,6 +130,24 @@ const main = async () => {
       console.log(`${name}: ${verdict}`);
     }
     console.table(rows);
+    if (textureBench) {
+      const cooked = numbers['texture-graph']?.textureCook;
+      if (cooked) {
+        console.table([{
+          backend: cooked.backend,
+          resolution: `${cooked.resolution}×${cooked.resolution}`,
+          'cold evaluation ms': +cooked.coldEvalMs.toFixed(1),
+          'cold GPU sync ms': +cooked.coldSyncMs.toFixed(1),
+          'PNG encoding ms': +cooked.encodeMs.toFixed(1),
+          'cached evaluation ms': +cooked.cachedEvalMs.toFixed(1),
+          'incremental evaluation ms': +cooked.editEvalMs.toFixed(1),
+          'incremental GPU sync ms': +cooked.editSyncMs.toFixed(1),
+          'cold nodes': cooked.firstNodes,
+          'cached nodes': cooked.cachedNodes,
+          'incremental nodes': cooked.editNodes,
+        }]);
+      }
+    }
     writeFileSync(path.join(outputDir, 'numbers.json'), `${JSON.stringify(numbers, null, 2)}\n`);
     if (updating && !only) {
       for (const file of readdirSync(referenceDir)) {
