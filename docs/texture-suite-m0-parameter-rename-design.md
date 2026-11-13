@@ -14,13 +14,14 @@
 2. An editable **paint fill** and **mask generator** may store a `graphId` and a dictionary of exposed parameter values, including nested folders.
 3. Model material bindings store a `materialId` and `MaterialParameterSetting[]` values keyed by name.
 4. Placed-object material overrides inherit which asset is assigned through their model, with their own `MaterialParameterSetting[]`.
-5. The project-wide **Shared presets** document (metadata ID `texture-graph-presets`) holds values and associates each preset with an asset `graphId`.
+5. Saved prefab objects keep independent copies of their material overrides and resolve assignments through their models.
+6. The project-wide **Shared presets** document (metadata ID `texture-graph-presets`) holds values and associates each preset with an asset `graphId`.
 
 If the graph's public parameter name changes without renaming these dependent values in the same project revision, the next load can restore a default or discard an intended override.
 
 ## What the pure plan provides
 
-`planTextureParameterRename` takes an **authoritative, complete** snapshot of the material, model, object and metadata domains. It validates a source material and a new parameter name, then returns:
+`planTextureParameterRename` takes an **authoritative, complete** snapshot of materials, models, placed objects, prefab objects and metadata. A matching prefab override blocks the plan until the transaction can rewrite saved prefabs. It validates a source material and a new parameter name, then returns:
 
 - A deterministic **impact inventory** of material assets, model documents, placed objects, metadata and reference counts.
 - Full-document `ProjectChange[]` upserts for a single host `project.applyChanges` batch.
@@ -50,11 +51,11 @@ It ignores unrelated assets that merely happen to have a parameter of the same n
 
 ## Interim safety guard for the editor
 
-The texture-graph Parameter Editor now preflights a public parameter rename against **all four native host domains** (materials, models, objects and metadata). The pure `readTextureRenameInventory` boundary rejects missing domains (including domains whose complete result should be an empty array), malformed or duplicate document identities, unsupported reference-bearing schemas and model overrides without model identity. It also checks that **every saved material matches the in-memory material library** before the planner is allowed to consider a graph-local edit. Unsaved/debounced material changes require completing their writes or reloading, rather than silently omitting dependencies. If the plan sees **any** dependent document beyond the source graph, the editor **refuses the local rename** and reports subgraph/Iterate, paint, model, object and shared-preset reference counts.
+The texture-graph Parameter Editor now preflights a public parameter rename against **five native host domains** (materials, models, objects, prefabs and metadata). The pure `readTextureRenameInventory` boundary rejects missing domains (including domains whose complete result should be an empty array), malformed or duplicate document identities, unsupported reference-bearing schemas and object overrides without model identity. It also checks that **every saved material matches the in-memory material library** before the planner is allowed to consider a graph-local edit. Unsaved/debounced material changes require completing their writes or reloading, rather than silently omitting dependencies. If the plan sees **any** dependent document beyond the source graph, the editor **refuses the local rename** and reports subgraph/Iterate, paint, model, object and shared-preset reference counts.
 
-This deliberately blocks a previously unsafe operation rather than pretending a graph-local Undo could restore another asset's model/object settings. A graph with no outside references may still use its existing local rename/undo flow.
+The check includes paint on the source material and reusable smart-material layers. Export-template assets carry no graph parameter references. A graph with no outside references may still use its existing local rename/undo flow.
 
-The preflight also refuses to rename if project identity/revision, graph **or parameter values** changed during scanning, if the project cannot be queried or is read-only, or if the planner finds a collision/unsupported document. `getSnapshotAll` now rejects page-to-page project/revision changes, missing continuation pages and cursor loops rather than returning a stitched, inconsistent snapshot. It checks the in-memory shared-presets list in addition to the persisted metadata snapshot.
+The preflight also refuses to rename if project identity/revision, graph **or parameter values** changed during scanning, if the project cannot be queried or is read-only, or if the planner finds a collision/unsupported document. `getSnapshotAll` now rejects page-to-page project/revision changes, malformed document lists, missing continuation pages and cursor loops. It checks the in-memory shared-presets list in addition to the persisted metadata snapshot.
 
 **The cross-document project transaction and unified undo/redo are still unfinished.** The guard must be removed/replaced once a full atomic rename action has been implemented and tested; do not turn failed checks into best-effort changes.
 

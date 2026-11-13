@@ -1083,15 +1083,15 @@ const Workspace: React.FC<{
                                 const plan = planTextureParameterRename({
                                     sourceMaterialId: asset.id, from, to, ...inventory,
                                 });
-                                const sharedInMemory = sharedPresets.of(asset.id).some((preset) => Object.hasOwn(preset.values, from));
-                                if (requiresProjectWideParameterRename(plan.impact) || sharedInMemory) {
+                                const sharedInMemory = sharedPresets.of(asset.id).filter((preset) => Object.hasOwn(preset.values, from)).length;
+                                if (requiresProjectWideParameterRename(plan.impact) || sharedInMemory > 0) {
                                     const otherMaterials = plan.impact.materials.filter((id) => id !== asset.id).length;
-                                    setMessage({ tone: 'error', text: `Rename blocked: ${otherMaterials} dependent material(s), ${plan.impact.nestedNodes} subgraph/Iterate node(s), ${plan.impact.paintReferences} paint reference(s), ${plan.impact.modelOverrides} model override(s), ${plan.impact.objectOverrides} placed-object override(s), and ${Math.max(plan.impact.sharedPresets, Number(sharedInMemory))} shared preset(s) need coordinated project-wide save and undo.` });
+                                    setMessage({ tone: 'error', text: `Rename blocked: ${otherMaterials} dependent material(s), ${plan.impact.nestedNodes} subgraph/Iterate node(s), ${plan.impact.paintReferences} paint reference(s), and ${plan.impact.modelOverrides} model and ${plan.impact.objectOverrides} placed-object override(s). Shared presets using this parameter: ${plan.impact.sharedPresets} saved, ${sharedInMemory} in the editor. These references need coordinated project-wide save and undo.` });
                                     return;
                                 }
                                 const currentStatus = projectService.getStatus();
                                 const latest = currentStored();
-                                if (currentStatus.projectId !== status.projectId || currentStatus.revision !== status.revision
+                                if (currentStatus.readOnly || currentStatus.projectId !== status.projectId || currentStatus.revision !== status.revision
                                     || JSON.stringify(latest.graph) !== JSON.stringify(before.graph)
                                     || JSON.stringify(latest.values) !== JSON.stringify(before.values)) {
                                     throw new Error('The project changed while references were being checked. Nothing was renamed; try again.');

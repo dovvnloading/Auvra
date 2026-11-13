@@ -42,6 +42,7 @@ const fixture = (): { snapshot: ProjectSnapshot; live: MaterialAsset[] } => {
                 objects: [{ id: 'object', modelId: 'model', materialOverrides: {
                     Wood: { parameters: [{ name: 'wear', value: 0.2 }] },
                 } }, { id: 'light', type: 'light' }],
+                prefabs: [],
                 metadata: [{ id: 'texture-graph-presets', settings: {
                     version: 1, presets: [{ id: 'preset', graphId: 'source', values: { wear: 0.8 } }],
                 } }],
@@ -53,6 +54,17 @@ const inventory = (data: ReturnType<typeof fixture>) =>
     readTextureRenameInventory(data.snapshot, data.live, { projectId: 'project-a', revision: 7 });
 const domains = (data: ReturnType<typeof fixture>): Record<string, unknown> =>
     data.snapshot.domains as Record<string, unknown>;
+
+const planWithPaintAssets = (...paintAssets: MaterialAsset[]) => {
+    const live = [material('source', { graph: graph() }), ...paintAssets];
+    const snapshot = {
+        projectId: 'project-a', revision: 7, hasMore: false,
+        domains: { materials: live.map(materialAssetDocument), models: [], objects: [], prefabs: [], metadata: [] },
+    };
+    return planTextureParameterRename({
+        ...inventory({ live, snapshot }), sourceMaterialId: 'source', from: 'wear', to: 'patina',
+    });
+};
 
 describe('texture parameter rename host inventory safety', () => {
     it('accepts complete matching saved documents and includes dependent references in the plan', () => {
@@ -71,8 +83,49 @@ describe('texture parameter rename host inventory safety', () => {
         });
     });
 
+    it('allows a local rename in a project with export templates and unrelated saved smart materials', () => {
+        const templates = material('templates', undefined, { exportTemplates: [] });
+        const smart = material('smart', undefined, { smartMaterial: { version: 1, at: 12, layer: {
+            id: 'fill', kind: 'fill', fill: { roughness: { kind: 'graph', graphId: 'other', values: { wear: 0.8 } } },
+        } } });
+        const plan = planWithPaintAssets(templates, smart);
+        expect(requiresProjectWideParameterRename(plan.impact)).toBe(false);
+        expect(plan.impact.materials).toEqual(['source']);
+    });
+
+    it('plans a reversible rename for graph fills and masks inside a saved smart material', () => {
+        const smart = material('smart', undefined, { smartMaterial: { version: 1, at: 12, layer: {
+            id: 'folder', kind: 'folder', layers: [{ id: 'fill', kind: 'fill',
+                fill: { roughness: { kind: 'graph', graphId: 'source', values: { wear: 0.8 } } },
+                mask: [{ id: 'mask', kind: 'generator', graphId: 'source', values: { wear: 0.2 } }],
+            }],
+        } } });
+        const before = structuredClone(materialAssetDocument(smart));
+        const plan = planWithPaintAssets(smart);
+        expect(requiresProjectWideParameterRename(plan.impact)).toBe(true);
+        expect(plan.impact.paintReferences).toBe(2);
+        expect(plan.changedMaterials.find(asset => asset.id === 'smart')?.paint).toMatchObject({
+            smartMaterial: { layer: { layers: [{
+                fill: { roughness: { values: { patina: 0.8 } } }, mask: [{ values: { patina: 0.2 } }],
+            }] } },
+        });
+        expect(materialAssetDocument(smart)).toEqual(before);
+        expect(plan.undoChanges.find(change => change.id === 'smart')?.value).toEqual(before);
+    });
+
+    it('rejects malformed paint variants even alongside valid export templates', () => {
+        for (const paint of [
+            { exportTemplates: [], layers: null },
+            { exportTemplates: [], smartMaterial: { version: 2, layer: {} } },
+            { smartMaterial: { version: 1, layer: null } },
+            { exportTemplates: {} },
+        ]) {
+            expect(() => planWithPaintAssets(material('paint', undefined, paint))).toThrow(/unsupported paint document/);
+        }
+    });
+
     it('requires every reference-bearing domain even when it contains no documents', () => {
-        for (const name of ['materials', 'models', 'objects', 'metadata']) {
+        for (const name of ['materials', 'models', 'objects', 'prefabs', 'metadata']) {
             const data = fixture();
             delete domains(data)[name];
             expect(() => inventory(data)).toThrow(name);
@@ -80,6 +133,33 @@ describe('texture parameter rename host inventory safety', () => {
         const empty = fixture();
         domains(empty).metadata = [];
         expect(inventory(empty).metadata).toEqual([]);
+    });
+
+    it('blocks a saved prefab override even when the prefab has no placed instances', () => {
+        const data = fixture();
+        const saved = domains(data);
+        saved.objects = [];
+        saved.models = [{ id: 'model', materialOverrides: { Wood: { materialId: 'source' }, Metal: { materialId: 'dependent' } } }];
+        const member = { id: 'member', modelId: 'model', materialOverrides: { Wood: { parameters: [{ name: 'wear', value: 0.6 }] } } };
+        saved.prefabs = [{ id: 'kit', objects: [member] }];
+        const plan = () => planTextureParameterRename({
+            ...inventory(data), sourceMaterialId: 'source', from: 'wear', to: 'patina',
+        });
+        expect(plan).toThrow(/prefab "kit" object "member" overrides "wear"/);
+
+        saved.prefabs = [{ id: 'kit', objects: [{ ...member, materialOverrides: { Metal: member.materialOverrides.Wood } }] }];
+        expect(plan).not.toThrow();
+
+        saved.prefabs = [{ id: 'kit', objects: [{ ...member, modelId: 'missing-model' }] }];
+        expect(plan).toThrow(/model is missing/);
+    });
+
+    it('rejects malformed prefab members before planning', () => {
+        for (const members of [null, [null], [{ id: 'p' }, { id: 'p' }], [{ id: 'p', materialOverrides: { Wood: { parameters: null } } }]]) {
+            const data = fixture();
+            domains(data).prefabs = [{ id: 'kit', objects: members }];
+            expect(() => inventory(data)).toThrow(/prefab/i);
+        }
     });
 
     it('rejects incomplete, mixed-project and stale snapshot envelopes', () => {
@@ -107,6 +187,10 @@ describe('texture parameter rename host inventory safety', () => {
     it('rejects malformed references and records without model identity', () => {
         const cases: Array<(data: ReturnType<typeof fixture>) => void> = [
             (data) => { (domains(data).models as any[])[0].materialOverrides = ['invalid']; },
+            (data) => { (domains(data).models as any[])[0].materialOverrides.Wood = null; },
+            (data) => { (domains(data).models as any[])[0].materialOverrides.Wood.materialId = 12; },
+            (data) => { (domains(data).models as any[])[0].materialOverrides.Wood.parameters = { wear: 0.1 }; },
+            (data) => { (domains(data).objects as any[])[0].materialOverrides.Wood.parameters = [null]; },
             (data) => { (domains(data).objects as any[])[0].modelId = undefined; },
             (data) => { (domains(data).objects as any[])[0].materialOverrides = ['invalid']; },
             (data) => { (domains(data).materials as any[])[1].textureGraph = { graph: { version: 2 } }; },
@@ -135,6 +219,15 @@ describe('texture parameter rename host inventory safety', () => {
             textureGraph: { ...dirtyDependent.live[1].textureGraph, values: { unsaved: 2 } },
         };
         expect(() => inventory(dirtyDependent)).toThrow(/differs from the saved project/);
+    });
+
+    it('accepts saved picture maps after the native host sorts their keys', () => {
+        const data = fixture();
+        data.live[0] = { ...data.live[0], pictures: { normal: 'texture-n', baseColor: 'texture-c' } };
+        const documents = data.live.map(materialAssetDocument);
+        documents[0] = { ...documents[0], pictures: { baseColor: 'texture-c', normal: 'texture-n' } };
+        domains(data).materials = documents;
+        expect(inventory(data).materials).toEqual(data.live);
     });
 
     it('blocks a material missing from either the editor or the project snapshot', () => {

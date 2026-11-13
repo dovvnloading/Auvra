@@ -11,7 +11,7 @@ import { GRAPH_USING_TYPES } from './nodes/io';
  * A public graph parameter may be referenced in material graph nodes, paint fill
  * graphs, model assignments and per-object overrides. Rewriting only the open
  * graph can silently change appearances. The caller must supply COMPLETE
- * snapshots for all four host domains, validate this plan, and persist all
+ * snapshots for all reference-bearing domains, validate this plan, and persist all
  * changes in a SINGLE project.applyChanges transaction before updating caches.
  * Do not apply one change at a time or mutate input documents optimistically.
  */
@@ -33,6 +33,11 @@ export interface ProjectMetadataForRename {
     [key: string]: unknown;
 }
 
+export interface ProjectPrefabForRename {
+    id: string;
+    objects: readonly ProjectObjectForRename[];
+}
+
 export interface TextureParameterRenameInput {
     sourceMaterialId: string;
     from: string;
@@ -41,6 +46,7 @@ export interface TextureParameterRenameInput {
     materials: readonly MaterialAsset[];
     models: readonly ProjectModelForRename[];
     objects: readonly ProjectObjectForRename[];
+    prefabs: readonly ProjectPrefabForRename[];
     metadata: readonly ProjectMetadataForRename[];
 }
 
@@ -71,12 +77,12 @@ export interface TextureParameterRenamePlan {
 }
 
 /**
- * A graph-local rename is permitted only when no other saved project record
- * relies on the parameter. Until the editor has project-wide undo, use this
- * guard instead of silently orphaning names in dependent documents.
+ * The graph-local command updates parameter definitions, bindings and values.
+ * Paint and nested graph-input keys need the full plan, even on the source material.
  */
 export const requiresProjectWideParameterRename = (impact: RenameImpact): boolean =>
-    impact.materials.some((id) => id !== impact.sourceMaterialId)
+    impact.paintReferences > 0 || impact.nestedNodes > 0
+    || impact.materials.some((id) => id !== impact.sourceMaterialId)
     || impact.models.length > 0
     || impact.objects.length > 0
     || impact.metadata.length > 0;
@@ -134,7 +140,7 @@ const renamedPaintUsers = (
     material: MaterialAsset, sourceId: string, from: string, to: string,
 ): { asset: MaterialAsset; count: number } | null => {
     const paint = record(material.paint);
-    if (!paint || !Array.isArray(paint.layers)) return null;
+    if (!paint || (!Array.isArray(paint.layers) && paint.smartMaterial === undefined)) return null;
     // Clone only the paint document. Leave other material and graph documents untouched.
     const copy = structuredClone(paint);
     let count = 0;
@@ -156,7 +162,14 @@ const renamedPaintUsers = (
             if (Array.isArray(layer.layers)) visit(layer.layers, depth + 1);
         }
     };
-    visit(copy.layers as unknown[], 0);
+    if (Array.isArray(copy.layers)) visit(copy.layers, 0);
+    if (copy.smartMaterial !== undefined) {
+        const smart = record(copy.smartMaterial);
+        if (smart?.version !== 1 || !record(smart.layer)) {
+            throw new Error(`Cannot inspect the saved smart material "${material.name}": unsupported smart material document.`);
+        }
+        visit([smart.layer], 0);
+    }
     if (!count) return null;
     if (paint.version !== 1 && paint.version !== undefined) {
         throw new Error(`Cannot rename a reference inside "${material.name}": unsupported paint document version.`);
@@ -264,32 +277,42 @@ export const planTextureParameterRename = (input: TextureParameterRenameInput): 
     // Object/model parameter lists are shared by the shader and baked texture
     // graph. A same-named shader parameter would be ambiguous to rename.
     const sharedShaderName = materialGraphParameters(source.graph).some((parameter) => parameter.name === from);
-    const nextModels = new Map<string, ProjectModelForRename>();
+    const modelsById = new Map(models.map(model => [model.id, model]));
     for (const model of models) {
         const changed = renamedOverrideSettings(model.materialOverrides,
             (_name, entry) => entry.materialId === sourceMaterialId, from, to, `model ${model.id}`);
         if (!changed.count) continue;
         if (sharedShaderName) throw new Error(`Cannot rename "${from}" in model overrides: a shader parameter in "${source.name}" has the same name.`);
         const next = { ...model, materialOverrides: changed.value };
-        nextModels.set(model.id, next);
         impact.models.push(model.id);
         impact.modelOverrides += changed.count;
         commit('models', model.id, model, next);
     }
-    for (const object of objects) {
-        const model = nextModels.get(object.modelId) ?? models.find((candidate) => candidate.id === object.modelId);
+    const objectOverrides = (object: ProjectObjectForRename, path: string) => {
+        const model = modelsById.get(object.modelId);
         if (!model) {
             const overrides = record(object.materialOverrides);
             if (overrides && Object.values(overrides).some((entry) => {
                 const params = record(entry)?.parameters;
                 return Array.isArray(params) && params.some((value) => record(value)?.name === from);
-            })) throw new Error(`Cannot safely inspect object "${object.id}": its model is missing from the supplied snapshot.`);
-            continue;
+            })) throw new Error(`Cannot safely inspect ${path}: its model is missing from the supplied snapshot.`);
+            return { value: object.materialOverrides, count: 0 };
         }
         const assigned = record(model.materialOverrides);
-        const changed = renamedOverrideSettings(object.materialOverrides,
+        return renamedOverrideSettings(object.materialOverrides,
             (name) => record(assigned?.[name])?.materialId === sourceMaterialId,
-            from, to, `object ${object.id}`);
+            from, to, path);
+    };
+    for (const prefab of input.prefabs) {
+        for (const member of prefab.objects) {
+            const path = `prefab "${prefab.id}" object "${member.id}"`;
+            if (objectOverrides(member, path).count) {
+                throw new Error(`Rename blocked: ${path} overrides "${from}". Renaming it requires updating the saved prefab.`);
+            }
+        }
+    }
+    for (const object of objects) {
+        const changed = objectOverrides(object, `object ${object.id}`);
         if (!changed.count) continue;
         if (sharedShaderName) throw new Error(`Cannot rename "${from}" in object overrides: a shader parameter in "${source.name}" has the same name.`);
         const next = { ...object, materialOverrides: changed.value };

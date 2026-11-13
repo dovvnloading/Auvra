@@ -58,7 +58,7 @@ const fixture = () => {
         { id: 'a', graphId: 'source', values: { wear: 0.3, other: 4 } },
         { id: 'b', graphId: 'used', values: { wear: 0.2 } },
     ] } }];
-    return { sourceMaterialId: 'source', from: 'wear', to: 'patina', materials: [source, used, paint], models, objects, metadata };
+    return { sourceMaterialId: 'source', from: 'wear', to: 'patina', materials: [source, used, paint], models, objects, prefabs: [], metadata };
 };
 
 describe('M0 transactional texture parameter rename planner', () => {
@@ -114,6 +114,34 @@ describe('M0 transactional texture parameter rename planner', () => {
 
         expect(plan.undoChanges[0].value).toEqual(materialAssetDocument(input.materials[0]));
         expect(plan.undoChanges.at(-1)?.value).toEqual(input.metadata[0]);
+    });
+
+    it('requires the full plan for paint references on the source material itself', () => {
+        const source = material('source', { graph: graph(), values: {} }, {
+            version: 1, layers: [{
+                id: 'fill', kind: 'fill', fill: {
+                    roughness: { kind: 'graph', graphId: 'source', output: 'roughness', values: { wear: 0.3 } },
+                },
+            }],
+        });
+        const { impact } = planTextureParameterRename({
+            sourceMaterialId: source.id, from: 'wear', to: 'patina', materials: [source], models: [], objects: [], prefabs: [], metadata: [],
+        });
+        expect(impact.materials).toEqual(['source']);
+        expect(impact.paintReferences).toBe(1);
+        expect(requiresProjectWideParameterRename(impact)).toBe(true);
+    });
+
+    it('requires the full plan for a source graph that overrides its own nested input', () => {
+        const source = material('source', {
+            graph: graph([createNode('subgraph', 0, 0, { graph: 'source', wear: 0.3 })]), values: {},
+        });
+        const { impact } = planTextureParameterRename({
+            sourceMaterialId: source.id, from: 'wear', to: 'patina', materials: [source], models: [], objects: [], prefabs: [], metadata: [],
+        });
+        expect(impact.materials).toEqual(['source']);
+        expect(impact.nestedNodes).toBe(1);
+        expect(requiresProjectWideParameterRename(impact)).toBe(true);
     });
 
     it('rejects target-name collisions before producing any mutations', () => {
