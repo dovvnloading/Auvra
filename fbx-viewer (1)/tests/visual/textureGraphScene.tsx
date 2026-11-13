@@ -350,7 +350,7 @@ export const TextureGraphScene: React.FC = () => {
         const gpu: TexturingGpu = isGpuRenderer(gl) ? webgpuTexturing(gl.core.device as unknown as WgpuDevice) : textureGpu();
         void (async () => {
             let own = true;
-            let pictures: { colour: Blob; normal: Blob };
+            let pictures: Awaited<ReturnType<typeof cook>>;
             try {
                 if (isGpuRenderer(gl)) {
                     await checkScatterParity(gpu);
