@@ -297,9 +297,9 @@ export class PaintSession {
         // cannot understand. Refuse before allocating the GPU stack or writing.
         const unsupported = incompatiblePaintSetFor(materialLibrary.list(), target);
         if (unsupported) {
-            const version = typeof unsupported.version === 'string' || typeof unsupported.version === 'number'
-                ? String(unsupported.version) : 'unknown';
-            throw new Error(`The painted set "${unsupported.name}" uses unsupported document version ${version}. This Auvra build cannot edit it safely. Open this project in a newer version; the saved set has not been changed.`);
+            const reason = 'channel' in unsupported ? `unsupported channel "${unsupported.channel}"`
+                : `unsupported document version ${typeof unsupported.version === 'string' || typeof unsupported.version === 'number' ? unsupported.version : 'unknown'}`;
+            throw new Error(`The painted set "${unsupported.name}" uses ${reason}. Open it in a compatible version of Auvra to edit it.`);
         }
         let asset = findPaintAsset(target);
         let document = asset ? readPaintDocument(asset.paint) : null;

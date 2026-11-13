@@ -416,23 +416,57 @@ export const unsupportedPaintVersion = (value: unknown): { version: unknown } | 
     return version === undefined || version === 1 ? null : { version };
 };
 
-/**
- * A future painted set belonging to the model/material group about to be edited.
- * Other assets may use `paint` for presets/templates; they must not block Paint.
- * This is a pure preflight so PaintSession can refuse before creating or saving
- * an empty replacement set.
- */
+const record = (value: unknown): Record<string, unknown> | undefined =>
+    value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+
+const unknownChannel = (key: unknown): key is string =>
+    typeof key === 'string' && !(PAINT_CHANNELS as readonly string[]).includes(key);
+
+/** Inspect the raw document before the v1 reader filters its channel lists. */
+const unsupportedPaintChannel = (doc: Record<string, unknown>): string | undefined => {
+    const declared = Array.isArray(doc.channels) ? doc.channels.find(unknownChannel) : undefined;
+    if (declared !== undefined) return declared;
+    const before = Object.keys(record(doc.before) ?? {}).find(unknownChannel);
+    if (before !== undefined) return before;
+
+    const pending: unknown[] = Array.isArray(doc.layers) ? [...doc.layers] : [];
+    while (pending.length) {
+        const layer = record(pending.pop());
+        if (!layer) continue;
+        for (const field of [layer.channels, layer.pictures, layer.fill]) {
+            const key = Object.keys(record(field) ?? {}).find(unknownChannel);
+            if (key !== undefined) return key;
+        }
+        for (const source of Object.values(record(layer.fill) ?? {})) {
+            const fill = record(source);
+            if (fill?.kind === 'below' && unknownChannel(fill.channel)) return fill.channel;
+        }
+        if (Array.isArray(layer.mask)) {
+            for (const effect of layer.mask) {
+                const mask = record(effect);
+                if (mask?.kind === 'below' && unknownChannel(mask.channel)) return mask.channel;
+            }
+        }
+        if (Array.isArray(layer.layers)) for (const child of layer.layers) pending.push(child);
+    }
+    return undefined;
+};
+
+type PaintIncompatibility = { id: string; name: string } & ({ version: unknown } | { channel: string });
+
+/** Check only the targeted model/material before Paint can allocate a stack or write a replacement. */
 export const incompatiblePaintSetFor = (
     assets: readonly { id: string; name: string; paint?: unknown }[],
     target: { modelId: string; materialNames: readonly string[] },
-): { id: string; name: string; version: unknown } | null => {
+): PaintIncompatibility | null => {
     for (const asset of assets) {
-        const unsupported = unsupportedPaintVersion(asset.paint);
-        if (!unsupported) continue;
-        const doc = asset.paint as Record<string, unknown>;
-        if (doc.modelId !== target.modelId || !Array.isArray(doc.materialNames)) continue;
+        const doc = record(asset.paint);
+        if (!doc || doc.modelId !== target.modelId || !Array.isArray(doc.materialNames)) continue;
         if (!doc.materialNames.some((name) => typeof name === 'string' && target.materialNames.includes(name))) continue;
-        return { id: asset.id, name: asset.name, version: unsupported.version };
+        const version = unsupportedPaintVersion(doc);
+        if (version) return { id: asset.id, name: asset.name, ...version };
+        const channel = unsupportedPaintChannel(doc);
+        if (channel !== undefined) return { id: asset.id, name: asset.name, channel };
     }
     return null;
 };

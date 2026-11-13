@@ -26,6 +26,8 @@ This stage establishes stable naming, physical semantics, non-destructive migrat
 | `emissive` | (0, 0, 0) | Colour | 8 | `emissive` | `emissiveTexture` RGB |
 | `opacity` | (1, 1, 1) | Linear scalar | 8 | `opacity` | `baseColorTexture` A |
 
+The catalog records the sample encoding and the initial blend mode separately. Base colour and emission store sRGB samples. Roughness, metallic, height and opacity are linear data. A tangent normal encodes signed XYZ into RGB in [0, 1]. New normal layers use reoriented normal mapping (`normalCombine`), and the other six channels default to `normal`. Layer opacity, coverage and masks set the blend weight. Float map exports convert colour components to linear light and leave data components alone.
+
 Precision here describes an editable sparse picture. The painted GLB writer encodes its exported pictures as PNG8. Occlusion can share the ORM texture's red component as a baked mesh map. The seven editable channels retain their existing identifiers and order.
 
 ## Proposed extended physical families (not enabled)
@@ -65,7 +67,7 @@ Prefer a descriptor registry over another collection of channel-specific switche
 1. **Paint v1 remains v1.** Keep the legacy seven keys, order, defaults and channel naming. Continue reading existing v1 documents without a different visual result.
 2. **No accidental upgrade.** Importing or opening a v1 project does not manufacture default coat/sheen/anisotropy data or change the pictures it applies. An explicit new-channel action is required.
 3. **Write v2 only when supported.** A new version (if required) should add descriptors/capability negotiation, per-channel storage metadata, and explicit serialization tests; do not force an upgrade for code that only adds a read-only catalog.
-4. **Version and unknown-channel policy.** Versionless records use the v1 reader. For explicit v1 and versionless records, it exposes recognized channels and filters unknown channel names. Producers that add a channel must bump the document version. An explicit unsupported version makes `readPaintDocument` return null. When that set matches the model and material being opened, Paint refuses the edit before creating or saving a replacement. The source remains available to a compatible editor. See [the reader and open guard](../fbx-viewer%20(1)/texturing/paint/paintTypes.ts) and [version compatibility fixtures](../fbx-viewer%20(1)/tests/frontend/paintVersionGuard.test.ts).
+4. **Version and unknown-channel policy.** A missing version selects the v1 reader. Explicit unsupported versions are refused. Before opening a set for editing, Paint checks the matching raw model/material document for unknown channel names, including layer fills, masks, pictures, nested folders and the original per-tile pictures. A v1 or versionless document carrying such data stays available to a compatible editor. Read-only consumers can still preview the recognized v1 subset. Future writers must increment the document version when adding an editable channel. [Reader and preflight](../fbx-viewer%20(1)/texturing/paint/paintTypes.ts) · [compatibility fixtures](../fbx-viewer%20(1)/tests/frontend/paintVersionGuard.test.ts).
 5. **One authoritative source.** Source material remains a material asset plus authoring document; per-model painted copies, streamed runtime pages, and temporary GPU targets are not new master authorities.
 6. **Undo and save:** changes to channel definitions, layer values, masks, texture assets and presets belong in the same logical undo transaction and complete project save.
 7. **Versioned project fixtures:** old v1 layers, sparse-page masks, normal/height workflows, UDIMs, smart materials, paint-as-graph nodes, and import/export use cases must survive before a v2 writer is enabled.
@@ -133,7 +135,8 @@ Only after those slices succeed should M2 convert the proposal catalog into a ru
 - [x] Per-output glTF texture destinations, factor-only cases, MaterialX image/value mappings and omission requirements documented.
 - [x] No paint-v1 serialization, migration, renderer, compressor or exporter code changed by the catalog.
 - [ ] Review/approve physical units, channel default values, and backend-supported texture-vs-uniform decisions.
-- [ ] Approve unknown-v2-data behavior with migration and rollback tests.
+- [x] Refuse unsupported versions and protect unrecognized channel data on the edit path. Known-channel v1 documents reopen with their authored layers and picture references.
+- [ ] Before enabling M2 authoring, implement a versioned upgrade and test recovery from an interrupted upgrade.
 - [ ] Author and review the first M2 implementation spec for coated metal and fabric.
 - [ ] Pass the repository's typechecks and unit suite in CI.
 
