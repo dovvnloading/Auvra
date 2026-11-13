@@ -179,6 +179,8 @@ const EXEMPT = new Map(Object.entries({
   'texturing/graph/registry.ts': 'data-model',
   'texturing/graph/stored.ts': 'data-model',
   'texturing/graph/types.ts': 'data-model',
+  // M0's read-only catalog describes existing paint semantics; it has no runtime side effects.
+  'texturing/surfaceChannelCatalog.ts': 'data-model',
   'texturing/materialOutput.ts': 'pure-utility',
   'texturing/zip.ts': 'pure-utility',
   'texturing/png.ts': 'pure-utility',
