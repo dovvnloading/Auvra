@@ -54,17 +54,26 @@ const VALUE_KIND_OF: Record<PaintChannel, SurfaceValueKind> = {
  * A typed, indexed view over the existing paint constants. It mirrors the old
  * values, not the other way around, so this addition cannot migrate a document.
  */
-export const PAINT_V1_CHANNEL_CATALOG: Readonly<Record<PaintChannel, PaintV1ChannelDescriptor>> =
-    Object.fromEntries(PAINT_CHANNELS.map((key) => [key, {
-        key,
-        label: CHANNEL_LABELS[key],
-        valueKind: VALUE_KIND_OF[key],
-        role: key === 'normal' ? 'normal' : CHANNEL_IS_COLOR[key] ? 'colour' : 'data',
-        defaultValue: [...CHANNEL_DEFAULT[key]] as [number, number, number],
-        rgb: CHANNEL_IS_COLOR[key],
-        materialInput: MATERIAL_INPUT_OF[key],
-        storage: 'paint-v1' as const,
-    }])) as Record<PaintChannel, PaintV1ChannelDescriptor>;
+const descriptorOf = (key: PaintChannel): PaintV1ChannelDescriptor => ({
+    key,
+    label: CHANNEL_LABELS[key],
+    valueKind: VALUE_KIND_OF[key],
+    role: key === 'normal' ? 'normal' : CHANNEL_IS_COLOR[key] ? 'colour' : 'data',
+    defaultValue: [...CHANNEL_DEFAULT[key]] as [number, number, number],
+    rgb: CHANNEL_IS_COLOR[key],
+    materialInput: MATERIAL_INPUT_OF[key],
+    storage: 'paint-v1',
+});
+
+export const PAINT_V1_CHANNEL_CATALOG: Readonly<Record<PaintChannel, PaintV1ChannelDescriptor>> = {
+    baseColor: descriptorOf('baseColor'),
+    roughness: descriptorOf('roughness'),
+    metallic: descriptorOf('metallic'),
+    height: descriptorOf('height'),
+    normal: descriptorOf('normal'),
+    emissive: descriptorOf('emissive'),
+    opacity: descriptorOf('opacity'),
+};
 
 /**
  * The contract for M2 design work, deliberately NOT included in PAINT_CHANNELS.
