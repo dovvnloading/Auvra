@@ -64,6 +64,9 @@ import { projectService } from '../../utils/projectService';
 import { editorSession } from '../../utils/editorSession';
 import { useLevelManager } from '../../hooks/useLevelManager';
 import { useProjectManager } from '../../hooks/useProjectManager';
+import { flushMaterialEditorWrites, saveMaterialEditorEdit } from '../../components/Materials/materialEditorWrites';
+import { createMaterialGraph } from '../../runtime/materials/materialGraph';
+import { materialLibrary } from '../../runtime/materials/materialLibrary';
 import { encodeTerrainHeightfield, TERRAIN_HEIGHTFIELD_HEADER_BYTES, TERRAIN_HEIGHTFIELD_MIME } from '../../utils/terrainHeightfieldCodec';
 import { resolveTerrainHeightfield } from '../../utils/terrainHeightfield';
 
@@ -146,6 +149,78 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
+});
+
+describe('pending material graph edits', () => {
+  const edited = (id: string, name: string) => ({ id, name, graph: createMaterialGraph() });
+
+  it('drains the latest edit to each material and joins any in-flight save before closing', async () => {
+    const { result } = renderEditor();
+    const generation = materialLibrary.generation;
+    const report = vi.fn();
+    await saveMaterialEditorEdit(edited('mat-a', 'First'), 'project-a', generation, false, report);
+    await saveMaterialEditorEdit(edited('mat-a', 'Final'), 'project-a', generation, false, report);
+    await saveMaterialEditorEdit(edited('mat-b', 'Other'), 'project-a', generation, false, report);
+    let release!: () => void;
+    const accepted = new Promise<void>(resolve => { release = resolve; });
+    vi.mocked(projectService.applyChanges).mockImplementationOnce(async () => {
+      mocks.calls.push('pending');
+      await accepted;
+      return null;
+    });
+    const unmountFlush = flushMaterialEditorWrites();
+    expect(mocks.calls).toEqual(['pending']);
+    await act(async () => {
+      const close = result.current.project.closeProject();
+      await Promise.resolve();
+      expect(projectService.close).not.toHaveBeenCalled();
+      expect(editorSession.getSnapshot().phase).toBe('ready');
+      release();
+      await Promise.all([close, unmountFlush]);
+    });
+    expect(mocks.calls).toEqual(['pending', 'applyChanges', 'close']);
+    expect(vi.mocked(projectService.applyChanges).mock.calls.map(([[change]]) => change)).toEqual([
+      expect.objectContaining({ id: 'mat-a', value: expect.objectContaining({ name: 'Final' }) }),
+      expect.objectContaining({ id: 'mat-b', value: expect.objectContaining({ name: 'Other' }) }),
+    ]);
+  });
+
+  it('keeps the project ready and the rejected material available to retry when closing fails', async () => {
+    const { result } = renderEditor();
+    const report = vi.fn();
+    const failure = new Error('Material write refused by host');
+    await saveMaterialEditorEdit(edited('mat-a', 'Retry me'), 'project-a', materialLibrary.generation, false, report);
+    vi.mocked(projectService.applyChanges).mockRejectedValueOnce(failure);
+    await act(async () => { await expect(result.current.project.closeProject()).rejects.toThrow(failure.message); });
+    expect(projectService.close).not.toHaveBeenCalled();
+    expect(editorSession.captureReady()?.projectId).toBe('project-a');
+    expect(report).toHaveBeenCalledWith(failure);
+    await act(() => result.current.project.closeProject());
+    expect(vi.mocked(projectService.applyChanges).mock.calls[1]).toEqual(vi.mocked(projectService.applyChanges).mock.calls[0]);
+    expect(report).toHaveBeenLastCalledWith(null);
+    expect(mocks.calls).toEqual(['applyChanges', 'close']);
+  });
+
+  it('discards old timers and rejects callbacks from a different or reloaded project with the same material ID', async () => {
+    vi.useFakeTimers();
+    renderEditor();
+    const report = vi.fn();
+    const generation = materialLibrary.generation;
+    const old = edited('mat-a', 'Old');
+    await saveMaterialEditorEdit(old, 'project-a', generation, false, report);
+    mocks.status.projectId = 'project-b';
+    editorSession.complete(editorSession.beginTransition(), 'project-b', 'level-a', 1);
+    await vi.advanceTimersByTimeAsync(400);
+    expect(projectService.applyChanges).not.toHaveBeenCalled();
+    expect(await saveMaterialEditorEdit(old, 'project-a', generation, true, report)).toBe(false);
+    mocks.status.projectId = 'project-a';
+    editorSession.complete(editorSession.beginTransition(), 'project-a', 'level-a', 1);
+    materialLibrary.replaceAll([]);
+    expect(await saveMaterialEditorEdit(old, 'project-a', generation, true, report)).toBe(false);
+    expect(projectService.applyChanges).not.toHaveBeenCalled();
+    expect(await saveMaterialEditorEdit(edited('mat-a', 'New'), 'project-a', materialLibrary.generation, true, report)).toBe(true);
+    expect(projectService.applyChanges).toHaveBeenCalledOnce();
+  });
 });
 
 describe('pending level edits', () => {
