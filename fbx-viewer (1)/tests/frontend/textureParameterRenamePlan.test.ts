@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createMaterialGraph, type MaterialGraph } from '../../runtime/materials/materialGraph';
 import { materialAssetDocument, type MaterialAsset } from '../../runtime/materials/materialLibrary';
 import { createNode, normalizeTextureGraph } from '../../texturing/graph/document';
-import { planTextureParameterRename, type ProjectModelForRename, type ProjectObjectForRename } from '../../texturing/graph/renameProjectParameter';
+import { planTextureParameterRename, requiresProjectWideParameterRename, type ProjectModelForRename, type ProjectObjectForRename } from '../../texturing/graph/renameProjectParameter';
 
 const surface = (): MaterialGraph => createMaterialGraph();
 const graph = (nodes: ReturnType<typeof createNode>[] = [], parameters = [
@@ -67,6 +67,7 @@ describe('M0 transactional texture parameter rename planner', () => {
         const old = JSON.stringify(input);
         const plan = planTextureParameterRename(input);
         expect(JSON.stringify(input)).toBe(old);
+        expect(requiresProjectWideParameterRename(plan.impact)).toBe(true);
         expect(plan.impact).toMatchObject({
             sourceMaterialId: 'source', from: 'wear', to: 'patina',
             materials: ['source', 'used', 'paint'], models: ['m1', 'm2'], objects: ['o1', 'o2'],
@@ -152,6 +153,7 @@ describe('M0 transactional texture parameter rename planner', () => {
         input.metadata.splice(0);
         const plan = planTextureParameterRename(input);
         expect(plan.impact.materials).toEqual(['source']);
+        expect(requiresProjectWideParameterRename(plan.impact)).toBe(false);
         expect(plan.impact.nestedNodes).toBe(0);
         expect(plan.impact.modelOverrides).toBe(0);
         expect(plan.changes).toHaveLength(1);
