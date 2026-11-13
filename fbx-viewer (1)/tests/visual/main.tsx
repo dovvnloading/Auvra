@@ -8,6 +8,7 @@ import { acceptSoftwareAdapter, acquireGpuCore, releaseIdleGpuCore } from '../..
 import { isGpuRenderer } from '../../renderer/gpu/frame';
 import type { GpuRenderer } from '../../renderer/gpu/GpuRenderer';
 import { SCENES, type SceneSteps, type VisualScene } from './scenes';
+import { textureGraphScene } from './textureGraphScene';
 
 /**
  * The page behind scripts/rendering/run.mjs: mounts one scene at a time, steps it a fixed number of frames on a clock
@@ -126,6 +127,8 @@ const capture = async (name: string) => {
   const { geometries, textures } = state.gl.info.memory;
   const programs = state.gl.info.programs?.length ?? 0;
   const bytes = onWebGpu ? webGpuBytes() : gpuBytes(state.gl.getContext() as WebGL2RenderingContext);
+  const cookBenchmark = name === 'texture-graph' ? textureGraphScene.benchmark : null;
+  const cookProblem = name === 'texture-graph' ? textureGraphScene.problem : null;
   if (onWebGpu) await settled();
   root.unmount();
   // Lets the canvas and what it holds go before the next scene.
@@ -138,7 +141,9 @@ const capture = async (name: string) => {
       await new Promise((resolve) => setTimeout(resolve, 20));
     }
   }
-  return { png, numbers: { loadMs, frameMs, calls, triangles, geometries, textures, programs, gpuBytes: bytes } };
+  return { png, numbers: { loadMs, frameMs, calls, triangles, geometries, textures, programs, gpuBytes: bytes,
+    ...(cookBenchmark ? { textureCook: cookBenchmark, textureCookProblem: cookProblem } : {}),
+  } };
 };
 
 const toPixels = async (url: string): Promise<ImageData> => {
