@@ -94,9 +94,9 @@ class PoseSamples {
         this.surface = { indices, previousPositions: this.from.slice(), positions: this.to.slice() };
     }
 
-    current(owner: THREE.Object3D): boolean {
+    current(owner: THREE.Object3D, resolved: THREE.SkinnedMesh): boolean {
         const { mesh, index } = this;
-        return owner === this.owner && isDescendantOf(mesh, owner) && mesh.skeleton === this.skeleton &&
+        return owner === this.owner && mesh === resolved && mesh.skeleton === this.skeleton &&
             mesh.geometry.index === index && (index?.version ?? 0) === this.indexVersion &&
             mesh.geometry.getAttribute('position') === this.vertex && this.vertex.count * 3 === this.to.length &&
             mesh.geometry.getAttribute('skinIndex') === this.joint && revision(this.joint) === this.jointRevision &&
@@ -108,6 +108,11 @@ class PoseSamples {
         // Bones can sit under an armature sibling of the skinned mesh.
         this.owner.updateWorldMatrix(true, false);
         this.owner.updateMatrixWorld(true);
+        // Detached/shared skeletons may be mounted outside the level object. The renderer
+        // updates them later; physics samples the current local pose before rendering.
+        for (const bone of this.skeleton.bones) {
+            if (bone && !isDescendantOf(bone, this.owner)) bone.updateWorldMatrix(true, false);
+        }
         const ownerDeterminant = garment.matrixWorld.determinant();
         if (!Number.isFinite(ownerDeterminant) || Math.abs(ownerDeterminant) < 1e-14) throw new Error('singular_transform');
         this.localMatrix.copy(garment.matrixWorld).invert().multiply(this.mesh.matrixWorld);
@@ -168,13 +173,15 @@ export class SkinnedSurfaceBinding {
         }
         if (!name) return true;
         const owner = garment.parent;
-        if (!owner) { this.issue = 'missing'; return false; }
+        if (!owner) { this.pose = null; this.issue = 'missing'; return false; }
         try {
-            if (this.pose && !this.pose.current(owner)) this.pose = null;
             if (!this.pose) {
                 this.retry -= dt;
                 if (this.retry > 0) return false;
-                this.pose = new PoseSamples(owner, findOwnerMesh(owner, garment, objectId, name));
+            }
+            const resolved = findOwnerMesh(owner, garment, objectId, name);
+            if (!this.pose?.current(owner, resolved)) {
+                this.pose = new PoseSamples(owner, resolved);
                 this.retry = 0;
             }
             this.pose.capture(garment);

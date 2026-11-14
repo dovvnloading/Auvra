@@ -37,6 +37,7 @@ function Reading({ sample, limits }: GarmentContactView) {
         </dl>}
         {avatar && <dl>
             <div className={row}><dt>Cloth vertex tests / corrections</dt><dd>{avatar.testedFeatures} / {avatar.corrections}</dd></div>
+            {avatar.pinLimitedFeatures > 0 && <div className={row}><dt>Avatar corrections limited by pins</dt><dd>{avatar.pinLimitedFeatures}</dd></div>}
             <div className={row}><dt>Avatar vertex tests / corrections</dt><dd>{avatar.testedBodyVertices} / {avatar.bodyVertexCorrections}</dd></div>
             <div className={row}><dt>Edge tests / corrections</dt><dd>{avatar.testedEdges} / {avatar.edgeCorrections}</dd></div>
             <div className={row}><dt>Primary / feature BVH visits</dt><dd>{avatar.nodeVisits} / {avatar.featureNodeVisits}</dd></div>

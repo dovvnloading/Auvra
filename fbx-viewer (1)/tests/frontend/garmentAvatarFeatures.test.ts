@@ -61,6 +61,16 @@ describe('swept avatar feature contact for coarse cloth', () => {
         expect(p[6]).toBe(cloth[6]);
     });
 
+    it('ignores zero-area animated proxy faces in every contact direction', () => {
+        const a = face(0), p = copy(a), tracker = whole(new Float64Array([1, 1, 1]));
+        // These three distinct indices collapse to one point for the whole sweep.
+        const collapsed = (z: number) => buffer([[0, 0, z], [0, 0, z], [0, 0, z]]);
+        tracker.prepare(region(collapsed(-.1), collapsed(.1)));
+        tracker.solve(a, p, .002, ignore);
+        expect(p).toEqual(a);
+        expect(tracker.stats.bodyVertexCorrections + tracker.stats.edgeCorrections + tracker.stats.corrections).toBe(0);
+    });
+
     it('uses finite segments and finite cloth faces when the infinite plane has a crossing', () => {
         const a = face(0), p = copy(a), s = whole(new Float64Array([1, 1, 1]));
         const outside = (z: number) => buffer([[.15, .15, z], [.21, .15, z], [.21, .21, z]]);
@@ -83,6 +93,20 @@ describe('swept avatar feature contact for coarse cloth', () => {
         expect(p[5]).toBeGreaterThan(p[2]);
         expect(p[8]).toBe(0);
         expect(motions.every(x => Math.abs(x - .003) < 1e-6)).toBe(true);
+    });
+
+    it('bounds pin leverage across both contact passes and reports a blocked shell', () => {
+        const a = buffer([[-.1, 0, 0], [.1, 0, 0], [0, .2, 0]]), p = copy(a);
+        const proxy = buffer([[-.04, .0004, -.001], [.04, .0004, -.001], [0, .0009, -.001]]);
+        const tracker = whole(new Float64Array([0, 0, 1]));
+        tracker.prepare(region(proxy, proxy));
+        tracker.solve(a, p, .004, ignore);
+        tracker.solve(a, p, .004, ignore);
+        expect(p.slice(0, 6)).toEqual(a.slice(0, 6));
+        const correction = Math.hypot(p[6]-a[6], p[7]-a[7], p[8]-a[8]);
+        expect(correction).toBeGreaterThan(0);
+        expect(correction).toBeLessThanOrEqual(.01601);
+        expect(tracker.stats.pinLimitedFeatures).toBeGreaterThan(0);
     });
 
     it('reports independently bounded supplemental candidate and BVH work', () => {

@@ -206,6 +206,14 @@ export class GarmentSimulation {
         this.carry += available;
         const steps = Math.min(MAX_TICKS, Math.floor((this.carry + 1e-12) / GARMENT_STEP));
         if (!avatar) this.avatarContact = null;
+        else {
+            this.avatarContact ??= new GarmentAvatarContact(this.inverseMass, undefined, undefined, this.mesh.indices);
+            if (!steps && !this.avatarContact.beginPartialFrame(avatar)) {
+                this.droppedTime += available;
+                this.carry = carryBefore;
+                return 0;
+            }
+        }
         const spans: BodySample[] = [];
         const nextBodies = new Map<string | number, GarmentCapsule>();
         for (let i = 0; i < colliders.length; i++) {
@@ -218,17 +226,22 @@ export class GarmentSimulation {
         }
         for (let tick = 0; tick < steps; tick++) {
             const end = clamp(((tick + 1) * GARMENT_STEP - carryBefore) / available, 0, 1);
+            if (avatar) {
+                const begin = clamp((tick * GARMENT_STEP - carryBefore) / available, 0, 1);
+                if (!this.avatarContact!.prepare(avatar, begin, end, true)) {
+                    // Suspend before committing cloth, pin or collider history. Dropping the
+                    // invalid interval prevents catch-up through a missing surface on recovery.
+                    this.droppedTime += available;
+                    this.carry = carryBefore;
+                    return tick;
+                }
+            }
             const motion = spans.map(s => {
                 const to = blendBody(s.from, s.to, end);
                 const from = this.lastTickBodies.get(s.key) ?? s.from;
                 this.lastTickBodies.set(s.key, to);
                 return { from, to };
             });
-            if (avatar) {
-                this.avatarContact ??= new GarmentAvatarContact(this.inverseMass, undefined, undefined, this.mesh.indices);
-                const begin = clamp((tick * GARMENT_STEP - carryBefore) / available, 0, 1);
-                this.avatarContact.prepare(avatar, begin, end, true);
-            }
             this.substep(wind, motion, ground, down, end);
             this.carry -= GARMENT_STEP;
             this.time += GARMENT_STEP;

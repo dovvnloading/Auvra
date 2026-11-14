@@ -55,6 +55,22 @@ describe('sample an owning skinned collision surface', () => {
         expect(end.previousPositions[5]).toBeCloseTo(.1);
     });
 
+    it('preserves outward winding and resets sweep history when a rig is reflected', () => {
+        const { host, body } = rig();
+        const group = new THREE.Group(), binding = new SkinnedSurfaceBinding();
+        host.add(group);
+        expect(binding.capture(group, 'actor', 'Body', 1)).toBe(true);
+        binding.tick(1);
+        binding.accept();
+        body.scale.x = -1;
+        expect(binding.capture(group, 'actor', 'Body', 1)).toBe(true);
+        const sample = binding.tick(1)!;
+        expect(Array.from(sample.indices)).toEqual([0, 2, 1]);
+        expect(sample.previousPositions).toEqual(sample.positions);
+        const [a,b,c] = Array.from(sample.indices, i => new THREE.Vector3().fromArray(sample.positions, 3*i));
+        expect(b.sub(a).cross(c.sub(a)).z).toBeGreaterThan(0);
+    });
+
     it('keeps accepted tick history across render frames that take no simulation step', () => {
         const { host, joint } = rig();
         const group = new THREE.Group(), binding = new SkinnedSurfaceBinding();
@@ -92,6 +108,45 @@ describe('sample an owning skinned collision surface', () => {
         const resumed = binding.tick(1)!;
         expect(resumed.positions[5]).toBeCloseTo(.48);
         expect(resumed.previousPositions[5]).toBeCloseTo(.48);
+    });
+
+    it('revalidates exact name, unique ownership and replacement even after a successful binding', () => {
+        const first = rig(), second = rig(), group = new THREE.Group(), binding = new SkinnedSurfaceBinding();
+        first.host.add(group);
+        expect(binding.capture(group, 'actor', 'Body', 1)).toBe(true);
+        binding.tick(1);
+        binding.accept();
+        first.body.name = 'Old';
+        expect(binding.capture(group, 'actor', 'Body', 1)).toBe(false);
+        expect(binding.issue).toBe('missing');
+        first.body.name = 'Body';
+        expect(binding.capture(group, 'actor', 'Body', 1)).toBe(true);
+        first.host.add(second.host);
+        expect(binding.capture(group, 'actor', 'Body', 1)).toBe(false);
+        expect(binding.issue).toBe('ambiguous');
+        second.host.userData.levelObjectId = 'nested';
+        expect(binding.capture(group, 'actor', 'Body', 1)).toBe(true);
+        second.host.add(first.body);
+        expect(binding.capture(group, 'actor', 'Body', 1)).toBe(false);
+        expect(binding.issue).toBe('missing');
+    });
+
+    it('refreshes a detached bone on an external armature before sampling its deformed vertices', () => {
+        const { host, body, joint } = rig(), group = new THREE.Group(), scene = new THREE.Group();
+        const armature = new THREE.Group();
+        scene.add(host, armature);
+        host.add(group);
+        const rootBone = body.skeleton.bones[0];
+        armature.add(rootBone);
+        body.bindMode = THREE.DetachedBindMode;
+        scene.updateMatrixWorld(true);
+        const binding = new SkinnedSurfaceBinding();
+        expect(binding.capture(group, 'actor', 'Body', 1)).toBe(true);
+        binding.tick(1);
+        binding.accept();
+        joint.position.z = .24;
+        expect(binding.capture(group, 'actor', 'Body', 1)).toBe(true);
+        expect(binding.tick(1)!.positions[5]).toBeCloseTo(.24, 6);
     });
 
     it('suspends unsupported proxy data instead of drawing the fitting torso', () => {

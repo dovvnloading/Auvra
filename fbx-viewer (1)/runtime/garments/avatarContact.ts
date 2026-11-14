@@ -46,6 +46,18 @@ function anchor(f: Triangle, w: Barycentric): Point {
     w[0] * f[0][2] + w[1] * f[1][2] + w[2] * f[2][2]];
 }
 
+/** The same finite-area threshold used to normalize an oriented face. */
+function areaSquaredAt(a: number, b: number, c: number, start: Float32Array, end: Float32Array, t: number): number {
+    const s = 1 - t;
+    const ux = s*(start[b]-start[a]) + t*(end[b]-end[a]);
+    const uy = s*(start[b+1]-start[a+1]) + t*(end[b+1]-end[a+1]);
+    const uz = s*(start[b+2]-start[a+2]) + t*(end[b+2]-end[a+2]);
+    const vx = s*(start[c]-start[a]) + t*(end[c]-end[a]);
+    const vy = s*(start[c+1]-start[a+1]) + t*(end[c+1]-end[a+1]);
+    const vz = s*(start[c+2]-start[a+2]) + t*(end[c+2]-end[a+2]);
+    return (uy*vz - uz*vy)**2 + (uz*vx - ux*vz)**2 + (ux*vy - uy*vx)**2;
+}
+
 interface Contact { weights: Barycentric; normal: Point; correction: number }
 
 /** With linearly moving vertices, oriented point/triangle volume is cubic in time.
@@ -117,7 +129,7 @@ export class GarmentAvatarContact {
     readonly stats: AvatarContactStats = {
         nodeVisits: 0, testedFeatures: 0, corrections: 0, limited: false, invalid: false, vertexPhaseLimited: false,
         testedEdges: 0, testedBodyVertices: 0, edgeCorrections: 0, bodyVertexCorrections: 0,
-        featurePairsLimited: false, featureNodesLimited: false, featureNodeVisits: 0,
+        featurePairsLimited: false, featureNodesLimited: false, featureNodeVisits: 0, pinLimitedFeatures: 0,
     };
     private readonly surface: AvatarSurfaceFeatures | null;
     private sourceIndices?: GarmentAvatarSurface['indices'];
@@ -135,13 +147,21 @@ export class GarmentAvatarContact {
         this.surface = clothIndices ? new AvatarSurfaceFeatures(clothIndices, inverseMass) : null;
     }
 
+    /** Save the accepted start of the first partial frame in owned buffers. Later partial
+     * frames reuse it until a complete fixed tick consumes the sweep. */
+    beginPartialFrame(surface: GarmentAvatarSurface): boolean {
+        return this.valid && this.sourceIndices === surface.indices && this.end.length === surface.positions.length
+            || this.prepare(surface, 0, 0);
+    }
+
     prepare(surface: GarmentAvatarSurface, from = 0, to = 1, continuePrevious = false): boolean {
+        this.surface?.beginTick();
         const wasValid = this.valid;
         const { positions, previousPositions, indices } = surface;
         Object.assign(this.stats, {
             nodeVisits: 0, testedFeatures: 0, corrections: 0, limited: false, invalid: false,
             vertexPhaseLimited: false, testedEdges: 0, testedBodyVertices: 0, edgeCorrections: 0, bodyVertexCorrections: 0,
-            featurePairsLimited: false, featureNodesLimited: false, featureNodeVisits: 0
+            featurePairsLimited: false, featureNodesLimited: false, featureNodeVisits: 0, pinLimitedFeatures: 0
         });
         this.valid = false;
         if (positions.length > AVATAR_CONTACT_LIMITS.vertices * 3 || indices.length > AVATAR_CONTACT_LIMITS.triangles * 3) {
@@ -208,6 +228,15 @@ export class GarmentAvatarContact {
                 for (let j = 0; j < 3; j++) { n.lo[j] = Math.min(a.lo[j], b.lo[j]); n.hi[j] = Math.max(a.hi[j], b.hi[j]); }
             } else {
                 const f = n.face * 3, a = 3 * indices[f], b = 3 * indices[f + 1], c = 3 * indices[f + 2];
+                // A moving face normal is quadratic. Vanishing at 0, 1/2 and 1 means
+                // this primitive has no oriented surface anywhere along this sweep.
+                if (areaSquaredAt(a, b, c, this.start, this.end, 1) <= 1e-24 &&
+                    areaSquaredAt(a, b, c, this.start, this.end, 0) <= 1e-24 &&
+                    areaSquaredAt(a, b, c, this.start, this.end, .5) <= 1e-24) {
+                    n.lo.fill(Infinity);
+                    n.hi.fill(-Infinity);
+                    continue;
+                }
                 for (let j = 0; j < 3; j++) {
                     n.lo[j] = Math.min(this.start[a + j], this.start[b + j], this.start[c + j], this.end[a + j], this.end[b + j], this.end[c + j]);
                     n.hi[j] = Math.max(this.start[a + j], this.start[b + j], this.start[c + j], this.end[a + j], this.end[b + j], this.end[c + j]);

@@ -1,4 +1,4 @@
-import { dot, segmentWeights, sub, triangleWeights, type Barycentric, type Point } from './contactGeometry';
+import { PinCorrectionBudget, dot, segmentWeights, sub, triangleWeights, type Barycentric, type Point } from './contactGeometry';
 
 export type FeatureTriangle = [Point, Point, Point];
 type Segment = [Point, Point];
@@ -12,6 +12,8 @@ export interface SurfaceFeatureStats {
     testedBodyVertices: number;
     edgeCorrections: number;
     bodyVertexCorrections: number;
+    /** Contact constraints blocked or truncated by prescribed pins, counted per projection attempt. */
+    pinLimitedFeatures: number;
     featurePairsLimited: boolean;
     featureNodesLimited: boolean;
     featureNodeVisits: number;
@@ -208,7 +210,9 @@ export class AvatarSurfaceFeatures {
     private readonly faces: number[][] = [];
     private readonly edges: number[][] = [];
     private readonly seen = new Set<number>();
+    private readonly pinBudget: PinCorrectionBudget;
     constructor(indices: Uint32Array, private readonly inverseMass: Float64Array) {
+        this.pinBudget = new PinCorrectionBudget(inverseMass.length);
         const known = new Set<number>(), v = inverseMass.length;
         for (let t = 0; t < indices.length; t += 3) {
             const face = [indices[t], indices[t + 1], indices[t + 2]];
@@ -220,6 +224,8 @@ export class AvatarSurfaceFeatures {
         }
     }
 
+    beginTick(): void { this.pinBudget.reset(); }
+
     project(old: Float32Array, end: Float32Array, gap: number, avatar0: Float32Array, avatar1: Float32Array,
         index: Uint16Array | Uint32Array, query: FeatureQuery, friction: ContactFriction, stats: SurfaceFeatureStats,
         maxPairs: number): void {
@@ -230,15 +236,37 @@ export class AvatarSurfaceFeatures {
             return false;
         };
         const resolve = (ids: number[], hit: Hit) => {
-            let denom = 0;
-            for (let k = 0; k < ids.length; k++)denom += hit.weights[k] ** 2 * this.inverseMass[ids[k]];
-            if (denom <= 1e-14) return;
+            let denominator = 0, largestGradient = 0, touchesPin = false;
             for (let k = 0; k < ids.length; k++) {
-                const i = ids[k], shift = hit.delta * hit.weights[k] * this.inverseMass[i] / denom;
+                const w = hit.weights[k], mass = this.inverseMass[ids[k]];
+                denominator += w * w * mass;
+                largestGradient = Math.max(largestGradient, Math.abs(w) * mass);
+                if (!mass && Math.abs(w) > 1e-8) touchesPin = true;
+            }
+            if (denominator <= 1e-14) {
+                if (touchesPin) stats.pinLimitedFeatures++;
+                return false;
+            }
+            let lambda = hit.delta / denominator;
+            const guard = touchesPin && largestGradient > 4 * denominator;
+            if (guard) {
+                // Near a pinned corner a tiny contact weight on the only movable vertex
+                // can require a metre-scale shift to close a millimetre-scale gap.
+                const unrestricted = lambda, maxMove = 4 * Math.max(gap, hit.delta);
+                for (let k = 0; k < ids.length; k++) {
+                    lambda = this.pinBudget.limit(lambda, ids[k], Math.abs(hit.weights[k]) * this.inverseMass[ids[k]], maxMove);
+                }
+                if (lambda < unrestricted) stats.pinLimitedFeatures++;
+            }
+            if (!lambda) return false;
+            for (let k = 0; k < ids.length; k++) {
+                const i = ids[k], shift = lambda * hit.weights[k] * this.inverseMass[i];
                 if (!shift) continue;
-                for (let j = 0; j < 3; j++)end[3 * i + j] += hit.normal[j] * shift;
+                if (guard) this.pinBudget.record(i, shift);
+                for (let j = 0; j < 3; j++) end[3 * i + j] += hit.normal[j] * shift;
                 friction(3 * i, ...hit.normal, shift, ...hit.bodyMotion);
             }
+            return true;
         };
         // Query reciprocal points first: broad triangles can easily cover a small proxy,
         // leaving no cloth vertices or edges inside the avatar faces.
@@ -255,7 +283,7 @@ export class AvatarSurfaceFeatures {
                     if (!budget()) return false;
                     stats.testedBodyVertices++;
                     const hit = bodyVertexContact(point(avatar0, i), point(avatar1, i), a, readFace(ids, end), gap);
-                    if (hit) { resolve(ids, hit); stats.bodyVertexCorrections++; }
+                    if (hit && resolve(ids, hit)) stats.bodyVertexCorrections++;
                 }
                 return true;
             });
@@ -276,7 +304,7 @@ export class AvatarSurfaceFeatures {
                     stats.testedEdges++;
                     const hit = edgeContact(a, [point(end, ids[0]), point(end, ids[1])], [point(avatar0, i), point(avatar0, k)],
                         [point(avatar1, i), point(avatar1, k)], gap);
-                    if (hit) { resolve(ids, hit); stats.edgeCorrections++; }
+                    if (hit && resolve(ids, hit)) stats.edgeCorrections++;
                 }
                 return true;
             });

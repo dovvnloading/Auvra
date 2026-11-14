@@ -26,6 +26,33 @@ describe('live cloth contact against an animated oriented triangle proxy', () =>
         expect(sim.avatarContactStats?.limited).toBe(false);
     });
 
+    it('retains the very first swept endpoint when several render calls precede the first fixed tick', () => {
+        const full = new GarmentSimulation(coupon(), noLoads), split = new GarmentSimulation(coupon(), noLoads);
+        const start = zPlane(-.2), halfway = zPlane(.1), end = zPlane(.4);
+        full.step(GARMENT_STEP, undefined, null, [], null, undefined, proxy(start, end));
+        expect(split.step(GARMENT_STEP / 2, undefined, null, [], null, undefined, proxy(start, halfway))).toBe(0);
+        // The direct API allows callers to reuse their frame buffers.
+        start.fill(7);
+        split.step(GARMENT_STEP / 2, undefined, null, [], null, undefined, proxy(halfway, end));
+        expect(split.positions[5]).toBeCloseTo(.402, 6);
+        expect(split.positions).toEqual(full.positions);
+    });
+
+    it('rejects an invalid proxy atomically and resumes at the next valid tick', () => {
+        const motion = { ...noLoads, gravity:9.81 };
+        const sim = new GarmentSimulation(coupon(), motion), expected = new GarmentSimulation(coupon(), motion);
+        const a = zPlane(-1), bad = a.slice();
+        bad[8] = NaN;
+        const initial = sim.positions.slice();
+        expect(sim.step(GARMENT_STEP * 3, undefined, null, [], null, undefined, proxy(a, bad))).toBe(0);
+        expect(sim.positions).toEqual(initial);
+        expect(sim.time).toBe(0);
+        expect(sim.avatarContactStats?.invalid).toBe(true);
+        sim.step(GARMENT_STEP, undefined, null, [], null, undefined, proxy(a, a));
+        expected.step(GARMENT_STEP, undefined, null, [], null, undefined, proxy(a, a));
+        expect(sim.positions).toEqual(expected.positions);
+    });
+
     it('solves a deforming face with different vertex displacements and matches a fixed-tick partition', () => {
         const source = zPlane(-.2), target = zPlane(.3);
         target[2] = .21; target[5] = .45; target[8] = .17;
