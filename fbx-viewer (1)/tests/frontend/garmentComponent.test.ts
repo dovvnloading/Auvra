@@ -141,6 +141,28 @@ describe('garment component in the level transform hierarchy', () => {
         garment.dispose();
     });
 
+    it('releases a cached bone renamed or moved into a nested actor and binds its replacement', () => {
+        const garment = new GarmentInstance(cookComponentGarment(undefined), 'cotton');
+        const host = new THREE.Group(), nested = new THREE.Group(), chest = bone('Chest');
+        nested.userData.levelObjectId = 'second-actor';
+        host.add(garment.root, chest, nested);
+        const binding = { ...settings(), followBone: 'Chest', wind: 0 };
+        try {
+            garment.advance(GARMENT_STEP, binding, 'actor');
+            expect(garment.root.visible).toBe(true);
+            chest.name = 'Old mount';
+            garment.advance(GARMENT_STEP, binding, 'actor');
+            expect(garment.root.visible).toBe(false);
+            const next = bone('Chest');
+            host.add(next);
+            garment.advance(.51, binding, 'actor');
+            expect(garment.root.visible).toBe(true);
+            nested.add(next);
+            garment.advance(GARMENT_STEP, binding, 'actor');
+            expect(garment.root.visible).toBe(false);
+        } finally { garment.dispose(); }
+    });
+
     it('follows translations from its owning rig and keeps two actors using identical bone names independent', () => {
         const cook = cookComponentGarment(undefined);
         const a = new GarmentInstance(cook, 'cotton');

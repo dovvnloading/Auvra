@@ -14,7 +14,7 @@ import { GARMENT_STEP, GarmentSimulation } from '../garments/solver';
 import { FITTING_TORSO, fittingOffsetAt, GARMENT_FABRICS, readFabricOverrides, type GarmentFabric, type GarmentFabricOverrides } from '../garments/fitting';
 import { SkinnedSurfaceBinding } from '../garments/skinnedSurface';
 import { GarmentStrainMap, type GarmentStrainView } from '../garments/strain';
-import { findBone, isDescendantOf } from '../ik';
+import { findBone } from '../ik';
 import { windAt, windTime, type WindVec } from '../wind';
 import type { ComponentDefinition, ComponentRenderProps } from './types';
 
@@ -75,6 +75,7 @@ export class GarmentInstance {
     private readonly offset = new THREE.Vector3();
     private followName = '';
     private bone: THREE.Object3D | null = null;
+    private resolvedBoneName = '';
     private searchDelay = 0;
     private missingBoneReported = false;
     private readonly avatar = new SkinnedSurfaceBinding();
@@ -118,10 +119,18 @@ export class GarmentInstance {
         return out;
     };
 
+    private ownsBone(host: THREE.Object3D | null, objectId: string): boolean {
+        for (let node = this.bone; node; node = node.parent) {
+            if (node === host) return true;
+            if (node === this.root || (node.userData.levelObjectId !== undefined && node.userData.levelObjectId !== objectId)) return false;
+        }
+        return false;
+    }
+
     /** Capture the translation of the named bone relative to its first pose, restricted to this actor. */
     private boneOffset(name: string, objectId: string, dt: number): boolean {
         const host = this.root.parent;
-        if (this.followName !== name || (this.bone && (!host || !isDescendantOf(this.bone, host)))) {
+        if (this.followName !== name || (this.bone && (this.bone.name !== this.resolvedBoneName || !this.ownsBone(host, objectId)))) {
             this.followName = name;
             this.bone = null;
             this.searchDelay = 0;
@@ -144,6 +153,7 @@ export class GarmentInstance {
             }
             this.missingBoneReported = false;
             this.bone = candidate;
+            this.resolvedBoneName = candidate.name;
             this.root.worldToLocal(candidate.getWorldPosition(this.boneOrigin));
             this.previousOffset.set(0, 0, 0);
         }
