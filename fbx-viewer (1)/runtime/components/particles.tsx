@@ -18,6 +18,7 @@ import type { ComputeEmitter, ComputeSubEmitter } from '../../renderer/gpu/parti
 import { particleWorldOf } from '../../renderer/gpu/particles/particleWorld';
 import { GpuParticleSystem } from '../gpuParticles';
 import { particleEmitters } from '../particleEmitters';
+import { advanceParticlePreviewReplay, particlePreview } from '../particlePreview';
 import { ParticleRenderer } from '../particleRenderer';
 import { ParticleSimulation, type MeshSurface, type ParticleRaycast } from '../particleSimulation';
 import { builtinSpriteTexture, SPRITE_GRIDS } from '../particleSprites';
@@ -34,9 +35,6 @@ import type { ComponentDefinition, ComponentRenderProps } from './types';
  * scripts, gameplay scripts and other emitters' sub-emitter events start, stop and burst it through
  * the particle emitter registry.
  */
-
-/** Seconds an editor preview of a one-shot effect waits after it ends before replaying. */
-const PREVIEW_REPLAY_DELAY = 1;
 
 const loadedTextures = new Map<string, THREE.Texture>();
 
@@ -92,7 +90,12 @@ const useParticleLight = (effect: ParticleEffect) => {
         const flicker = 1 - effect.light.flicker * 0.5 * (1 + Math.sin(clock.current * 23) * 0.6 + Math.sin(clock.current * 37) * 0.4) * 0.5;
         light.intensity = effect.light.intensity * strength * flicker;
     };
-    return { light, glow };
+    const resetGlow = useCallback(() => {
+        peak.current = 1;
+        clock.current = 0;
+        if (light) light.intensity = 0;
+    }, [light]);
+    return { light, glow, resetGlow };
 };
 
 /** Seconds between looks for the host model's surface while it has not loaded. */
@@ -134,6 +137,25 @@ const useMeshSurface = (
 
 type EmitterProps = ComponentRenderProps & { effect: ParticleEffect };
 
+function usePreviewClock(
+    editor: boolean, objectId: string, system: { restart(): void },
+    started: React.MutableRefObject<boolean>, idle: React.MutableRefObject<number>, resetGlow: () => void,
+) {
+    const clock = useRef<ReturnType<typeof particlePreview.attach> | null>(null);
+    useLayoutEffect(() => {
+        if (!editor) return;
+        const layer = particlePreview.attach(objectId, () => {
+            system.restart();
+            started.current = false;
+            idle.current = 0;
+            resetGlow();
+        });
+        clock.current = layer;
+        return () => { layer.release(); clock.current = null; };
+    }, [editor, objectId, system, started, idle, resetGlow]);
+    return clock;
+}
+
 const ParticlesRender: React.FC<ComponentRenderProps> = (props) => {
     const effect = useMemo(() => resolveParticleEffect(props.component.props), [props.component.props]);
     const onGpuRenderer = useThree(state => isGpuRenderer(state.gl));
@@ -164,7 +186,7 @@ const CpuParticles: React.FC<EmitterProps> = ({ object, component, mode, effect 
         renderer.setLook(effect, sprite.texture, sprite.grid);
     }, [simulation, renderer, effect, sprite]);
 
-    const { light, glow } = useParticleLight(effect);
+    const { light, glow, resetGlow } = useParticleLight(effect);
 
     // The model's surface, for the mesh shape.
     const takeSurface = useCallback((surface: MeshSurface | null) => simulation.setMeshSurface(surface), [simulation]);
@@ -172,6 +194,7 @@ const CpuParticles: React.FC<EmitterProps> = ({ object, component, mode, effect 
 
     // Starts with the play session (or always in the editor), prewarmed when asked.
     const started = useRef(false);
+    const auditioning = useRef(false);
     useLayoutEffect(() => {
         started.current = false;
         if (editor || playOnStart) simulation.play();
@@ -179,11 +202,12 @@ const CpuParticles: React.FC<EmitterProps> = ({ object, component, mode, effect 
     }, [simulation, editor, playOnStart]);
 
     const scope = editor ? 'editor' : 'runtime';
-    useEffect(() => particleEmitters.register(scope, {
+    useLayoutEffect(() => particleEmitters.register(scope, {
         objectId: object.id,
         componentId: component.id,
         play: () => simulation.play(),
         stop: clear => simulation.stop(clear),
+        setAuditioning: active => { auditioning.current = active; },
         emit: count => {
             const host = anchor.current?.parent;
             if (!host) return;
@@ -206,12 +230,19 @@ const CpuParticles: React.FC<EmitterProps> = ({ object, component, mode, effect 
     } : null), [physics, queries, object.id]);
 
     const idle = useRef(0);
+    const preview = usePreviewClock(editor, object.id, simulation, started, idle, resetGlow);
 
-    useFrame((state, delta) => {
+    useFrame((state, frameDelta) => {
         const host = anchor.current?.parent;
         if (!host) return;
         const current = effectRef.current;
         host.updateWorldMatrix(true, false);
+        const delta = preview.current ? preview.current.nextDelta(frameDelta) : frameDelta;
+        if (delta === null) {
+            renderer.update(simulation, host.matrixWorld, state.camera);
+            glow(0, simulation.count);
+            return;
+        }
         if (!started.current) {
             started.current = true;
             if (current.loop && current.prewarm && simulation.isEmitting) simulation.prewarm(host.matrixWorld.elements);
@@ -231,13 +262,7 @@ const CpuParticles: React.FC<EmitterProps> = ({ object, component, mode, effect 
         }
 
         // An editor preview of a one-shot effect replays a moment after it ends.
-        if (editor && simulation.isDone) {
-            idle.current += delta;
-            if (idle.current > PREVIEW_REPLAY_DELAY) {
-                idle.current = 0;
-                simulation.play();
-            }
-        } else idle.current = 0;
+        if (editor) idle.current = advanceParticlePreviewReplay(simulation, idle.current, delta, auditioning.current);
 
         renderer.update(simulation, host.matrixWorld, state.camera);
         glow(delta, simulation.count);
@@ -271,13 +296,14 @@ const GpuParticles: React.FC<EmitterProps> = ({ object, component, mode, effect 
         system.setEffect(effect);
         system.setLook(effect, sprite.texture, sprite.grid);
     }, [system, effect, sprite]);
-    const { light, glow } = useParticleLight(effect);
+    const { light, glow, resetGlow } = useParticleLight(effect);
 
     // The model's surface, for the mesh shape.
     const takeSurface = useCallback((surface: MeshSurface | null) => system.setMeshSurface(surface), [system]);
     useMeshSurface(anchor, effect.shape.kind, object.id, takeSurface);
 
     const started = useRef(false);
+    const auditioning = useRef(false);
     useLayoutEffect(() => {
         started.current = false;
         if (editor || playOnStart) system.play();
@@ -285,11 +311,12 @@ const GpuParticles: React.FC<EmitterProps> = ({ object, component, mode, effect 
     }, [system, editor, playOnStart]);
 
     const scope = editor ? 'editor' : 'runtime';
-    useEffect(() => particleEmitters.register(scope, {
+    useLayoutEffect(() => particleEmitters.register(scope, {
         objectId: object.id,
         componentId: component.id,
         play: () => system.play(),
         stop: clear => system.stop(clear),
+        setAuditioning: active => { auditioning.current = active; },
         emit: count => {
             const host = anchor.current?.parent;
             if (!host) return;
@@ -306,10 +333,13 @@ const GpuParticles: React.FC<EmitterProps> = ({ object, component, mode, effect 
     const ground = useRef<number | null>(null);
     const sinceGround = useRef(Infinity);
     const idle = useRef(0);
+    const preview = usePreviewClock(editor, object.id, system, started, idle, resetGlow);
 
-    useFrame((_, delta) => {
+    useFrame((_, frameDelta) => {
         const host = anchor.current?.parent;
         if (!host) return;
+        const delta = preview.current ? preview.current.nextDelta(frameDelta) : frameDelta;
+        if (delta === null) return;
         host.updateWorldMatrix(true, false);
         if (!started.current) {
             started.current = true;
@@ -324,13 +354,7 @@ const GpuParticles: React.FC<EmitterProps> = ({ object, component, mode, effect 
         }
         system.step(gl, delta, host.matrixWorld, ground.current);
 
-        if (editor && system.isDone) {
-            idle.current += delta;
-            if (idle.current > PREVIEW_REPLAY_DELAY) {
-                idle.current = 0;
-                system.play();
-            }
-        } else idle.current = 0;
+        if (editor) idle.current = advanceParticlePreviewReplay(system, idle.current, delta, auditioning.current);
         glow(delta, system.count);
     });
 
@@ -368,12 +392,13 @@ const ComputeParticles: React.FC<EmitterProps> = ({ object, component, mode, eff
         system.setEffect(effect);
         system.setLook(effect, sprite.texture, sprite.grid);
     }, [system, effect, sprite]);
-    const { light, glow } = useParticleLight(effect);
+    const { light, glow, resetGlow } = useParticleLight(effect);
 
     const takeSurface = useCallback((surface: MeshSurface | null) => system.setMeshSurface(surface), [system]);
     useMeshSurface(anchor, effect.shape.kind, object.id, takeSurface);
 
     const started = useRef(false);
+    const auditioning = useRef(false);
     useLayoutEffect(() => {
         started.current = false;
         if (editor || playOnStart) system.play();
@@ -381,7 +406,7 @@ const ComputeParticles: React.FC<EmitterProps> = ({ object, component, mode, eff
     }, [system, editor, playOnStart]);
 
     const scope = editor ? 'editor' : 'runtime';
-    useEffect(() => {
+    useLayoutEffect(() => {
         const key = computeEmitterKey(scope, object.id, component.id);
         computeEmitters.set(key, system);
         const remove = particleEmitters.register(scope, {
@@ -389,6 +414,7 @@ const ComputeParticles: React.FC<EmitterProps> = ({ object, component, mode, eff
             componentId: component.id,
             play: () => system.play(),
             stop: clear => system.stop(clear),
+            setAuditioning: active => { auditioning.current = active; },
             emit: count => {
                 const host = anchor.current?.parent;
                 if (!host) return;
@@ -412,10 +438,13 @@ const ComputeParticles: React.FC<EmitterProps> = ({ object, component, mode, eff
     // Other emitters on the object may mount after this one, so their links are looked for until all are found.
     const wiredFor = useRef<ParticleEffect | null>(null);
     const sinceWiring = useRef(SUB_EMITTER_RETRY_FRAMES);
+    const preview = usePreviewClock(editor, object.id, system, started, idle, resetGlow);
 
-    useFrame((_, delta) => {
+    useFrame((_, frameDelta) => {
         const host = anchor.current?.parent;
         if (!host) return;
+        const delta = preview.current ? preview.current.nextDelta(frameDelta) : frameDelta;
+        if (delta === null) return;
         host.updateWorldMatrix(true, false);
         if (wiredFor.current !== effect && ++sinceWiring.current >= SUB_EMITTER_RETRY_FRAMES) {
             sinceWiring.current = 0;
@@ -440,13 +469,7 @@ const ComputeParticles: React.FC<EmitterProps> = ({ object, component, mode, eff
         }
         system.step(delta, host.matrixWorld, ground.current);
 
-        if (editor && system.isDone) {
-            idle.current += delta;
-            if (idle.current > PREVIEW_REPLAY_DELAY) {
-                idle.current = 0;
-                system.play();
-            }
-        } else idle.current = 0;
+        if (editor) idle.current = advanceParticlePreviewReplay(system, idle.current, delta, auditioning.current);
         glow(delta, system.count);
     });
 
@@ -466,6 +489,7 @@ export const PARTICLES_COMPONENT: ComponentDefinition = {
         + 'change over their life and look, what they hit and what they set off. Runs on the CPU, or on the GPU for hundreds of thousands of particles. '
         + 'Plays by itself, or from level and gameplay scripts.',
     props: [
+        { key: 'emitterName', label: 'Emitter name', type: 'string', default: '' },
         { key: 'playOnStart', label: 'Play on start', type: 'boolean', default: true },
     ],
     Render: ParticlesRender,

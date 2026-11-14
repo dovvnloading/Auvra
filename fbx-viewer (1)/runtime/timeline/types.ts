@@ -56,6 +56,17 @@ export interface TimelineEventTrack extends TrackBase {
     keys: TimelineKey<string>[];
 }
 
+export const MAX_TIMELINE_PARTICLE_BURST = 5000;
+export type TimelineParticleCueValue = { action: 'play' | 'stop' } | { action: 'burst'; count: number };
+
+/** A discrete playback command bound to one specific Particles component. */
+export interface TimelineParticleTrack extends TrackBase {
+    kind: 'particle';
+    objectId: string;
+    componentId: string;
+    keys: TimelineKey<TimelineParticleCueValue>[];
+}
+
 /** Cuts the view to a camera component's object at each key (the value; '' is the gameplay camera). */
 export interface TimelineCameraTrack extends TrackBase {
     kind: 'camera';
@@ -132,7 +143,7 @@ export interface TimelineFadeTrack extends TrackBase {
 }
 
 export type TimelineTrack = TimelineTransformTrack | TimelineVisibilityTrack | TimelineVariableTrack | TimelineEventTrack | TimelineCameraTrack
-    | TimelineAnimationTrack | TimelineAudioTrack | TimelineSubtitleTrack | TimelineFadeTrack;
+    | TimelineAnimationTrack | TimelineAudioTrack | TimelineSubtitleTrack | TimelineFadeTrack | TimelineParticleTrack;
 
 export interface TimelineData {
     /** Seconds; playback ends (or loops) here. */

@@ -1,12 +1,14 @@
 import type { LevelComponent } from '../../types';
 import {
     EMPTY_TIMELINE,
+    MAX_TIMELINE_PARTICLE_BURST,
     TIMELINE_PLAYER_TARGET,
     type TimelineClipValue,
     type TimelineData,
     type TimelineInterpolation,
     type TimelineKey,
     type TimelineLineValue,
+    type TimelineParticleCueValue,
     type TimelineSoundValue,
     type TimelineTrack,
     type TimelineTransformTrack,
@@ -427,6 +429,13 @@ const readSound = (value: unknown): TimelineSoundValue | undefined => {
     return { sound: value.sound, length: bounded(value.length, 5, MIN_TIMELINE_DURATION, MAX_TIMELINE_SPAN), volume: bounded(value.volume, 1, 0, 2) };
 };
 
+const readParticleCue = (value: unknown): TimelineParticleCueValue | undefined => {
+    if (!isRecord(value)) return undefined;
+    if (value.action === 'play' || value.action === 'stop') return { action: value.action };
+    if (value.action === 'burst') return { action: 'burst', count: Math.round(bounded(value.count, 10, 1, MAX_TIMELINE_PARTICLE_BURST)) };
+    return undefined;
+};
+
 const readLine = (value: unknown): TimelineLineValue | undefined => {
     if (!isRecord(value) || typeof value.text !== 'string') return undefined;
     return {
@@ -489,6 +498,11 @@ const normalizeTrack = (value: unknown): TimelineTrack | null => {
         case 'event': {
             const keys = normalizeKeys(value.keys, readText, false);
             return keys ? { ...base, kind: 'event', keys } : null;
+        }
+        case 'particle': {
+            const keys = normalizeKeys(value.keys, readParticleCue, false);
+            if (typeof value.objectId !== 'string' || typeof value.componentId !== 'string' || !keys) return null;
+            return { ...base, kind: 'particle', objectId: value.objectId, componentId: value.componentId, keys };
         }
         case 'camera': {
             const keys = normalizeKeys(value.keys, readText, false);

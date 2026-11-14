@@ -20,29 +20,39 @@ export interface ParticleEmitterHandle {
     isPlaying(): boolean;
     /** Particles alive now. */
     alive(): number;
+    /** Editor cues control this emitter until the audition ends, including its one-shot replay policy. */
+    setAuditioning?(active: boolean): void;
 }
 
-const scopes: Record<ParticleScope, Map<string, Map<string, ParticleEmitterHandle>>> = { editor: new Map(), runtime: new Map() };
+// Runtime has one handle per component. Each open editor viewport has its own handle.
+const scopes: Record<ParticleScope, Map<string, Map<string, Set<ParticleEmitterHandle>>>> = { editor: new Map(), runtime: new Map() };
 
 export const particleEmitters = {
     /** Adds an emitter; returns its removal. */
     register(scope: ParticleScope, handle: ParticleEmitterHandle): () => void {
         const byObject = scopes[scope];
-        const emitters = byObject.get(handle.objectId) ?? new Map<string, ParticleEmitterHandle>();
-        emitters.set(handle.componentId, handle);
+        const emitters = byObject.get(handle.objectId) ?? new Map<string, Set<ParticleEmitterHandle>>();
+        const views = emitters.get(handle.componentId) ?? new Set<ParticleEmitterHandle>();
+        if (scope === 'runtime') views.clear();
+        views.add(handle);
+        emitters.set(handle.componentId, views);
         byObject.set(handle.objectId, emitters);
         return () => {
-            const current = byObject.get(handle.objectId);
-            if (current?.get(handle.componentId) !== handle) return;
-            current.delete(handle.componentId);
-            if (current.size === 0) byObject.delete(handle.objectId);
+            if (!views.delete(handle) || views.size > 0) return;
+            emitters.delete(handle.componentId);
+            if (!emitters.size) byObject.delete(handle.objectId);
         };
     },
     get(scope: ParticleScope, objectId: string, componentId: string): ParticleEmitterHandle | undefined {
-        return scopes[scope].get(objectId)?.get(componentId);
+        return scopes[scope].get(objectId)?.get(componentId)?.values().next().value;
+    },
+    /** The same authored emitter may be previewed in several editor viewports. */
+    editorViews(objectId: string, componentId: string): Iterable<ParticleEmitterHandle> {
+        return scopes.editor.get(objectId)?.get(componentId) ?? [];
     },
     /** Every emitter on an object. */
     forObject(scope: ParticleScope, objectId: string): ParticleEmitterHandle[] {
-        return Array.from(scopes[scope].get(objectId)?.values() ?? []);
+        const components = scopes[scope].get(objectId);
+        return components ? Array.from(components.values()).flatMap(views => [...views]) : [];
     },
 };

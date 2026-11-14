@@ -1,8 +1,9 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TimelineInspector } from '../../components/Timeline/TimelineInspector';
 import type { LevelComponent, LevelObject } from '../../types';
 import type { TimelineData } from '../../runtime/timeline/types';
+import { particleEmitters } from '../../runtime/particleEmitters';
 import { timelinePreview } from '../../runtime/timeline/preview';
 
 const makeObject = (id: string, name: string, patch: Partial<LevelObject> = {}): LevelObject => ({
@@ -75,6 +76,92 @@ describe('Timeline editor', () => {
 
     afterEach(() => {
         window.removeEventListener('keydown', windowKeys);
+    });
+
+    it('binds named emitters, edits and drags particle cues, and saves one timeline change', () => {
+        const torch = makeObject('torch', 'Torch', { components: [
+            { id: 'flame', type: 'particles', enabled: true, props: { emitterName: 'Flame' } },
+            { id: 'smoke', type: 'particles', enabled: true, props: { emitterName: 'Smoke' } },
+        ] });
+        scene.levelObjects = [door, torch, elsewhere];
+        const change = renderInspector();
+        openEditor();
+        fireEvent.click(screen.getByRole('button', { name: 'Add Particle cue track' }));
+        expect(screen.getByLabelText('Particle target object')).toHaveValue('torch');
+        expect(screen.getByLabelText('Particle emitter')).toHaveValue('flame');
+        fireEvent.change(screen.getByLabelText('Particle emitter'), { target: { value: 'smoke' } });
+        const lane = screen.getByRole('group', { name: 'Smoke Cues keys' });
+        fireEvent.doubleClick(lane);
+        const first = keyButton('Smoke Cues key at 0.00 s · Burst ×10');
+        fireEvent.change(screen.getByLabelText('Burst count'), { target: { value: '38' } });
+        fireEvent.pointerDown(first, { pointerId: 2, clientX: 20 });
+        fireEvent.pointerMove(first, { pointerId: 2, clientX: 70 });
+        fireEvent.pointerUp(first, { pointerId: 2, clientX: 70 });
+        expect(keyButton('Smoke Cues key at 0.50 s · Burst ×38')).toHaveAttribute('aria-pressed', 'true');
+        for (const [time, action] of [[1, 'play'], [2, 'stop'], [3, 'play']] as const) {
+            setPlayhead(time);
+            fireEvent.doubleClick(lane);
+            fireEvent.change(screen.getByLabelText('Emitter action'), { target: { value: action } });
+            expect(screen.queryByLabelText('Burst count')).toBeNull();
+        }
+        fireEvent.click(screen.getByRole('button', { name: 'Delete Key' }));
+        expect(change).not.toHaveBeenCalled();
+        save();
+        expect(savedTimeline(change).tracks).toEqual([{
+            kind: 'particle', id: expect.any(String), objectId: 'torch', componentId: 'smoke',
+            keys: [{ time: 0.5, value: { action: 'burst', count: 38 } }, { time: 1, value: { action: 'play' } }, { time: 2, value: { action: 'stop' } }],
+        }]);
+    });
+
+    it('shows missing bindings, permits retargeting, and reports disabled and unnamed emitters', () => {
+        scene.levelObjects = [door, makeObject('replacement', 'Torch', { components: [
+            { id: 'new-fire', type: 'particles', enabled: false, props: {} },
+        ] })];
+        const change = renderInspector({ duration: 2, tracks: [{ id: 't', kind: 'particle', objectId: 'gone', componentId: 'old-fire', keys: [] }] });
+        openEditor();
+        expect(screen.getByRole('option', { name: 'Missing particle object' })).toBeInTheDocument();
+        expect(screen.getByRole('option', { name: 'Missing emitter' })).toBeInTheDocument();
+        fireEvent.change(screen.getByLabelText('Particle target object'), { target: { value: 'replacement' } });
+        expect(screen.getByRole('option', { name: 'Particles 1 · disabled' })).toBeInTheDocument();
+        save();
+        expect(savedTimeline(change).tracks[0]).toMatchObject({ objectId: 'replacement', componentId: 'new-fire' });
+    });
+
+    it('auditions crossed cues on playback, seeks silently and stops on cancel', () => {
+        const emit = vi.fn();
+        const handle = { objectId: 'door', componentId: 'sparks', play: vi.fn(), stop: vi.fn(), emit, emitAt: vi.fn(), alive: () => 0, isPlaying: () => false };
+        const unregister = particleEmitters.register('editor', handle);
+        const frames = new Map<number, FrameRequestCallback>();
+        let frameId = 0;
+        vi.spyOn(window, 'requestAnimationFrame').mockImplementation(callback => { frames.set(++frameId, callback); return frameId; });
+        vi.spyOn(window, 'cancelAnimationFrame').mockImplementation(id => { frames.delete(id); });
+        vi.spyOn(performance, 'now').mockReturnValue(0);
+        const advance = (time: number) => act(() => {
+            const frame = frameId;
+            const callback = frames.get(frame);
+            frames.delete(frame);
+            callback?.(time);
+        });
+        try {
+            renderInspector({ duration: 3, tracks: [{ id: 't', kind: 'particle', objectId: 'door', componentId: 'sparks',
+                keys: [{ time: 0, value: { action: 'burst', count: 7 } }, { time: 1, value: { action: 'burst', count: 12 } }] }] });
+            openEditor();
+            setPlayhead(1);
+            setPlayhead(0);
+            expect(emit).not.toHaveBeenCalled();
+            fireEvent.click(screen.getByRole('button', { name: 'Play timeline preview' }));
+            advance(1100);
+            advance(1200);
+            expect(emit.mock.calls).toEqual([[7], [12]]);
+            fireEvent.click(screen.getByRole('button', { name: 'Pause timeline preview' }));
+            setPlayhead(0.5);
+            fireEvent.click(screen.getByRole('button', { name: 'Play timeline preview' }));
+            expect(emit.mock.calls).toEqual([[7], [12]]);
+            fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+            advance(2000);
+            expect(emit.mock.calls).toEqual([[7], [12]]);
+            expect(frames.size).toBe(0);
+        } finally { unregister(); }
     });
 
     it('summarises the stored timeline and offers the level objects as targets', () => {

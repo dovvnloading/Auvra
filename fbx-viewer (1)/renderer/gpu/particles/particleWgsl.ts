@@ -1,6 +1,8 @@
 /// <reference types="@webgpu/types" />
 import { VERTEX_WGSL } from "../geometryPool";
 import { CAMERA_BINDINGS_WGSL, VIEW_WGSL } from "../shaders";
+import { MAX_PARTICLE_FORCE_FIELDS } from "../../../runtime/particleEffect";
+import { PARTICLE_FORCE_FIELD_FLOATS } from "../../../runtime/particleForceFields";
 
 /**
  * PARTICLE SHADERS
@@ -27,7 +29,8 @@ export const EVENT_HEADER_BYTES = 16;
 export const MAX_REQUESTS = 256;
 export const REQUEST_BYTES = 80;
 export const REQUEST_WORDS = REQUEST_BYTES / 4;
-export const PARAMS_WORDS = 120;
+export const FORCE_FIELDS_OFFSET_WORDS = 120;
+export const PARAMS_WORDS = FORCE_FIELDS_OFFSET_WORDS + MAX_PARTICLE_FORCE_FIELDS * PARTICLE_FORCE_FIELD_FLOATS;
 export const PARAMS_BYTES = PARAMS_WORDS * 4;
 /** 64 rows of colour and alpha over life, then 64 of size (x) and speed (y). */
 export const CURVE_ROWS = 128;
@@ -97,6 +100,14 @@ struct Particle {
   link: u32,
 }
 
+struct ForceField {
+  centreRadius: vec4f,
+  // Curl uses the first three words for its animated, seeded phases.
+  axisStrength: vec4f,
+  // Kind, falloff, curl frequency and curl strength normalization.
+  settings: vec4f,
+}
+
 struct Params {
   emitter: mat4x4f,
   previousEmitter: mat4x4f,
@@ -121,7 +132,8 @@ struct Params {
   fogColor: vec3f, fogDensity: f32,
   trailEvery: f32, spawnTotal: u32, requestCount: u32, seed: u32,
   shapeKind: u32, flags: u32, meshCount: u32, mode: u32,
-  frameMode: u32, fogMode: u32, gridCells: u32, pad: u32,
+  frameMode: u32, fogMode: u32, gridCells: u32, forceFieldCount: u32,
+  forceFields: array<ForceField, ${MAX_PARTICLE_FORCE_FIELDS}>,
 }
 
 struct Curves { rows: array<vec4f, ${CURVE_ROWS}> }
@@ -514,6 +526,57 @@ fn worldPointOf(position: vec3f) -> vec3f {
   return (params.emitter * vec4f(position, 1.0)).xyz;
 }
 
+// Curl of a windowed vector potential, including the derivative of the radial window.
+fn boundedCurl(offset: vec3f, field: ForceField) -> vec3f {
+  let radius = field.centreRadius.w;
+  // Scale first so even very small radii have a representable squared distance.
+  if (any(abs(offset) >= vec3f(radius))) { return vec3f(0.0); }
+  let unitOffset = offset / radius;
+  let h = 1.0 - dot(unitOffset, unitOffset);
+  if (h <= 0.0) { return vec3f(0.0); }
+  let exponent = field.settings.y + 2.0;
+  let frequency = field.settings.z;
+  // The wave vectors share a 20π period per coordinate. Split the period to avoid
+  // cancellation when offsets span many wavelengths at f32 precision.
+  let q = offset * frequency;
+  let turns = round(q * 0.015915494309189534);
+  let reduced = (q - turns * 62.828125) - turns * 0.003728071795864769;
+  let angle = vec3f(reduced.y + 0.5 * reduced.z, reduced.z + 0.7 * reduced.x, reduced.x - 0.6 * reduced.y) + field.axisStrength.xyz;
+  let c = cos(angle);
+  let curl = vec3f(-0.6 * c.z - c.y, 0.5 * c.x - c.z, 0.7 * c.y - c.x);
+  let windowSlope = pow(h, exponent - 1.0);
+  let edgeScale = -2.0 * exponent / (3.0 * radius * frequency + 4.0 * exponent);
+  return windowSlope * (h * field.settings.w * curl + edgeScale * cross(unitOffset, sin(angle)));
+}
+
+fn fieldAcceleration(position: vec3f) -> vec3f {
+  var acceleration = vec3f(0.0);
+  for (var i = 0u; i < params.forceFieldCount; i++) {
+    let field = params.forceFields[i];
+    let offset = position - field.centreRadius.xyz;
+    if (field.settings.x == 3.0) {
+      acceleration += field.axisStrength.w * boundedCurl(offset, field);
+      continue;
+    }
+    let radius = field.centreRadius.w;
+    let distanceSq = dot(offset, offset);
+    if (distanceSq >= radius * radius) { continue; }
+    var direction = field.axisStrength.xyz;
+    if (field.settings.x < 2.0) {
+      direction = select(cross(direction, offset), -offset, field.settings.x == 0.0);
+      let lengthSq = dot(direction, direction);
+      if (lengthSq <= 1e-12) { continue; }
+      direction *= inverseSqrt(lengthSq);
+    }
+    var weight = 1.0;
+    if (field.settings.y != 0.0) {
+      weight = pow(max(0.0, 1.0 - sqrt(distanceSq) / radius), field.settings.y);
+    }
+    acceleration += direction * (field.axisStrength.w * weight);
+  }
+  return acceleration;
+}
+
 fn worldDirectionOf(direction: vec3f) -> vec3f {
   if ((params.flags & FLAG_LOCAL) == 0u) { return direction; }
   let m = params.emitter;
@@ -705,6 +768,9 @@ fn sceneHitOf(start: vec3f, stop: vec3f, velocity: vec3f) -> SceneHit {
   }
 
   var velocity = before.velocity + params.force * dt;
+  if (params.forceFieldCount > 0u) {
+    velocity += fieldAcceleration(before.position) * dt;
+  }
   if (params.turbulence > 0.0) {
     let q = before.position / params.turbulenceScale;
     let t = params.clock * 0.6;

@@ -31,6 +31,7 @@ import { NavMeshOverlay } from './NavMeshOverlay';
 import type { LevelNavMesh } from '../../runtime/navigation';
 import { findSplineComponent } from '../../runtime/splineRegistry';
 import { SplineEditOverlay } from './SplineEditOverlay';
+import { ParticleForceFieldOverlay } from './ParticleForceFieldOverlay';
 import { useSplineSelection } from './splineEditing';
 import { gizmoPointer } from './gizmoPointer';
 import { timelinePreview } from '../../runtime/timeline/preview';
@@ -986,6 +987,10 @@ export const EnvironmentScene: React.FC<EnvironmentSceneProps> = ({
                                 if (foliageSet) updateLevelObject(foliageSet.id, { foliageData: { types } });
                             }}
                         />
+                    )}
+
+                    {selectedSource && transformTarget && interactionMode === 'select' && (
+                        <ParticleForceFieldOverlay object={selectedSource} node={transformTarget} />
                     )}
 
                     {/* The selected spline's points; a selected point takes the gizmo from the object */}

@@ -25,6 +25,7 @@ import {
 } from '../../runtime/timeline/evaluate';
 import { createTimelineEvents, timelineEvents, type TimelineEvent } from '../../runtime/timeline/events';
 import { timelinePreview } from '../../runtime/timeline/preview';
+import { particleEmitters } from '../../runtime/particleEmitters';
 import { cinematics } from '../../runtime/cinematics';
 import { cameraDirector } from '../../runtime/cameraDirector';
 import { GameContentProvider } from '../../runtime/GameContentContext';
@@ -445,6 +446,40 @@ describe('timeline component', () => {
     const unsubscribe = timelineEvents.subscribe(event => seen.push(event));
     return { seen, unsubscribe };
   };
+
+  it('dispatches emitter-specific cues on actual playing frames including zero, loops, and the final key', () => {
+    sessionScene('torch');
+    const calls: string[] = [];
+    const remove = particleEmitters.register('runtime', {
+      objectId: 'torch', componentId: 'stream', alive: () => 0, isPlaying: () => true, emitAt() {},
+      play: () => calls.push('play'), stop: () => calls.push('stop'), emit: n => calls.push('burst ' + n),
+    });
+    const timeline: TimelineData = { duration: 0.125, tracks: [{
+      id: 'cue', kind: 'particle', objectId: 'torch', componentId: 'stream', keys: [
+        { time: 0, value: { action: 'play' } }, { time: 0.0625, value: { action: 'burst', count: 3 } },
+        { time: 0.125, value: { action: 'stop' } },
+      ],
+    }] };
+    try {
+      const runtime = mount(timelineComponent({ timeline, loop: true, speed: 5 }));
+      runFrames(1, 0);
+      runFrames(1, 0);
+      expect(calls).toEqual(['play']);
+      runFrames(1, 0.1); // Four complete wraps in a single real runtime frame.
+      expect(calls).toEqual(['play', ...Array(4).fill(['burst 3', 'stop', 'play']).flat()]);
+      runtime.unmount();
+      calls.length = 0;
+      const once = mount(timelineComponent({ timeline }));
+      runFrames(4, 0.1);
+      expect(calls).toEqual(['play', 'burst 3', 'stop']);
+      once.unmount();
+      calls.length = 0;
+      mount(timelineComponent({ timeline }), 'editor');
+      act(() => timelinePreview.set({ ownerId: 'switch', data: timeline, time: 0.1 }));
+      runFrames(2, 0.1);
+      expect(calls).toEqual([]);
+    } finally { remove(); }
+  });
 
   it('defines the timeline component with its schema props; the editor attaches its inspector', () => {
     expect(TIMELINE_COMPONENT.type).toBe(TIMELINE_COMPONENT_TYPE);

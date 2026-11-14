@@ -1,4 +1,5 @@
 import type { LevelObject, LevelObjectType } from '../types';
+import { recordParticleTargets, rekeyComponents, remapParticleCues, type ParticleCueTargets } from './componentIds';
 import { frontendDiagnostics } from '../diagnostics/runtime';
 import { collectSubtree, getWorldMatrix, sortByHierarchy, toLocalTransform, type LocalTransform } from './sceneGraph';
 
@@ -96,6 +97,7 @@ export const pasteLevelObjects = (payload: LevelClipboardPayload, options: Paste
   const idMap = new Map(placeable.map((object) => [object.id, createId()] as const));
 
   const objects: LevelObject[] = [];
+  const targets: ParticleCueTargets = new Map();
   const rootIds: string[] = [];
   const names = new Set(options.levelObjects.map((object) => object.name));
   for (const source of placeable) {
@@ -114,9 +116,11 @@ export const pasteLevelObjects = (payload: LevelClipboardPayload, options: Paste
       copy.position = [copy.position[0] + dx, copy.position[1] + dy, copy.position[2] + dz];
       rootIds.push(copy.id);
     }
-    if (copy.components) copy.components = copy.components.map((component) => ({ ...component, id: createId() }));
+    if (copy.components) copy.components = rekeyComponents(copy.components, createId);
+    recordParticleTargets(targets, source.id, copy.id, source.components, copy.components);
     objects.push(copy);
   }
+  for (const copy of objects) if (copy.components) copy.components = remapParticleCues(copy.components, targets);
   return { objects, rootIds };
 };
 

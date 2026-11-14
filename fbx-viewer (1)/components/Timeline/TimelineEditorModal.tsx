@@ -1,10 +1,12 @@
 import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { AxesIcon, BoltIcon, CaptionsIcon, CrossIcon, CrosshairIcon, EyeIcon, FilmIcon, HashIcon, MusicIcon, MuteIcon, PersonIcon, PlusIcon, SunDimIcon, TrashIcon, VideoIcon, VolumeIcon, WarningIcon } from '../UI/Icons';
+import { AxesIcon, BoltIcon, CaptionsIcon, CrossIcon, CrosshairIcon, EyeIcon, FilmIcon, HashIcon, MusicIcon, MuteIcon, PersonIcon, PlayIcon, PauseIcon, PlusIcon, SparklesIcon, SunDimIcon, TrashIcon, VideoIcon, VolumeIcon, WarningIcon } from '../UI/Icons';
 import type { IconComponent } from '../UI/Icons';
 import type { LevelObject } from '../../types';
 import {
     TIMELINE_PLAYER_TARGET,
+    MAX_TIMELINE_PARTICLE_BURST,
+    type TimelineParticleCueValue,
     type TimelineClipValue,
     type TimelineData,
     type TimelineInterpolation,
@@ -14,6 +16,8 @@ import {
     type TimelineTrack,
     type TimelineVec3,
 } from '../../runtime/timeline/types';
+import { particleEmitterName } from '../../runtime/particleEffect';
+import { auditionTimelineParticles, beginTimelineParticleAudition, endTimelineParticleAudition } from '../../runtime/timeline/particleCues';
 import { ColourField } from '../UI/ColourPicker';
 
 /**
@@ -52,7 +56,7 @@ type TrackKind = TimelineTrack['kind'];
 type TransformChannel = 'position' | 'rotation' | 'scale';
 /** A key list of a track: one of the transform channels, or `keys` for the other kinds. */
 type Channel = TransformChannel | 'keys';
-type KeyValue = TimelineVec3 | boolean | number | string | TimelineClipValue | TimelineSoundValue | TimelineLineValue;
+type KeyValue = TimelineVec3 | boolean | number | string | TimelineParticleCueValue | TimelineClipValue | TimelineSoundValue | TimelineLineValue;
 type AnyKey = TimelineKey<KeyValue>;
 
 /** A key's place in the draft. The index follows the key when its list is re-sorted by time. */
@@ -93,7 +97,7 @@ const MIN_ROW_HEIGHT = 60;
 const DRAG_THRESHOLD = 3;
 const TIME_EPSILON = 1e-4;
 const TICK_STEPS = [0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 15, 30, 60, 120];
-const TRACK_KINDS: TrackKind[] = ['transform', 'visibility', 'variable', 'event', 'camera', 'animation', 'audio', 'subtitle', 'fade'];
+const TRACK_KINDS: TrackKind[] = ['transform', 'visibility', 'variable', 'event', 'particle', 'camera', 'animation', 'audio', 'subtitle', 'fade'];
 const TRANSFORM_CHANNELS: TransformChannel[] = ['position', 'rotation', 'scale'];
 const CHANNEL_LABELS: Record<TransformChannel, string> = { position: 'Position', rotation: 'Rotation', scale: 'Scale' };
 const AXES = ['X', 'Y', 'Z'] as const;
@@ -108,6 +112,7 @@ const KIND_INFO: Record<TrackKind, { label: string; icon: IconComponent; text: s
     visibility: { label: 'Visibility', icon: EyeIcon, text: 'text-emerald-400', fill: 'bg-emerald-400' },
     variable: { label: 'Variable', icon: HashIcon, text: 'text-violet-400', fill: 'bg-violet-400' },
     event: { label: 'Event', icon: BoltIcon, text: 'text-amber-400', fill: 'bg-amber-400' },
+    particle: { label: 'Particle cue', icon: SparklesIcon, text: 'text-teal-300', fill: 'bg-teal-400' },
     camera: { label: 'Camera', icon: VideoIcon, text: 'text-pink-400', fill: 'bg-pink-400' },
     animation: { label: 'Animation', icon: PersonIcon, text: 'text-orange-400', fill: 'bg-orange-400' },
     audio: { label: 'Audio', icon: MusicIcon, text: 'text-cyan-400', fill: 'bg-cyan-400' },
@@ -124,7 +129,21 @@ const spanLabel = (value: KeyValue, sounds: readonly { id: string; label: string
     if (typeof value !== 'object' || Array.isArray(value)) return '';
     if ('clip' in value) return value.clip || 'No clip';
     if ('sound' in value) return sounds.find(sound => sound.id === value.sound)?.label ?? (value.sound || 'No sound');
+    if ('action' in value) return describeCue(value);
     return value.speaker ? `${value.speaker}: ${value.text}` : value.text;
+};
+
+const cueLabels = { play: 'Play', stop: 'Stop', burst: 'Burst' } as const;
+const describeCue = (cue: TimelineParticleCueValue) =>
+    cue.action === 'burst' ? `Burst ×${cue.count}` : cueLabels[cue.action];
+
+const emitterOptions = (object?: LevelObject) => {
+    const emitters = (object?.components ?? []).filter(c => c.type === 'particles');
+    const names = emitters.map((c, i) => particleEmitterName(c.props) || `Particles ${i + 1}`);
+    return emitters.map((c, i) => {
+        const name = names.indexOf(names[i]) === names.lastIndexOf(names[i]) ? names[i] : `${names[i]} (${i + 1})`;
+        return { id: c.id, label: c.enabled === false ? `${name} · disabled` : name };
+    });
 };
 
 /** Objects that can play clips: those with a model. */
@@ -159,12 +178,13 @@ const createTrackId = (taken: Set<string>) => {
     return id;
 };
 
-const createTrack = (kind: TrackKind, id: string, objectId: string): TimelineTrack => {
+const createTrack = (kind: TrackKind, id: string, objectId: string, componentId: string): TimelineTrack => {
     switch (kind) {
         case 'transform': return { id, kind, objectId, position: [], rotation: [], scale: [] };
         case 'visibility': return { id, kind, objectId, keys: [] };
         case 'variable': return { id, kind, name: '', keys: [] };
         case 'event': return { id, kind, keys: [] };
+        case 'particle': return { id, kind, objectId, componentId, keys: [] };
         case 'camera': return { id, kind, keys: [], blend: 0 };
         case 'animation': return { id, kind, objectId, keys: [] };
         case 'audio': return { id, kind, objectId: '', bus: 'sfx', keys: [] };
@@ -179,6 +199,7 @@ const lanesOf = (track: TimelineTrack): Lane[] => {
         case 'visibility': return [{ channel: 'keys', label: 'Visible' }];
         case 'variable': return [{ channel: 'keys', label: 'Value' }];
         case 'event': return [{ channel: 'keys', label: 'Events' }];
+        case 'particle': return [{ channel: 'keys', label: 'Cues' }];
         case 'camera': return [{ channel: 'keys', label: 'Shots' }];
         case 'animation': return [{ channel: 'keys', label: 'Clips' }];
         case 'audio': return [{ channel: 'keys', label: 'Sounds' }];
@@ -209,6 +230,7 @@ const setKeys = (track: TimelineTrack, channel: Channel, keys: AnyKey[]): Timeli
         case 'variable': return { ...track, keys: keys as TimelineKey<number>[] };
         case 'event': return { ...track, keys: keys as TimelineKey<string>[] };
         case 'camera': return { ...track, keys: keys as TimelineKey<string>[] };
+        case 'particle': return { ...track, keys: keys as TimelineKey<TimelineParticleCueValue>[] };
         case 'animation': return { ...track, keys: keys as TimelineKey<TimelineClipValue>[] };
         case 'audio': return { ...track, keys: keys as TimelineKey<TimelineSoundValue>[] };
         case 'subtitle': return { ...track, keys: keys as TimelineKey<TimelineLineValue>[] };
@@ -282,6 +304,7 @@ const createKey = (
         case 'visibility': value = previous ? !previous.value : true; break;
         case 'variable': value = neighbour?.value ?? 0; break;
         case 'event': value = neighbour?.value ?? 'Event'; break;
+        case 'particle': value = neighbour ? copyValue(neighbour.value) : { action: 'burst', count: 10 }; break;
         case 'camera': value = neighbour?.value ?? cameraObjects(objects)[0]?.id ?? ''; break;
         case 'animation': value = neighbour ? copyValue(neighbour.value) : {
             clip: sources.clipsFor?.(track.objectId)[0] ?? '', length: 2, offset: 0, speed: 1, loop: true, blendIn: 0.25, blendOut: 0.25,
@@ -319,6 +342,7 @@ const cleanTimeline = (data: TimelineData): TimelineData => ({
 const describeValue = (value: KeyValue) => {
     if (Array.isArray(value)) return `(${value.map(formatNumber).join(', ')})`;
     if (typeof value === 'object') {
+        if ('action' in value) return describeCue(value);
         if ('clip' in value) return `${value.clip || 'No clip'}, ${formatNumber(value.length)} s`;
         if ('sound' in value) return `${value.sound || 'No sound'}, ${formatNumber(value.length)} s`;
         return `"${value.text}", ${formatNumber(value.length)} s`;
@@ -423,6 +447,19 @@ const KeyDetails: React.FC<{
                 <NumberField label="Volume" ariaLabel="Sound volume" value={value.volume} min={0} max={2} onChange={(volume) => set({ volume })} />
             </div>
         );
+    } else if (typeof value === 'object' && !Array.isArray(value) && 'action' in value) {
+        editor = <div className="space-y-2">
+            <label className="block text-2xs text-gray-400">Emitter action
+                <select className={`mt-1 w-full ${FIELD_CLASS}`} value={value.action} onChange={event => {
+                    const action = event.target.value as TimelineParticleCueValue['action'];
+                    onChange({ ...timelineKey, value: action === 'burst' ? { action, count: 10 } : { action } });
+                }}>
+                    {(['play', 'stop', 'burst'] as const).map(action => <option key={action} value={action}>{cueLabels[action]}</option>)}
+                </select>
+            </label>
+            {value.action === 'burst' && <NumberField label="Burst count" value={value.count} min={1} max={MAX_TIMELINE_PARTICLE_BURST}
+                onChange={count => onChange({ ...timelineKey, value: { action: 'burst', count: Math.round(count) } })} />}
+        </div>;
     } else if (typeof value === 'object' && !Array.isArray(value)) {
         const set = (change: Partial<TimelineLineValue>) => onChange({ ...timelineKey, value: { ...value, ...change } });
         editor = (
@@ -536,7 +573,8 @@ const KeyDetails: React.FC<{
                     </select>
                 ) : (
                     <p className="text-2xs text-gray-500">{
-                        track.kind === 'animation' ? 'Clips blend by their own blend in and out.'
+                        track.kind === 'particle' ? 'The cue fires once when playback crosses the key.'
+                            : track.kind === 'animation' ? 'Clips blend by their own blend in and out.'
                             : track.kind === 'audio' || track.kind === 'subtitle' ? 'It starts at its key and lasts its length.'
                                 : `${track.kind === 'event' ? 'Event' : track.kind === 'camera' ? 'Camera' : 'Visibility'} keys always step: the value holds until the next key.`
                     }</p>
@@ -567,6 +605,8 @@ export const TimelineEditorModal: React.FC<TimelineEditorModalProps> = ({
     const draftRef = useRef(draft);
     const [selected, setSelected] = useState<KeyRef | null>(null);
     const [playhead, setPlayhead] = useState(0);
+    const [playing, setPlaying] = useState(false);
+    const playback = useRef({ time: 0, frame: 0, running: false });
     const [zoom, setZoom] = useState(() => clamp(Math.round(800 / Math.max(timeline.duration, MIN_DURATION)), MIN_ZOOM, MAX_ZOOM));
     const [confirmDiscard, setConfirmDiscard] = useState(false);
     const rootRef = useRef<HTMLDivElement>(null);
@@ -594,6 +634,7 @@ export const TimelineEditorModal: React.FC<TimelineEditorModalProps> = ({
         const ids = new Set(animatedObjects(objects).map(object => object.id));
         return objectOptions.filter(option => ids.has(option.id));
     }, [objects, objectOptions]);
+    const particleObjects = useMemo(() => objectOptions.filter(o => objectsById.get(o.id)?.components?.some(c => c.type === 'particles')), [objectOptions, objectsById]);
     const sources = { clipsFor, sounds };
 
     // The viewport follows the draft and the playhead.
@@ -631,6 +672,7 @@ export const TimelineEditorModal: React.FC<TimelineEditorModalProps> = ({
             }
             case 'variable': return track.name.trim() || 'Variable';
             case 'event': return 'Events';
+            case 'particle': return emitterOptions(objectsById.get(track.objectId)).find(c => c.id === track.componentId)?.label ?? 'Particle cues';
             case 'camera': return 'Camera cuts';
             case 'animation': {
                 if (track.objectId === TIMELINE_PLAYER_TARGET) return 'The player';
@@ -652,10 +694,12 @@ export const TimelineEditorModal: React.FC<TimelineEditorModalProps> = ({
     const addTrack = (kind: TrackKind) => {
         const data = draftRef.current;
         const characters = animatedObjects(objects);
-        const target = kind === 'animation'
+        let target = kind === 'animation'
             ? (ownerId && characters.some(object => object.id === ownerId) ? ownerId : characters[0]?.id ?? TIMELINE_PLAYER_TARGET)
             : ownerId && objectsById.has(ownerId) ? ownerId : objects[0]?.id ?? '';
-        const track = createTrack(kind, createTrackId(new Set(data.tracks.map(existing => existing.id))), target);
+        if (kind === 'particle' && !particleObjects.some(o => o.id === target)) target = particleObjects[0]?.id ?? '';
+        const componentId = kind === 'particle' ? emitterOptions(objectsById.get(target))[0]?.id ?? '' : '';
+        const track = createTrack(kind, createTrackId(new Set(data.tracks.map(existing => existing.id))), target, componentId);
         commit({ ...data, tracks: [...data.tracks, track] });
     };
 
@@ -758,7 +802,45 @@ export const TimelineEditorModal: React.FC<TimelineEditorModalProps> = ({
 
     // --- Playhead ---
 
-    const movePlayhead = (time: number) => setPlayhead(clamp(time, 0, draftRef.current.duration));
+    const halt = () => {
+        const state = playback.current;
+        state.running = false;
+        cancelAnimationFrame(state.frame);
+        endTimelineParticleAudition();
+        setPlaying(false);
+    };
+    const movePlayhead = (time: number) => {
+        halt();
+        playback.current.time = clamp(time, 0, draftRef.current.duration);
+        setPlayhead(playback.current.time);
+    };
+    const togglePlayback = () => {
+        const state = playback.current;
+        if (state.running) { halt(); return; }
+        if (state.time >= draftRef.current.duration) state.time = 0;
+        if (state.time === 0) auditionTimelineParticles(draftRef.current, -1, 0);
+        else beginTimelineParticleAudition(draftRef.current, state.time);
+        setPlayhead(state.time);
+        state.running = true;
+        setPlaying(true);
+        let last = performance.now();
+        const advance = (now: number) => {
+            if (!state.running) return;
+            const data = draftRef.current;
+            const next = Math.min(data.duration, state.time + Math.max(0, now - last) / 1000);
+            last = now;
+            auditionTimelineParticles(data, state.time, next);
+            state.time = next;
+            setPlayhead(next);
+            if (next >= data.duration) halt();
+            else state.frame = requestAnimationFrame(advance);
+        };
+        state.frame = requestAnimationFrame(advance);
+    };
+    useEffect(() => {
+        const state = playback.current;
+        return () => { state.running = false; cancelAnimationFrame(state.frame); endTimelineParticleAudition(); };
+    }, []);
 
     const scrubTo = (event: React.PointerEvent<HTMLDivElement>) => {
         const left = rulerRef.current?.getBoundingClientRect().left ?? 0;
@@ -768,12 +850,13 @@ export const TimelineEditorModal: React.FC<TimelineEditorModalProps> = ({
     const changeDuration = (value: number) => {
         const next = clamp(round3(value), MIN_DURATION, MAX_DURATION);
         commit({ ...draftRef.current, duration: next });
-        setPlayhead(current => Math.min(current, next));
+        movePlayhead(Math.min(playhead, next));
     };
 
     // --- Closing and keys ---
 
     const requestClose = () => {
+        halt();
         if (dirty) setConfirmDiscard(true);
         else onClose();
     };
@@ -863,6 +946,10 @@ export const TimelineEditorModal: React.FC<TimelineEditorModalProps> = ({
 
                 <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-gray-800 bg-gray-950/60 px-4 py-2">
                     <NumberField label="Duration" value={duration} min={MIN_DURATION} max={MAX_DURATION} suffix="s" onChange={changeDuration} />
+                    <button type="button" className="flex items-center gap-1 rounded border border-gray-700 px-2 h-6 text-2xs text-gray-200"
+                        aria-label={playing ? 'Pause timeline preview' : 'Play timeline preview'} onClick={togglePlayback}>
+                        {playing ? <PauseIcon size={11} /> : <PlayIcon size={11} />}{playing ? 'Pause' : 'Play'}
+                    </button>
                     <NumberField label="Playhead" ariaLabel="Playhead time" value={playhead} min={0} max={duration} suffix="s" onChange={(time) => movePlayhead(round3(time))} />
                     <div className="h-5 w-px bg-gray-800" />
                     <div className="flex flex-wrap items-center gap-1.5">
@@ -940,8 +1027,7 @@ export const TimelineEditorModal: React.FC<TimelineEditorModalProps> = ({
 
                             {draft.tracks.length === 0 && (
                                 <div className="sticky left-0 px-4 py-10 text-center text-xs text-gray-500" style={{ width: HEADER_WIDTH + Math.min(laneWidth, 640) }}>
-                                    No tracks yet. Add a track above: Transform, Visibility, Variable, Event and Camera tracks key objects, values and shots;
-                                    Animation, Audio, Subtitles and Fade tracks play clips on characters, sounds, lines and fades for cinematics.
+                                    Add a track above, then double-click its lane to create a key at the playhead.
                                 </div>
                             )}
 
@@ -950,7 +1036,8 @@ export const TimelineEditorModal: React.FC<TimelineEditorModalProps> = ({
                                 const info = KIND_INFO[track.kind];
                                 const Icon = info.icon;
                                 const name = trackName(track);
-                                const rowHeight = Math.max(lanes.length * LANE_HEIGHT, MIN_ROW_HEIGHT);
+                                const rowHeight = Math.max(lanes.length * LANE_HEIGHT, track.kind === 'particle' ? 92 : MIN_ROW_HEIGHT);
+                                const emitters = track.kind === 'particle' ? emitterOptions(objectsById.get(track.objectId)) : [];
                                 const target = track.kind === 'transform' || track.kind === 'visibility' ? track.objectId : null;
                                 return (
                                     <div
@@ -1007,6 +1094,29 @@ export const TimelineEditorModal: React.FC<TimelineEditorModalProps> = ({
                                                         {objectOptions.map(option => <option key={option.id} value={option.id}>{option.label}</option>)}
                                                     </select>
                                                 )}
+                                                {track.kind === 'particle' && <>
+                                                    <select aria-label="Particle target object" className={`w-full ${FIELD_CLASS}`} value={track.objectId}
+                                                        onChange={event => {
+                                                            const objectId = event.target.value;
+                                                            const componentId = emitterOptions(objectsById.get(objectId))[0]?.id ?? '';
+                                                            changeTrack(track.id, t => t.kind === 'particle' ? { ...t, objectId, componentId } : t);
+                                                        }}>
+                                                        {!particleObjects.some(o => o.id === track.objectId) && <option value={track.objectId}>
+                                                            {track.objectId ? 'Missing particle object' : 'Choose a particle object'}
+                                                        </option>}
+                                                        {particleObjects.map(o => <option value={o.id} key={o.id}>{o.label}</option>)}
+                                                    </select>
+                                                    <select aria-label="Particle emitter" className={`w-full ${FIELD_CLASS}`} value={track.componentId}
+                                                        onChange={event => {
+                                                            const componentId = event.target.value;
+                                                            changeTrack(track.id, t => t.kind === 'particle' ? { ...t, componentId } : t);
+                                                        }}>
+                                                        {!emitters.some(e => e.id === track.componentId) && <option value={track.componentId}>
+                                                            {track.componentId ? 'Missing emitter' : 'Choose an emitter'}
+                                                        </option>}
+                                                        {emitters.map(e => <option key={e.id} value={e.id}>{e.label}</option>)}
+                                                    </select>
+                                                </>}
                                                 {track.kind === 'animation' && (
                                                     <select
                                                         aria-label="Character"
@@ -1144,6 +1254,7 @@ export const TimelineEditorModal: React.FC<TimelineEditorModalProps> = ({
                                                         const isSelected = selected?.trackId === track.id && selected.channel === lane.channel && selected.index === index;
                                                         const late = key.time > duration + TIME_EPSILON;
                                                         const span = spanOf(key.value);
+                                                        const cue = typeof key.value === 'object' && 'action' in key.value ? key.value : null;
                                                         if (span !== null && !late) {
                                                             const label = spanLabel(key.value, sounds);
                                                             return (
@@ -1170,10 +1281,10 @@ export const TimelineEditorModal: React.FC<TimelineEditorModalProps> = ({
                                                             <button
                                                                 key={index}
                                                                 type="button"
-                                                                aria-label={`${name} ${lane.label} key at ${formatTime(key.time)}`}
+                                                                aria-label={`${name} ${lane.label} key at ${formatTime(key.time)}${cue ? ` · ${describeCue(cue)}` : ''}`}
                                                                 aria-pressed={isSelected}
                                                                 title={`${formatTime(key.time)} · ${describeValue(key.value)}${late ? ' · past the end' : ''}`}
-                                                                className={`absolute top-1/2 -ml-1.5 -mt-1.5 h-3 w-3 rotate-45 rounded-[2px] border cursor-ew-resize focus:outline-none ${isSelected ? 'z-10 bg-white border-amber-400 ring-2 ring-amber-400/60' : `${info.fill} border-black/50 hover:brightness-125`} ${late ? 'opacity-40' : ''}`}
+                                                                className={`absolute top-1/2 -ml-1.5 -mt-1.5 h-3 w-3 rounded-[2px] border cursor-ew-resize focus:outline-none ${cue ? '' : 'rotate-45'} ${isSelected ? 'z-10 bg-white border-amber-400 ring-2 ring-amber-400/60' : `${info.fill} border-black/50 hover:brightness-125`} ${late ? 'opacity-40' : ''}`}
                                                                 style={{ left: late ? LANE_INSET + laneWidth + LANE_TAIL / 2 : xAt(key.time) }}
                                                                 onPointerDown={(event) => startKeyDrag(event, ref, key.time)}
                                                                 onPointerMove={moveKeyDrag}
@@ -1183,7 +1294,11 @@ export const TimelineEditorModal: React.FC<TimelineEditorModalProps> = ({
                                                                 // A drag's trailing click can land on a button that now shows another key.
                                                                 onClick={(event) => { if (event.detail === 0) setSelected(ref); }}
                                                                 onDoubleClick={(event) => event.stopPropagation()}
-                                                            />
+                                                            >
+                                                                {cue && <span aria-hidden="true" className="flex items-center justify-center text-gray-950">{
+                                                                    cue.action === 'burst' ? <SparklesIcon size={9} /> : cue.action === 'play' ? <PlayIcon size={9} /> : <span className="h-1.5 w-1.5 bg-current" />
+                                                                }</span>}
+                                                            </button>
                                                         );
                                                     })}
                                                 </div>

@@ -1,6 +1,5 @@
-import { useCallback, useEffect, useRef } from 'react';
+import { useEffect, useRef } from 'react';
 import { EditorState } from '../types';
-import { LevelObject } from '../../../types';
 import { useScene } from '../../../context/SceneContext';
 import { editorSession } from '../../../utils/editorSession';
 import { frontendDiagnostics } from '../../../diagnostics/runtime';
@@ -27,10 +26,6 @@ interface HotkeyConfig {
     };
 }
 
-type Scene = ReturnType<typeof useScene>;
-/** Bulk insert of complete documents (one undo step), when the level manager provides it. */
-type BulkInsert = (objects: LevelObject[]) => Promise<unknown>;
-
 const isEditableTarget = (target: EventTarget | null) => {
     const element = target as HTMLElement | null;
     return !!element && (element.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(element.tagName));
@@ -43,44 +38,8 @@ export const useEnvironmentHotkeys = (config: HotkeyConfig) => {
     const latest = useRef({ config, scene });
     latest.current = { config, scene };
     const pasteCount = useRef(0);
-    // Fields addLevelObject does not take, applied once the created object is in state (fallback path only).
-    const pendingPatches = useRef(new Map<string, Partial<LevelObject>>());
-
-    const applyPendingPatches = useCallback(() => {
-        const patches = pendingPatches.current;
-        if (patches.size === 0 || !editorSession.captureReady()) return;
-        const { levelObjects, updateLevelObject } = latest.current.scene;
-        for (const object of levelObjects) {
-            const patch = patches.get(object.id);
-            if (!patch) continue;
-            patches.delete(object.id);
-            updateLevelObject(object.id, patch);
-        }
-    }, []);
-    useEffect(applyPendingPatches, [scene.levelObjects, applyPendingPatches]);
-
     useEffect(() => {
         /** Insert `objects` (parents first); returns the id each one ended up with. */
-        const insertObjects = async (current: Scene, objects: LevelObject[]): Promise<Map<string, string>> => {
-            const bulkInsert = (current as Scene & { addLevelObjects?: BulkInsert }).addLevelObjects;
-            if (bulkInsert) {
-                await bulkInsert(objects);
-                return new Map(objects.map((object) => [object.id, object.id]));
-            }
-            const ids = new Map<string, string>();
-            for (const object of objects) {
-                const id = await current.addLevelObject(object.modelId, object.position, object.rotation, object.scale, object.type);
-                if (!id) continue;
-                ids.set(object.id, id);
-                const patch: Partial<LevelObject> = { ...object };
-                for (const key of ['id', 'levelId', 'modelId', 'position', 'rotation', 'scale', 'type'] as const) delete patch[key];
-                if (object.parentId) patch.parentId = ids.get(object.parentId) ?? object.parentId;
-                pendingPatches.current.set(id, patch);
-                applyPendingPatches();
-            }
-            return ids;
-        };
-
         const place = (payload: LevelClipboardPayload | null, offset: [number, number, number]) => {
             const current = latest.current.scene;
             const levelId = editorSession.captureReady()?.levelId;
@@ -89,12 +48,12 @@ export const useEnvironmentHotkeys = (config: HotkeyConfig) => {
                 levelId,
                 levelObjects: current.levelObjects,
                 offset,
-                canPlace: (object) => (object.type !== 'prop' && object.type !== 'foliage')
+                canPlace: (object) => !object.modelId || (object.type !== 'prop' && object.type !== 'foliage')
                     || current.models.some((model) => model.id === object.modelId),
             });
             if (pasted.objects.length === 0) return;
-            void insertObjects(current, pasted.objects).then((ids) => {
-                const selected = pasted.rootIds.flatMap((id) => ids.get(id) ?? []);
+            void current.addLevelObjects(pasted.objects).then((ids) => {
+                const selected = pasted.rootIds.filter(id => ids.includes(id));
                 if (selected.length && editorSession.captureReady()) latest.current.config.actions.setSelection(selected);
             }).catch((error) => frontendDiagnostics.failure('level_paste_failed', error));
         };
@@ -217,5 +176,5 @@ export const useEnvironmentHotkeys = (config: HotkeyConfig) => {
 
         window.addEventListener('keydown', handleKey);
         return () => window.removeEventListener('keydown', handleKey);
-    }, [applyPendingPatches]);
+    }, []);
 };

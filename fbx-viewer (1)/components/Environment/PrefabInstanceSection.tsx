@@ -4,7 +4,7 @@ import type { LevelObject } from '../../types';
 import { useScene } from '../../context/SceneContext';
 import { usePrefabs } from '../../hooks/usePrefabs';
 import { editorSession } from '../../utils/editorSession';
-import { findInstanceRoot, overriddenFields } from '../../utils/prefabSync';
+import { findInstanceRoot, instanceMembers, overriddenFields } from '../../utils/prefabSync';
 
 const FIELD_LABELS: Record<string, string> = {
     name: 'name', type: 'type', modelId: 'model', position: 'position', rotation: 'rotation', scale: 'scale',
@@ -22,7 +22,7 @@ export const PrefabInstanceSection: React.FC<{ object: LevelObject }> = ({ objec
     const [busy, setBusy] = useState(false);
     const prefab = prefabs.find(item => item.id === object.prefabId);
     const root = useMemo(() => (prefab ? findInstanceRoot(levelObjects, object, prefab) : null), [levelObjects, object, prefab]);
-    const overrides = useMemo(() => (prefab ? overriddenFields(object, prefab) : []), [object, prefab]);
+    const overrides = useMemo(() => (prefab && root ? overriddenFields(object, prefab, instanceMembers(levelObjects, root)) : []), [object, prefab, levelObjects, root]);
 
     if (!object.prefabId) return null;
     if (!prefab || !root) {

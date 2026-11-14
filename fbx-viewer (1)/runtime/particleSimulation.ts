@@ -3,9 +3,12 @@ import {
     bakeCurve,
     bakeGradient,
     linearColor,
+    MAX_PARTICLE_FORCE_FIELDS,
     type ParticleEffect,
     type SubEmitterTrigger,
 } from './particleEffect';
+import { compileParticleRateCurve, particleEmissionBetween } from './particleEmissionRate';
+import { applyParticleForceFields, PARTICLE_FORCE_FIELD_FLOATS, prepareParticleForceFields } from './particleForceFields';
 
 /**
  * PARTICLE SIMULATION
@@ -100,14 +103,18 @@ export class ParticleSimulation {
     private effect!: ParticleEffect;
     private colorTable!: Float32Array;
     private sizeTable!: Float32Array;
+    private rateIntegral: Float64Array | null = null;
     private speedTable!: Float32Array;
     private startA = new Float32Array(3);
     private startB = new Float32Array(3);
+    private readonly forceFields = new Float32Array(MAX_PARTICLE_FORCE_FIELDS * PARTICLE_FORCE_FIELD_FLOATS);
     private wants = { death: false, collision: false };
     private mesh: MeshSampler | null = null;
     private readonly random: () => number;
     /** Seconds since it last started playing (delay included), and into the current cycle. */
     private clock = 0;
+    /** Seconds simulated, including particles coasting after the emission clock has stopped. */
+    private elapsed = 0;
     private cycleTime = 0;
     private burstsDone = 0;
     private emitting = true;
@@ -145,6 +152,7 @@ export class ParticleSimulation {
         this.effect = effect;
         this.colorTable = bakeGradient(effect.colorOverLife);
         this.sizeTable = bakeCurve(effect.sizeOverLife);
+        this.rateIntegral = compileParticleRateCurve(effect.rateOverCycle);
         this.speedTable = bakeCurve(effect.speedOverLife);
         linearColor(effect.startColor[0], this.startA);
         linearColor(effect.startColor[1], this.startB);
@@ -185,6 +193,17 @@ export class ParticleSimulation {
         if (clear) this.count = 0;
     }
 
+    /** Replay from the current transform without old motion, sub-emitter events, or particles. */
+    restart(): void {
+        this.stop(true);
+        this.elapsed = 0;
+        this.last = null;
+        this.emitterVelocity.fill(0);
+        this.events.length = 0;
+        this.collisionCursor = 0;
+        this.play();
+    }
+
     /** Runs one looping cycle at once, as if it had been going a while. */
     prewarm(matrix: ArrayLike<number> | null, steps = 30): void {
         const dt = this.effect.duration / steps;
@@ -221,6 +240,7 @@ export class ParticleSimulation {
             this.emitterVelocity[2] = (world[14] - previous[14]) / step;
         }
         this.simulate(step, world, raycast ?? null);
+        this.elapsed += step;
         this.emit(step, world, previous, moved);
         this.last = (this.last ?? new Float64Array(16));
         for (let i = 0; i < 16; i++) this.last[i] = world[i];
@@ -247,6 +267,10 @@ export class ParticleSimulation {
         const orbit = effect.orbit;
         const cx = local ? 0 : world[12], cz = local ? 0 : world[14];
         const collide = raycast && effect.collision.mode === 'world' && !local;
+        const fieldCount = prepareParticleForceFields(effect.forceFields, local ? null : world, this.forceFields, this.elapsed);
+        if (fieldCount > 0) {
+            applyParticleForceFields(this.forceFields, fieldCount, step, this.count, this.positions, this.velocities, this.ages, this.lifetimes);
+        }
         let checks = 0;
         const checkFrom = this.collisionCursor;
         let i = 0;
@@ -351,6 +375,7 @@ export class ParticleSimulation {
         // The cycle: bursts at their times, the continuous rate spread evenly.
         const duration = Math.max(0.05, effect.duration);
         const local = this.effect.space === 'local';
+        this.cycleTime = Math.min(this.cycleTime, duration);
         while (left > 0 && !this.finished) {
             const active = Math.min(left, duration - this.cycleTime);
             const end = this.cycleTime + active;
@@ -361,11 +386,13 @@ export class ParticleSimulation {
                 for (let k = 0; k < burst.count; k++) this.spawn(local ? null : world, age);
                 this.burstsDone++;
             }
-            this.carry += effect.rate * active;
+            this.carry += particleEmissionBetween(this.rateIntegral, this.cycleTime, end, duration, effect.rate);
             // A hair over, so whole numbers summed from fractions of a step are not lost to rounding.
             const due = Math.floor(this.carry + 1e-6);
             this.carry -= due;
-            for (let k = 0; k < due; k++) this.spawn(local ? null : world, (left - active) + active * (1 - (k + 0.5) / due));
+            for (let k = 0; k < due && this.count < this.capacity; k++) {
+                this.spawn(local ? null : world, (left - active) + active * (1 - (k + 0.5) / due));
+            }
             this.cycleTime = end;
             left -= active;
             if (this.cycleTime >= duration - 1e-9) {

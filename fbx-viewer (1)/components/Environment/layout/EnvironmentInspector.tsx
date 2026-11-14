@@ -30,6 +30,8 @@ import { isTerrainHeightfieldPending } from '../../../utils/terrainHeightfieldCo
 import { editorSession } from '../../../utils/editorSession';
 import { appConfirm } from '../../../utils/appDialogs';
 import { collectSubtree, getWorldMatrix, reparentPreservingWorld, sortByHierarchy, toLocalTransform, wouldCreateCycle } from '../../../utils/sceneGraph';
+import { particleEmitterName } from '../../../runtime/particleEffect';
+import { ParticlePreviewControls } from '../ParticlePreviewControls';
 import { COMPONENT_DEFINITIONS, createComponent, getComponentDefinition } from '../../../runtime/components/registry';
 import type { ComponentPropSchema } from '../../../runtime/components/types';
 import { findSplineComponent } from '../../../runtime/splineRegistry';
@@ -421,9 +423,10 @@ const ComponentPropField: React.FC<{
 
 const ComponentsSection: React.FC<{
     object: LevelObject;
+    editing: boolean;
     onCommit: (components: LevelComponent[]) => void;
     onScrub: (components: LevelComponent[]) => void;
-}> = ({ object, onCommit, onScrub }) => {
+}> = ({ object, editing, onCommit, onScrub }) => {
     const [menuOpen, setMenuOpen] = useState(false);
     const components = object.components ?? [];
 
@@ -433,6 +436,8 @@ const ComponentsSection: React.FC<{
     return (
         <div className="space-y-3 pt-2 border-t border-gray-800/50">
             <div className={SECTION_TITLE}><PuzzleIcon size={12} /> Components</div>
+            {editing && components.some(component => component.type === 'particles' && component.enabled) &&
+                <ParticlePreviewControls objectId={object.id} />}
 
             {components.length === 0 && (
                 <div className="text-2xs text-gray-500 italic">No components. Add one to give this object lights or behaviour.</div>
@@ -440,6 +445,8 @@ const ComponentsSection: React.FC<{
 
             {components.map(component => {
                 const definition = getComponentDefinition(component.type);
+                const name = component.type === 'particles' ? particleEmitterName(component.props) : '';
+                const label = definition?.label ?? component.type;
                 return (
                     <div key={component.id} className={`rounded border border-gray-700 bg-gray-800/40 ${component.enabled ? '' : 'opacity-60'}`}>
                         <div className="flex items-center gap-2 px-2 py-1.5 border-b border-gray-700/60">
@@ -451,7 +458,7 @@ const ComponentsSection: React.FC<{
                                 aria-label={`Enable ${definition?.label ?? component.type}`}
                                 title={component.enabled ? 'Disable component' : 'Enable component'}
                             />
-                            <span className="flex-1 text-xs font-bold text-gray-200 truncate">{definition?.label ?? component.type}</span>
+                            <span className="flex-1 text-xs font-bold text-gray-200 truncate">{name ? `${label} · ${name}` : label}</span>
                             <button
                                 type="button"
                                 onClick={() => onCommit(components.filter(c => c.id !== component.id))}
@@ -1129,6 +1136,7 @@ export const EnvironmentInspector: React.FC<EnvironmentInspectorProps> = ({ stat
                         <ComponentsSection
                             key={objectId}
                             object={selectedObject}
+                            editing={!state.isPlaying}
                             onCommit={(components) => commitUpdate({ components })}
                             onScrub={(components) => scrubUpdate({ components })}
                         />
