@@ -233,6 +233,42 @@ function refineSeam(chain: number[], splits: Map<number, number>): number[] {
     return result;
 }
 
+/** Improve interior diagonals in bounded disjoint sweeps. Boundaries and the size field remain fixed. */
+function improveAngles(indices: number[], points: Point[], maxEdge: number): void {
+    const dist2 = (a: number, b: number) => (points[a].x - points[b].x) ** 2 + (points[a].y - points[b].y) ** 2;
+    const quality = (a: number, b: number, c: number, area: number) => area / (dist2(a, b) + dist2(b, c) + dist2(c, a));
+    const longest = (maxEdge * (1 + 1e-10)) ** 2;
+    for (let sweep = 0; sweep < 8; sweep++) {
+        const seen = new Map<number, { triangle: number; opposite: number }>();
+        const changed = new Set<number>();
+        for (let i = 0; i < indices.length; i += 3) {
+            for (let k = 0; k < 3; k++) {
+                const a = indices[i + k], b = indices[i + (k + 1) % 3], d = indices[i + (k + 2) % 3];
+                const key = edgeKey(a, b), prev = seen.get(key);
+                if (!prev) { seen.set(key, { triangle: i, opposite: d }); continue; }
+                if (changed.has(prev.triangle)) continue;
+                const c = prev.opposite;
+                if (dist2(c, d) > longest) continue;
+                const area1 = cross(points[c], points[d], points[a]), area2 = cross(points[c], points[b], points[d]);
+                if (area1 <= EPSILON_AREA || area2 <= EPSILON_AREA) continue;
+                const old = Math.min(quality(b, a, c, cross(points[b], points[a], points[c])), quality(a, b, d, cross(points[a], points[b], points[d])));
+                const next = Math.min(quality(c, d, a, area1), quality(c, b, d, area2));
+                if (next <= old + 1e-9) continue;
+                indices[prev.triangle] = c;
+                indices[prev.triangle + 1] = d;
+                indices[prev.triangle + 2] = a;
+                indices[i] = c;
+                indices[i + 1] = b;
+                indices[i + 2] = d;
+                changed.add(prev.triangle);
+                changed.add(i);
+                break;
+            }
+        }
+        if (!changed.size) break;
+    }
+}
+
 function buildHinges(indices: number[]): GarmentHinge[] {
     const halfEdges = new Map<number, { a: number; b: number; c: number }>();
     const hinges: GarmentHinge[] = [];
@@ -317,6 +353,7 @@ export function cookGarment(value: GarmentPattern): CookedGarment {
     const remap = new Uint32Array(points.length), indices: number[] = [], pins: number[] = [], panelRanges: GarmentPanelRange[] = [];
     let cursor = 0;
     for (const g of panels) {
+        improveAngles(g.indices, points, pattern.edgeLength);
         const p = g.panel, vertexStart = cursor, indexStart = indices.length;
         const { origin, u, v } = p.placement;
         for (const old of g.vertices) {
