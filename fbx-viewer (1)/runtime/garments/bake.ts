@@ -14,7 +14,9 @@ export interface FittingBakeReference { assetId: string; recipe: string; duratio
 export type FittingBakeReply = { progress: number } | { bytes: ArrayBuffer; duration: number } | { error: string };
 
 export async function fittingDigest(bytes: ArrayBuffer | Uint8Array<ArrayBuffer>): Promise<string> {
-    const digest = await crypto.subtle.digest('SHA-256', bytes);
+    // A typed view also works when a host or worker supplies an ArrayBuffer from a different realm.
+    const view = ArrayBuffer.isView(bytes) ? bytes : new Uint8Array(bytes);
+    const digest = await crypto.subtle.digest('SHA-256', view);
     return Array.from(new Uint8Array(digest), n => n.toString(16).padStart(2, '0')).join('');
 }
 
