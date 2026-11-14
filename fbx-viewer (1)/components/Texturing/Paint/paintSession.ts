@@ -379,7 +379,7 @@ export class PaintSession {
             },
             storePicture: (blob) => projectService.uploadAsset(new File([blob], 'painted.png', { type: 'image/png' })),
         };
-        let stack: PaintStack;
+        let stack: PaintStack | undefined;
         try {
             stack = await PaintStack.open(stackHost, part, document);
             assertOwner();
@@ -388,6 +388,7 @@ export class PaintSession {
             graphPictures.dispose();
             throw error;
         }
+        if (!stack) throw new Error('The painted set could not be opened.');
         const session = new PaintSession(target, host, part, stack, asset, occluder, modelSpace, owner);
         session.releasePictures = graphPictures.dispose;
         // Graphs using this set's stack draw from it while it is open.
