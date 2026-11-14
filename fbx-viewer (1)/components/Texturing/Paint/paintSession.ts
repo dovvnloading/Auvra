@@ -1256,6 +1256,11 @@ export class PaintSession {
  * they cannot restore an obsolete paint document after the new project
  * revision has been published.
  */
+/** Save pending Paint pictures and documents before project save, export or replacement. */
+export const flushPendingPaintSessionWrites = async (): Promise<void> => {
+    for (const session of [...livePaintSessions]) await session.flushForProjectRename();
+};
+
 export const preparePaintSessionsForProjectRename = async (): Promise<(committed: boolean) => void> => {
     const locked: PaintSession[] = [];
     const finish = (committed: boolean): void => {
