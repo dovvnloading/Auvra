@@ -202,12 +202,16 @@ export const useProjectManager = ({
         throw new Error('The updated project could not be published to the editor session.');
       }
     } catch (error) {
-      finishPaint(committed);
+      // A post-acknowledgement identity/revision error also means the host
+      // may already have committed. Never re-enable stale editor writers or
+      // pretend this was a safely rejected transaction.
+      const saved = committed || error instanceof RenameProjectSyncError;
+      finishPaint(saved);
       if (editorSession.isTransitionCurrent(transition)) {
-        if (committed) editorSession.fail(transition);
+        if (saved) editorSession.fail(transition);
         else editorSession.revert(transition, previous, projectService.getStatus().revision);
       }
-      if (committed) throw new RenameProjectSyncError(
+      if (saved) throw new RenameProjectSyncError(
         'The rename was saved in the project, but the editor could not reload it. Reopen the project before editing.',
         error,
       );
