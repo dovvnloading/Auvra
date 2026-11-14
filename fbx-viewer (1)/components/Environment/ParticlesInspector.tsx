@@ -20,7 +20,6 @@ import {
     resolveParticleEffect,
     sanitizeParticleEffect,
     SUB_EMITTER_TRIGGERS,
-    type Curve,
     type Gradient,
     type ParticleEffect,
     type ParticleForceField,
@@ -28,6 +27,7 @@ import {
     type Range,
     type Vec3,
 } from '../../runtime/particleEffect';
+import { ParticleCurveEditor } from './ParticleCurveEditor';
 import { ColourField } from '../UI/ColourPicker';
 
 const FIELD = 'w-full bg-gray-950 border border-gray-700 rounded px-1.5 py-0.5 text-2xs text-gray-200 focus:outline-none focus:border-amber-500';
@@ -156,36 +156,6 @@ const GradientEditor: React.FC<{ label: string; value: Gradient; onCommit: (valu
     );
 };
 
-/** A curve's points over a small plot: position and value each, added and removed. */
-const CurveEditor: React.FC<{ label: string; value: Curve; onCommit: (value: Curve) => void }> = ({ label, value, onCommit }) => {
-    const points = value.points;
-    const top = Math.max(1, ...points.map(([, v]) => v));
-    const path = points.map(([t, v], i) => `${i === 0 ? 'M' : 'L'}${(t * 100).toFixed(1)},${(30 - (v / top) * 28).toFixed(1)}`).join(' ');
-    const set = (index: number, point: [number, number]) =>
-        onCommit({ points: points.map((entry, i) => (i === index ? point : entry)).sort((a, b) => a[0] - b[0]) });
-    return (
-        <div className="space-y-1">
-            <div className={LABEL}>{label}</div>
-            <svg aria-label={`${label} preview`} viewBox="0 0 100 32" preserveAspectRatio="none" className="h-8 w-full rounded border border-gray-700 bg-gray-950">
-                <path d={`M0,${(30 - 28 / top).toFixed(1)} H100`} stroke="#444" strokeDasharray="2 2" fill="none" vectorEffect="non-scaling-stroke" />
-                <path d={path} stroke="#f59e0b" fill="none" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
-            </svg>
-            {points.map(([t, v], index) => (
-                <div key={index} className="grid grid-cols-[1fr_1fr_20px] items-center gap-1">
-                    <NumberInput label={`${label} point ${index + 1} position`} value={t} step={0.05} onCommit={(next) => set(index, [Math.min(1, Math.max(0, next)), v])} />
-                    <NumberInput label={`${label} point ${index + 1} value`} value={v} step={0.1} onCommit={(next) => set(index, [t, Math.max(0, next)])} />
-                    <button type="button" aria-label={`Remove ${label} point ${index + 1}`} disabled={points.length <= 1} onClick={() => onCommit({ points: points.filter((_, i) => i !== index) })} className="text-gray-500 hover:text-red-400 disabled:opacity-30"><TrashIcon size={11} /></button>
-                </div>
-            ))}
-            {points.length < 8 && (
-                <button type="button" className={BUTTON} onClick={() => onCommit({ points: [...points, [1, points[points.length - 1]?.[1] ?? 1] as [number, number]].sort((a, b) => a[0] - b[0]) })}>
-                    <PlusIcon size={10} /> Point
-                </button>
-            )}
-        </div>
-    );
-};
-
 const ForceFieldEditor: React.FC<{ fields: ParticleForceField[]; onChange: (fields: ParticleForceField[]) => void }> = ({ fields, onChange }) => {
     const edit = (index: number, patch: Partial<ParticleForceField>) =>
         onChange(fields.map((field, i) => i === index ? { ...field, ...patch } : field));
@@ -249,6 +219,11 @@ export const ParticlesInspector: React.FC<ComponentInspectorProps> = ({ object, 
                 <Row label="Simulation"><Select label="Simulation" value={effect.simulation} options={PARTICLE_SIMULATION_MODES} labels={{ cpu: 'CPU (every feature)', gpu: 'GPU (up to a million)' }} onChange={(simulation) => update({ simulation })} /></Row>
                 {effect.simulation === 'gpu' && <p className="text-2xs text-gray-500">WebGL2 GPU mode draws unsorted sprites and collides with the ground under the emitter. Choose CPU for ribbons or sub-emitters on WebGL2.</p>}
                 <Row label="Rate (per s)"><NumberInput label="Rate" value={effect.rate} step={1} onCommit={(rate) => update({ rate })} /></Row>
+                <details className="rounded border border-gray-800 px-1.5 py-1">
+                    <summary className="cursor-pointer text-2xs text-gray-300">Rate over cycle</summary>
+                    <ParticleCurveEditor label="Rate multiplier" domain="Cycle" maximum={10} value={effect.rateOverCycle}
+                        onCommit={(rateOverCycle) => update({ rateOverCycle })} />
+                </details>
                 <Row label="Per metre moved"><NumberInput label="Rate over distance" value={effect.rateOverDistance} step={0.5} onCommit={(rateOverDistance) => update({ rateOverDistance })} /></Row>
                 <Row label="Cycle (s)"><NumberInput label="Duration" value={effect.duration} onCommit={(duration) => update({ duration })} /></Row>
                 <Row label="Loop"><Toggle label="Loop" value={effect.loop} onChange={(loop) => update({ loop })} /></Row>
@@ -303,8 +278,8 @@ export const ParticlesInspector: React.FC<ComponentInspectorProps> = ({ object, 
 
             <Section title="Over life">
                 <GradientEditor label="Colour and alpha" value={effect.colorOverLife} onCommit={(colorOverLife) => update({ colorOverLife })} />
-                <CurveEditor label="Size" value={effect.sizeOverLife} onCommit={(sizeOverLife) => update({ sizeOverLife })} />
-                <CurveEditor label="Speed" value={effect.speedOverLife} onCommit={(speedOverLife) => update({ speedOverLife })} />
+                <ParticleCurveEditor label="Size" domain="Lifetime" maximum={50} value={effect.sizeOverLife} onCommit={(sizeOverLife) => update({ sizeOverLife })} />
+                <ParticleCurveEditor label="Speed" domain="Lifetime" maximum={10} value={effect.speedOverLife} onCommit={(speedOverLife) => update({ speedOverLife })} />
             </Section>
 
             <Section title="Collision">

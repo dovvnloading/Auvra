@@ -478,7 +478,7 @@ Add a **Particles** component to an object for a particle effect: smoke, fire, s
 | Start | Each particle's **Lifetime**, **Speed**, **Size**, **Rotation** and **Spin**, picked between two values; a colour between two; how much of the object's own motion it starts with; and whether it stays in the **World** where it was left or moves with the object (**Local**: a jet's flame) |
 | Forces | **Gravity** (negative rises), **Drag**, **Wind**, **Turbulence** (swirling, the size of its swirls set by **Swirl size**) and **Orbit** round the object's up axis |
 | Force fields | Up to four radial, vortex or directional fields with individual centers, radii and falloff. See [Building a layered particle system](#building-a-layered-particle-system). |
-| Over life | A **Colour and alpha** gradient and **Size** and **Speed** curves across each particle's life, with previews |
+| Over life | A **Colour and alpha** gradient and editable **Size** and **Speed** multiplier curves across each particle's life |
 | Collision | **With the world**: particles bounce off what they hit (**Bounce**, **Friction**) or die there (**Die on hit**). It only runs in play |
 | Sub-emitters | Another Particles component on the same object, set off where these particles **die** or **hit something**: rain that splashes, fireworks that burst, sparks that smoke |
 | Rendering | **Draw as** camera-facing sprites, **stretched along their motion** (sparks, rain), **flat** (ripples, shockwaves), **upright**, or a **ribbon** through them (trails). The **Sprite** is one of the engine's (soft, smoke, spark, glow, ring, star, an animated flame, droplet, snowflake, leaf, square, debris) or a texture of the project, which can be a flipbook (columns and rows) played over each particle's life, at a frame rate, or one frame at random. **Blending** added glows, blended layers; **Brightness** above 1 glows with bloom |
@@ -503,6 +503,16 @@ Open **Force fields** on either emitter. Up to four spherical fields can overlap
 **Strength** is acceleration in m/s². With **Falloff exponent** at 0, the force has full strength throughout the interior. At 1 it decreases linearly, reaching half strength halfway to the edge. At 2 it reaches quarter strength there. Particles on or outside the boundary feel zero acceleration from that field.
 
 To experiment with Ion Vortex, disable the vortex field on **Ion stream** to see how the inward pull and lift shape the stream, then re-enable it and change its strength from positive to negative to reverse the twist. The project saves the field settings alongside the emitter, including in prefabs and built games.
+
+### Shaping a pulse with curves
+
+Add a **Particles** component to an object and choose **Pulse rings** from **Preset**. Three short emission windows launch groups of rings in each 0.74-second cycle. In **Emission → Rate over cycle**, the horizontal axis runs from the start to the end of one cycle. The vertical axis multiplies **Rate (per s)**. Drag the end of the first high plateau to the right to make the first group thicker. A zero multiplier leaves a gap between groups. Bursts and per-metre emission keep their own timing.
+
+Under **Over life**, the **Size** and **Speed** graphs use the age of each individual particle. For example, moving a size peak from 25% to 75% makes each particle grow largest later in its flight. Choose **Linear** for a straight ramp, **Step** to hold each value until the next key, or **Smooth** for a rounded transition that stays between its neighbouring key values.
+
+Each graph supports up to eight keys. Double-click the graph to place one, or choose **Add key**. Drag a key or use **Time (%)** and **Value (×)** for a precise edit. With a key focused, the arrow keys nudge it, Shift increases the nudge tenfold, and Delete removes it. Escape cancels a drag. One drag creates one Undo entry.
+
+The emitter integrates the rate curve over the simulated time in each frame, including pulses shorter than a frame. For example, on a two-second cycle with a base rate of 100 per second, a linear ramp from 0× to 2× schedules 50 particles in the first second and 150 in the second. The lifetime size and speed curves use 64 samples in the simulation.
 
 ### GPU particles
 

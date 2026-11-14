@@ -434,6 +434,7 @@ const EXEMPT = new Map(Object.entries({
   'runtime/vehicleSim.ts': 'pure-derived-state',
   'runtime/surfaces.ts': 'pure-utility',
   'runtime/particleEffect.ts': 'pure-utility',
+  'runtime/particleEmissionRate.ts': 'pure-utility',
   'runtime/particleEmitters.ts': 'pure-derived-state',
   'runtime/particleForceFields.ts': 'hot-loop',
   'runtime/particlePreview.ts': 'pure-derived-state',

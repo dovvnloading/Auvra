@@ -7,6 +7,7 @@ import {
     type ParticleEffect,
     type SubEmitterTrigger,
 } from './particleEffect';
+import { compileParticleRateCurve, particleEmissionBetween } from './particleEmissionRate';
 import { applyParticleForceFields, PARTICLE_FORCE_FIELD_FLOATS, prepareParticleForceFields } from './particleForceFields';
 
 /**
@@ -102,6 +103,7 @@ export class ParticleSimulation {
     private effect!: ParticleEffect;
     private colorTable!: Float32Array;
     private sizeTable!: Float32Array;
+    private rateIntegral: Float64Array | null = null;
     private speedTable!: Float32Array;
     private startA = new Float32Array(3);
     private startB = new Float32Array(3);
@@ -148,6 +150,7 @@ export class ParticleSimulation {
         this.effect = effect;
         this.colorTable = bakeGradient(effect.colorOverLife);
         this.sizeTable = bakeCurve(effect.sizeOverLife);
+        this.rateIntegral = compileParticleRateCurve(effect.rateOverCycle);
         this.speedTable = bakeCurve(effect.speedOverLife);
         linearColor(effect.startColor[0], this.startA);
         linearColor(effect.startColor[1], this.startB);
@@ -368,6 +371,7 @@ export class ParticleSimulation {
         // The cycle: bursts at their times, the continuous rate spread evenly.
         const duration = Math.max(0.05, effect.duration);
         const local = this.effect.space === 'local';
+        this.cycleTime = Math.min(this.cycleTime, duration);
         while (left > 0 && !this.finished) {
             const active = Math.min(left, duration - this.cycleTime);
             const end = this.cycleTime + active;
@@ -378,11 +382,13 @@ export class ParticleSimulation {
                 for (let k = 0; k < burst.count; k++) this.spawn(local ? null : world, age);
                 this.burstsDone++;
             }
-            this.carry += effect.rate * active;
+            this.carry += particleEmissionBetween(this.rateIntegral, this.cycleTime, end, duration, effect.rate);
             // A hair over, so whole numbers summed from fractions of a step are not lost to rounding.
             const due = Math.floor(this.carry + 1e-6);
             this.carry -= due;
-            for (let k = 0; k < due; k++) this.spawn(local ? null : world, (left - active) + active * (1 - (k + 0.5) / due));
+            for (let k = 0; k < due && this.count < this.capacity; k++) {
+                this.spawn(local ? null : world, (left - active) + active * (1 - (k + 0.5) / due));
+            }
             this.cycleTime = end;
             left -= active;
             if (this.cycleTime >= duration - 1e-9) {

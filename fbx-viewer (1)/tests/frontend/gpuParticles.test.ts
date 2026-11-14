@@ -61,6 +61,38 @@ describe('gpu particle effects', () => {
 });
 
 describe('emission clock', () => {
+  it('integrates a rising rate independently of frame boundaries and wraps short cycles', () => {
+    const effect = effectWith({ duration: 0.05, rate: 100, rateOverCycle: { points: [[0, 0], [1, 2]] } });
+    const whole = new EmissionClock();
+    const split = new EmissionClock();
+    whole.play();
+    split.play();
+    // Two full periods contribute 5 particles apiece. The first half of the next adds 1.25.
+    expect(whole.advance(effect, 0.125, 0).cycle).toBe(11);
+    const total = Array.from({ length: 25 }, () => split.advance(effect, 0.005, 0).cycle)
+      .reduce((sum, count) => sum + count, 0);
+    expect(total).toBe(11);
+    expect(whole.advance(effect, 0.025, 0).cycle).toBe(4);
+    expect(split.advance(effect, 0.025, 0).cycle).toBe(4);
+  });
+
+  it('keeps bursts and distance emission when the curve is silent and takes live edits at the current phase', () => {
+    const clock = new EmissionClock();
+    clock.play();
+    const silent = effectWith({
+      duration: 1, rate: 80, rateOverCycle: { points: [[0, 0], [1, 0]] }, rateOverDistance: 3,
+      bursts: [{ time: 0.1, count: 7 }],
+    });
+    expect(clock.advance(silent, 0.4, 2)).toEqual({ cycle: 7, trail: 6 });
+    const ramp = effectWith({ ...silent, rate: 100, rateOverCycle: { points: [[0, 0], [1, 2]] } });
+    // Integral from phase .4 to .5 of 200t is nine births.
+    expect(clock.advance(ramp, 0.1, 0).cycle).toBe(9);
+    // The edited loop has already ended. Only the new elapsed .05s counts.
+    const shorter = effectWith({ ...ramp, duration: 0.1, bursts: [] });
+    expect(clock.advance(shorter, 0.05, 0).cycle).toBe(2);
+    expect(clock.advance(shorter, 0.05, 0).cycle).toBe(8);
+  });
+
   it('counts the rate evenly, waits out the delay and fires bursts once per cycle', () => {
     const clock = new EmissionClock();
     const effect = effectWith({ rate: 100, delay: 0.5, duration: 1, loop: true, bursts: [{ time: 0.25, count: 7 }] });

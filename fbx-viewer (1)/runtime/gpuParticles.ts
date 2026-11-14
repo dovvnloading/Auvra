@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { BAKE_SAMPLES, bakeCurve, bakeGradient, linearColor, MAX_PARTICLE_FORCE_FIELDS, type ParticleEffect, type ParticleShapeKind } from './particleEffect';
 import { PARTICLE_FORCE_FIELD_FLOATS, prepareParticleForceFields } from './particleForceFields';
+import { compileParticleRateCurve, particleEmissionBetween } from './particleEmissionRate';
 import { MODE_DEFINE, PARTICLE_CORNER, PARTICLE_FRAGMENT, WorldMesh } from './particleRenderer';
 import { MAX_PARTICLE_STEP, type MeshSurface } from './particleSimulation';
 import { FullscreenPass } from './postEffects';
@@ -351,6 +352,8 @@ export class EmissionClock {
     private burstsDone = 0;
     private carry = 0;
     private distanceCarry = 0;
+    private rateCurve: ParticleEffect['rateOverCycle'] | undefined;
+    private rateIntegral: Float64Array | null = null;
 
     play(): void {
         this.emitting = true;
@@ -382,6 +385,12 @@ export class EmissionClock {
             this.distanceCarry -= counts.trail;
         }
         const duration = Math.max(0.05, effect.duration);
+        // If an edit shortened this cycle, finish its new tail with zero elapsed time.
+        this.cycleTime = Math.min(this.cycleTime, duration);
+        if (effect.rateOverCycle !== this.rateCurve) {
+            this.rateCurve = effect.rateOverCycle;
+            this.rateIntegral = compileParticleRateCurve(effect.rateOverCycle);
+        }
         while (left > 0 && !this.finished) {
             const active = Math.min(left, duration - this.cycleTime);
             const end = this.cycleTime + active;
@@ -389,7 +398,7 @@ export class EmissionClock {
                 counts.cycle += effect.bursts[this.burstsDone].count;
                 this.burstsDone++;
             }
-            this.carry += effect.rate * active;
+            this.carry += particleEmissionBetween(this.rateIntegral, this.cycleTime, end, duration, effect.rate);
             const due = Math.floor(this.carry + 1e-6);
             this.carry -= due;
             counts.cycle += due;

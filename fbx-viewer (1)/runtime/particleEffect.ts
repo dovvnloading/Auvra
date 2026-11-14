@@ -48,9 +48,13 @@ export interface Gradient {
     stops: GradientStop[];
 }
 
-/** A curve over a particle's life: [t 0-1, value] points, joined by straight lines. */
+export const PARTICLE_CURVE_INTERPOLATIONS = ['linear', 'step', 'smooth'] as const;
+export type ParticleCurveInterpolation = typeof PARTICLE_CURVE_INTERPOLATIONS[number];
+
+/** Normalized time/value keys. Curves without an authored interpolation mode are linear. */
 export interface Curve {
     points: [number, number][];
+    interpolation?: ParticleCurveInterpolation;
 }
 
 export type ParticleShapeKind = 'point' | 'sphere' | 'hemisphere' | 'cone' | 'box' | 'circle' | 'edge' | 'mesh';
@@ -168,6 +172,8 @@ export interface ParticleEffect {
     delay: number;
     /** Particles per second. */
     rate: number;
+    /** Multiplies continuous emission over normalized cycle time. Bursts and distance emission are independent. */
+    rateOverCycle: Curve;
     /** Particles per metre the emitter moves: trails. */
     rateOverDistance: number;
     bursts: ParticleBurst[];
@@ -260,27 +266,100 @@ export const bakeGradient = (gradient: Gradient): Float32Array => {
     return out;
 };
 
-/** A curve baked to BAKE_SAMPLES values. */
-export const bakeCurve = (curve: Curve): Float32Array => {
-    const out = new Float32Array(BAKE_SAMPLES);
-    const points = curve.points.length ? curve.points : [[0, 1] as [number, number]];
-    for (let i = 0; i < BAKE_SAMPLES; i++) out[i] = evaluateCurve(points, i / (BAKE_SAMPLES - 1));
-    return out;
-};
+/** One-sided endpoint derivative, limited to preserve the sign and shape of the end segment. */
+function endpointSlope(h0: number, h1: number, s0: number, s1: number): number {
+    const slope = ((2 * h0 + h1) * s0 - h0 * s1) / (h0 + h1);
+    if (Math.sign(slope) !== Math.sign(s0)) return 0;
+    if (Math.sign(s0) !== Math.sign(s1) && Math.abs(slope) > 3 * Math.abs(s0)) return 3 * s0;
+    return slope;
+}
 
-/** A curve's value at `t` (0-1), held flat before its first point and after its last. */
-export const evaluateCurve = (points: readonly [number, number][], t: number): number => {
-    if (points.length === 0) return 1;
-    if (t <= points[0][0]) return points[0][1];
-    for (let i = 1; i < points.length; i++) {
-        const [t1, v1] = points[i];
-        if (t <= t1) {
-            const [t0, v0] = points[i - 1];
-            return t1 - t0 <= 1e-6 ? v1 : v0 + (v1 - v0) * ((t - t0) / (t1 - t0));
+/** PCHIP uses a weighted harmonic mean on unevenly spaced keys and a flat tangent at extrema. */
+function monotoneSlopes(keys: readonly [number, number][]): number[] {
+    const n = keys.length;
+    const h: number[] = [], s: number[] = [];
+    for (let i = 1; i < n; i++) {
+        const width = keys[i][0] - keys[i - 1][0];
+        h.push(width);
+        s.push((keys[i][1] - keys[i - 1][1]) / width);
+    }
+    if (n === 2) return [s[0], s[0]];
+    const slopes = [endpointSlope(h[0], h[1], s[0], s[1])];
+    for (let i = 1; i < n - 1; i++) {
+        const before = s[i - 1], after = s[i];
+        if (before === 0 || after === 0 || Math.sign(before) !== Math.sign(after)) slopes.push(0);
+        else {
+            const w1 = 2 * h[i] + h[i - 1], w2 = h[i] + 2 * h[i - 1];
+            slopes.push((w1 + w2) / (w1 / before + w2 / after));
         }
     }
-    return points[points.length - 1][1];
+    slopes.push(endpointSlope(h[n - 2], h[n - 3], s[n - 2], s[n - 3]));
+    return slopes;
+}
+
+function curveKeys(points: readonly [number, number][], interpolation: ParticleCurveInterpolation) {
+    const ordered = points.filter(p => Array.isArray(p) && Number.isFinite(p[0]) && Number.isFinite(p[1]))
+        .sort((a, b) => a[0] - b[0]);
+    // Legacy linear keys can describe an instantaneous jump using two values at the same time.
+    return interpolation === 'linear' ? ordered : ordered.filter((p, i) => p[0] !== ordered[i + 1]?.[0]);
+}
+
+type CurvePolynomial = [constant: number, linear: number, quadratic: number, cubic: number];
+
+function segmentPolynomial(keys: readonly [number, number][], index: number, interpolation: ParticleCurveInterpolation, slopes: number[] | null): CurvePolynomial {
+    const [start, a] = keys[index], [end, b] = keys[index + 1];
+    if (interpolation === 'step') return [a, 0, 0, 0];
+    const width = end - start, delta = b - a;
+    if (!slopes) return width <= 1e-6 ? [b, 0, 0, 0] : [a, delta, 0, 0];
+    const left = width * slopes[index], right = width * slopes[index + 1];
+    // Subnormal key spacing can overflow a secant slope. Its linear span remains finite.
+    if (!Number.isFinite(left) || !Number.isFinite(right)) return [a, delta, 0, 0];
+    return [a, left, 3 * delta - 2 * left - right, left + right - 2 * delta];
+}
+
+/** Cubic coefficients [a,b,c,d] at u=(t-t0)/(t1-t0) on a span of sorted particle keys.
+ * Duplicate times bound an empty span. Step and smooth resolve ties to the last authored value.
+ */
+export function particleCurveSegment(points: readonly [number, number][], index: number, interpolation: ParticleCurveInterpolation): CurvePolynomial {
+    const left = points[index], right = points[index + 1];
+    if (!left || !right || !(right[0] > left[0])) return [left?.[1] ?? 1, 0, 0, 0];
+    if (interpolation !== 'smooth') return segmentPolynomial(points, index, interpolation, null);
+    const keys = curveKeys(points, interpolation);
+    const span = keys.findIndex(point => point[0] === left[0]);
+    if (span < 0 || span + 1 >= keys.length) return [left[1], 0, 0, 0];
+    return segmentPolynomial(keys, span, interpolation, monotoneSlopes(keys));
+}
+
+/** Prepare once per bake. At coincident times, step and smooth take the last authored key. */
+function curveSampler(points: readonly [number, number][], interpolation: ParticleCurveInterpolation = 'linear') {
+    const keys = curveKeys(points, interpolation);
+    const last = keys.length - 1;
+    const slopes = interpolation === 'smooth' && last >= 1 ? monotoneSlopes(keys) : null;
+    const segments = keys.slice(0, -1).map((_, i) => segmentPolynomial(keys, i, interpolation, slopes));
+    return (t: number): number => {
+        if (last < 0) return 1;
+        if (Number.isNaN(t) || t <= keys[0][0]) return keys[0][1];
+        for (let i = 1; i <= last; i++) {
+            const [end, b] = keys[i];
+            if (t > end) continue;
+            if (t === end) return b;
+            const start = keys[i - 1][0], u = (t - start) / (end - start);
+            const [constant, linear, quadratic, cubic] = segments[i - 1];
+            return constant + u * (linear + u * (quadratic + u * cubic));
+        }
+        return keys[last][1];
+    };
+}
+
+/** A curve baked to the lookup table shared by all three particle simulations. */
+export const bakeCurve = (curve: Curve): Float32Array => {
+    const sample = curveSampler(curve.points, curve.interpolation);
+    return Float32Array.from({ length: BAKE_SAMPLES }, (_, i) => sample(i / (BAKE_SAMPLES - 1)));
 };
+
+/** Evaluate at normalized time, holding the first and last values outside the keyed interval. */
+export const evaluateCurve = (points: readonly [number, number][], t: number, interpolation: ParticleCurveInterpolation = 'linear'): number =>
+    curveSampler(points, interpolation)(t);
 
 /** A baked table's sample at life `t` (0-1). */
 export const sampleBaked = (table: Float32Array, t: number, stride = 1, channel = 0): number => {
@@ -305,7 +384,7 @@ const DEFAULT_LIGHT: ParticleLight = { enabled: false, color: '#ffb060', intensi
 export const DEFAULT_PARTICLE_EFFECT: ParticleEffect = {
     simulation: 'cpu',
     duration: 3, loop: true, prewarm: false, delay: 0,
-    rate: 20, rateOverDistance: 0, bursts: [], maxParticles: 400,
+    rate: 20, rateOverCycle: { points: [[0, 1], [1, 1]] }, rateOverDistance: 0, bursts: [], maxParticles: 400,
     shape: DEFAULT_SHAPE, space: 'world',
     lifetime: [2.4, 3.6], speed: [0.6, 1], size: [0.5, 0.8], rotation: [0, 360], spin: [-20, 20],
     startColor: ['#a8a8a8', '#8c8c8c'], inheritVelocity: 0,
@@ -362,14 +441,17 @@ const gradient = (value: unknown, fallback: Gradient): Gradient => {
 };
 
 const curve = (value: unknown, fallback: Curve, min: number, max: number): Curve => {
-    const points = Array.isArray(record(value).points) ? (record(value).points as unknown[]) : null;
-    if (!points || points.length === 0) return { points: fallback.points.map(([t, v]) => [t, v] as [number, number]) };
-    return {
-        points: points.slice(0, 8)
-            .filter((point): point is unknown[] => Array.isArray(point) && point.length >= 2)
-            .map(point => [num(point[0], 0, 0, 1), num(point[1], 1, min, max)] as [number, number])
-            .sort((a, b) => a[0] - b[0]),
-    };
+    const data = record(value);
+    const interpolation = PARTICLE_CURVE_INTERPOLATIONS.find(mode => mode === data.interpolation);
+    const authored = Array.isArray(data.points) && data.points.length > 0 ? data.points : null;
+    const valid = authored?.slice(0, 8)
+        .filter((point): point is unknown[] => Array.isArray(point) && point.length >= 2)
+        .map(point => [num(point[0], 0, 0, 1), num(point[1], 1, min, max)] as [number, number])
+        .sort((a, b) => a[0] - b[0]);
+    // Older malformed curves baked to a unit multiplier. Give the editor a usable key for that value.
+    const points: [number, number][] = valid?.length ? valid : authored ? [[0, 1]] : fallback.points.map(([t, v]) => [t, v]);
+    const mode = interpolation ?? (authored ? undefined : fallback.interpolation);
+    return mode ? { points, interpolation: mode } : { points };
 };
 
 const sprite = (value: unknown, fallback: string): string =>
@@ -412,6 +494,7 @@ export const sanitizeParticleEffect = (value: unknown, base: ParticleEffect = DE
         prewarm: bool(e.prewarm, base.prewarm),
         delay: num(e.delay, base.delay, 0, 60),
         rate: num(e.rate, base.rate, 0, limits.rate),
+        rateOverCycle: curve(e.rateOverCycle, base.rateOverCycle, 0, 10),
         rateOverDistance: num(e.rateOverDistance, base.rateOverDistance, 0, 200),
         bursts: (Array.isArray(e.bursts) ? e.bursts : base.bursts).slice(0, 8).map(entry => {
             const burst = record(entry);
@@ -544,6 +627,21 @@ export const PARTICLE_PRESETS = {
         shape: { kind: 'circle', radius: 0.4 }, startColor: ['#ffb040', '#ff7020'],
         colorOverLife: fade('#ffb040', 1, '#ff3000'), sizeOverLife: { points: [[0, 1], [1, 0.5]] },
         render: { sprite: 'glow', blending: 'additive', emissive: 5, sort: false },
+    }),
+    pulseRings: effect({
+        duration: 0.74, rate: 52, maxParticles: 64, lifetime: [2.32, 2.32],
+        rateOverCycle: { interpolation: 'step', points: [[0, 1.6], [0.08, 0], [0.22, 1.2], [0.28, 0], [0.4, 0.82], [0.445, 0], [1, 0]] },
+        shape: { kind: 'circle', radius: 0.015, volume: 0.2, angle: 0.2, axis: [0, 1, 0] },
+        speed: [2.45, 2.45], size: [1.64, 1.72], gravity: 0, drag: 0, turbulence: 0,
+        startColor: ['#fbffff', '#dcfaff'],
+        colorOverLife: { stops: [
+            { t: 0, color: '#fff5b9', alpha: 0.15 }, { t: 0.05, color: '#fff2ac', alpha: 0.9 },
+            { t: 0.22, color: '#63fde8', alpha: 0.95 }, { t: 0.57, color: '#38bcff', alpha: 0.9 },
+            { t: 0.86, color: '#b85cfe', alpha: 0.7 }, { t: 1, color: '#cf5eff', alpha: 0 },
+        ] },
+        sizeOverLife: { interpolation: 'smooth', points: [[0, 0.45], [0.11, 1.15], [0.31, 0.8], [0.65, 1.3], [1, 1.8]] },
+        speedOverLife: { interpolation: 'smooth', points: [[0, 0.6], [0.18, 0.75], [0.48, 1.18], [1, 1.45]] },
+        render: { mode: 'horizontal', sprite: 'ring', blending: 'additive', emissive: 2.8, sort: false },
     }),
     magic: effect({
         rate: 40, lifetime: [1, 2], speed: [0.2, 0.6], size: [0.08, 0.16], gravity: -0.3, drag: 0.5, turbulence: 0.6, orbit: 2,
@@ -696,7 +794,7 @@ export const PARTICLE_PRESET_LABELS: Record<ParticlePresetId, string> = {
     rain: 'Rain', snow: 'Snow', steam: 'Steam', leaves: 'Falling leaves', confetti: 'Confetti', fireflies: 'Fireflies',
     waterfall: 'Waterfall mist', muzzleFlash: 'Muzzle flash', shockwave: 'Shockwave', trail: 'Trail', debris: 'Debris',
     fountain: 'Fountain (GPU)', swarm: 'Swarm (GPU)', downpour: 'Downpour (GPU)',
-    ionVortex: 'Ion vortex', vortexSparks: 'Vortex sparks',
+    ionVortex: 'Ion vortex', vortexSparks: 'Vortex sparks', pulseRings: 'Pulse rings',
 };
 
 /** The artist's optional name for a particle component within a layered effect. */
@@ -751,5 +849,7 @@ export const estimateParticles = (effect: ParticleEffect): number => {
     const longest = effect.lifetime[1];
     const burst = effect.bursts.reduce((sum, entry) => sum + entry.count, 0);
     const cycles = effect.loop ? Math.ceil(longest / Math.max(0.05, effect.duration)) + 1 : 1;
-    return effect.rate * longest + burst * cycles + effect.rateOverDistance * 40 * longest;
+    const multipliers = effect.rateOverCycle?.points;
+    const peakRate = effect.rate * (multipliers?.length ? Math.max(...multipliers.map(point => point[1])) : 1);
+    return peakRate * longest + burst * cycles + effect.rateOverDistance * 40 * longest;
 };
