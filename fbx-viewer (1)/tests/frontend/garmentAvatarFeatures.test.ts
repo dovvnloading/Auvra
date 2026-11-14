@@ -35,6 +35,22 @@ describe('swept avatar feature contact for coarse cloth', () => {
         expect((x[2] + x[5]) / 2).toBeGreaterThanOrEqual(.09199);
     });
 
+    it('resolves the moving intersection of two shearing edges using their material weights', () => {
+        const cloth = buffer([[-1, 0, 0], [1, 0, 0], [0, -.12, 0]]);
+        const moved = copy(cloth);
+        moved[1] = -.025;
+        moved[4] = .035;
+        const before = buffer([[.03, -1, -.15], [.03, 1, -.08], [.09, 1, -.07]]);
+        const after = buffer([[.06, -1, .09], [-.04, 1, .13], [.02, 1, .14]]);
+        const tracker = whole(new Float64Array([1, 1, 0]));
+        tracker.prepare(region(before, after));
+        tracker.solve(cloth, moved, .002, ignore);
+        expect(tracker.stats.edgeCorrections).toBeGreaterThan(0);
+        expect(tracker.stats.corrections).toBe(0);
+        expect((moved[2] + moved[5]) / 2).toBeGreaterThan(.105);
+        expect(moved.subarray(6)).toEqual(cloth.subarray(6));
+    });
+
     it('detects a coplanar edge which enters and leaves an initially disjoint panel within one tick', () => {
         const cloth = buffer([[0, -.3, 0], [0, .3, 0], [-.01, .3, 0]]), p = copy(cloth), s = whole(new Float64Array([1, 1, 0]));
         const offset = (x: number) => buffer([[x - .1, 0, 0], [x + .1, 0, 0], [x + .1, .01, 0]]);

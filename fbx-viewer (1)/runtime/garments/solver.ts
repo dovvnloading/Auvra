@@ -4,6 +4,7 @@ import type { CookedGarment } from './pattern';
 import { closestAxisTriangle, type Point } from './contactGeometry';
 import { GarmentAvatarContact, type GarmentAvatarSurface, type AvatarContactStats } from './avatarContact';
 export type { GarmentAvatarSurface } from './avatarContact';
+import { hasGarmentLayers } from './layerContact';
 import { GarmentSelfContact, type SelfContactStats } from './selfContact';
 
 /** SI units. This fixed-budget preview uses independent warp, weft and shear terms. */
@@ -156,7 +157,8 @@ export class GarmentSimulation {
             this.inverseMass[i] = 1 / this.inverseMass[i];
         }
         for (const i of mesh.pins) this.inverseMass[i] = 0;
-        this.selfContact = mat.selfCollision ? new GarmentSelfContact(mesh, this.inverseMass) : null;
+        this.selfContact = mat.selfCollision || hasGarmentLayers(mesh)
+            ? new GarmentSelfContact(mesh, this.inverseMass, undefined, undefined, mat.selfCollision) : null;
         this.bendAlpha = new Float64Array(mesh.hinges.length);
         this.bendLambda = new Float64Array(mesh.hinges.length);
         const uv = mesh.materialUV;

@@ -1,5 +1,5 @@
 import type { CookedGarment } from './pattern';
-
+import { GARMENT_LAYER_LIMITS, GarmentLayerContact, hasGarmentLayers, newLayerStats, type LayerContactStats } from './layerContact';
 import { dot, sub, segmentWeights, triangleWeights, type Point } from './contactGeometry';
 type Edge = [number, number];
 interface Face { a: number; b: number; c: number; edges: [number, number, number] }
@@ -38,19 +38,27 @@ function separation(vertices: Point[], vertexFace: boolean): Separation | null {
     return { weights, normal, distance };
 }
 
-export interface SelfContactStats {
+export interface SelfContactStats extends LayerContactStats {
     facePairs: number;
     testedFeatures: number;
     vertexFace: number;
     edgeEdge: number;
     limited: boolean;
+    broadPhaseLimited: boolean;
+    featureCapacityLimited: boolean;
+    advancementLimited: number;
 }
+
+const EMPTY_CONTACT_STATS: Readonly<SelfContactStats> = Object.freeze({
+    ...newLayerStats(), facePairs: 0, testedFeatures: 0, vertexFace: 0, edgeEdge: 0,
+    limited: false, broadPhaseLimited: false, featureCapacityLimited: false, advancementLimited: 0,
+});
 
 /** Bounded preview of contacts within one cooked instance. Each query follows linear
  * trajectories from the accepted start to the current endpoint. One contact sweep
  * can create another contact elsewhere. The external diagnostic reports truncated work. */
 export class GarmentSelfContact {
-    readonly stats: SelfContactStats = { facePairs: 0, testedFeatures: 0, vertexFace: 0, edgeEdge: 0, limited: false };
+    readonly stats: SelfContactStats = { ...EMPTY_CONTACT_STATS };
     private readonly faces: Face[] = [];
     private readonly edges: Edge[] = [];
     private readonly canonical: Int32Array;
@@ -62,8 +70,17 @@ export class GarmentSelfContact {
     private readonly maxFeatures: number;
     private readonly maxBroadTests: number;
     private broadTests = 0;
+    private readonly faceRanks: Uint8Array | null;
+    private readonly layerContact: GarmentLayerContact | null;
 
-    constructor(mesh: CookedGarment, inverseMass: Float64Array, maxFeatures = 40000, maxBroadTests = 120000) {
+    constructor(mesh: CookedGarment, inverseMass: Float64Array, maxFeatures = 40000, maxBroadTests = 120000, private readonly includeSameLayer = true) {
+        this.faceRanks = hasGarmentLayers(mesh) ? new Uint8Array(mesh.indices.length / 3) : null;
+        this.layerContact = this.faceRanks ? new GarmentLayerContact(inverseMass) : null;
+        if (this.faceRanks) {
+            for (const panel of mesh.panelRanges) {
+                this.faceRanks.fill(panel.layer ?? 0, panel.indexStart / 3, (panel.indexStart + panel.indexCount) / 3);
+            }
+        }
         this.vertexCount = inverseMass.length;
         this.inverseMass = inverseMass;
         this.maxFeatures = maxFeatures;
@@ -94,19 +111,26 @@ export class GarmentSelfContact {
     }
 
     reset(): void {
-        Object.assign(this.stats, { facePairs: 0, testedFeatures: 0, vertexFace: 0, edgeEdge: 0, limited: false });
+        this.layerContact?.reset();
+        Object.assign(this.stats, EMPTY_CONTACT_STATS);
     }
 
     solve(start: Float32Array, positions: Float32Array, gap: number): void {
         this.reset();
+        if (!(gap > 0)) return;
+        this.gather(start, positions, gap);
+        this.layerContact?.project(positions, gap, this.stats);
+    }
+
+    private gather(start: Float32Array, positions: Float32Array, gap: number): void {
         this.broadTests = 0;
         this.vertexFaceSeen.clear();
         this.edgeEdgeSeen.clear();
-        if (!(gap > 0)) return;
+        const broadGap = this.layerContact ? gap * GARMENT_LAYER_LIMITS.recoveryGaps : gap;
         for (const box of this.bounds) {
             const { a, b, c } = this.faces[box.face];
             for (let j = 0; j < 3; j++) {
-                box.min[j] = Math.min(start[3 * a + j], start[3 * b + j], start[3 * c + j], positions[3 * a + j], positions[3 * b + j], positions[3 * c + j]) - gap;
+                box.min[j] = Math.min(start[3 * a + j], start[3 * b + j], start[3 * c + j], positions[3 * a + j], positions[3 * b + j], positions[3 * c + j]) - broadGap;
                 box.max[j] = Math.max(start[3 * a + j], start[3 * b + j], start[3 * c + j], positions[3 * a + j], positions[3 * b + j], positions[3 * c + j]);
             }
         }
@@ -116,19 +140,35 @@ export class GarmentSelfContact {
             for (let j = i + 1; j < this.bounds.length; j++) {
                 const b = this.bounds[j];
                 if (b.min[0] > a.max[0]) break;
-                if (++this.broadTests > this.maxBroadTests) { this.stats.limited = true; return; }
+                if (++this.broadTests > this.maxBroadTests) {
+                    this.stats.broadPhaseLimited = this.stats.limited = true;
+                    return;
+                }
                 if (b.min[1] > a.max[1] || a.min[1] > b.max[1] || b.min[2] > a.max[2] || a.min[2] > b.max[2]) continue;
+                const rankA = this.faceRanks?.[a.face] ?? 0, rankB = this.faceRanks?.[b.face] ?? 0;
+                const ranked = rankA !== rankB;
+                if (!ranked && !this.includeSameLayer) continue;
                 const fa = this.faces[a.face], fb = this.faces[b.face];
                 const va = [fa.a, fa.b, fa.c], vb = [fb.a, fb.b, fb.c];
                 // Surface neighbours and stitch-equivalent neighbours already meet at zero gap.
                 if (va.some(v => vb.some(w => this.canonical[v] === this.canonical[w]))) continue;
                 this.stats.facePairs++;
+                if (ranked && this.layerContact) {
+                    const [inner, outer] = rankA < rankB ? [fa, fb] : [fb, fa];
+                    const handled = this.layerContact.gather(start, positions, inner, outer, gap, this.stats, this.maxFeatures);
+                    if (this.stats.limited && this.stats.testedFeatures >= this.maxFeatures) {
+                        this.stats.featureCapacityLimited = true;
+                        return;
+                    }
+                    if (this.stats.layerCapacityLimited) return;
+                    if (handled) continue;
+                }
                 for (const [vertices, tri, id] of [[va, fb, b.face], [vb, fa, a.face]] as const) {
                     for (const v of vertices) {
                         const key = v * this.faces.length + id;
                         if (this.vertexFaceSeen.has(key)) continue;
                         this.vertexFaceSeen.add(key);
-                        if (!this.feature(start, positions, gap, [v, tri.a, tri.b, tri.c], true)) return;
+                        if (!this.feature(start, positions, gap, [v, tri.a, tri.b, tri.c], true, ranked)) return;
                     }
                 }
                 for (const ei of fa.edges) for (const ej of fb.edges) {
@@ -136,14 +176,17 @@ export class GarmentSelfContact {
                     if (this.edgeEdgeSeen.has(key)) continue;
                     this.edgeEdgeSeen.add(key);
                     const u = this.edges[ei], v = this.edges[ej];
-                    if (!this.feature(start, positions, gap, [u[0], u[1], v[0], v[1]], false)) return;
+                    if (!this.feature(start, positions, gap, [u[0], u[1], v[0], v[1]], false, ranked)) return;
                 }
             }
         }
     }
 
-    private feature(start: Float32Array, end: Float32Array, gap: number, ids: Stencil, vf: boolean): boolean {
-        if (this.stats.testedFeatures >= this.maxFeatures) { this.stats.limited = true; return false; }
+    private feature(start: Float32Array, end: Float32Array, gap: number, ids: Stencil, vf: boolean, ranked: boolean): boolean {
+        if (this.stats.testedFeatures >= this.maxFeatures) {
+            this.stats.featureCapacityLimited = this.stats.limited = true;
+            return false;
+        }
         this.stats.testedFeatures++;
         for (let j = 0; j < 3; j++) {
             const left = vf ? [ids[0]] : [ids[0], ids[1]];
@@ -155,11 +198,13 @@ export class GarmentSelfContact {
         }
         const motion = ids.map(i => sub(sample(end, end, i, 0), sample(start, start, i, 0)));
         // Subtract common translation before bounding relative speed along t in [0,1].
-        const speeds = motion.map(v => length(sub(v, motion[0])));
+        const relative = motion.map(v => sub(v, motion[0]));
+        const speeds = relative.map(length);
         const maxSpeed = vf ? Math.max(speeds[1], speeds[2], speeds[3]) : speeds[1] + Math.max(speeds[2], speeds[3]);
-        const tolerance = Math.max(1e-7, gap * 1e-3);
+        const tolerance = Math.max(1e-7, gap * (ranked ? GARMENT_LAYER_LIMITS.sweptToleranceFraction : 0.001));
         let t = 0;
-        for (let iteration = 0; iteration < 12; iteration++) {
+        const iterations = ranked ? GARMENT_LAYER_LIMITS.sweptIterations : 12;
+        for (let iteration = 0; iteration < iterations; iteration++) {
             const s = separation(ids.map(i => sample(start, end, i, t)), vf);
             if (!s) return true;
             if (s.distance <= gap + tolerance) {
@@ -181,12 +226,23 @@ export class GarmentSelfContact {
                 }
                 return true;
             }
-            if (maxSpeed <= 1e-12) return true;
-            const advance = (s.distance - gap) / maxSpeed;
+            let closingSpeed = maxSpeed;
+            if (ranked) {
+                // The current closest-feature normal separates these convex primitives.
+                // A bound on how quickly that fixed plane can close is tighter than the
+                // full relative speed during tangential sliding. Every constituent
+                // vertex moves linearly, so this cannot skip first contact.
+                const speed = relative.map(v => dot(v, s.normal));
+                closingSpeed = vf ? Math.max(speed[1], speed[2], speed[3]) :
+                    Math.max(speed[2], speed[3]) - Math.min(0, speed[1]);
+            }
+            if (closingSpeed <= 1e-12) return true;
+            const advance = (s.distance - gap) / closingSpeed;
             if (t + advance > 1) return true;
             t += Math.max(0, advance);
         }
         this.stats.limited = true;
+        this.stats.advancementLimited++;
         return true;
     }
 }
