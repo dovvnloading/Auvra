@@ -5,7 +5,7 @@ import { useAssets } from '../../context/AssetContext';
 import { useScene } from '../../context/SceneContext';
 import { frontendDiagnostics } from '../../diagnostics/runtime';
 import { projectService } from '../../utils/projectService';
-import { planTextureParameterRename, requiresProjectWideParameterRename } from '../../texturing/graph/renameProjectParameter';
+import { planTextureParameterRename, type TextureParameterRenamePlan } from '../../texturing/graph/renameProjectParameter';
 import { ParameterRenamePreview, projectRenamePreview, type ProjectRenamePreview } from './ParameterRenamePreview';
 import { readTextureRenameInventory } from '../../texturing/graph/renameSnapshot';
 import { materialLibrary, type MaterialAsset } from '../../runtime/materials/materialLibrary';
@@ -16,7 +16,7 @@ import { feedbackPairs, passCount } from '../../texturing/graph/iterate';
 import { describeMatrix, tileSafeDirection, tileSafeMatrix, transformMatrix } from '../../texturing/graph/safeTransform';
 import { PROCESSOR_PICTURES, PROCESSOR_TYPES, defaultFunctionFor, processorUse, readNamedSettings, settingDefault } from '../../texturing/graph/nodes/processors';
 import { compileFunction, readFunctionGraph, type FunctionGraph, type NamedSetting } from '../../texturing/graph/functionGraph';
-import { PARAMETER_KINDS, PARAMETER_KIND_LABELS, applyPreset, availableParameterName, hasPinCondition, presetFrom, putPreset, removePreset, renameParameter, renamePreset } from '../../texturing/graph/parameters';
+import { PARAMETER_KINDS, PARAMETER_KIND_LABELS, applyPreset, availableParameterName, hasPinCondition, presetFrom, putPreset, removePreset, renamePreset } from '../../texturing/graph/parameters';
 import { VALUE_SETTING_KINDS, valuePinKey } from '../../texturing/graph/nodeKit';
 import { graphAnimates, textureNodeDefinition, type GraphEntry, type GraphResolver } from '../../texturing/graph/registry';
 import { DEFAULT_ANIMATION, FLIPBOOK_FRAMES, flipbookEdge, flipbookFrameSize, flipbookGrid, frameTime, packFlipbook, readAnimation, type GraphAnimation } from '../../texturing/graph/animation';
@@ -270,7 +270,8 @@ const Workspace: React.FC<{
     onOpenGraph: (graphId: string, nodeId: string) => void;
 }> = ({ hidden, asset, onSave, onOpenAsset, session, entries, resolve, libraryVersion, path, onClose, outer, onOpenGraph }) => {
     const { textures } = useAssets();
-    const { models, projectStatus } = useScene();
+    const { models, projectStatus, renameTextureParameter, undoProjectTextureRename,
+        redoProjectTextureRename, textureRenameHistory } = useScene();
     const textureStore = useTextureStore();
     const pictureLookup = useMemo(() => materialLibrary.textureLookup(false), []);
     const lookup = useMemo(() => deepPictures.lookup((id: string) => pictureLookup(id, 'map')), [pictureLookup]);
@@ -307,6 +308,7 @@ const Workspace: React.FC<{
     const dragBase = useRef<GraphSnapshot | null>(null);
     const renamingParameter = useRef(false);
     const [renamePreview, setRenamePreview] = useState<ProjectRenamePreview | null>(null);
+    const renamePlan = useRef<{ plan: TextureParameterRenamePlan; projectId: string; revision: number } | null>(null);
     const [, setHistoryVersion] = useState(0);
     // Kept outside this screen, so it survives switching material and leaving the tab.
     const generation = materialLibrary.generation;
@@ -965,10 +967,11 @@ const Workspace: React.FC<{
         );
     };
 
-    const checkParameterRename = (from: string, to: string, previewOnly = false) => {
+    const checkParameterRename = (from: string, to: string) => {
         if (renamingParameter.current) return;
         renamingParameter.current = true;
         setRenamePreview(null);
+        renamePlan.current = null;
         setMessage({ text: 'Checking this parameter’s references across the project…', tone: 'info' });
         void (async () => {
             const status = projectService.getStatus();
@@ -994,17 +997,34 @@ const Workspace: React.FC<{
             if (sharedInMemory !== plan.impact.sharedPresets) {
                 throw new Error('The shared presets in the editor differ from the saved project. Finish saving or reload before renaming.');
             }
-            if (previewOnly || currentStatus.readOnly || requiresProjectWideParameterRename(plan.impact)) {
-                setRenamePreview(projectRenamePreview(plan, status.projectId, status.revision, materialLibrary.version, sharedPresets.getVersion()));
-                setMessage(null);
-                return;
-            }
-            // No external references: the existing graph-local history is valid.
-            const renamed = renameParameter(before.graph, before.values, from, to);
-            change({ graph: renamed.graph, values: renamed.values });
-            setMessage({ text: `Parameter "${from}" renamed to "${to}" inside this graph.`, tone: 'info' });
+            // Even a graph-only rename now uses the project transaction. This
+            // keeps a single authoritative undo/redo path and prevents queued
+            // graph-local writes from restoring an old parameter name.
+            renamePlan.current = { plan, projectId: status.projectId, revision: status.revision };
+            setRenamePreview(projectRenamePreview(plan, status.projectId, status.revision, materialLibrary.version, sharedPresets.getVersion()));
+            setMessage(null);
         })().catch((error: unknown) => {
             setMessage({ tone: 'error', text: error instanceof Error ? error.message : 'Parameter rename could not be verified; no changes were made.' });
+        }).finally(() => { renamingParameter.current = false; });
+    };
+
+    const applyParameterRename = () => {
+        if (renamingParameter.current || !renamePreview || !renamePlan.current) return;
+        const { projectId, revision, plan } = renamePlan.current;
+        if (projectStatus.projectId !== projectId || projectStatus.revision !== revision
+            || renamePreview.libraryVersion !== materialLibrary.version
+            || renamePreview.presetsVersion !== sharedPresets.getVersion()) {
+            setMessage({ tone: 'error', text: 'The rename preview is stale. Refresh the references before applying it.' });
+            return;
+        }
+        renamingParameter.current = true;
+        setMessage({ text: 'Saving the parameter rename in one project transaction…', tone: 'info' });
+        void renameTextureParameter(plan, { projectId, revision }).then(() => {
+            renamePlan.current = null;
+            setRenamePreview(null);
+            setMessage({ text: `Parameter "${plan.impact.from}" renamed to "${plan.impact.to}" across the project.`, tone: 'info' });
+        }, (error: unknown) => {
+            setMessage({ tone: 'error', text: error instanceof Error ? error.message : 'The project rename could not be applied.' });
         }).finally(() => { renamingParameter.current = false; });
     };
 
@@ -1278,8 +1298,23 @@ const Workspace: React.FC<{
                     {tab === 'graph' && renamePreview && renamePreview.projectId === projectStatus.projectId &&
                         <ParameterRenamePreview preview={renamePreview}
                             stale={renamePreview.revision !== projectStatus.revision || renamePreview.libraryVersion !== materialLibrary.version || renamePreview.presetsVersion !== sharedVersion}
-                            onRefresh={() => checkParameterRename(renamePreview.impact.from, renamePreview.impact.to, true)}
-                            onDismiss={() => setRenamePreview(null)} />}
+                            onRefresh={() => checkParameterRename(renamePreview.impact.from, renamePreview.impact.to)}
+                            onDismiss={() => { setRenamePreview(null); renamePlan.current = null; }}
+                            onApply={applyParameterRename} readOnly={projectStatus.readOnly} />}
+                    {tab === 'graph' && projectStatus.projectId && (textureRenameHistory.canUndo || textureRenameHistory.canRedo) && (
+                        <div className="mb-2 flex flex-wrap gap-1.5" aria-label="Project parameter rename history">
+                            <Button size="sm" variant="ghost" disabled={!textureRenameHistory.canUndo}
+                                onClick={() => void undoProjectTextureRename().catch((error: unknown) =>
+                                    setMessage({ tone: 'error', text: error instanceof Error ? error.message : 'Project rename undo failed.' }))}>
+                                Undo project rename
+                            </Button>
+                            <Button size="sm" variant="ghost" disabled={!textureRenameHistory.canRedo}
+                                onClick={() => void redoProjectTextureRename().catch((error: unknown) =>
+                                    setMessage({ tone: 'error', text: error instanceof Error ? error.message : 'Project rename redo failed.' }))}>
+                                Redo project rename
+                            </Button>
+                        </div>
+                    )}
                     {message && <p className={`mb-2 text-2xs ${message.tone === 'error' ? 'text-bad' : 'text-accent'}`}>{message.text}</p>}
                     {tab === 'node' ? nodeInspector() : tab === 'graph' ? graphInspector() : materialInspector()}
                 </div>

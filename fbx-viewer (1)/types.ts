@@ -843,6 +843,14 @@ export interface SceneContextType {
   closeProject: () => Promise<void>;
   createNewProject: (template?: ProjectTemplate) => Promise<void>;
   projectStatus: ProjectStatus;
+  /** Atomic native rename across materials, models, objects, prefabs and shared presets. */
+  renameTextureParameter: (
+    plan: import('./texturing/graph/renameProjectParameter').TextureParameterRenamePlan,
+    expected: { projectId: string; revision: number },
+  ) => Promise<void>;
+  undoProjectTextureRename: () => Promise<void>;
+  redoProjectTextureRename: () => Promise<void>;
+  textureRenameHistory: { canUndo: boolean; canRedo: boolean };
 
   // Model Actions
   addModel: (file: File, category: AssetCategory) => Promise<void>;

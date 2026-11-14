@@ -202,6 +202,43 @@ class HeadlessMaterialCommandTests(unittest.TestCase):
         with ProjectRepository(self.path, read_only=True) as repository:
             self.assertEqual(len(repository.get_domain("textures")["documents"]), 3)
 
+    def test_cooked_pictures_match_after_parameter_rename_and_project_reopen(self) -> None:
+        # Compare the actual cooked PNGs, not just the JSON keys. A rename
+        # changing the shader appearance would be a regression even if every
+        # saved document had been updated consistently.
+        self.run_command("set-value", "Living crate", "Wetness", "0.61")
+        _, original_json, _ = self.run_command("cook", "Living crate", "--size", "32",
+                                               "--out", str(self.out / "original"))
+        original = {item["name"]: Path(item["path"]).read_bytes()
+                    for item in json.loads(original_json)["files"]}
+        with ProjectRepository(self.path, read_only=True) as repository:
+            before = repository.get_domain("materials")["documents"][0]
+            seed = before["textureGraph"]["graph"]["seed"]
+
+        _, preview_json, _ = self.run_command("rename-parameter", "living-crate", "Wetness", "Patina")
+        revision = json.loads(preview_json)["revision"]
+        receipt = Path(self.tmp.name) / "cook-rename-receipt.json"
+        self.run_command("rename-parameter", "living-crate", "Wetness", "Patina",
+                         "--apply-revision", str(revision), "--receipt", str(receipt))
+        with ProjectRepository(self.path, read_only=True) as repository:
+            renamed = repository.get_domain("materials")["documents"][0]
+            self.assertEqual(renamed["textureGraph"]["values"], {"Patina": 0.61})
+            self.assertEqual(renamed["textureGraph"]["graph"]["parameters"][0]["name"], "Patina")
+            self.assertEqual(renamed["textureGraph"]["graph"]["seed"], seed)
+
+        _, renamed_json, _ = self.run_command("cook", "Living crate", "--size", "32",
+                                              "--out", str(self.out / "renamed"))
+        renamed_files = {item["name"]: Path(item["path"]).read_bytes()
+                         for item in json.loads(renamed_json)["files"]}
+        self.assertEqual(renamed_files, original)
+
+        self.run_command("undo-rename", str(receipt))
+        _, restored_json, _ = self.run_command("cook", "Living crate", "--size", "32",
+                                               "--out", str(self.out / "restored"))
+        restored = {item["name"]: Path(item["path"]).read_bytes()
+                    for item in json.loads(restored_json)["files"]}
+        self.assertEqual(restored, original)
+
     def test_draws_a_ball(self) -> None:
         _, out, _ = self.run_command("ball", "living-crate", "--size", "32", "--out", str(self.out), "--into-project")
         result = json.loads(out)

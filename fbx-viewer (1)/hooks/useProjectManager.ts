@@ -3,6 +3,13 @@ import { CameraState, type ProjectTemplate } from '../types';
 import { ProjectStatus, projectService } from '../utils/projectService';
 import { useNotification } from '../context/NotificationContext';
 import { flushMaterialEditorWrites } from '../components/Materials/materialEditorWrites';
+import { sharedPresets } from '../components/Texturing/projectPresets';
+import { flushPendingPaintSessionWrites, preparePaintSessionsForProjectRename } from '../components/Texturing/Paint/paintSession';
+import type { TextureParameterRenamePlan } from '../texturing/graph/renameProjectParameter';
+import {
+  commitTextureParameterRename, replayTextureParameterRename, RenameProjectSyncError,
+  type RenameTransactionReceipt,
+} from '../texturing/graph/renameTransaction';
 import { dbOperations } from '../utils/db';
 import { OperationHandle, useOperationActions } from '../context/OperationContext';
 import { frontendDiagnostics, type DiagnosticAttributes, type DiagnosticContext } from '../diagnostics/runtime';
@@ -51,10 +58,25 @@ export const useProjectManager = ({
   const { startOperation } = useOperationActions();
   const [projectStatus, setProjectStatus] = useState<ProjectStatus>(projectService.getStatus());
   const activeOperation = useRef<OperationHandle | null>(null);
+  // This history belongs to the native project, not to the current graph tab.
+  const renameJournal = useRef<{ projectId: string | null; past: RenameTransactionReceipt[]; future: RenameTransactionReceipt[] }>({
+    projectId: null, past: [], future: [],
+  });
+  const [textureRenameHistory, setTextureRenameHistory] = useState({ canUndo: false, canRedo: false });
+  const publishRenameHistory = useCallback(() => {
+    setTextureRenameHistory({
+      canUndo: renameJournal.current.past.length > 0,
+      canRedo: renameJournal.current.future.length > 0,
+    });
+  }, []);
 
   useEffect(() => {
     const unsubscribe = projectService.subscribe((status) => {
       setProjectStatus(status);
+      if (renameJournal.current.projectId !== status.projectId) {
+        renameJournal.current = { projectId: status.projectId, past: [], future: [] };
+        publishRenameHistory();
+      }
       const session = editorSession.getSnapshot();
       if (session.phase === 'ready' && status.projectId !== session.projectId) {
         const invalidated = editorSession.beginTransition();
@@ -68,7 +90,7 @@ export const useProjectManager = ({
     });
     projectService.refreshStatus().catch((error) => frontendDiagnostics.failure('project_status_unavailable', error));
     return unsubscribe;
-  }, []);
+  }, [publishRenameHistory]);
 
   const run = useCallback(async <T,>(
     kind: string,
@@ -96,6 +118,7 @@ export const useProjectManager = ({
       // export or replacement. A failed flush leaves the project open for retry.
       await flushPendingLevelEdits({ notify: false });
       await flushMaterialEditorWrites();
+      await flushPendingPaintSessionWrites();
       // The transition is begun before the operation's first host request. It
       // synchronously invalidates every old World Editor lease, including
       // delayed writes.
@@ -152,6 +175,84 @@ export const useProjectManager = ({
       ...(diagnostic ? { diagnostic } : {}),
     }), handle.signal, contextFor(handle), transition || undefined);
   }, [contextFor, restoreSession]);
+
+  /**
+   * The host commits all affected documents in ONE batch. Before mutation,
+   * flush the world/material/preset/Paint writers and fence old editor leases.
+   * Only after the native acknowledgement do we retire Paint sessions and
+   * reload the whole project (models, objects, prefabs, graphs and presets).
+   */
+  const runProjectRenameAction = useCallback(async (
+    label: string, success: string, mutate: (committed: () => void) => Promise<void>,
+  ): Promise<void> => run('project.rename_parameter', label, async (handle) => {
+    await sharedPresets.flushPendingWrites();
+    const finishPaint = await preparePaintSessionsForProjectRename();
+    const previous = editorSession.captureReady();
+    if (!previous) {
+      finishPaint(false);
+      throw new Error('The project editor is not ready to rename parameters.');
+    }
+    const transition = editorSession.beginTransition();
+    let committed = false;
+    try {
+      await mutate(() => { committed = true; });
+      finishPaint(true);
+      await hydrate(handle, 0.2, 0.78, transition);
+      const status = projectService.getStatus();
+      if (!status.projectId || !editorSession.complete(transition, status.projectId, getCurrentLevelId(), status.revision)) {
+        throw new Error('The updated project could not be published to the editor session.');
+      }
+    } catch (error) {
+      // A post-acknowledgement identity/revision error also means the host
+      // may already have committed. Never re-enable stale editor writers or
+      // pretend this was a safely rejected transaction.
+      const saved = committed || error instanceof RenameProjectSyncError;
+      finishPaint(saved);
+      if (editorSession.isTransitionCurrent(transition)) {
+        if (saved) editorSession.fail(transition);
+        else editorSession.revert(transition, previous, projectService.getStatus().revision);
+      }
+      if (saved) throw new RenameProjectSyncError(
+        'The rename was saved in the project, but the editor could not reload it. Reopen the project before editing.',
+        error,
+      );
+      throw error;
+    }
+  }, success), [getCurrentLevelId, hydrate, run]);
+
+  const renameTextureParameter = useCallback(async (
+    plan: TextureParameterRenamePlan, expected: { projectId: string; revision: number },
+  ): Promise<void> => runProjectRenameAction('Renaming project parameter', 'Parameter renamed across the project.', async (committed) => {
+    const receipt = await commitTextureParameterRename(plan, projectService, expected, committed);
+    if (renameJournal.current.projectId !== expected.projectId) {
+      renameJournal.current = { projectId: expected.projectId, past: [], future: [] };
+    }
+    renameJournal.current.past.push(receipt);
+    renameJournal.current.future = [];
+    publishRenameHistory();
+  }), [publishRenameHistory, runProjectRenameAction]);
+
+  const undoProjectTextureRename = useCallback(async (): Promise<void> => {
+    const receipt = renameJournal.current.past.at(-1);
+    if (!receipt) throw new Error('No project parameter rename is available to undo.');
+    await runProjectRenameAction('Undoing project parameter rename', 'Project parameter rename undone.', async (committed) => {
+      await replayTextureParameterRename(receipt, 'undo', projectService, committed);
+      renameJournal.current.past.pop();
+      renameJournal.current.future.push(receipt);
+      publishRenameHistory();
+    });
+  }, [publishRenameHistory, runProjectRenameAction]);
+
+  const redoProjectTextureRename = useCallback(async (): Promise<void> => {
+    const receipt = renameJournal.current.future.at(-1);
+    if (!receipt) throw new Error('No project parameter rename is available to redo.');
+    await runProjectRenameAction('Redoing project parameter rename', 'Project parameter rename redone.', async (committed) => {
+      await replayTextureParameterRename(receipt, 'redo', projectService, committed);
+      renameJournal.current.future.pop();
+      renameJournal.current.past.push(receipt);
+      publishRenameHistory();
+    });
+  }, [publishRenameHistory, runProjectRenameAction]);
 
   const persistEditorState = useCallback(async (handle: OperationHandle) => {
     await projectService.applyChanges([{
@@ -283,5 +384,6 @@ export const useProjectManager = ({
   return frontendDiagnostics.traceActions('project_manager', {
     saveProject, saveProjectAs, exportProject, buildGame, importProject, importLegacyProject, migrateLegacyBrowserProject,
     loadProject, openRecentProject, recoverProject, createNewProject, closeProject, projectStatus,
+    renameTextureParameter, undoProjectTextureRename, redoProjectTextureRename, textureRenameHistory,
   });
 };

@@ -286,6 +286,10 @@ const SceneContextComposer: React.FC<{ children: ReactNode, isLoading: boolean, 
         closeProject: projectManager.closeProject,
         createNewProject: projectManager.createNewProject,
         projectStatus: projectManager.projectStatus,
+        renameTextureParameter: projectManager.renameTextureParameter,
+        undoProjectTextureRename: projectManager.undoProjectTextureRename,
+        redoProjectTextureRename: projectManager.redoProjectTextureRename,
+        textureRenameHistory: projectManager.textureRenameHistory,
     };
 
     // Gameplay code reads content through the runtime context, so the same code runs in the editor and the player.

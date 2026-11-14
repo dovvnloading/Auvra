@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import * as THREE from 'three';
-import { PaintSession } from '../../components/Texturing/Paint/paintSession';
+import { PaintSession, samePaintSessionOwner } from '../../components/Texturing/Paint/paintSession';
 import { materialLibrary } from '../../runtime/materials/materialLibrary';
 import { createMaterialGraph } from '../../runtime/materials/materialGraph';
 import { projectService } from '../../utils/projectService';
@@ -20,6 +20,16 @@ const source = {
 };
 
 const target = { modelId: 'prop', materialNames: ['Rubber'] };
+
+describe('Paint pending-write project generation fencing', () => {
+    it('does not save into a new project, a rehydrated material library or a newer editor session', () => {
+        const captured = { projectId: 'a', libraryGeneration: 1, editorGeneration: 6 };
+        expect(samePaintSessionOwner(captured, { ...captured })).toBe(true);
+        expect(samePaintSessionOwner(captured, { ...captured, projectId: 'b' })).toBe(false);
+        expect(samePaintSessionOwner(captured, { ...captured, libraryGeneration: 2 })).toBe(false);
+        expect(samePaintSessionOwner(captured, { ...captured, editorGeneration: 7 })).toBe(false);
+    });
+});
 
 describe('paint format version compatibility', () => {
     it('still reads legacy versionless and explicit v1 documents', () => {

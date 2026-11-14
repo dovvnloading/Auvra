@@ -1,16 +1,22 @@
 # M0 — Exposed Texture Parameter Rename: Cross-Document Plan
 
-> **Status:** Cross-asset rename with preview and undo/redo through the closed-project material command. The live editor still uses the reference guard.
+> **Status:** Cross-asset rename has a verified live-editor preview, one native transaction, whole-project rehydration and guarded session undo/redo. The closed-project material command remains available for durable receipt-based undo/redo. Full Windows editor and standalone-player fidelity still need end-to-end verification.
 >
 > **Tracking:** [M0 issue #279](https://github.com/dovvnloading/Auvra/issues/279), [rename defect #291](https://github.com/dovvnloading/Auvra/issues/291).
 >
 > **Implementation:** `fbx-viewer (1)/texturing/graph/renameProjectParameter.ts` and `tests/frontend/textureParameterRenamePlan.test.ts`.
 
-## Rename a parameter across a saved project
+## Rename a parameter from the live editor
 
-In Materials, open the texture graph, select the Graph inspector, choose Edit under Parameters, and change the formula name. If there are cross-asset references, the inspector shows the saved revision, reference counts and affected document IDs. Enter the project folder and copy the PowerShell preview command. A changed project revision or material/preset state requires refreshing the preview.
+Open a writable project, select a texture graph material, open its Graph inspector and choose **Edit** under Parameters. Changing a formula name now performs an authoritative five-domain preflight and displays a project-level preview: material, model, object, prefab and metadata document identities; paint/subgraph reference counts; and the exact project revision. Inspect the affected documents, then choose **Apply rename to project**.
 
-Close the project in the editor so the command can acquire the native writer lock. Install the editor dependencies with `npm ci` in `fbx-viewer (1)`. From the repository root, preview the affected assets and note the revision returned.
+The editor first flushes queued World Editor, material, shared-preset and Paint saves; blocks further Paint edits; and submits all affected documents in **one revision-checked** `project.applyChanges` request. It never performs an optimistic graph-local rename. After the native host acknowledges the commit, the editor rehydrates the project so graph, model, object and preset views use the committed names. Project rename **Undo**/**Redo** buttons in the Graph inspector replay the full document set, refusing to overwrite a dependent document modified since the previous action **or a newly added dependent reference**. An unrelated intervening project revision is allowed only if every affected document still matches and no new dependent has appeared.
+
+A preview becomes stale after any project revision or material/preset update; refresh it before applying. If pending saves advance the revision during the operation, the action safely refuses and requires a new preview. A native write failure retains existing in-memory values; if the native commit succeeded but rehydration fails, reopen the project rather than blindly retrying the rename. Pending Paint saves are also flushed before ordinary save, export, close and project replacement. Delayed Paint writes are scoped to the original project ID, material-library generation and editor-session generation so they cannot silently write into a replacement project. The in-session undo/redo journal clears when the project is replaced or reopened: it is **not** a persistent receipt.
+
+## Closed-project command and durable receipts
+
+Alternatively, from Materials copy the PowerShell preview command after entering the project folder. Close the project in the editor so the command can acquire the native writer lock. Install the editor dependencies with `npm ci` in `fbx-viewer (1)`. From the repository root, preview the affected assets and note the revision returned.
 
 ```sh
 python -m Auvra.project.material_commands ./MyProject rename-parameter living-crate Wetness Patina
@@ -58,26 +64,26 @@ The function never touches the host or the material library, never mutates its i
 
 It ignores unrelated assets that merely happen to have a parameter of the same name. The implementation validates graph *asset IDs* rather than labels and only touches matching graph-valued paint references.
 
-## Safe integration order (not yet implemented)
+## Implemented integration order
 
-1. **Snapshot and preflight:** call `projectService.getSnapshotAll` for all required domains; validate the project identity and revision. Do not rely on only visible scene objects or partial editor lists.
-2. **Preview:** present the plan's affected asset IDs/counts with a detailed collision message. Accept or cancel without changing anything.
-3. **Commit once:** issue **one** `projectService.applyChanges(plan.changes)` call. The host owns the project transaction and expected revision; reject conflicts and re-plan if the host snapshot changed.
-4. **Update local state:** only when host ack succeeds, update the local material library plus in-memory model, scene-object and prefab state in one coordinated editor transaction. Never optimistically update the source graph first and other assets later.
-5. **Undo/redo:** push the complete before/after batch into a project-level history action. Apply `undoChanges` in one host call; after successful ack refresh local libraries and scene state. A graph-only undo would not be correct.
-6. **Reload test:** close/reopen the native project and validate that all saved values, graph wiring, presets, model overrides, placed-object overrides and saved prefab overrides are preserved.
+1. **Snapshot and preflight:** `projectService.getSnapshotAll` loads all required domains and validates project identity/revision and saved material values, including unloaded dependents.
+2. **Preview:** present affected asset IDs and reference counts with collision diagnostics; no files are changed yet.
+3. **Commit once:** flush queued writers, fence Paint/session work, and issue **one** `projectService.applyChanges(plan.changes)` call. The host owns the project transaction and expected revision; reject conflicts and require re-preview if the host snapshot changed.
+4. **Update local state:** after host acknowledgement, rehydrate detached native project state and publish it via the scene hydration boundary. Never optimistically update only the source graph.
+5. **Undo/redo:** keep a session-level project history receipt with full before/after records, verify every affected document and scan the **full current inventory for newly introduced dependents** against a fresh authoritative snapshot, then replay one native batch and rehydrate again. A graph-only undo would not be correct.
+6. **Reload and standalone tests:** verify saved parameters, graph wiring, presets, model/placed-object/prefab overrides and standalone cook on the supported native host and player. These remain required M0 completion evidence.
 
-**Important:** Current `TextureGraphWorkspace.tsx` uses graph-local history. Do **not** route a cross-document rename through its existing `change({ graph, values })` callback. This feature must wait for a project-level transaction and history integration. Avoid publishing a deceptively functional UI button that only updates part of the project.
+**Important:** `TextureGraphWorkspace.tsx` still uses graph-local history for ordinary graph edits. Parameter renames use the **project** command and project-specific undo/redo; do not route a cross-document rename through the graph-local `change({ graph, values })` callback.
 
-## Interim safety guard for the editor
+## Live editor preflight and safety guard
 
-The texture-graph Parameter Editor now preflights a public parameter rename against **five native host domains** (materials, models, objects, prefabs and metadata). The pure `readTextureRenameInventory` boundary rejects missing domains (including domains whose complete result should be an empty array), malformed or duplicate document identities, unsupported reference-bearing schemas and object overrides without model identity. It also checks that **every saved material matches the in-memory material library** before the planner is allowed to consider a graph-local edit. Unsaved/debounced material changes require completing their writes or reloading, rather than silently omitting dependencies. If the plan sees **any** dependent document beyond the source graph, the editor **refuses the local rename** and reports subgraph/Iterate, paint, model, placed-object, prefab and shared-preset reference counts.
+The texture-graph Parameter Editor now preflights a public parameter rename against **five native host domains** (materials, models, objects, prefabs and metadata). The pure `readTextureRenameInventory` boundary rejects missing domains (including domains whose complete result should be an empty array), malformed or duplicate document identities, unsupported reference-bearing schemas and object overrides without model identity. It also checks that **every saved material matches the in-memory material library** before the planner is allowed to consider a graph-local edit. Unsaved/debounced material changes require completing their writes or reloading, rather than silently omitting dependencies. If the plan sees **any** dependent document beyond the source graph, the editor **previews** the project-wide rename and requires explicit application. It reports subgraph/Iterate, paint, model, placed-object, prefab and shared-preset reference counts.
 
-The check includes paint on the source material and reusable smart-material layers. Export-template assets carry no graph parameter references. A graph with no outside references may still use its existing local rename/undo flow.
+The check includes paint on the source material and reusable smart-material layers. Export-template assets carry no graph parameter references. A graph without outside references now uses the same project transaction so that undo/redo cannot be split between graph-local and project-level history.
 
 The preflight also refuses to rename if project identity/revision, graph **or parameter values** changed during scanning, if the project cannot be queried or is read-only, or if the planner finds a collision/unsupported document. `getSnapshotAll` now rejects page-to-page project/revision changes, malformed document lists, missing continuation pages and cursor loops. It checks the in-memory shared-presets list in addition to the persisted metadata snapshot.
 
-**The cross-document project transaction and unified undo/redo are still unfinished.** The guard must be removed/replaced once a full atomic rename action has been implemented and tested; do not turn failed checks into best-effort changes.
+**The live editor now uses the cross-document project transaction and a guarded session-level undo/redo path.** It still fails closed rather than attempting best-effort writes on incomplete snapshots, stale revisions, unsupported schemas, or unsaved changes.
 
 ## M0.2 host transaction and immediate-undo primitive
 
@@ -90,15 +96,15 @@ The preflight also refuses to rename if project identity/revision, graph **or pa
 
 The immediate inverse call **refuses** to run if the project has changed since the original commit. Blindly restoring old model/object snapshots after newer edits would erase legitimate work. A failure to refresh local state after the host accepted a transaction is reported as **saved but requiring rehydration**, not as an invitation to retry a possibly duplicated mutation.
 
-This is not yet wired into the editor. A complete user-facing implementation still needs local material/model/object/prefab/preset publication as one coordinated action, pending-edit fencing, and integration with project-level undo/redo across later revisions. Until that exists, the [interim local-rename guard](../fbx-viewer%20(1)/components/Texturing/TextureGraphWorkspace.tsx) protects dependent values by refusing unsafe graph-local renames.
+The editor now invokes the transaction through `useProjectManager`, fences pending writers and Paint sessions, and rehydrates all native project state after native acknowledgement. `replayTextureParameterRename` supports session undo/redo across unrelated later revisions by comparing *all* affected full documents before another atomic batch. The original immediate-undo helper remains useful for strict adjacent-revision callers.
 
 ## Limitations and future gates
 
-- **Not yet wired into UI:** simply adding the pure planner does not fix the user-facing Rename button; issue #291 stays open.
+- **Native runtime validation:** automated TypeScript and planner tests are not a substitute for a supported Windows WebView2 project save/reopen and standalone-game cook test.
 - **No remote/shared-library changes:** project-local material and preset metadata are the scope. Library packages can be imported later with their own dependencies and names.
 - **No arbitrary unknown-schema edits:** an unsupported producer is rejected if it references the source and owns the old key; a correct future-version editor should handle it.
 - **No external project rewrite:** only the open native project's domains can be committed atomically.
-- **No undo claim:** the plan contains reverse snapshots, but real undo correctness requires host and scene-state integration.
+- **Session history only:** the editor journal does not survive a project reopen; use the closed-project CLI receipt for durable undo and redo. A future persistent editor journal would need a safe recovery contract.
 
 ## Verification
 
@@ -108,10 +114,10 @@ npm ci
 npm run diagnostics:verify
 npm run typecheck
 npm run typecheck:strict
-npm test -- tests/frontend/textureParameterRenamePlan.test.ts tests/frontend/textureRenameSnapshot.test.ts tests/frontend/projectSnapshotPagination.test.ts tests/frontend/textureParameters.test.ts tests/frontend/textureRenameTransaction.test.ts
+npm test -- tests/frontend/textureParameterRenamePlan.test.ts tests/frontend/textureRenameSnapshot.test.ts tests/frontend/projectSnapshotPagination.test.ts tests/frontend/textureParameters.test.ts tests/frontend/textureRenameTransaction.test.ts tests/frontend/textureRenameReplay.test.ts tests/frontend/parameterRenamePreview.test.tsx
 npm run build
 ```
 
 The focused test covers the defining graph, two nested/Iterate uses, nested fill/mask references, two model overrides, two independent placed-object overrides, saved prefab members with model-bound overrides, project shared presets, exact-key scoping, immutability, and conflict refusal.
 
-**Merge gate:** CI and code review must pass; full issue #291 remains open until the persisted editor action, single host transaction, unified undo/redo and save/reload tests are implemented.
+**Merge gate:** CI, code review and supported native-host smoke must pass. Do not close all of #291 on the strength of source tests alone: save/reload, standalone-game cook and complete live multi-domain fidelity remain explicit acceptance gates.

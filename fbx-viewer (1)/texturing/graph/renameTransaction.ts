@@ -1,5 +1,6 @@
-import type { ProjectChange } from '../../utils/projectService';
-import type { TextureParameterRenamePlan } from './renameProjectParameter';
+import type { ProjectChange, ProjectSnapshot } from '../../utils/projectService';
+import { readTextureRenameInventory } from './renameSnapshot';
+import { planTextureParameterRename, type RenameImpact, type TextureParameterRenamePlan } from './renameProjectParameter';
 
 /**
  * M0.2 — Safe host-bound commit/undo primitive for an exposed texture graph
@@ -25,6 +26,8 @@ export interface RenameProjectHost {
 
 export interface RenameTransactionReceipt {
     projectId: string;
+    /** The source and parameter names are needed to detect NEW dependents on replay. */
+    impact: RenameImpact;
     /** Revision when the original plan was computed. */
     beforeRevision: number;
     /** Revision after the one host commit (the only safe immediate undo base). */
@@ -104,6 +107,7 @@ export const commitTextureParameterRename = async (
     const afterRevision = await applyBatch(host, expected.projectId, expected.revision, plan.changes, afterCommit);
     return {
         projectId: expected.projectId,
+        impact: plan.impact,
         beforeRevision: expected.revision,
         afterRevision,
         undoChanges: plan.undoChanges,
@@ -121,3 +125,69 @@ export const undoTextureParameterRename = async (
     host: RenameProjectHost,
     afterCommit: (changes: readonly ProjectChange[]) => void | Promise<void>,
 ): Promise<number> => applyBatch(host, receipt.projectId, receipt.afterRevision, receipt.undoChanges, afterCommit);
+
+/** A complete, single-revision host snapshot is needed to replay a rename safely. */
+export interface RenameSnapshotHost extends RenameProjectHost {
+    getSnapshotAll(): Promise<ProjectSnapshot | null>;
+}
+
+/**
+ * Project-level undo/redo, not graph-local history. An unrelated project save is
+ * allowed, but every affected document must still equal the exact value written
+ * by the previous rename/undo. Refuse rather than clobbering a later edit.
+ *
+ * The snapshot validator checks all five reference-bearing domains, including
+ * empty domains and saved prefab members, before any write is attempted.
+ */
+export const replayTextureParameterRename = async (
+    receipt: RenameTransactionReceipt,
+    direction: 'undo' | 'redo',
+    host: RenameSnapshotHost,
+    afterCommit: (changes: readonly ProjectChange[]) => void | Promise<void>,
+): Promise<number> => {
+    const status = host.getStatus();
+    checkStatus(status, receipt.projectId, status.revision);
+    const snapshot = await host.getSnapshotAll();
+    if (!snapshot || snapshot.projectId !== receipt.projectId || snapshot.revision !== status.revision) {
+        throw new Error('The project changed while checking the rename history. Nothing was overwritten.');
+    }
+    const inventory = readTextureRenameInventory(snapshot, null, {
+        projectId: receipt.projectId, revision: snapshot.revision,
+    });
+    const documents: Record<string, ReadonlyMap<string, unknown>> = {
+        materials: inventory.materialDocuments,
+        models: new Map(inventory.models.map(doc => [doc.id, doc] as const)),
+        objects: new Map(inventory.objects.map(doc => [doc.id, doc] as const)),
+        prefabs: new Map(inventory.prefabs.map(doc => [doc.id, doc] as const)),
+        metadata: new Map(inventory.metadata.map(doc => [doc.id, doc] as const)),
+    };
+    // Full-document equality protects documents changed by the first rename.
+    // It does NOT protect a newly created model, prefab or shared preset that
+    // starts consuming the renamed key later. Re-plan against the complete
+    // current project so reversing this rename cannot strand new references.
+    const impact = receipt.impact;
+    const fresh = planTextureParameterRename({
+        ...inventory,
+        sourceMaterialId: impact.sourceMaterialId,
+        from: direction === 'undo' ? impact.to : impact.from,
+        to: direction === 'undo' ? impact.from : impact.to,
+    });
+    const expected = direction === 'undo' ? receipt.redoChanges : receipt.undoChanges;
+    const changes = direction === 'undo' ? receipt.undoChanges : receipt.redoChanges;
+    if (!expected.length || expected.length !== changes.length) {
+        throw new Error('The parameter rename history has incomplete snapshots.');
+    }
+    const originallyAffected = new Set(expected.map(change => `${change.domain}/${change.id ?? ''}`));
+    for (const change of fresh.changes) {
+        if (!originallyAffected.has(`${change.domain}/${change.id ?? ''}`)) {
+            throw new Error(`Cannot ${direction} parameter rename: a new dependent ${change.domain}/${change.id ?? '(unknown)'} now references the parameter. No documents were overwritten.`);
+        }
+    }
+    for (const change of expected) {
+        if (!change.id || change.operation !== 'upsert' || !documents[change.domain]?.has(change.id)
+            || JSON.stringify(documents[change.domain].get(change.id)) !== JSON.stringify(change.value)) {
+            throw new Error(`Cannot ${direction} parameter rename: ${change.domain}/${change.id ?? '(unknown)'} was edited or removed after the rename. No documents were overwritten.`);
+        }
+    }
+    return applyBatch(host, receipt.projectId, snapshot.revision, changes, afterCommit);
+};
