@@ -506,6 +506,8 @@ To experiment with Ion Vortex, disable the vortex field on **Ion stream** to see
 
 ### Shaping a pulse with curves
 
+To try the saved example, use **Import project** and choose the [Pulse Rings project](examples/Auvra-Pulse-Rings.auvrapack). It includes the emitter and a camera. [Watch the six-second render](examples/Auvra-Pulse-Rings.mp4).
+
 Add a **Particles** component to an object and choose **Pulse rings** from **Preset**. Three short emission windows launch groups of rings in each 0.74-second cycle. In **Emission → Rate over cycle**, the horizontal axis runs from the start to the end of one cycle. The vertical axis multiplies **Rate (per s)**. Drag the end of the first high plateau to the right to make the first group thicker. A zero multiplier leaves a gap between groups. Bursts and per-metre emission keep their own timing.
 
 Under **Over life**, the **Size** and **Speed** graphs use the age of each individual particle. For example, moving a size peak from 25% to 75% makes each particle grow largest later in its flight. Choose **Linear** for a straight ramp, **Step** to hold each value until the next key, or **Smooth** for a rounded transition that stays between its neighbouring key values.
