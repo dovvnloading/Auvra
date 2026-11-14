@@ -107,6 +107,33 @@ describe('live project parameter rename history', () => {
         } });
     });
 
+    it('blocks undo when another asset starts referencing the renamed parameter', async () => {
+        const { host, documents, applied, status, plan } = fixture();
+        const receipt = await commitTextureParameterRename(plan(), host, { projectId: 'project-a', revision: 8 }, () => undefined);
+        // The original six documents remain unchanged: only a NEW model was
+        // added, so document-equality checks alone are insufficient.
+        documents.models.push({ id: 'later-model', materialOverrides: {
+            Stone: { materialId: 'source', parameters: [{ name: 'patina', value: 0.82 }] },
+        } });
+        status.revision++;
+        await expect(replayTextureParameterRename(receipt, 'undo', host, () => undefined))
+            .rejects.toThrow(/new dependent models\/later-model/);
+        expect(applied).toHaveLength(1);
+    });
+
+    it('blocks redo when another asset starts referencing the restored old name', async () => {
+        const { host, documents, applied, status, plan } = fixture();
+        const receipt = await commitTextureParameterRename(plan(), host, { projectId: 'project-a', revision: 8 }, () => undefined);
+        await replayTextureParameterRename(receipt, 'undo', host, () => undefined);
+        documents.models.push({ id: 'later-model', materialOverrides: {
+            Stone: { materialId: 'source', parameters: [{ name: 'wear', value: 0.82 }] },
+        } });
+        status.revision++;
+        await expect(replayTextureParameterRename(receipt, 'redo', host, () => undefined))
+            .rejects.toThrow(/new dependent models\/later-model/);
+        expect(applied).toHaveLength(2);
+    });
+
     it('refuses to restore any dependent document changed after the rename', async () => {
         const { host, documents, applied, plan } = fixture();
         const receipt = await commitTextureParameterRename(plan(), host, { projectId: 'project-a', revision: 8 }, () => undefined);
