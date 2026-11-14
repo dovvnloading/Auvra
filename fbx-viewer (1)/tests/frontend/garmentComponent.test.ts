@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { meshLodChain, meshLodReady } from '../../utils/meshLod';
 import { describe, expect, it, vi } from 'vitest';
 import { cookComponentGarment, GarmentInstance, readGarmentSettings } from '../../runtime/components/garmentComponent';
+import * as windField from '../../runtime/wind';
 import { createComponent } from '../../runtime/components/registry';
 import type { GarmentPattern } from '../../runtime/garments/pattern';
 import { GARMENT_STEP } from '../../runtime/garments/solver';
@@ -54,6 +55,49 @@ describe('garment component in the level transform hierarchy', () => {
         garment.dispose();
         other.dispose();
         for (const disposal of disposals) expect(disposal).toHaveBeenCalledTimes(1);
+    });
+
+    it('applies world gravity in physical units under a rotated, nonuniformly scaled hierarchy', () => {
+        const mesh = cookComponentGarment({ version: 1, edgeLength: .5, seams: [], panels: [{
+            id: 'p', name: 'Free swatch', grain: [1, 0], pins: [],
+            placement: { origin: [3, 3, 0], u: [1, 0, 0], v: [0, 0, 1] },
+            boundary: [{ id: 'a', x: 0, y: 0 }, { id: 'b', x: .2, y: 0 }, { id: 'c', x: 0, y: .2 }],
+        }] });
+        const garment = new GarmentInstance(mesh, 'cotton');
+        const ancestor = new THREE.Group(), host = new THREE.Group();
+        ancestor.scale.set(1.5, 3, .5);
+        ancestor.rotation.z = .4;
+        host.rotation.x = .5;
+        ancestor.add(host); host.add(garment.root);
+        try {
+            const position = () => garment.root.localToWorld(new THREE.Vector3().fromArray(garment.simulation.positions));
+            const initial = position();
+            garment.advance(GARMENT_STEP, { ...settings(), animateTorso: false, wind: 0 }, 'cloth');
+            const delta = position().sub(initial);
+            expect(delta.x).toBeCloseTo(0, 6);
+            expect(delta.y).toBeCloseTo(-9.81 * GARMENT_STEP ** 2, 6);
+            expect(delta.z).toBeCloseTo(0, 6);
+        } finally { garment.dispose(); }
+    });
+
+    it('samples wind near the garment when its panels are far from the fitting form', () => {
+        const garment = new GarmentInstance(cookComponentGarment({ version: 1, edgeLength: .5, seams: [], panels: [{
+            id: 'p', name: 'Window curtain', grain: [1, 0], pins: [],
+            placement: { origin: [8, 2, 0], u: [1, 0, 0], v: [0, 1, 0] },
+            boundary: [{ id: 'a', x: 0, y: 0 }, { id: 'b', x: .2, y: 0 }, { id: 'c', x: 0, y: .2 }],
+        }] }), 'cotton');
+        const host = new THREE.Group();
+        host.position.x = 2;
+        host.add(garment.root);
+        const field = vi.spyOn(windField, 'windAt');
+        try {
+            garment.advance(GARMENT_STEP, { ...settings(), animateTorso: false, wind: 1 }, 'cloth');
+            const [x, y] = field.mock.calls[0];
+            expect(x).toBeCloseTo(10.1, 4);
+            expect(y).toBeCloseTo(2.1, 4);
+            garment.advance(1, { ...settings(), wind: 0 }, 'cloth');
+            expect(garment.simulation.droppedTime).toBeCloseTo(1 - 8 * GARMENT_STEP, 10);
+        } finally { field.mockRestore(); garment.dispose(); }
     });
 
     it('uses the cooked triangle connectivity at every pose regardless of which frame is drawn first', async () => {

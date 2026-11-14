@@ -52,7 +52,6 @@ export function cookComponentGarment(value: unknown): CookedGarment {
 
 // This proxy uses the solver's upright capsule, scaled in X. Its dimensions are in owner-local metres.
 const MAX_FRAME_STEPS = 8;
-const _unitUp = new THREE.Vector3(0, 1, 0);
 
 /** Owns the CPU simulation, presentation mesh and fitting body of exactly one level-component instance. */
 export class GarmentInstance {
@@ -63,7 +62,7 @@ export class GarmentInstance {
     private readonly capsule = { ...FITTING_TORSO };
     private readonly colliders = [this.capsule];
     private readonly pins = new THREE.Matrix4();
-    private readonly inverseRotation = new THREE.Quaternion();
+    private readonly worldToLocalLinear = new THREE.Matrix3();
     private readonly down = new THREE.Vector3();
     private readonly ambient = new THREE.Vector3();
     private readonly sample = new THREE.Vector3();
@@ -110,8 +109,8 @@ export class GarmentInstance {
         this.root.add(this.mesh, this.torso);
     }
 
-    // The fitting body is about half a metre long. Sample Auvra's field at its center,
-    // then let each simulated triangle compute drag against its own velocity and normal.
+    // Sample the field at the current cloth bounds, including garments arranged away from the form.
+    // Each triangle computes drag against its own velocity and normal.
     private readonly wind = (_x: number, _y: number, _z: number, out: WindVec): WindVec => {
         out.x = this.ambient.x;
         out.y = this.ambient.y;
@@ -210,16 +209,19 @@ export class GarmentInstance {
             this.solvedMesh = this.solvedBone = undefined;
             return;
         }
-        this.root.getWorldQuaternion(this.inverseRotation).invert();
-        this.down.copy(_unitUp).negate().applyQuaternion(this.inverseRotation);
+        // Acceleration and velocity are vectors in world units. Keep the inverse scale and shear
+        // introduced by the owner hierarchy when expressing them in simulation coordinates.
+        this.worldToLocalLinear.setFromMatrix4(this.root.matrixWorld).invert();
+        this.down.set(0, -1, 0).applyMatrix3(this.worldToLocalLinear);
         if (settings.wind > 0) {
-            this.sample.copy(this.torso.position).applyMatrix4(this.root.matrixWorld);
+            this.sample.copy(this.mesh.geometry.boundingSphere!.center).applyMatrix4(this.root.matrixWorld);
             windAt(this.sample.x, this.sample.y, this.sample.z, windTime(), this.windScratch);
             this.ambient.set(this.windScratch.x, this.windScratch.y, this.windScratch.z)
-                .applyQuaternion(this.inverseRotation).multiplyScalar(settings.wind);
+                .applyMatrix3(this.worldToLocalLinear).multiplyScalar(settings.wind);
         }
 
         const elapsed = Math.min(dt, GARMENT_STEP * MAX_FRAME_STEPS);
+        this.simulation.droppedTime += dt - elapsed;
         const oldCarry = this.carry;
         this.carry += elapsed;
         let changed = false;
