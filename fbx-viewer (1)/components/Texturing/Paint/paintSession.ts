@@ -92,6 +92,7 @@ export const MAX_BRANCHES = 12;
  */
 export const HISTORY_BYTES = 256 * 1024 * 1024;
 const SAVE_DELAY_MS = 2500;
+const livePaintSessions = new Set<PaintSession>();
 /** Changes to one thing this close together make one undo step. */
 const COALESCE_MS = 1000;
 
@@ -141,6 +142,7 @@ export class PaintSession {
     private readonly listeners = new Set<() => void>();
     private saveTimer: ReturnType<typeof setTimeout> | null = null;
     private saving: Promise<void> | null = null;
+    private lastSaveFailure: unknown | null = null;
     private coalesceKey: string | null = null;
     private coalesceAt = 0;
     version = 0;
@@ -352,6 +354,7 @@ export class PaintSession {
         session.releasePictures = graphPictures.dispose;
         // Graphs using this set's stack draw from it while it is open.
         session.closeStack = registerOpenStack(asset.id, stack);
+        livePaintSessions.add(session);
         return session;
     }
 
@@ -606,6 +609,20 @@ export class PaintSession {
         await projectService.applyChanges([{ domain: MATERIALS_DOMAIN, operation: 'upsert', id: this.asset.id, value: materialAssetDocument(this.asset) }]);
     }
 
+    /** Flush autosave and its pictures before a multi-document project mutation. */
+    async flushForProjectRename(): Promise<boolean> {
+        if (this.retired) return false;
+        if (!this.usable || this.locked || this.busy) {
+            throw new Error('Finish or close the current Paint operation before renaming project parameters.');
+        }
+        if (this.saving) await this.saving;
+        if (this.saveTimer) await this.save();
+        if (this.lastSaveFailure) {
+            throw new Error('The pending Paint changes could not be saved. Retry the Paint save before renaming.');
+        }
+        return true;
+    }
+
     /** Keeps changed pictures and the document in the project (never from a lost GPU context). */
     async save(): Promise<void> {
         if (this.saveTimer) { clearTimeout(this.saveTimer); this.saveTimer = null; }
@@ -615,8 +632,10 @@ export class PaintSession {
             try {
                 await this.stack.keepPictures();
                 await this.keepDocument();
+                this.lastSaveFailure = null;
                 this.status = null;
             } catch (error) {
+                this.lastSaveFailure = error;
                 if (error instanceof GpuResetError) {
                     this.status = error.message;
                 } else {
@@ -1172,8 +1191,41 @@ export class PaintSession {
         // Saved on closing (save itself refuses to keep anything from a lost GPU context).
         if (this.saveTimer) {
             clearTimeout(this.saveTimer);
-            void this.save().finally(() => this.stack.dispose());
-        } else this.stack.dispose();
+            void this.save().finally(() => { this.stack.dispose(); livePaintSessions.delete(this); });
+        } else if (this.saving) {
+            void this.saving.finally(() => { this.stack.dispose(); livePaintSessions.delete(this); });
+        } else {
+            this.stack.dispose();
+            livePaintSessions.delete(this);
+        }
         this.listeners.clear();
     }
 }
+
+/**
+ * Drain Paint's delayed AND final-on-dispose saves, then block new strokes
+ * while a live project-wide rename is committed and rehydrated. A failed
+ * rename unlocks each old session. Once committed, retire old sessions so
+ * they cannot restore an obsolete paint document after the new project
+ * revision has been published.
+ */
+export const preparePaintSessionsForProjectRename = async (): Promise<(committed: boolean) => void> => {
+    const locked: PaintSession[] = [];
+    const finish = (committed: boolean): void => {
+        for (const session of locked) {
+            if (committed) session.retire();
+            session.unlock();
+        }
+    };
+    try {
+        for (const session of [...livePaintSessions]) {
+            if (!await session.flushForProjectRename()) continue;
+            session.lock('Project-wide parameter rename in progress');
+            locked.push(session);
+        }
+        return finish;
+    } catch (error) {
+        finish(false);
+        throw error;
+    }
+};
