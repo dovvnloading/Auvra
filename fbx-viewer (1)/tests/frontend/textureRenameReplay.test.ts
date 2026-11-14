@@ -33,7 +33,7 @@ const nested: MaterialAsset = {
 const fixture = () => {
     const status = { projectId: 'project-a' as string | null, revision: 8, readOnly: false };
     const documents: Record<string, Array<Record<string, unknown>>> = {
-        materials: [source, nested].map(asset => structuredClone(materialAssetDocument(asset))),
+        materials: [source, nested].map(asset => structuredClone(materialAssetDocument(asset)) as unknown as Record<string, unknown>),
         models: [{ id: 'model', materialOverrides: {
             Wood: { materialId: 'source', parameters: [{ name: 'wear', value: 0.35 }] },
         } }],
