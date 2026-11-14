@@ -4,7 +4,7 @@ import { ProjectStatus, projectService } from '../utils/projectService';
 import { useNotification } from '../context/NotificationContext';
 import { flushMaterialEditorWrites } from '../components/Materials/materialEditorWrites';
 import { sharedPresets } from '../components/Texturing/projectPresets';
-import { preparePaintSessionsForProjectRename } from '../components/Texturing/Paint/paintSession';
+import { flushPendingPaintSessionWrites, preparePaintSessionsForProjectRename } from '../components/Texturing/Paint/paintSession';
 import type { TextureParameterRenamePlan } from '../texturing/graph/renameProjectParameter';
 import {
   commitTextureParameterRename, replayTextureParameterRename, RenameProjectSyncError,
@@ -118,6 +118,7 @@ export const useProjectManager = ({
       // export or replacement. A failed flush leaves the project open for retry.
       await flushPendingLevelEdits({ notify: false });
       await flushMaterialEditorWrites();
+      await flushPendingPaintSessionWrites();
       // The transition is begun before the operation's first host request. It
       // synchronously invalidates every old World Editor lease, including
       // delayed writes.
