@@ -26,9 +26,12 @@ export function fittingBakeRecipe(input: FittingBakeInput): Promise<string> {
     const firstLayer = pattern.panels[0].layer ?? 0;
     const usesClothContact = input.selfCollision || pattern.panels.some(p => (p.layer ?? 0) !== firstLayer);
     // Revision 3 includes the completed pin-budget and swept-contact fixes. Revision 2 was
-    // published during the transition. Clips without cloth-to-cloth contact remain compatible.
-    const recipe: unknown[] = [usesClothContact ? 3 : 1, pattern, input.fabric, input.animateTorso, input.selfCollision];
+    // published during the transition. Revision 4 restores CCD for zero contact offset.
+    // The unmodified solver paths retain their previous hashes.
     const overrides = readFabricOverrides(input.fabric, input.material);
+    let revision = 1;
+    if (usesClothContact) revision = overrides?.thickness === 0 ? 4 : 3;
+    const recipe: unknown[] = [revision, pattern, input.fabric, input.animateTorso, input.selfCollision];
     if (overrides) recipe.push(overrides);
     const canonical = JSON.stringify(recipe);
     return fittingDigest(new TextEncoder().encode(canonical));

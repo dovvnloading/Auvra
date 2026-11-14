@@ -64,6 +64,24 @@ describe('bounded garment self contact', () => {
         for (let i = 3; i < 6; i++) expect(end[3*i+2]).toBeGreaterThan(.00399);
     });
 
+    it('forgets a zero-clearance approach side when an instance is reset and the same mesh is arranged anew', () => {
+        const mesh = fixture([...floor, ...upper], [0,1,2,3,4,5]);
+        const tracker = new GarmentSelfContact(mesh, new Float64Array([0,0,0,1,1,1]));
+        const end = mesh.positions.slice();
+        for (let i = 3; i < 6; i++) end[3*i+2] = -.05;
+        tracker.solve(mesh.positions, end, 0);
+        for (let i = 3; i < 6; i++) expect(Math.abs(end[3*i+2])).toBeLessThan(1e-7);
+        tracker.reset();
+        const coincident = end.slice(), departing = end.slice();
+        for (let i = 3; i < 6; i++) {
+            coincident[3*i+2] = 0;
+            departing[3*i+2] = -.01;
+        }
+        const expected = departing.slice();
+        tracker.solve(coincident, departing, 0);
+        expect(departing).toEqual(expected);
+    });
+
     it('bounds the response at a nearly fixed barycentric witness on an unranked panel', () => {
         const mesh = fixture([[-.04,.0004,0],[.04,.0004,0],[0,.0009,0],[-.1,0,.001],[.1,0,.001],[0,.2,.001]], [0,1,2,3,4,5]);
         const end = mesh.positions.slice(), contact = new GarmentSelfContact(mesh, new Float64Array([0,0,0,0,0,1]));

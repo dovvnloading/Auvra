@@ -114,7 +114,7 @@ export class GarmentLayerContact {
             if (s1 > 2 * gap) continue;
             // Recover a locally inverted arrangement, or block a fast crossing from the expected side.
             // Distant back-side layers are never drawn through another part of the garment.
-            const recovery = -GARMENT_LAYER_LIMITS.recoveryGaps * gap;
+            const recovery = gap === 0 ? -1e-7 : -GARMENT_LAYER_LIMITS.recoveryGaps * gap;
             if (s1 < recovery && signedGap(start, inner, outer, corner, prevLo.normal) < recovery) continue;
             if (this.contacts.length >= GARMENT_LAYER_LIMITS.contacts) {
                 stats.layerCapacityLimited = stats.limited = true;

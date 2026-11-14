@@ -16,6 +16,7 @@ function sample(start: Float32Array, end: Float32Array, vertex: number, t: numbe
     ];
 }
 
+const ZERO_GAP_TOLERANCE = 1e-7; // metres; used for CCD evaluation, never as the separation target
 type Stencil = [number, number, number, number];
 interface Separation { weights: Stencil; normal: Point; distance: number }
 
@@ -67,6 +68,8 @@ export class GarmentSelfContact {
     private readonly vertexCount: number;
     private readonly vertexFaceSeen = new Set<number>();
     private readonly edgeEdgeSeen = new Set<number>();
+    private previousZeroNormals = new Map<number, Point>();
+    private currentZeroNormals = new Map<number, Point>();
     private readonly inverseMass: Float64Array;
     private readonly maxFeatures: number;
     private readonly maxBroadTests: number;
@@ -114,14 +117,24 @@ export class GarmentSelfContact {
     }
 
     reset(): void {
+        this.previousZeroNormals.clear();
+        this.currentZeroNormals.clear();
+        this.resetWork();
+    }
+
+    private resetWork(): void {
         this.layerContact?.reset();
         this.pinBudget.reset();
         Object.assign(this.stats, EMPTY_CONTACT_STATS);
     }
 
     solve(start: Float32Array, positions: Float32Array, gap: number): void {
-        this.reset();
-        if (!(gap > 0)) return;
+        this.resetWork();
+        const last = this.currentZeroNormals;
+        this.currentZeroNormals = this.previousZeroNormals;
+        this.previousZeroNormals = last;
+        this.currentZeroNormals.clear();
+        if (!Number.isFinite(gap) || gap < 0) return;
         this.gather(start, positions, gap);
         this.layerContact?.project(positions, gap, this.stats);
     }
@@ -130,7 +143,7 @@ export class GarmentSelfContact {
         this.broadTests = 0;
         this.vertexFaceSeen.clear();
         this.edgeEdgeSeen.clear();
-        const broadGap = this.layerContact ? gap * GARMENT_LAYER_LIMITS.recoveryGaps : gap;
+        const broadGap = gap === 0 ? ZERO_GAP_TOLERANCE : this.layerContact ? gap * GARMENT_LAYER_LIMITS.recoveryGaps : gap;
         for (const box of this.bounds) {
             const { a, b, c } = this.faces[box.face];
             for (let j = 0; j < 3; j++) {
@@ -188,45 +201,54 @@ export class GarmentSelfContact {
                         const key = v * this.faces.length + id;
                         if (this.vertexFaceSeen.has(key)) continue;
                         this.vertexFaceSeen.add(key);
-                        if (!this.feature(start, positions, gap, [v, tri.a, tri.b, tri.c], true)) return;
+                        if (!this.feature(start, positions, gap, [v, tri.a, tri.b, tri.c], true, key)) return;
                     }
                 }
                 for (const ei of fa.edges) for (const ej of fb.edges) {
                     const key = Math.min(ei, ej) * this.edges.length + Math.max(ei, ej);
                     if (this.edgeEdgeSeen.has(key)) continue;
                     this.edgeEdgeSeen.add(key);
-                    const u = this.edges[ei], v = this.edges[ej];
-                    if (!this.feature(start, positions, gap, [u[0], u[1], v[0], v[1]], false)) return;
+                    // A stable side is defined for a particular edge ordering.
+                    const u = this.edges[gap === 0 ? Math.min(ei, ej) : ei], v = this.edges[gap === 0 ? Math.max(ei, ej) : ej];
+                    if (!this.feature(start, positions, gap, [u[0], u[1], v[0], v[1]], false, -1 - key)) return;
                 }
             }
         }
     }
 
-    private feature(start: Float32Array, end: Float32Array, gap: number, ids: Stencil, vf: boolean): boolean {
+    private feature(start: Float32Array, end: Float32Array, gap: number, ids: Stencil, vf: boolean, key: number): boolean {
         if (this.stats.testedFeatures >= this.maxFeatures) {
             this.stats.featureCapacityLimited = this.stats.limited = true;
             return false;
         }
         this.stats.testedFeatures++;
+        const shell = gap === 0 ? ZERO_GAP_TOLERANCE : gap;
         for (let j = 0; j < 3; j++) {
             const left = vf ? [ids[0]] : [ids[0], ids[1]];
             const right = vf ? [ids[1], ids[2], ids[3]] : [ids[2], ids[3]];
             let leftMin = Infinity, leftMax = -Infinity, rightMin = Infinity, rightMax = -Infinity;
             for (const i of left) { const k = 3 * i + j; leftMin = Math.min(leftMin, start[k], end[k]); leftMax = Math.max(leftMax, start[k], end[k]); }
             for (const i of right) { const k = 3 * i + j; rightMin = Math.min(rightMin, start[k], end[k]); rightMax = Math.max(rightMax, start[k], end[k]); }
-            if (leftMin > rightMax + gap || rightMin > leftMax + gap) return true;
+            if (leftMin > rightMax + shell || rightMin > leftMax + shell) return true;
         }
         const motion = ids.map(i => sub(sample(end, end, i, 0), sample(start, start, i, 0)));
         // Subtract common translation before bounding relative speed along t in [0,1].
         const relative = motion.map(v => sub(v, motion[0]));
-        const tolerance = Math.max(1e-7, gap * GARMENT_LAYER_LIMITS.sweptToleranceFraction);
+        const tolerance = Math.max(ZERO_GAP_TOLERANCE, gap * GARMENT_LAYER_LIMITS.sweptToleranceFraction);
         let t = 0;
         for (let iteration = 0; iteration < GARMENT_LAYER_LIMITS.sweptIterations; iteration++) {
             const s = separation(ids.map(i => sample(start, end, i, t)), vf);
             if (!s) return true;
             if (s.distance <= gap + tolerance) {
-                // Initial coincident surfaces have no reliable side. They require arrangement/repair.
-                if (s.distance <= 1e-12) return true;
+                // A zero-offset feature can spend multiple ticks at exact coincidence.
+                // Retain the last observed approach side; a freshly arranged, exactly
+                // coincident two-sided feature has no unique side until it separates.
+                if (gap === 0) {
+                    const last = this.previousZeroNormals.get(key);
+                    if (s.distance < 1e-12 && !last) return true;
+                    if (last && t === 0 && (s.distance < 1e-12 || dot(last, s.normal) < 0)) s.normal = last;
+                    this.currentZeroNormals.set(key, s.normal);
+                } else if (s.distance < 1e-12) return true;
                 let signedEnd = 0, denom = 0;
                 for (let k = 0; k < 4; k++) {
                     const j = 3 * ids[k], w = s.weights[k];
@@ -262,7 +284,9 @@ export class GarmentSelfContact {
             const closingSpeed = vf ? Math.max(speed[1], speed[2], speed[3]) :
                 Math.max(speed[2], speed[3]) - Math.min(0, speed[1]);
             if (closingSpeed <= 1e-12) return true;
-            const advance = (s.distance - gap) / closingSpeed;
+            // Stop just before a zero-distance impact to sample its approach normal.
+            // Projection still uses exactly zero as the physical clearance.
+            const advance = (s.distance - (gap === 0 ? 0.5 * ZERO_GAP_TOLERANCE : gap)) / closingSpeed;
             if (t + advance > 1) return true;
             t += Math.max(0, advance);
         }

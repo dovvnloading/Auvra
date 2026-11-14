@@ -121,9 +121,59 @@ describe('authored layer ordering within one cooked garment', () => {
         expect(generic.stats.vertexFace).toBeGreaterThan(0);
     });
 
-    it('sweeps a fast sliding contact that is clear of the support footprint at both ends of a tick', () => {
+    it.each([0, 1])('uses a zero physical gap on a full crossing and remembers the approach side at rest (order %s)', layer => {
+        for (const sign of layer ? [1] : [1, -1]) {
+            const lower = panel('support', 0, 0, true);
+            const upper = panel('cloth', layer, .025*sign, false, [[-.05,-.035],[.05,-.035],[0,.04]]);
+            const mesh = cook(lower, upper);
+            const contact = new GarmentSelfContact(mesh, masses(mesh));
+            let accepted = mesh.positions.slice();
+            for (let tick = 0; tick < 121; tick++) {
+                const predicted = accepted.slice();
+                for (let i = 3; i < 6; i++) predicted[3*i+2] -= sign * (tick === 0 ? .06 : .00075);
+                contact.solve(accepted, predicted, 0);
+                for (let i = 3; i < 6; i++) expect(Math.abs(predicted[3*i+2])).toBeLessThan(1e-7);
+                expect(predicted.slice(0, 9)).toEqual(mesh.positions.slice(0, 9));
+                expect(contact.stats.limited).toBe(false);
+                accepted = predicted;
+            }
+            const departing = accepted.slice();
+            for (let i = 3; i < 6; i++) departing[3*i+2] += sign*.01;
+            const expected = departing.slice();
+            contact.solve(accepted, departing, 0);
+            expect(departing).toEqual(expected);
+        }
+    });
+
+    it.each([0, 1])('supports repeated gravitational contact with the authored zero-offset material (order %s)', layer => {
+        const mesh = cook(panel('support', 0, 0, true), panel('cloth', layer, .0001, false, [[-.05,-.035],[.05,-.035],[0,.04]]));
+        const sim = new GarmentSimulation(mesh, { thickness: 0, selfCollision: layer === 0 });
+        const down = { x: 0, y: 0, z: -1 };
+        for (let i = 0; i < 120; i++) {
+            sim.step(GARMENT_STEP, undefined, null, [], null, down);
+            for (let v = 3; v < 6; v++) expect(Math.abs(sim.positions[3*v+2])).toBeLessThan(1e-7);
+            expect(sim.selfContactStats?.limited).toBe(false);
+        }
+    });
+
+    it.each([0, 1])('allows coincident resting sheets without inventing thickness at zero clearance (order %s)', layer => {
+        const mesh = cook(panel('support', 0, 0, true), panel('cloth', layer, 0));
+        const contact = new GarmentSelfContact(mesh, masses(mesh)), resting = mesh.positions.slice();
+        for (let i = 0; i < 3; i++) contact.solve(mesh.positions, resting, 0);
+        expect(resting).toEqual(mesh.positions);
+        expect(contact.stats.facePairs).toBe(1);
+        expect(contact.stats.layerProjections + contact.stats.vertexFace + contact.stats.edgeEdge).toBe(0);
+        for (const invalid of [-.001, NaN, Infinity]) {
+            contact.solve(mesh.positions, resting, invalid);
+            expect(contact.stats.facePairs).toBe(0);
+            expect(resting).toEqual(mesh.positions);
+        }
+    });
+
+    it.each([{ gap: .004, layer: 1 }, { gap: 0, layer: 1 }, { gap: 0, layer: 0 }])(
+        'sweeps an interior crossing during tangential motion, including zero clearance ($gap, order $layer)', ({ gap, layer }) => {
         const lower = panel('inner', 0, 0, true, [[-.1,-.1], [.1,-.1], [0,.1]]);
-        const upper = panel('outer', 1, .04, false, [[-.01,-.01], [.01,-.01], [0,.01]]);
+        const upper = panel('outer', layer, .04, false, [[-.01,-.01], [.01,-.01], [0,.01]]);
         upper.placement.origin[0] = -.45;
         const mesh = cook(lower, upper);
         const end = mesh.positions.slice(), contact = new GarmentSelfContact(mesh, masses(mesh));
@@ -131,11 +181,11 @@ describe('authored layer ordering within one cooked garment', () => {
             end[3*i] += .9;
             end[3*i+2] = -.04;
         }
-        contact.solve(mesh.positions, end, clearance);
-        expect(contact.stats.layerFallbackPairs).toBe(1);
+        contact.solve(mesh.positions, end, gap);
+        expect(contact.stats.layerFallbackPairs).toBe(layer === 1 ? 1 : 0);
         expect(contact.stats.vertexFace + contact.stats.edgeEdge).toBeGreaterThan(0);
         expect(contact.stats.advancementLimited).toBe(0);
-        for (let i = 3; i < 6; i++) expect(end[3*i+2]).toBeGreaterThan(.00399);
+        for (let i = 3; i < 6; i++) expect(end[3*i+2]).toBeGreaterThanOrEqual(gap - 1e-7);
     });
 
     it('carries a compressed outer panel on a moving pinned inner panel for two seconds with collision switch off', () => {

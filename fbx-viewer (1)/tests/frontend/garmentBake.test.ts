@@ -47,11 +47,17 @@ describe('fitting clip and live component parity', () => {
         const options = fixture(), pattern = options.pattern;
         const legacy = (input: FittingBakeInput, revision = 1) => createHash('sha256').update(JSON.stringify([
             revision, readGarmentPattern(input.pattern), input.fabric, input.animateTorso, input.selfCollision,
+            ...(input.material ? [input.material] : []),
         ])).digest('hex');
         expect(await fittingBakeRecipe(options)).toBe(legacy(options));
         const self = { ...options, selfCollision: true };
         expect(await fittingBakeRecipe(self)).not.toBe(legacy(self));
         expect(await fittingBakeRecipe(self)).not.toBe(legacy(self, 2));
+        const zero = { ...self, material: { thickness: 0 } };
+        expect(await fittingBakeRecipe(self)).toBe(legacy(self, 3));
+        expect(await fittingBakeRecipe(zero)).not.toBe(legacy(zero, 3));
+        const noContact = { ...zero, selfCollision: false };
+        expect(await fittingBakeRecipe(noContact)).toBe(legacy(noContact));
         pattern.panels[0].layer = 1;
         expect(await fittingBakeRecipe(options)).not.toBe(legacy(options));
         pattern.panels[1].layer = 1;
