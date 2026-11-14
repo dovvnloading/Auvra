@@ -2,13 +2,30 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ParticlePreviewControls } from '../../components/Environment/ParticlePreviewControls';
 import { sanitizeParticleEffect } from '../../runtime/particleEffect';
-import { particlePreview, PARTICLE_PREVIEW_STEP } from '../../runtime/particlePreview';
+import { advanceParticlePreviewReplay, particlePreview, PARTICLE_PREVIEW_STEP } from '../../runtime/particlePreview';
 import { ParticleSimulation } from '../../runtime/particleSimulation';
 import { ComputeEmitter, type EmitterHome } from '../../renderer/gpu/particles/computeEmitter';
 import type { GpuFrame } from '../../renderer/gpu/frame';
 
 describe('particle system preview', () => {
     afterEach(() => vi.unstubAllGlobals());
+    it('keeps the cued layer stopped past its replay delay while another one-shot layer previews normally', () => {
+        const effect = sanitizeParticleEffect({ loop: false, duration: 0.2, rate: 0 });
+        const held = new ParticleSimulation(effect, 1);
+        const normal = new ParticleSimulation(effect, 1);
+        held.stop();
+        let heldIdle = 0, normalIdle = 0;
+        for (let i = 0; i < 13; i++) {
+            held.step(0.1, null);
+            normal.step(0.1, null);
+            heldIdle = advanceParticlePreviewReplay(held, heldIdle, 0.1, true);
+            normalIdle = advanceParticlePreviewReplay(normal, normalIdle, 0.1, false);
+        }
+        expect(held.isEmitting).toBe(false);
+        expect(normal.isEmitting).toBe(true);
+        for (let i = 0; i < 12; i++) heldIdle = advanceParticlePreviewReplay(held, heldIdle, 0.1, false);
+        expect(held.isEmitting).toBe(true);
+    });
     it('pauses, steps and restarts every mounted layer and view of the selected object', () => {
         const restart = vi.fn();
         const layers = Array.from({ length: 4 }, () => particlePreview.attach('torch', restart));

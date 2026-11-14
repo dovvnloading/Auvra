@@ -1,6 +1,15 @@
 /** Transient editor playback, shared by every layer and viewport of one level object. */
 export const PARTICLE_PREVIEW_STEP = 1 / 60;
 
+/** Return the new idle time. Timeline audition owns the emitter until it releases the preview. */
+export function advanceParticlePreviewReplay(emitter: { isDone: boolean; play(): void }, idle: number, delta: number, auditioning: boolean): number {
+    if (auditioning || !emitter.isDone) return 0;
+    const elapsed = idle + delta;
+    if (elapsed <= 1) return elapsed;
+    emitter.play();
+    return 0;
+}
+
 interface Layer {
     pendingSteps: number;
     restart: () => void;

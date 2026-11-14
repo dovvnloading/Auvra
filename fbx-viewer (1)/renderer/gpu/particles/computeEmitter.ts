@@ -791,7 +791,7 @@ export class ComputeEmitter {
     u[115] = render.mode === "ribbon" ? 0 : MODE_DEFINE[render.mode];
     u[116] = FRAME_NUMBER[render.frameMode];
     u[118] = this.heightGrid ? this.heightGrid.cells : 0;
-    u[119] = prepareParticleForceFields(effect.forceFields, local ? null : e, this.forceFields);
+    u[119] = prepareParticleForceFields(effect.forceFields, local ? null : e, this.forceFields, this.elapsed);
     const activeWords = FORCE_FIELDS_OFFSET_WORDS + u[119] * PARTICLE_FORCE_FIELD_FLOATS;
     this.device.queue.writeBuffer(this.params, 0, this.paramWords, 0, activeWords);
   }

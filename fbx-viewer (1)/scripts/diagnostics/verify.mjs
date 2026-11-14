@@ -297,6 +297,7 @@ const EXEMPT = new Map(Object.entries({
   'runtime/scripting/protocol.ts': 'protocol-model',
   'runtime/scripting/scriptApi.ts': 'sandbox-proxy',
   'runtime/timeline/evaluate.ts': 'pure-utility',
+  'runtime/timeline/particleCues.ts': 'hot-loop',
   'runtime/timeline/poser.ts': 'hot-loop',
   'runtime/timeline/preview.ts': 'pure-derived-state',
   'runtime/cinematics.ts': 'pure-derived-state',

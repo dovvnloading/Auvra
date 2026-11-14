@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { GpuParticleSystem } from '../../runtime/gpuParticles';
+import { ParticleSimulation } from '../../runtime/particleSimulation';
 import { createParticleForceField, sanitizeParticleEffect } from '../../runtime/particleEffect';
 import { ParticleWorld } from '../../renderer/gpu/particles/particleWorld';
 import { PARTICLE_BYTES } from '../../renderer/gpu/particles/particleWgsl';
@@ -16,6 +17,58 @@ const cases = [
     { name: 'moving emitter', fields, at: [2, 3, 1], origin: [0, 3, 1], expected: [-0.1, 0.15, 0.05] },
 ];
 const stepSeconds = 0.05;
+
+async function checkCurl(run) {
+    const field = { ...createParticleForceField('curl'), center: [0.5, -0.25, 0.125], radius: 3, falloff: 1.5, strength: 16, scale: 0.85, evolution: 2, seed: 53 };
+    const point = [0.8, -0.65, 0.2];
+    const cases = [
+        { name: 'seeded curl' }, { name: 'repeat seed' }, { name: 'different seed', edit: { seed: 938 } },
+        { name: 'animated curl', warmup: 8 },
+        { name: 'translated curl', origin: [2, 1, -3], point: [2.8, 0.35, -2.8] },
+        { name: 'reversed curl', edit: { strength: -16 } },
+        { name: 'rotated local curl', space: 'local', rotate: true, origin: [7, -3, 2] },
+        { name: 'outside curl', point: [3.6, -0.25, 0.125] },
+        { name: 'curl on boundary', point: [3.5, -0.25, 0.125] },
+        { name: 'curl exterior shell', point: [3.50001, -0.25, 0.125] },
+        { name: 'microscopic curl', point: [3e-23, 2e-23, -1e-23], edit: { center: [0, 0, 0], radius: 1e-22 } },
+        { name: 'large curl volume', point: [2000.125, -1300.75, 720.625], edit: { radius: 10000, scale: 0.05 } },
+        { name: 'static curl', edit: { evolution: 0 } },
+        { name: 'static curl later', edit: { evolution: 0 }, warmup: 8 },
+    ];
+    const values = new Map();
+    for (const test of cases) {
+        const at = test.point ?? point;
+        const warmup = test.warmup ?? 0;
+        const matrix = new THREE.Matrix4().makeRotationZ(test.rotate ? Math.PI / 2 : 0).setPosition(...(test.origin ?? [0, 0, 0]));
+        const effect = sanitizeParticleEffect({
+            rate: 0, speed: [0, 0], lifetime: [2, 2], shape: { kind: 'point' }, drag: 0, gravity: 0, turbulence: 0,
+            space: test.space ?? 'world', forceFields: [{ ...field, ...test.edit }], render: { blending: 'additive' },
+        });
+        // GPU bursts spawn on the first submitted step. CPU bursts spawn immediately,
+        // so age its empty simulation through that same instant before releasing the particle.
+        const cpu = new ParticleSimulation(effect, 1);
+        for (let frame = 0; frame <= warmup; frame++) cpu.step(stepSeconds, matrix.elements);
+        cpu.emitAt(1, ...at);
+        cpu.step(stepSeconds, matrix.elements);
+        const expected = cpu.velocities;
+        const actual = await run(effect, at, matrix, [0, 0, 0], 'velocity', warmup);
+        if (!actual.every((value, i) => Math.abs(value - expected[i]) < 0.0001)) {
+            throw new Error(`${test.name} CPU velocity ${expected}, GPU read ${actual}`);
+        }
+        values.set(test.name, actual);
+    }
+    const delta = (a, b) => Math.hypot(...values.get(a).map((v, i) => v - values.get(b)[i]));
+    if (Math.hypot(...values.get('seeded curl')) < 0.001 || Math.hypot(...values.get('outside curl')) > 0.00001 ||
+        ['curl on boundary', 'curl exterior shell'].some(name => Math.hypot(...values.get(name)) > 1e-7) ||
+        delta('seeded curl', 'rotated local curl') > 0.0001 ||
+        !values.get('reversed curl').every((value, i) => Math.abs(value + values.get('seeded curl')[i]) < 0.00001) ||
+        delta('seeded curl', 'repeat seed') > 0.00001 || delta('seeded curl', 'translated curl') > 0.0001 ||
+        delta('seeded curl', 'different seed') < 0.001 || delta('seeded curl', 'animated curl') < 0.001 ||
+        delta('static curl', 'static curl later') > 0.00001) {
+        throw new Error('Curl motion failed its seed, time or locality checks: ' + JSON.stringify(Object.fromEntries(values)));
+    }
+    return cases.map(test => test.name);
+}
 
 // Four .05s steps span one cycle. A linear 0→2 multiplier at 80/s integrates
 // to 1, 3, 5 and 7 births. The midpoint burst adds two to the second interval.
@@ -64,16 +117,17 @@ async function checkCases(run) {
             throw new Error(`${interpolation} lifetime expected x≈${expected}, read ${position[0]}`);
         }
     }
-    return [...cases.map(test => test.name), ...modes.map(([mode]) => `${mode} lifetime`)];
+    return [...cases.map(test => test.name), ...modes.map(([mode]) => `${mode} lifetime`), ...await checkCurl(run)];
 }
 
 async function checkWebGL() {
     const renderer = new THREE.WebGLRenderer();
     try {
-        const forces = await checkCases((effect, at, matrix, velocity, attribute) => {
+        const forces = await checkCases((effect, at, matrix, velocity, attribute, warmup = 0) => {
             const system = new GpuParticleSystem(1);
             try {
                 system.setEffect(effect);
+                for (let i = 0; i < warmup; i++) system.step(renderer, stepSeconds, matrix, null);
                 system.emitAt(1, ...at, ...velocity);
                 system.step(renderer, stepSeconds, matrix, null);
                 system.step(renderer, stepSeconds, matrix, null);
@@ -156,10 +210,11 @@ async function checkWebGPU() {
     }
     try {
         device.pushErrorScope('validation');
-        const result = await checkCases(async (effect, at, matrix, velocity, attribute) => {
+        const result = await checkCases(async (effect, at, matrix, velocity, attribute, warmup = 0) => {
             const emitter = world.createEmitter(1);
             try {
                 emitter.setEffect(effect);
+                for (let i = 0; i < warmup; i++) step(emitter, matrix);
                 emitter.emitAt(1, ...at, ...velocity);
                 step(emitter, matrix);
                 step(emitter, matrix);

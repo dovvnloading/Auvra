@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { rekeyComponents } from './componentIds';
+import { recordParticleTargets, rekeyComponents, remapParticleCues, type ParticleCueTargets } from './componentIds';
 import type { LevelObject, LevelObjectType, PrefabData } from '../types';
 import { collectSubtree, getWorldMatrix } from './sceneGraph';
 
@@ -120,9 +120,11 @@ export const instantiatePrefab = (prefab: PrefabData, levelId: string, position:
   const ordered = collectSubtree(linked, prefab.rootId);
 
   const ids = new Map(ordered.map((object) => [object.id, newId()]));
-  return ordered.map((object): LevelObject => {
+  const targets: ParticleCueTargets = new Map();
+  const copies = ordered.map((object): LevelObject => {
     const isRoot = object.id === prefab.rootId;
     const components = object.components && rekeyComponents(object.components, newId);
+    recordParticleTargets(targets, object.id, ids.get(object.id)!, object.components, components);
     return {
       ...object,
       id: ids.get(object.id)!,
@@ -134,4 +136,6 @@ export const instantiatePrefab = (prefab: PrefabData, levelId: string, position:
       ...(components ? { components } : {}),
     };
   });
+  for (const copy of copies) if (copy.components) copy.components = remapParticleCues(copy.components, targets);
+  return copies;
 };

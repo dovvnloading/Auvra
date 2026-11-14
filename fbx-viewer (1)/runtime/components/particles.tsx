@@ -18,7 +18,7 @@ import type { ComputeEmitter, ComputeSubEmitter } from '../../renderer/gpu/parti
 import { particleWorldOf } from '../../renderer/gpu/particles/particleWorld';
 import { GpuParticleSystem } from '../gpuParticles';
 import { particleEmitters } from '../particleEmitters';
-import { particlePreview } from '../particlePreview';
+import { advanceParticlePreviewReplay, particlePreview } from '../particlePreview';
 import { ParticleRenderer } from '../particleRenderer';
 import { ParticleSimulation, type MeshSurface, type ParticleRaycast } from '../particleSimulation';
 import { builtinSpriteTexture, SPRITE_GRIDS } from '../particleSprites';
@@ -35,9 +35,6 @@ import type { ComponentDefinition, ComponentRenderProps } from './types';
  * scripts, gameplay scripts and other emitters' sub-emitter events start, stop and burst it through
  * the particle emitter registry.
  */
-
-/** Seconds an editor preview of a one-shot effect waits after it ends before replaying. */
-const PREVIEW_REPLAY_DELAY = 1;
 
 const loadedTextures = new Map<string, THREE.Texture>();
 
@@ -197,6 +194,7 @@ const CpuParticles: React.FC<EmitterProps> = ({ object, component, mode, effect 
 
     // Starts with the play session (or always in the editor), prewarmed when asked.
     const started = useRef(false);
+    const auditioning = useRef(false);
     useLayoutEffect(() => {
         started.current = false;
         if (editor || playOnStart) simulation.play();
@@ -204,11 +202,12 @@ const CpuParticles: React.FC<EmitterProps> = ({ object, component, mode, effect 
     }, [simulation, editor, playOnStart]);
 
     const scope = editor ? 'editor' : 'runtime';
-    useEffect(() => particleEmitters.register(scope, {
+    useLayoutEffect(() => particleEmitters.register(scope, {
         objectId: object.id,
         componentId: component.id,
         play: () => simulation.play(),
         stop: clear => simulation.stop(clear),
+        setAuditioning: active => { auditioning.current = active; },
         emit: count => {
             const host = anchor.current?.parent;
             if (!host) return;
@@ -263,13 +262,7 @@ const CpuParticles: React.FC<EmitterProps> = ({ object, component, mode, effect 
         }
 
         // An editor preview of a one-shot effect replays a moment after it ends.
-        if (editor && simulation.isDone) {
-            idle.current += delta;
-            if (idle.current > PREVIEW_REPLAY_DELAY) {
-                idle.current = 0;
-                simulation.play();
-            }
-        } else idle.current = 0;
+        if (editor) idle.current = advanceParticlePreviewReplay(simulation, idle.current, delta, auditioning.current);
 
         renderer.update(simulation, host.matrixWorld, state.camera);
         glow(delta, simulation.count);
@@ -310,6 +303,7 @@ const GpuParticles: React.FC<EmitterProps> = ({ object, component, mode, effect 
     useMeshSurface(anchor, effect.shape.kind, object.id, takeSurface);
 
     const started = useRef(false);
+    const auditioning = useRef(false);
     useLayoutEffect(() => {
         started.current = false;
         if (editor || playOnStart) system.play();
@@ -317,11 +311,12 @@ const GpuParticles: React.FC<EmitterProps> = ({ object, component, mode, effect 
     }, [system, editor, playOnStart]);
 
     const scope = editor ? 'editor' : 'runtime';
-    useEffect(() => particleEmitters.register(scope, {
+    useLayoutEffect(() => particleEmitters.register(scope, {
         objectId: object.id,
         componentId: component.id,
         play: () => system.play(),
         stop: clear => system.stop(clear),
+        setAuditioning: active => { auditioning.current = active; },
         emit: count => {
             const host = anchor.current?.parent;
             if (!host) return;
@@ -359,13 +354,7 @@ const GpuParticles: React.FC<EmitterProps> = ({ object, component, mode, effect 
         }
         system.step(gl, delta, host.matrixWorld, ground.current);
 
-        if (editor && system.isDone) {
-            idle.current += delta;
-            if (idle.current > PREVIEW_REPLAY_DELAY) {
-                idle.current = 0;
-                system.play();
-            }
-        } else idle.current = 0;
+        if (editor) idle.current = advanceParticlePreviewReplay(system, idle.current, delta, auditioning.current);
         glow(delta, system.count);
     });
 
@@ -409,6 +398,7 @@ const ComputeParticles: React.FC<EmitterProps> = ({ object, component, mode, eff
     useMeshSurface(anchor, effect.shape.kind, object.id, takeSurface);
 
     const started = useRef(false);
+    const auditioning = useRef(false);
     useLayoutEffect(() => {
         started.current = false;
         if (editor || playOnStart) system.play();
@@ -416,7 +406,7 @@ const ComputeParticles: React.FC<EmitterProps> = ({ object, component, mode, eff
     }, [system, editor, playOnStart]);
 
     const scope = editor ? 'editor' : 'runtime';
-    useEffect(() => {
+    useLayoutEffect(() => {
         const key = computeEmitterKey(scope, object.id, component.id);
         computeEmitters.set(key, system);
         const remove = particleEmitters.register(scope, {
@@ -424,6 +414,7 @@ const ComputeParticles: React.FC<EmitterProps> = ({ object, component, mode, eff
             componentId: component.id,
             play: () => system.play(),
             stop: clear => system.stop(clear),
+            setAuditioning: active => { auditioning.current = active; },
             emit: count => {
                 const host = anchor.current?.parent;
                 if (!host) return;
@@ -478,13 +469,7 @@ const ComputeParticles: React.FC<EmitterProps> = ({ object, component, mode, eff
         }
         system.step(delta, host.matrixWorld, ground.current);
 
-        if (editor && system.isDone) {
-            idle.current += delta;
-            if (idle.current > PREVIEW_REPLAY_DELAY) {
-                idle.current = 0;
-                system.play();
-            }
-        } else idle.current = 0;
+        if (editor) idle.current = advanceParticlePreviewReplay(system, idle.current, delta, auditioning.current);
         glow(delta, system.count);
     });
 

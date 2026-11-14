@@ -14,7 +14,7 @@ The editor is a dope sheet docked along the bottom of the window. The viewport a
 
 - **Duration**: the length of the timeline in seconds (0.05 to 600). Playback stops or loops when it reaches the end.
 - **Playhead**: the time where new keys go. You can also click or drag the ruler to move it. It snaps to 0.05 s; hold Shift for free timing. When the ruler has focus, the arrow keys move the playhead by 0.05 s (1 s with Shift), and Home and End jump to the start and the end.
-- **Transform**, **Visibility**, **Variable**, **Event**, **Camera**, **Animation**, **Audio**, **Subtitles**, **Fade**: each adds a track of that kind.
+- Add a track with **Transform**, **Visibility**, **Variable**, **Event**, **Camera**, **Animation**, **Audio**, **Subtitles**, **Fade**, or **Particle cue**.
 - **Zoom**: widens or narrows the time scale.
 
 Below the toolbar are the ruler and one row per track. Keys show as diamonds at their times; clips, sounds and subtitle lines show as bars as long as they last. The panel on the right edits the selected key.
@@ -29,6 +29,7 @@ Nothing you change reaches the level until you click **Save**, which stores the 
 | Visibility | An object in this level | Visible or hidden |
 | Variable | A level variable, by name | A number |
 | Event | None | An event name (see [Events](#events)) |
+| Particle cue | One Particles component on a level object | Play, Stop or Burst with a particle count |
 | Camera | None | The camera to show from this key on: an object with a Camera component, or the gameplay camera (see [Camera cuts](#camera-cuts)) |
 | Animation | A character: an object with a model, or the player | A clip of the character's model, played from the key for a length (see [Character animation](#character-animation)) |
 | Audio | Everywhere (2D), an object, or the player; and a mixer bus | A sound, played from the key for at most a length, at a volume |
@@ -89,6 +90,18 @@ For example, a door that opens when the player steps on a switch:
 1. Add a **Timeline** to the door. Turn **Autoplay** off and set **Play Variable** to `doorOpen`.
 2. In the editor, add a Transform track (it targets the door), key the closed pose at 0 s and the open pose at 1.5 s, and set the first key's interpolation to **Smooth**.
 3. In the Level Blueprint, declare `doorOpen` as a Boolean (false), and connect **On Overlap** on the switch to **Set Level Variable** `doorOpen` = true.
+
+## Particle cues
+
+Use a particle cue track to time one named emitter independently of the other emitters on the same object. Choose the object and its emitter in the track header. Add keys at the desired times and set the action on each key.
+
+| Action | What happens when playback crosses the key |
+|---|---|
+| Play | Starts emission at the beginning of its delay and cycle. Existing particles continue moving. |
+| Stop | Stops new continuous emission. Particles already in flight finish their lifetimes. |
+| Burst | Emits the specified count at the emitter, including when its continuous emission is stopped. |
+
+Turn off **Play on start** on an emitter if the timeline should control its first emission. Use **Play timeline preview** to audition cues as the playhead crosses them. Scrubbing the ruler lets you position keys without firing them. Enter game play to run the saved sequence with its autoplay, speed and loop settings. For a working two-track example, open the [Aurora Curtain project](examples/Auvra-Aurora-Curtain.auvrapack).
 
 ## Camera cuts
 

@@ -102,8 +102,9 @@ struct Particle {
 
 struct ForceField {
   centreRadius: vec4f,
+  // Curl uses the first three words for its animated, seeded phases.
   axisStrength: vec4f,
-  // Kind and falloff, followed by two padding words.
+  // Kind, falloff, curl frequency and curl strength normalization.
   settings: vec4f,
 }
 
@@ -525,11 +526,38 @@ fn worldPointOf(position: vec3f) -> vec3f {
   return (params.emitter * vec4f(position, 1.0)).xyz;
 }
 
+// Curl of a windowed vector potential, including the derivative of the radial window.
+fn boundedCurl(offset: vec3f, field: ForceField) -> vec3f {
+  let radius = field.centreRadius.w;
+  // Scale first so even very small radii have a representable squared distance.
+  if (any(abs(offset) >= vec3f(radius))) { return vec3f(0.0); }
+  let unitOffset = offset / radius;
+  let h = 1.0 - dot(unitOffset, unitOffset);
+  if (h <= 0.0) { return vec3f(0.0); }
+  let exponent = field.settings.y + 2.0;
+  let frequency = field.settings.z;
+  // The wave vectors share a 20π period per coordinate. Split the period to avoid
+  // cancellation when offsets span many wavelengths at f32 precision.
+  let q = offset * frequency;
+  let turns = round(q * 0.015915494309189534);
+  let reduced = (q - turns * 62.828125) - turns * 0.003728071795864769;
+  let angle = vec3f(reduced.y + 0.5 * reduced.z, reduced.z + 0.7 * reduced.x, reduced.x - 0.6 * reduced.y) + field.axisStrength.xyz;
+  let c = cos(angle);
+  let curl = vec3f(-0.6 * c.z - c.y, 0.5 * c.x - c.z, 0.7 * c.y - c.x);
+  let windowSlope = pow(h, exponent - 1.0);
+  let edgeScale = -2.0 * exponent / (3.0 * radius * frequency + 4.0 * exponent);
+  return windowSlope * (h * field.settings.w * curl + edgeScale * cross(unitOffset, sin(angle)));
+}
+
 fn fieldAcceleration(position: vec3f) -> vec3f {
   var acceleration = vec3f(0.0);
   for (var i = 0u; i < params.forceFieldCount; i++) {
     let field = params.forceFields[i];
     let offset = position - field.centreRadius.xyz;
+    if (field.settings.x == 3.0) {
+      acceleration += field.axisStrength.w * boundedCurl(offset, field);
+      continue;
+    }
     let radius = field.centreRadius.w;
     let distanceSq = dot(offset, offset);
     if (distanceSq >= radius * radius) { continue; }

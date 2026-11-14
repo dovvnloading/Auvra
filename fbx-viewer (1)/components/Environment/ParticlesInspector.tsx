@@ -8,6 +8,7 @@ import {
     MAX_PARTICLE_FORCE_FIELDS,
     PARTICLE_BLENDINGS,
     PARTICLE_COLLISION_MODES,
+    PARTICLE_CURL_DEFAULTS,
     PARTICLE_FRAME_MODES,
     PARTICLE_FORCE_FIELD_KINDS,
     particleEmitterName,
@@ -45,6 +46,7 @@ const FORCE_HINTS: Record<ParticleForceField['kind'], string> = {
     radial: 'Positive strength pulls toward the center. Negative strength pushes outward.',
     vortex: 'Particles turn around the axis. Negative strength reverses the swirl.',
     directional: 'Positive strength pushes along the axis. Negative strength pushes against it.',
+    curl: 'Scale sets swirl size. A seed repeats the pattern. Evolution 0 holds it still. Arrows show the flow at 1 s.',
 };
 
 /** A number typed in and taken on Enter or when the field is left. */
@@ -166,18 +168,23 @@ const ForceFieldEditor: React.FC<{ fields: ParticleForceField[]; onChange: (fiel
                     <legend className="text-2xs font-semibold text-gray-300">Field {index + 1}</legend>
                     <div className="flex items-center gap-1">
                         <Toggle label="Field enabled" value={field.enabled} onChange={(enabled) => edit(index, { enabled })} />
-                        <Select label="Field type" value={field.kind} options={PARTICLE_FORCE_FIELD_KINDS} labels={{ radial: 'Radial', vortex: 'Vortex', directional: 'Directional' }} onChange={(kind) => edit(index, { kind })} />
+                        <Select label="Field type" value={field.kind} options={PARTICLE_FORCE_FIELD_KINDS} labels={{ radial: 'Radial', vortex: 'Vortex', directional: 'Directional', curl: 'Curl noise' }} onChange={(kind) => edit(index, { kind })} />
                         <button type="button" aria-label={`Remove field ${index + 1}`} className={BUTTON} onClick={() => onChange(fields.filter((_, i) => i !== index))}><TrashIcon size={11} /></button>
                     </div>
                     <VectorInputs label="Center (m)" value={field.center} onCommit={(center) => edit(index, { center })} />
-                    {field.kind !== 'radial' && <VectorInputs label="Axis" value={field.axis} onCommit={(axis) => edit(index, { axis })} />}
+                    {(field.kind === 'directional' || field.kind === 'vortex') && <VectorInputs label="Axis" value={field.axis} onCommit={(axis) => edit(index, { axis })} />}
                     <Row label="Radius (m)"><NumberInput label="Field radius" value={field.radius} onCommit={(radius) => edit(index, { radius })} /></Row>
                     <Row label="Strength (m/s²)"><NumberInput label="Field strength" value={field.strength} onCommit={(strength) => edit(index, { strength })} /></Row>
+                    {field.kind === 'curl' && <>
+                        <Row label="Swirl scale (m)"><NumberInput label="Curl swirl scale" value={field.scale ?? PARTICLE_CURL_DEFAULTS.scale} step={0.05} onCommit={(scale) => edit(index, { scale })} /></Row>
+                        <Row label="Evolution (rad/s)"><NumberInput label="Curl evolution" value={field.evolution ?? PARTICLE_CURL_DEFAULTS.evolution} onCommit={(evolution) => edit(index, { evolution })} /></Row>
+                        <Row label="Seed"><NumberInput label="Curl seed" value={field.seed ?? PARTICLE_CURL_DEFAULTS.seed} step={1} onCommit={(seed) => edit(index, { seed })} /></Row>
+                    </>}
                     <p className={LABEL}>{FORCE_HINTS[field.kind]}</p>
                     <Row label="Falloff exponent"><NumberInput label="Field falloff" value={field.falloff} step={0.25} onCommit={(falloff) => edit(index, { falloff })} /></Row>
                 </fieldset>
             ))}
-            {fields.length > 0 && <p className={LABEL}>Centers follow the emitter. Falloff 0 gives full strength throughout the radius. A value of 1 fades linearly to the edge.</p>}
+            {fields.length > 0 && <p className={LABEL}>Centers follow the emitter. Higher falloff concentrates the field toward its center.</p>}
             <button type="button" className={BUTTON + ' disabled:opacity-40'} disabled={fields.length >= MAX_PARTICLE_FORCE_FIELDS} onClick={() => onChange([...fields, createParticleForceField()])}>
                 <PlusIcon size={10} /> Add force field ({fields.length}/{MAX_PARTICLE_FORCE_FIELDS})
             </button>

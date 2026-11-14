@@ -12,17 +12,6 @@ import { collectSubtree, sortByHierarchy } from '../utils/sceneGraph';
 
 const describeError = (error: unknown): string => error instanceof Error && error.message ? error.message : 'unknown error';
 
-/** Fields the level add API cannot take; written once the new object is in level state. */
-const instanceFields = (object: LevelObject, parentId: string | null): Partial<LevelObject> => {
-  const fields: Partial<LevelObject> = { name: object.name, parentId };
-  if (object.prefabId) fields.prefabId = object.prefabId;
-  if (object.prefabObjectId) fields.prefabObjectId = object.prefabObjectId;
-  if (object.components?.length) fields.components = object.components;
-  if (object.spawnConfig) fields.spawnConfig = object.spawnConfig;
-  if (object.audioConfig) fields.audioConfig = object.audioConfig;
-  return fields;
-};
-
 /** Merges the edits of several instance syncs; removals children first, additions parents first. */
 const mergeSyncs = (objects: readonly LevelObject[], syncs: InstanceSync[]): InstanceSync => {
   const removals: string[] = [];
@@ -70,7 +59,7 @@ const writePrefabs = (update: PrefabData[] | ((current: PrefabData[]) => PrefabD
 };
 
 export const usePrefabs = () => {
-  const { models, levelObjects, currentLevelId, addLevelObject, addLevelObjects, updateLevelObject, removeLevelObjects, snapshotHistory } = useScene();
+  const { models, levelObjects, currentLevelId, addLevelObjects, updateLevelObject, removeLevelObjects, snapshotHistory } = useScene();
   const { addNotification } = useNotification();
   const prefabs = useSyncExternalStore(subscribePrefabs, readPrefabs, readPrefabs);
   const setPrefabs = writePrefabs;
@@ -78,10 +67,6 @@ export const usePrefabs = () => {
   const [isPlacing, setIsPlacing] = useState(false);
   const [projectId, setProjectId] = useState<string | null>(projectService.getStatus().projectId);
   const placingRef = useRef(false);
-  // New object id -> parent link, name, components, ... still to write.
-  const pendingFields = useRef(new Map<string, Partial<LevelObject>>());
-  const [pendingVersion, setPendingVersion] = useState(0);
-
   useEffect(() => projectService.subscribe((status) => setProjectId(status.projectId)), []);
 
   const refresh = useCallback(async () => {
@@ -102,27 +87,8 @@ export const usePrefabs = () => {
   }, []);
 
   useEffect(() => {
-    pendingFields.current.clear();
     void refresh();
   }, [projectId, refresh]);
-
-  // addLevelObject generates ids and only takes a transform, so the parent
-  // link (and name, components, prefab id) is applied once each placed object
-  // is in level state, where updateLevelObject can see it.
-  useEffect(() => {
-    const pending = pendingFields.current;
-    if (pending.size === 0) return;
-    for (const object of levelObjects) {
-      const fields = pending.get(object.id);
-      if (!fields) continue;
-      pending.delete(object.id);
-      try {
-        updateLevelObject(object.id, fields);
-      } catch (error) {
-        frontendDiagnostics.failure('prefab_instance_link_failed', error);
-      }
-    }
-  }, [levelObjects, pendingVersion, updateLevelObject]);
 
   const createFromSelection = useCallback(async (
     selectedIds: string[],
@@ -272,12 +238,7 @@ export const usePrefabs = () => {
         frontendDiagnostics.failure('prefab_instance_unlink_failed', error);
       }
     }
-    for (const fields of pendingFields.current.values()) {
-      if (fields.prefabId === id) {
-        delete fields.prefabId;
-        delete fields.prefabObjectId;
-      }
-    }
+
     return true;
   }, [addNotification, levelObjects, updateLevelObject]);
 
@@ -290,7 +251,7 @@ export const usePrefabs = () => {
       return null;
     }
     const objects = instantiatePrefab(prefab, currentLevelId, position);
-    const missing = objects.filter((object) => (object.type === 'prop' || object.type === 'foliage')
+    const missing = objects.filter((object) => object.modelId && (object.type === 'prop' || object.type === 'foliage')
       && !models.some((model) => model.id === object.modelId));
     if (missing.length > 0) {
       addNotification({ message: `Prefab "${prefab.name}" uses ${missing.length} object(s) whose model is no longer in the project.`, type: 'error' });
@@ -299,28 +260,11 @@ export const usePrefabs = () => {
 
     placingRef.current = true;
     setIsPlacing(true);
-    // Instance id (from instantiatePrefab) -> id the level add API assigned.
-    const placed = new Map<string, string>();
     try {
-      // Parents come first, so every parent id is already mapped.
-      for (const object of objects) {
-        const levelId = await addLevelObject(object.modelId, object.position, object.rotation, object.scale, object.type);
-        if (!levelId) throw new Error(`"${object.name}" could not be added to the level`);
-        placed.set(object.id, levelId);
-        pendingFields.current.set(levelId, instanceFields(object, object.parentId ? placed.get(object.parentId) ?? null : null));
-      }
-      setPendingVersion((version) => version + 1);
-      return placed.get(objects[0].id) ?? null;
+      // Store the final IDs together; timelines may target components on children added later in the batch.
+      const added = await addLevelObjects(objects);
+      return added.includes(objects[0].id) ? objects[0].id : null;
     } catch (error) {
-      const added = [...placed.values()];
-      for (const id of added) pendingFields.current.delete(id);
-      if (added.length > 0) {
-        try {
-          removeLevelObjects(added);
-        } catch (cleanupError) {
-          frontendDiagnostics.failure('prefab_place_cleanup_failed', cleanupError);
-        }
-      }
       frontendDiagnostics.failure('prefab_place_failed', error);
       addNotification({ message: `Could not place prefab: ${describeError(error)}`, type: 'error' });
       return null;
@@ -328,7 +272,7 @@ export const usePrefabs = () => {
       placingRef.current = false;
       setIsPlacing(false);
     }
-  }, [addLevelObject, addNotification, currentLevelId, models, prefabs, removeLevelObjects]);
+  }, [addLevelObjects, addNotification, currentLevelId, models, prefabs]);
 
   return {
     prefabs,

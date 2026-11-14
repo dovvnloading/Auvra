@@ -24,6 +24,7 @@ import {
     type TimelineSoundStart,
 } from '../timeline/evaluate';
 import { timelineEvents } from '../timeline/events';
+import { compileTimelineParticleCues, dispatchTimelineParticleCues } from '../timeline/particleCues';
 import { timelinePreview } from '../timeline/preview';
 import { ClipPoser, poseLayers, type PoseLayer } from '../timeline/poser';
 import { TIMELINE_PLAYER_TARGET } from '../timeline/types';
@@ -213,6 +214,7 @@ const TimelinePlayer: React.FC<ComponentRenderProps> = ({ object, component }) =
     const mixer = useRuntimeMixer();
     const stored = component.props.timeline;
     const data = useMemo(() => normalizeTimeline(stored), [stored]);
+    const particleCues = useMemo(() => compileTimelineParticleCues(data), [data]);
     const targetIds = useMemo(() => timelineTargetIds(data), [data]);
     const { autoplay, loop, speed, playVariable, cinematic, skippable, holdEnd } = readTimelineSettings(component);
 
@@ -391,6 +393,8 @@ const TimelinePlayer: React.FC<ComponentRenderProps> = ({ object, component }) =
 
         // Sounds: those running count down; those whose start was passed begin.
         const advance = step * speed;
+        const wraps = loop ? Math.floor((current.time + advance) / data.duration) : 0;
+        dispatchTimelineParticleCues('runtime', particleCues, current.started ? current.time : -1, time, wraps);
         sounds.current = sounds.current.filter(playingSound => {
             playingSound.left -= advance;
             if (playingSound.left > 0) return true;

@@ -113,6 +113,8 @@ export class ParticleSimulation {
     private readonly random: () => number;
     /** Seconds since it last started playing (delay included), and into the current cycle. */
     private clock = 0;
+    /** Seconds simulated, including particles coasting after the emission clock has stopped. */
+    private elapsed = 0;
     private cycleTime = 0;
     private burstsDone = 0;
     private emitting = true;
@@ -194,6 +196,7 @@ export class ParticleSimulation {
     /** Replay from the current transform without old motion, sub-emitter events, or particles. */
     restart(): void {
         this.stop(true);
+        this.elapsed = 0;
         this.last = null;
         this.emitterVelocity.fill(0);
         this.events.length = 0;
@@ -237,6 +240,7 @@ export class ParticleSimulation {
             this.emitterVelocity[2] = (world[14] - previous[14]) / step;
         }
         this.simulate(step, world, raycast ?? null);
+        this.elapsed += step;
         this.emit(step, world, previous, moved);
         this.last = (this.last ?? new Float64Array(16));
         for (let i = 0; i < 16; i++) this.last[i] = world[i];
@@ -263,7 +267,7 @@ export class ParticleSimulation {
         const orbit = effect.orbit;
         const cx = local ? 0 : world[12], cz = local ? 0 : world[14];
         const collide = raycast && effect.collision.mode === 'world' && !local;
-        const fieldCount = prepareParticleForceFields(effect.forceFields, local ? null : world, this.forceFields);
+        const fieldCount = prepareParticleForceFields(effect.forceFields, local ? null : world, this.forceFields, this.elapsed);
         if (fieldCount > 0) {
             applyParticleForceFields(this.forceFields, fieldCount, step, this.count, this.positions, this.velocities, this.ages, this.lifetimes);
         }

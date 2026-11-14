@@ -15,8 +15,9 @@
 export type Range = [number, number];
 export type Vec3 = [number, number, number];
 
-export const PARTICLE_FORCE_FIELD_KINDS = ['radial', 'vortex', 'directional'] as const;
+export const PARTICLE_FORCE_FIELD_KINDS = ['radial', 'vortex', 'directional', 'curl'] as const;
 export const MAX_PARTICLE_FORCE_FIELDS = 4;
+export const PARTICLE_CURL_DEFAULTS = { scale: 2, evolution: 0.6, seed: 0 } as const;
 
 export interface ParticleForceField {
     kind: typeof PARTICLE_FORCE_FIELD_KINDS[number];
@@ -29,12 +30,19 @@ export interface ParticleForceField {
     radius: number;
     /** Peak acceleration in m/s². Positive radial strength attracts. */
     strength: number;
-    /** Exponent on (1 - distance / radius); zero gives a uniform field. */
+    /** Radial attenuation exponent. Curl retains a smooth boundary even at zero falloff. */
     falloff: number;
+    /** Curl only. Spatial scale in simulation units; the base waves repeat over 2π times this length. */
+    scale?: number;
+    /** Curl phase speed in radians per second; zero holds the pattern still. */
+    evolution?: number;
+    /** Curl pattern seed, 0–65535. */
+    seed?: number;
 }
 
 export const createParticleForceField = (kind: ParticleForceField['kind'] = 'radial'): ParticleForceField => ({
     kind, enabled: true, center: [0, 0, 0], axis: [0, 1, 0], radius: 5, strength: 10, falloff: 1,
+    ...(kind === 'curl' ? PARTICLE_CURL_DEFAULTS : {}),
 });
 
 export interface GradientStop {
@@ -472,6 +480,11 @@ const forceFields = (value: unknown, fallback: ParticleForceField[]): ParticleFo
             radius: num(field.radius, defaults.radius, 0, 10000),
             strength: num(field.strength, defaults.strength, -1000, 1000),
             falloff: num(field.falloff, defaults.falloff, 0, 8),
+            ...(kind === 'curl' ? {
+                scale: num(field.scale, PARTICLE_CURL_DEFAULTS.scale, 0.05, 1000),
+                evolution: num(field.evolution, PARTICLE_CURL_DEFAULTS.evolution, -10, 10),
+                seed: Math.round(num(field.seed, PARTICLE_CURL_DEFAULTS.seed, 0, 65535)),
+            } : {}),
         });
     }
     return result;
@@ -643,6 +656,23 @@ export const PARTICLE_PRESETS = {
         speedOverLife: { interpolation: 'smooth', points: [[0, 0.6], [0.18, 0.75], [0.48, 1.18], [1, 1.45]] },
         render: { mode: 'horizontal', sprite: 'ring', blending: 'additive', emissive: 2.8, sort: false },
     }),
+    auroraCurtain: effect({
+        simulation: 'gpu', rate: 3200, maxParticles: 14500, duration: 4,
+        lifetime: [2.6, 3.8], speed: [1.5, 1.8], size: [0.028, 0.052],
+        shape: { kind: 'edge', size: [6.5, 0, 0], axis: [0, 1, 0], angle: 2 },
+        gravity: -0.45, drag: 0.25, turbulence: 0, startColor: ['#f5ffff', '#dcfff0'],
+        forceFields: [
+            { kind: 'curl', enabled: true, center: [0, 2.4, 0], axis: [0, 1, 0], radius: 6.5,
+                strength: 12, falloff: 0.5, scale: 1.4, evolution: 0.55, seed: 19 },
+        ],
+        colorOverLife: { stops: [
+            { t: 0, color: '#83ffb6', alpha: 0 }, { t: 0.09, color: '#63ff9e', alpha: 0.75 },
+            { t: 0.34, color: '#25f5ad', alpha: 0.86 }, { t: 0.60, color: '#3bcce3', alpha: 0.75 },
+            { t: 0.82, color: '#9971f2', alpha: 0.56 }, { t: 1, color: '#d97ff5', alpha: 0 },
+        ] },
+        sizeOverLife: { interpolation: 'smooth', points: [[0, 0.45], [0.18, 0.95], [0.72, 1.2], [1, 0.6]] },
+        render: { mode: 'stretched', sprite: 'soft', blending: 'additive', emissive: 2.6, stretch: 4.25, sort: false },
+    }),
     magic: effect({
         rate: 40, lifetime: [1, 2], speed: [0.2, 0.6], size: [0.08, 0.16], gravity: -0.3, drag: 0.5, turbulence: 0.6, orbit: 2,
         shape: { kind: 'circle', radius: 0.6, volume: 0 }, startColor: ['#9ad8ff', '#d6a0ff'],
@@ -794,7 +824,7 @@ export const PARTICLE_PRESET_LABELS: Record<ParticlePresetId, string> = {
     rain: 'Rain', snow: 'Snow', steam: 'Steam', leaves: 'Falling leaves', confetti: 'Confetti', fireflies: 'Fireflies',
     waterfall: 'Waterfall mist', muzzleFlash: 'Muzzle flash', shockwave: 'Shockwave', trail: 'Trail', debris: 'Debris',
     fountain: 'Fountain (GPU)', swarm: 'Swarm (GPU)', downpour: 'Downpour (GPU)',
-    ionVortex: 'Ion vortex', vortexSparks: 'Vortex sparks', pulseRings: 'Pulse rings',
+    ionVortex: 'Ion vortex', vortexSparks: 'Vortex sparks', pulseRings: 'Pulse rings', auroraCurtain: 'Aurora curtain (GPU)',
 };
 
 /** The artist's optional name for a particle component within a layered effect. */

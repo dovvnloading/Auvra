@@ -1,6 +1,6 @@
 import type { LevelComponent, LevelObject, PrefabData } from '../types';
 import { collectSubtree, sortByHierarchy } from './sceneGraph';
-import { rekeyComponents } from './componentIds';
+import { recordParticleTargets, rekeyComponents, remapParticleCues, type ParticleCueTargets } from './componentIds';
 import type { PrefabObject } from './prefabs';
 
 /**
@@ -42,12 +42,29 @@ const comparable = (field: SyncedField, value: unknown): string => {
 
 const sameValue = (field: SyncedField, a: unknown, b: unknown): boolean => comparable(field, a) === comparable(field, b);
 
-/** New component list from the prefab, reusing the instance's component ids where the same type sits at the same index. */
-const syncComponents = (current: LevelComponent[] | undefined, next: LevelComponent[] | undefined): LevelComponent[] =>
-  rekeyComponents(clone(next ?? []), (component, index) => {
-    const existing = current?.[index];
-    return existing && existing.type === component.type ? existing.id : newId();
-  });
+/** Project authored components into one instance's ID space before comparing or applying them. */
+function instanceComponents(
+  prefab: PrefabData, members: Map<string, LevelObject>, instanceIds: Map<string, string>,
+  previousObjects?: Map<string, PrefabObject>,
+): Map<string, LevelComponent[]> {
+  const result = new Map<string, LevelComponent[]>();
+  const targets: ParticleCueTargets = new Map();
+  for (const object of prefab.objects) {
+    const current = members.get(object.id)?.components ?? [];
+    const previous = previousObjects?.get(object.id)?.components;
+    const previousIndex = new Map(previous?.map((component, i) => [component.id, i]));
+    const components = rekeyComponents(clone(object.components ?? []), (component, i) => {
+      // A surviving prefab component keeps its instance ID when a sibling moves or is inserted.
+      const index = previous ? previousIndex.get(component.id) : i;
+      const existing = index === undefined ? undefined : current[index];
+      return existing?.type === component.type ? existing.id : newId();
+    });
+    result.set(object.id, components);
+    recordParticleTargets(targets, object.id, instanceIds.get(object.id) ?? object.id, object.components, components);
+  }
+  for (const [id, components] of result) result.set(id, remapParticleCues(components, targets));
+  return result;
+}
 
 /** Objects heading an instance of `prefabId` (all of them when omitted). */
 export const instanceRoots = (objects: readonly LevelObject[], prefab: Pick<PrefabData, 'id' | 'rootId'>): LevelObject[] =>
@@ -100,9 +117,13 @@ export const syncInstance = (
   const nextIds = new Set(next.objects.map(object => object.id));
   const result: InstanceSync = { updates: [], additions: [], removals: [] };
 
-  // Instance object id for each prefab object id, filled in as additions are planned.
+  // Allocate IDs for the whole instance before resolving any forward cue references.
   const instanceId = new Map<string, string>([...byPrefabObject].map(([prefabObjectId, member]) => [prefabObjectId, member.id]));
+  instanceId.set(next.rootId, root.id);
   const ordered = orderPrefabObjects(next);
+  for (const object of ordered) if (!instanceId.has(object.id)) instanceId.set(object.id, newId());
+  const oldComponents = previous && instanceComponents(previous, byPrefabObject, instanceId);
+  const nextComponents = instanceComponents(next, byPrefabObject, instanceId, oldObjects);
 
   for (const prefabObject of ordered) {
     const isRoot = prefabObject.id === next.rootId;
@@ -110,8 +131,7 @@ export const syncInstance = (
     const parentId = isRoot ? root.parentId ?? null : instanceId.get(prefabObject.parentId ?? '') ?? root.id;
 
     if (!member) {
-      const id = newId();
-      instanceId.set(prefabObject.id, id);
+      const id = instanceId.get(prefabObject.id)!;
       const { id: _id, ...document } = clone(prefabObject);
       result.additions.push({
         ...document,
@@ -120,7 +140,7 @@ export const syncInstance = (
         parentId,
         prefabId: next.id,
         prefabObjectId: prefabObject.id,
-        ...(prefabObject.components ? { components: syncComponents(undefined, prefabObject.components) } : {}),
+        ...(prefabObject.components ? { components: nextComponents.get(prefabObject.id)! } : {}),
       } as LevelObject);
       continue;
     }
@@ -129,12 +149,13 @@ export const syncInstance = (
     const old = oldObjects.get(prefabObject.id);
     for (const field of SYNCED_FIELDS) {
       if (isRoot && ROOT_PLACEMENT.has(field)) continue;
-      const wanted = prefabObject[field as keyof PrefabObject];
+      const wanted = field === 'components' ? nextComponents.get(prefabObject.id) : prefabObject[field];
       if (sameValue(field, member[field], wanted)) continue;
-      const overridden = !options.revert && (!old || !sameValue(field, member[field], old[field as keyof PrefabObject]));
+      const before = field === 'components' ? oldComponents?.get(prefabObject.id) : old?.[field];
+      const overridden = !options.revert && (!old || !sameValue(field, member[field], before));
       if (overridden) continue;
       (changes as Record<string, unknown>)[field] = field === 'components'
-        ? syncComponents(member.components, wanted as LevelComponent[] | undefined)
+        ? wanted
         : clone(wanted);
     }
     if (!isRoot && (member.parentId ?? null) !== parentId) changes.parentId = parentId;
@@ -181,24 +202,41 @@ export const prefabFromInstance = (
     if (!object.prefabObjectId && object.id !== root.id) adopted.set(object.id, prefabObjectId);
     prefabIdOf.set(object.id, prefabObjectId);
   }
+  const original = new Map(prefab.objects.map(object => [object.id, object]));
+  const targets: ParticleCueTargets = new Map();
   const prefabObjects = subtree.map((object): PrefabObject => {
     const { levelId: _levelId, prefabId: _prefabId, prefabObjectId: _prefabObjectId, ...document } = clone(object);
     const isRoot = object.id === root.id;
+    const id = prefabIdOf.get(object.id)!;
+    const previous = original.get(id)?.components;
+    const components = document.components && rekeyComponents(document.components, (component, index) => {
+      const old = previous?.[index];
+      return old?.type === component.type ? old.id : component.id;
+    });
+    recordParticleTargets(targets, object.id, id, object.components, components);
     return {
       ...document,
-      id: prefabIdOf.get(object.id)!,
+      id,
+      ...(components ? { components } : {}),
       parentId: isRoot ? null : prefabIdOf.get(object.parentId ?? '') ?? prefab.rootId,
       ...(isRoot ? { position: [0, 0, 0] as [number, number, number] } : {}),
     };
   });
+  for (const object of prefabObjects) if (object.components) object.components = remapParticleCues(object.components, targets);
   return { prefab: { ...prefab, objects: prefabObjects }, adopted };
 };
 
 /** The synced fields where `member` differs from its prefab object (the root's placement does not count). */
-export const overriddenFields = (member: LevelObject, prefab: PrefabData): SyncedField[] => {
+export const overriddenFields = (member: LevelObject, prefab: PrefabData, members: readonly LevelObject[] = [member]): SyncedField[] => {
   const prefabObject = prefab.objects.find(object => object.id === member.prefabObjectId);
   if (!prefabObject) return [];
   const isRoot = prefabObject.id === prefab.rootId;
+  const targets: ParticleCueTargets = new Map();
+  for (const sibling of members) {
+    const source = prefab.objects.find(object => object.id === sibling.prefabObjectId);
+    if (source) recordParticleTargets(targets, source.id, sibling.id, source.components, sibling.components);
+  }
   return SYNCED_FIELDS.filter(field => !(isRoot && ROOT_PLACEMENT.has(field))
-    && !sameValue(field, member[field], prefabObject[field as keyof PrefabObject]));
+    && !sameValue(field, member[field], field === 'components'
+      ? remapParticleCues(prefabObject.components ?? [], targets) : prefabObject[field]));
 };
