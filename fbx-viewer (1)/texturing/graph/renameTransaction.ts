@@ -1,4 +1,5 @@
-import type { ProjectChange } from '../../utils/projectService';
+import type { ProjectChange, ProjectSnapshot } from '../../utils/projectService';
+import { readTextureRenameInventory } from './renameSnapshot';
 import type { TextureParameterRenamePlan } from './renameProjectParameter';
 
 /**
@@ -121,3 +122,52 @@ export const undoTextureParameterRename = async (
     host: RenameProjectHost,
     afterCommit: (changes: readonly ProjectChange[]) => void | Promise<void>,
 ): Promise<number> => applyBatch(host, receipt.projectId, receipt.afterRevision, receipt.undoChanges, afterCommit);
+
+/** A complete, single-revision host snapshot is needed to replay a rename safely. */
+export interface RenameSnapshotHost extends RenameProjectHost {
+    getSnapshotAll(): Promise<ProjectSnapshot | null>;
+}
+
+/**
+ * Project-level undo/redo, not graph-local history. An unrelated project save is
+ * allowed, but every affected document must still equal the exact value written
+ * by the previous rename/undo. Refuse rather than clobbering a later edit.
+ *
+ * The snapshot validator checks all five reference-bearing domains, including
+ * empty domains and saved prefab members, before any write is attempted.
+ */
+export const replayTextureParameterRename = async (
+    receipt: RenameTransactionReceipt,
+    direction: 'undo' | 'redo',
+    host: RenameSnapshotHost,
+    afterCommit: (changes: readonly ProjectChange[]) => void | Promise<void>,
+): Promise<number> => {
+    const status = host.getStatus();
+    checkStatus(status, receipt.projectId, status.revision);
+    const snapshot = await host.getSnapshotAll();
+    if (!snapshot || snapshot.projectId !== receipt.projectId || snapshot.revision !== status.revision) {
+        throw new Error('The project changed while checking the rename history. Nothing was overwritten.');
+    }
+    const inventory = readTextureRenameInventory(snapshot, null, {
+        projectId: receipt.projectId, revision: snapshot.revision,
+    });
+    const documents: Record<string, ReadonlyMap<string, unknown>> = {
+        materials: inventory.materialDocuments,
+        models: new Map(inventory.models.map(doc => [doc.id, doc] as const)),
+        objects: new Map(inventory.objects.map(doc => [doc.id, doc] as const)),
+        prefabs: new Map(inventory.prefabs.map(doc => [doc.id, doc] as const)),
+        metadata: new Map(inventory.metadata.map(doc => [doc.id, doc] as const)),
+    };
+    const expected = direction === 'undo' ? receipt.redoChanges : receipt.undoChanges;
+    const changes = direction === 'undo' ? receipt.undoChanges : receipt.redoChanges;
+    if (!expected.length || expected.length !== changes.length) {
+        throw new Error('The parameter rename history has incomplete snapshots.');
+    }
+    for (const change of expected) {
+        if (!change.id || change.operation !== 'upsert' || !documents[change.domain]?.has(change.id)
+            || JSON.stringify(documents[change.domain].get(change.id)) !== JSON.stringify(change.value)) {
+            throw new Error(`Cannot ${direction} parameter rename: ${change.domain}/${change.id ?? '(unknown)'} was edited or removed after the rename. No documents were overwritten.`);
+        }
+    }
+    return applyBatch(host, receipt.projectId, snapshot.revision, changes, afterCommit);
+};
