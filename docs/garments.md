@@ -4,6 +4,8 @@ Add **Garment** to a level object to sew and simulate a garment in the editor an
 
 To try the complete fitting scene, import [Auvra Garment Studio](examples/Auvra-Garment-Studio.auvrapack) through the project's **Import** control. Open **Fitting room**, select **Garment · sleeveless top**, and inspect its **Garment** component. **Play** uses the scene's fitting camera. **Build Web** or a supported desktop target packages the authored component with the game.
 
+[Watch the two-second fitting sequence](examples/Auvra-Garment-Studio.mp4). The preview renders the saved garment positions and fitting form from the example.
+
 ## Fit the sleeveless top
 
 1. Select a **Pattern panel**. The outline uses millimetres in its controls. Green edges are sewn, the selected outgoing edge is yellow, and orange points are pinned.
@@ -17,7 +19,7 @@ To try the complete fitting scene, import [Auvra Garment Studio](examples/Auvra-
 
 Add the garment to the level object that owns the rigged model. Arrange its panels around the body in the model’s local frame. Set **Skinned collision mesh (exact name)** to the name of an outward-wound skinned proxy on that object. A lower-resolution, hidden proxy can share the avatar’s skeleton. The component samples bone and morph deformation as the actor animates. Selecting a mesh replaces the display form and its sway. Bind **Follow bone translation** to move the pins with a bone, or leave the pins at the authored positions.
 
-Each garment accepts one proxy, up to 4,096 vertices and 8,192 triangles. Use a unique mesh name. Missing or invalid bindings suspend the garment and retry. Contacts check cloth vertices against moving avatar triangles and apply friction relative to the moving surface. Start with the garment arranged outside the avatar. Edge crossings, deep initial overlap and multiple layers can still intersect. Bone and mesh bindings use live simulation.
+Each garment accepts one proxy, up to 4,096 vertices and 8,192 triangles. Use a unique mesh name. Missing or invalid bindings suspend the garment and retry. Contacts check cloth vertices against moving avatar triangles and apply friction relative to the moving surface. Start with the garment arranged outside the avatar. Edge crossings, deep initial overlap and multiple layers can still intersect. Bone and mesh bindings use live simulation. The garment samples the current transforms when its frame callback runs. A procedural rig modifier scheduled later in the same frame is sampled on the following frame.
 
 ## Inspect deformation
 

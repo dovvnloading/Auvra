@@ -3,8 +3,6 @@ import { describe, expect, it } from 'vitest';
 import { cookComponentGarment, GarmentInstance, readGarmentSettings } from '../../runtime/components/garmentComponent';
 import { createSleevelessTop } from '../../runtime/garments/pattern';
 import { SkinnedSurfaceBinding } from '../../runtime/garments/skinnedSurface';
-import { drawnAloneIds } from '../../components/Environment/EnvironmentScene';
-import type { LevelObject } from '../../types';
 import { GARMENT_STEP } from '../../runtime/garments/solver';
 
 function rig(name = 'Body') {
@@ -27,20 +25,6 @@ function rig(name = 'Body') {
 }
 
 describe('sample an owning skinned collision surface', () => {
-    it('keeps an unselected garment owner individually drawable only while its enabled component needs the actual rig', () => {
-        const actor = (id: string, props: Record<string, unknown>, enabled = true): LevelObject => ({
-            id, levelId: 'scene', modelId: 'model', name: id, type: 'prop',
-            position: [0,0,0], rotation: [0,0,0], scale: [1,1,1],
-            components: [{ id: 'g', type: 'garment', enabled, props }],
-        });
-        const objects = [actor('body', {collisionMesh: 'Body'}), actor('pins', {followBone: 'Chest'}),
-            actor('form', {showTorso:true}), actor('disabled', {collisionMesh: 'Body'}, false)];
-        expect(drawnAloneIds('', objects)).toEqual(['body', 'pins']);
-        expect(drawnAloneIds('body|form', objects)).toEqual(['body', 'form', 'pins']);
-        const edited = [actor('body', {collisionMesh: ''}), ...objects.slice(1)];
-        expect(drawnAloneIds('', edited)).toEqual(['pins']);
-    });
-
     it('samples morphs and individual bone influences in owner-local metres under a rotated, translated and scaled actor', () => {
         const { host, body, joint } = rig();
         const group = new THREE.Group();

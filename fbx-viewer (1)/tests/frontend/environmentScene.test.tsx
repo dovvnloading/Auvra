@@ -2,7 +2,7 @@ import { ComponentProps } from 'react';
 import { render } from '@testing-library/react';
 import * as THREE from 'three';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { EnvironmentScene } from '../../components/Environment/EnvironmentScene';
+import { drawnAloneIds, EnvironmentScene } from '../../components/Environment/EnvironmentScene';
 import { LevelObjectRenderer } from '../../components/Environment/LevelObjectRenderer';
 import type { InteractionMode } from '../../components/Environment/types';
 import type { LevelObject, LoadedModelData } from '../../types';
@@ -82,6 +82,25 @@ describe('environment terrain selection', () => {
       expect(onSelectObject).not.toHaveBeenCalled();
       expect(stopPropagation).not.toHaveBeenCalled();
     }
+  });
+});
+
+describe('garment rig preview selection', () => {
+  it('keeps unselected rig owners individually drawable while an enabled garment needs their pose', () => {
+    const actor = (id: string, props: Record<string, unknown>, enabled = true): LevelObject => ({
+      ...levelObject(id, 'prop'),
+      components: [{ id: 'g', type: 'garment', enabled, props }],
+    });
+    const objects = [
+      actor('body', { collisionMesh: 'Body' }),
+      actor('pins', { followBone: 'Chest' }),
+      actor('form', { showTorso: true }),
+      actor('disabled', { collisionMesh: 'Body' }, false),
+    ];
+    expect(drawnAloneIds('', objects)).toEqual(['body', 'pins']);
+    expect(drawnAloneIds('body|form', objects)).toEqual(['body', 'form', 'pins']);
+    const edited = [actor('body', { collisionMesh: '' }), ...objects.slice(1)];
+    expect(drawnAloneIds('', edited)).toEqual(['pins']);
   });
 });
 
