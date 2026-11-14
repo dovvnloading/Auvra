@@ -470,6 +470,8 @@ const EXEMPT = new Map(Object.entries({
   'runtime/garments/solver.ts': 'hot-loop',
   'runtime/garments/avatarContact.ts': 'hot-loop',
   'runtime/garments/avatarFeatureContact.ts': 'hot-loop',
+  'runtime/garments/layerContact.ts': 'hot-loop',
+  'runtime/garments/contactTelemetry.ts': 'event-boundary',
   'runtime/garments/skinnedSurface.ts': 'hot-loop',
   'runtime/springBones.ts': 'hot-loop',
   'runtime/daylight.ts': 'pure-derived-state',

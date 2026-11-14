@@ -46,7 +46,7 @@ Each garment accepts one proxy, up to 4,096 vertices and 8,192 triangles. Use a 
 
 ## Inspect contact
 
-Expand **Contact diagnostics** in the garment inspector during live editing. Select the viewport when several views display the same garment. Counters describe the most recent accepted solver tick in that view. Use the layer projections and residuals to inspect a tight stack, and the edge and vertex correction counts to inspect an avatar interaction. The panel reports which search budgets or conservative queries reached a limit. Cached playback displays recorded positions and has no live contact query. The panel samples up to four times per second while open.
+Expand **Contact diagnostics** in the garment inspector during live editing. Select the viewport when several views display the same garment. Counters describe the most recent accepted solver tick in that view. Use the layer projections and residuals to inspect a tight stack, and the edge and vertex correction counts to inspect an avatar interaction. While the panel is open, it also records any search or conservative advancement limit reached between readings, even if the following tick recovers. Live readings refresh every 250 ms. A binding or playback-mode change updates the display immediately. Cached playback shows the clip time.
 
 ## Inspect deformation
 

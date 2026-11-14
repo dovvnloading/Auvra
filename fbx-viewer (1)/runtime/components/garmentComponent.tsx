@@ -8,6 +8,8 @@ import type { LevelComponent } from '../../types';
 import { frontendDiagnostics } from '../../diagnostics/runtime';
 import { keepFullDetail } from '../../utils/meshLod';
 import { cookGarment, createSleevelessTop, readGarmentPattern, type CookedGarment } from '../garments/pattern';
+import { garmentContacts, type GarmentContactSource } from '../garments/contactTelemetry';
+import { hasGarmentLayers } from '../garments/layerContact';
 import { GARMENT_STEP, GarmentSimulation } from '../garments/solver';
 import { FITTING_TORSO, fittingOffsetAt, GARMENT_FABRICS, readFabricOverrides, type GarmentFabric, type GarmentFabricOverrides } from '../garments/fitting';
 import { SkinnedSurfaceBinding } from '../garments/skinnedSurface';
@@ -77,11 +79,13 @@ export class GarmentInstance {
     private searchDelay = 0;
     private missingBoneReported = false;
     private readonly avatar = new SkinnedSurfaceBinding();
+    private readonly orderedLayers: boolean;
     private avatarIssue = '';
     private carry = 0;
     private time = 0;
 
     constructor(private readonly cooked: CookedGarment, fabric: GarmentSettings['fabric'], selfCollision = false, fabricOverrides?: GarmentFabricOverrides) {
+        this.orderedLayers = hasGarmentLayers(cooked);
         this.simulation = new GarmentSimulation(cooked, { ...GARMENT_FABRICS[fabric], ...readFabricOverrides(fabric, fabricOverrides), ...(selfCollision ? { selfCollision: true } : {}) });
         this.simulation.reset();
         const geometry = new THREE.BufferGeometry();
@@ -186,7 +190,10 @@ export class GarmentInstance {
         this.publishGeometry();
     }
 
-    advance(dt: number, settings: GarmentSettings, objectId: string): void {
+    private solvedMesh?: string;
+    private solvedBone?: string;
+
+    advance(dt: number, settings: GarmentSettings, objectId: string, observer?: GarmentContactSource): void {
         this.torso.visible = settings.showTorso && !settings.collisionMesh;
         if (!(dt > 0) || !Number.isFinite(dt)) {
             this.updateSurface(settings, false);
@@ -199,7 +206,10 @@ export class GarmentInstance {
             if (this.avatarIssue) frontendDiagnostics.warning('garment_collision_mesh_' + this.avatarIssue);
         }
         this.root.visible = ready && this.boneOffset(settings.followBone, objectId, dt);
-        if (!this.root.visible) return;
+        if (!this.root.visible) {
+            this.solvedMesh = this.solvedBone = undefined;
+            return;
+        }
         this.root.getWorldQuaternion(this.inverseRotation).invert();
         this.down.copy(_unitUp).negate().applyQuaternion(this.inverseRotation);
         if (settings.wind > 0) {
@@ -227,6 +237,8 @@ export class GarmentInstance {
             const accepted = this.simulation.step(GARMENT_STEP, this.pins.elements,
                 settings.wind > 0 ? this.wind : null, surface ? [] : this.colliders, null, this.down, surface);
             if (!accepted) break;
+            observer?.recordTick(this.simulation.selfContactStats, surface ? this.simulation.avatarContactStats : null,
+                settings.collisionMesh, settings.followBone);
             this.avatar.accept();
             this.time = next;
             this.torso.position.set(this.capsule.x, this.capsule.y + FITTING_TORSO.height / 2, this.capsule.z);
@@ -234,7 +246,26 @@ export class GarmentInstance {
         }
         this.previousOffset.copy(this.endOffset);
         this.updateSurface(settings, changed);
-        if (changed) this.publishGeometry();
+        if (changed) {
+            this.solvedMesh = settings.collisionMesh;
+            this.solvedBone = settings.followBone;
+            this.publishGeometry();
+        }
+    }
+
+    /** Called only from an observed editor preview at the inspector's snapshot rate. */
+    publishContacts(target: GarmentContactSource, settings: GarmentSettings, cacheTime?: number): void {
+        if (!target.observed()) return;
+        const status = cacheTime !== undefined ? 'cache' : this.avatarIssue ? 'missing-avatar' :
+            !this.root.visible ? 'missing-bone' : 'live';
+        if (!target.due(status, settings.collisionMesh, settings.followBone)) return;
+        const solved = status === 'live' && this.solvedMesh === settings.collisionMesh && this.solvedBone === settings.followBone;
+        target.publish({
+            status, seconds: cacheTime ?? this.simulation.time, body: settings.collisionMesh,
+            detail: this.avatarIssue || settings.followBone, orderedLayers: this.orderedLayers,
+            sameLayer: settings.selfCollision, solved, self: solved ? this.simulation.selfContactStats : null,
+            avatar: solved && settings.collisionMesh ? this.simulation.avatarContactStats : null,
+        });
     }
 
     dispose(): void {
@@ -247,7 +278,8 @@ export class GarmentInstance {
 
 const CachedGarment: React.FC<{
     instance: GarmentInstance; settings: GarmentSettings; cache: GarmentCache; loop: boolean;
-}> = ({ instance, settings, cache, loop }) => {
+    contactSource: React.MutableRefObject<GarmentContactSource | null>;
+}> = ({ instance, settings, cache, loop, contactSource }) => {
     const elapsed = useRef(0);
     const output = useMemo(() => new Float32Array(cache.vertexCount * 3), [cache]);
     const center = useMemo((): [number, number, number] => [0, 0, 0], []);
@@ -256,12 +288,14 @@ const CachedGarment: React.FC<{
         const t = loop && cache.duration > 0 ? elapsed.current % cache.duration : Math.min(elapsed.current, cache.duration);
         sampleGarmentCache(cache, t, output, center);
         instance.presentCachedPose(output, vector.fromArray(center), settings);
+        if (contactSource.current) instance.publishContacts(contactSource.current, settings, t);
         if (Number.isFinite(dt) && dt > 0) elapsed.current += dt;
     });
     return <primitive object={instance.root} />;
 };
 
-const GarmentRender: React.FC<ComponentRenderProps> = ({ object, component }) => {
+const GarmentRender: React.FC<ComponentRenderProps> = ({ object, component, mode }) => {
+    const contactSource = useRef<GarmentContactSource | null>(null);
     const settings = readGarmentSettings(component);
     const pattern = component.props.pattern;
     const cooked = useMemo(() => {
@@ -308,12 +342,27 @@ const GarmentRender: React.FC<ComponentRenderProps> = ({ object, component }) =>
         if (!garment) frontendDiagnostics.warning('garment_invalid_pattern');
         return () => garment?.dispose();
     }, [garment]);
+    useEffect(() => {
+        if (mode !== 'editor' || !garment) return;
+        const source = garmentContacts.attach(object, component.id);
+        contactSource.current = source;
+        return () => {
+            source.dispose();
+            if (contactSource.current === source) contactSource.current = null;
+        };
+    }, [object, component.id, mode, garment]);
     // Animation, timelines and character IK publish at negative priorities. An ordinary-priority
     // procedural modifier mounted later contributes its previous pose to this sample.
-    useFrame((_state, dt) => { if (!cache) garment?.advance(dt, settings, object.id); });
+    useFrame((_state, dt) => {
+        if (cache || !garment) return;
+        const source = contactSource.current;
+        const observer = source?.observed() ? source : undefined;
+        garment.advance(dt, settings, object.id, observer);
+        if (observer) garment.publishContacts(observer, settings);
+    });
     if (!garment) return null;
     return cache ? <CachedGarment key={ref!.assetId} instance={garment} settings={settings} cache={cache}
-        loop={component.props.loopBake === true} /> : <primitive object={garment.root} />;
+        loop={component.props.loopBake === true} contactSource={contactSource} /> : <primitive object={garment.root} />;
 };
 
 export const GARMENT_COMPONENT: ComponentDefinition = {
