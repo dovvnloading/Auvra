@@ -11,6 +11,7 @@ import { STARTER_MATERIALS } from '../../runtime/materials/starterMaterials';
 import { paintedCopyGraph } from '../../utils/paintedCopies';
 import type { LevelComponent, LevelObject, SkyConfig } from '../../types';
 import { TextureGraphScene, textureGraphScene } from './textureGraphScene';
+import { garmentScene } from './garmentScene';
 
 /**
  * The scenes the rendering pictures are taken of: each small, fixed and built from the engine's own lighting, sky,
@@ -446,4 +447,5 @@ export const SCENES: Record<string, VisualScene> = {
       await frames(6);
     },
   },
+  garment: garmentScene,
 };

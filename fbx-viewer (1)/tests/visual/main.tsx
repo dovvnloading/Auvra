@@ -1,4 +1,5 @@
 import { verifyPaintViewTarget } from './paintViewTarget';
+import { garmentPixelReport } from './garmentScene';
 import './instrument';
 import { clearcoatMapPixels } from './clearcoatMapPixels';
 import React, { useEffect } from 'react';
@@ -185,6 +186,7 @@ const capture = async (name: string) => {
   const udimMip = !onWebGpu && name === 'materials' ? await checkUdimMip() : null;
   return { png, numbers: { ...(udimMip ? { udimMip } : {}), ...(deviceLoss ? { deviceLoss } : {}), loadMs, frameMs, calls, triangles, geometries, textures, programs, gpuBytes: bytes,
     ...(clearcoatMap ? { clearcoatMap } : {}),
+    ...(name === 'garment' ? { garmentPixels: garmentPixelReport } : {}),
     ...(cookBenchmark ? { textureCook: cookBenchmark, textureCookProblem: cookProblem } : {}),
     ...(standardCook ? { graphCook: standardCook, graphCookProblem: cookProblem } : {}),
     ...(bc1Parity ? { bc1Parity } : {}),
