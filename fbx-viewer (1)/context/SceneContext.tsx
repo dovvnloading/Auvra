@@ -1,3 +1,4 @@
+import { projectService } from '../utils/projectService';
 
 import React, { createContext, useContext, useState, ReactNode, useCallback, useMemo, useRef } from 'react';
 import { flushSync } from 'react-dom';
@@ -23,6 +24,12 @@ import type { GameContent } from '../runtime/types';
 
 // Export granular hooks for high-performance consumption
 export { useViewport, useSelection, useAssets, useLevel };
+
+async function readComponentAsset(assetId: string): Promise<ArrayBuffer> {
+    const response = await projectService.fetchAsset(assetId);
+    if (!response.ok) throw new Error('Could not load the project asset.');
+    return response.arrayBuffer();
+}
 
 const SceneContext = createContext<SceneContextType | undefined>(undefined);
 
@@ -294,6 +301,7 @@ const SceneContextComposer: React.FC<{ children: ReactNode, isLoading: boolean, 
 
     // Gameplay code reads content through the runtime context, so the same code runs in the editor and the player.
     const gameContent = useMemo<GameContent>(() => ({
+        readAssetBytes: readComponentAsset,
         models: assets.models,
         blueprints: assets.blueprints,
         attachments: assets.attachments,

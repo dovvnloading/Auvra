@@ -40,6 +40,8 @@ export interface ComponentDefinition {
     label: string;
     description: string;
     props: ComponentPropSchema[];
+    /** Additional structured defaults for custom inspectors, freshly created for each added component. */
+    createProps?: () => Record<string, unknown>;
     Render?: React.FC<ComponentRenderProps>;
     Inspector?: React.FC<ComponentInspectorProps>;
 }

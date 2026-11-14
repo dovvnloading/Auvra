@@ -1,0 +1,73 @@
+import { useState } from 'react';
+import { fireEvent, render, screen } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
+import { GarmentInspector } from '../../components/Environment/GarmentInspector';
+import { createSleevelessTop, readGarmentPattern } from '../../runtime/garments/pattern';
+import type { LevelComponent, LevelObject } from '../../types';
+
+const object: LevelObject = { id: 'dress-form', levelId: 'level', modelId: '', type: 'prop', name: 'Dress form',
+    position: [0, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1] };
+function mount(props: Record<string, unknown> = {}) {
+    const save = vi.fn();
+    function Editor() {
+        const [component, set] = useState<LevelComponent>({ id: 'garment-1', type: 'garment', enabled: true, props });
+        return <GarmentInspector object={object} component={component} onChangeProps={patch => {
+            save(patch); set({ ...component, props: { ...component.props, ...patch } });
+        }} />;
+    }
+    render(<Editor />);
+    return save;
+}
+function choose(label: string, value: string) {
+    fireEvent.change(screen.getByLabelText(label), { target: { value } });
+}
+function editNumber(label: string, value: string) {
+    choose(label, value); fireEvent.blur(screen.getByLabelText(label));
+}
+
+describe('garment pattern inspector', () => {
+    it('commits one measured edit, rejects invalid mesh detail and leaves the source valid', () => {
+        const save = mount();
+        const source = createSleevelessTop();
+        const panel = source.panels[0];
+        expect(save).not.toHaveBeenCalled();
+        editNumber('Grain angle (°)', '30');
+        expect(save).toHaveBeenCalledTimes(1);
+        expect(readGarmentPattern(save.mock.lastCall![0].pattern).panels[0].grain[0]).toBeCloseTo(Math.cos(Math.PI / 6));
+        editNumber('Mesh edge (mm)', '-1');
+        expect(screen.getByRole('alert')).toBeInTheDocument();
+        expect(save).toHaveBeenCalledTimes(1);
+        choose('Point / outgoing edge', panel.boundary[0].id);
+        fireEvent.click(screen.getByRole('button', { name: 'Split edge' }));
+        expect(readGarmentPattern(save.mock.lastCall![0].pattern).panels[0].boundary.length).toBe(panel.boundary.length + 1);
+    });
+    it('unsews an existing seam and stitches the same two edges across panel selection', () => {
+        const pattern = createSleevelessTop();
+        const join = pattern.seams[0];
+        const selectSide = (side: typeof join.a) => {
+            const panel = pattern.panels.find(p => p.id === side.panelId)!;
+            const index = panel.boundary.findIndex(p => p.id === side.from);
+            const forward = panel.boundary[(index + 1) % panel.boundary.length].id === side.to;
+            choose('Pattern panel', panel.id); choose('Point / outgoing edge', forward ? side.from : side.to);
+        };
+        const save = mount({ pattern });
+        selectSide(join.a);
+        fireEvent.click(screen.getByRole('button', { name: 'Unsew edge' }));
+        expect(readGarmentPattern(save.mock.lastCall![0].pattern).seams.length).toBe(3);
+        fireEvent.click(screen.getByRole('button', { name: 'Start seam' }));
+        selectSide(join.b);
+        fireEvent.click(screen.getByRole('button', { name: 'Sew to first edge' }));
+        expect(readGarmentPattern(save.mock.lastCall![0].pattern).seams.length).toBe(4);
+        expect(save).toHaveBeenCalledTimes(2);
+    });
+    it('preserves malformed user data until explicit replacement and lets the artist add a panel', () => {
+        const save = mount({ pattern: { version: 42 } });
+        expect(screen.getByRole('alert')).toBeInTheDocument();
+        expect(save).not.toHaveBeenCalled();
+        fireEvent.click(screen.getByRole('button', { name: 'Replace with starter pattern' }));
+        fireEvent.click(screen.getByRole('button', { name: 'Add panel' }));
+        const pattern = readGarmentPattern(save.mock.lastCall![0].pattern);
+        expect(pattern.panels).toHaveLength(3);
+        expect(screen.getByLabelText('Pattern panel')).toHaveValue(pattern.panels[2].id);
+    });
+});

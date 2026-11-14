@@ -12,6 +12,8 @@ import { DEFAULT_NAV_SETTINGS, resolveNavSettings, type NavSettings } from './na
 
 /** Everything the gameplay runtime needs from loaded content, whether it came from the editor or a game pack. */
 export interface GameContent {
+    /** Resolve a cooked component attachment from this project or game pack. */
+    readAssetBytes?: (assetId: string) => Promise<ArrayBuffer>;
     models: LoadedModelData[];
     blueprints: Blueprint[];
     attachments: AttachmentData[];
