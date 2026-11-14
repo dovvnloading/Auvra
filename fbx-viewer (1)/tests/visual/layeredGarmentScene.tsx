@@ -5,13 +5,18 @@ import type { LevelComponent, LevelObject } from '../../types';
 import { cookComponentGarment, GarmentInstance, readGarmentSettings } from '../../runtime/components/garmentComponent';
 import { readFabricOverrides } from '../../runtime/garments/fitting';
 import { GARMENT_STEP } from '../../runtime/garments/solver';
+import type { GarmentPanelRange } from '../../runtime/garments/pattern';
 import exampleUrl from '../../../docs/examples/Auvra-Layered-Cloth.auvrapack?url';
 import type { SceneSteps, VisualScene } from './scenes';
 
 type ProjectSwatch = { position: LevelObject['position']; component: LevelComponent };
-interface SwatchReport { initialPixels: number; finalPixels: number; motionPixels: number; layerProjections: number; upperY: number }
+interface SwatchReport {
+    initialPixels: number; finalPixels: number; motionPixels: number;
+    initialOverlayPixels: number; finalOverlayPixels: number;
+    layerProjections: number; upperY: number;
+}
 let setup: ProjectSwatch[] = [];
-let active: { garment: GarmentInstance; sample: ProjectSwatch; upperStart: number }[] = [];
+let active: { garment: GarmentInstance; sample: ProjectSwatch; overlay: GarmentPanelRange }[] = [];
 export let layeredPixelReport: SwatchReport[] = [];
 
 function Scene() {
@@ -19,11 +24,13 @@ function Scene() {
     const swatches = useMemo(() => setup.map(sample => {
         const settings = readGarmentSettings(sample.component);
         const cooked = cookComponentGarment(sample.component.props.pattern);
+        const overlay = cooked.panelRanges.find(panel => panel.id === 'overlay');
+        if (!overlay) throw new Error('Missing overlay in ' + sample.component.id);
         const garment = new GarmentInstance(cooked, settings.fabric, settings.selfCollision,
             readFabricOverrides(settings.fabric, sample.component.props.fabricProperties));
         garment.root.position.fromArray(sample.position);
         garment.advance(0, settings, sample.component.id);
-        return { garment, sample, upperStart: cooked.panelRanges[1].vertexStart };
+        return { garment, sample, overlay };
     }), []);
     useEffect(() => {
         camera.lookAt(0, .98, 0);
@@ -65,10 +72,25 @@ async function check(steps: SceneSteps) {
         ctx.drawImage(gl.domElement, 0, 0);
         return ctx.getImageData(0, 0, canvas.width, canvas.height).data;
     }
-    for (const { garment } of active) garment.root.visible = false;
-    const background = await pixels();
-    for (const { garment } of active) garment.root.visible = true;
+    async function overlayPixels() {
+        const ranges = active.map(({ garment }) => ({ ...garment.mesh.geometry.drawRange }));
+        try {
+            for (const { garment, overlay } of active) garment.mesh.geometry.setDrawRange(overlay.indexStart, overlay.indexCount);
+            return await pixels();
+        } finally {
+            active.forEach(({ garment }, i) => garment.mesh.geometry.setDrawRange(ranges[i].start, ranges[i].count));
+        }
+    }
+    const wasVisible = active.map(({ garment }) => garment.root.visible);
+    let background: Uint8ClampedArray;
+    try {
+        for (const { garment } of active) garment.root.visible = false;
+        background = await pixels();
+    } finally {
+        active.forEach(({ garment }, i) => { garment.root.visible = wasVisible[i]; });
+    }
     const initial = await pixels();
+    const initialOverlay = await overlayPixels();
     const corrections = [0, 0];
     for (const [index, s] of active.entries()) {
         const settings = readGarmentSettings(s.sample.component);
@@ -78,7 +100,8 @@ async function check(steps: SceneSteps) {
         }
     }
     const final = await pixels();
-    const masks = [initial, final].map(image => {
+    const finalOverlay = await overlayPixels();
+    const [before, after, overlayBefore, overlayAfter] = [initial, final, initialOverlay, finalOverlay].map(image => {
         const mask = new Uint8Array(canvas.width * canvas.height);
         for (let i = 0; i < mask.length; i++) {
             const k = 4*i;
@@ -89,15 +112,21 @@ async function check(steps: SceneSteps) {
     });
     for (const [index, s] of active.entries()) {
         let initialPixels = 0, finalPixels = 0, motionPixels = 0;
-        for (let i = 0; i < masks[0].length; i++) {
+        let initialOverlayPixels = 0, finalOverlayPixels = 0;
+        for (let i = 0; i < before.length; i++) {
             if (Number(i % canvas.width >= canvas.width / 2) !== index) continue;
-            initialPixels += masks[0][i]; finalPixels += masks[1][i];
-            motionPixels += Number(masks[0][i] !== masks[1][i]);
+            initialPixels += before[i]; finalPixels += after[i];
+            motionPixels += Number(before[i] !== after[i]);
+            initialOverlayPixels += overlayBefore[i];
+            finalOverlayPixels += overlayAfter[i];
         }
-        const report = { initialPixels, finalPixels, motionPixels, layerProjections: corrections[index],
-            upperY: s.garment.simulation.positions[3*s.upperStart+1] };
-        if (Math.min(initialPixels, finalPixels) < 128 || motionPixels < 12 ||
-            (index === 0 ? corrections[index] <= 0 || report.upperY < .8 : corrections[index] !== 0 || report.upperY > -1))
+        const report = { initialPixels, finalPixels, motionPixels, initialOverlayPixels, finalOverlayPixels,
+            layerProjections: corrections[index], upperY: s.garment.simulation.positions[3*s.overlay.vertexStart+1] };
+        const ranked = index === 0;
+        // Both overlays start inside the camera. Only the supported one remains after a second.
+        const overlayVisibleAsExpected = initialOverlayPixels >= 128 && (ranked ? finalOverlayPixels >= 128 : finalOverlayPixels <= 4);
+        if (!overlayVisibleAsExpected || Math.min(initialPixels, finalPixels) < 128 || motionPixels < 12 ||
+            (ranked ? corrections[index] <= 0 || report.upperY < .8 : corrections[index] !== 0 || report.upperY > -1))
             throw new Error('Layer study ' + index + ' failed: ' + JSON.stringify(report));
         layeredPixelReport.push(report);
     }

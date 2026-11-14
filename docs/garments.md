@@ -61,3 +61,5 @@ Changing the pattern, fabric coefficients, self-contact setting or form motion i
 The example opens in live mode and includes a two-second fitting clip. Select **Play fitting clip** to replay it.
 
 The CPU fitting solver uses separate warp, weft and shear constraints, dihedral bending, mass from rest area, stretch-resistant sewing, friction and a bounded fixed clock. A fitting bake records that solver's output. Dense wardrobes spanning multiple components, globally intersection-free collision, native or GPU cloth solving, and nonlinear or hysteretic material fitting remain open work.
+
+The [garment engine development plan](garment-engine-roadmap.md) describes outfit contact, reference fitting, fabric validation, production patterns and performance qualification.

@@ -5,7 +5,7 @@ import { expect, it } from 'vitest';
 import { cookComponentGarment, GarmentInstance, readGarmentSettings } from '../../runtime/components/garmentComponent';
 import { readFabricOverrides } from '../../runtime/garments/fitting';
 import { GARMENT_STEP } from '../../runtime/garments/solver';
-import type { CookedGarment, GarmentPanelRange } from '../../runtime/garments/pattern';
+import { readGarmentPattern, type CookedGarment, type GarmentPanelRange } from '../../runtime/garments/pattern';
 import type { LevelObject } from '../../types';
 
 // Vertical ray through each overlay vertex. The support is a single-valued surface in XZ in this fixture.
@@ -39,6 +39,13 @@ it('drops both archived swatches onto their moving supports and measures contact
     expect(studies).toHaveLength(2);
     // General self-contact stays off in both arms, so only the authored rank can support the overlay.
     expect(studies.every(c => c.props.selfCollision === false)).toBe(true);
+    const matchedInputs = studies.map(component => {
+        const pattern = readGarmentPattern(component.props.pattern);
+        return { ...component.props, color: '', pattern: {
+            ...pattern, panels: pattern.panels.map(panel => ({ ...panel, layer: 0 })),
+        } };
+    });
+    expect(matchedInputs[0]).toEqual(matchedInputs[1]);
     const meshes = studies.map(c => cookComponentGarment(c.props.pattern));
     expect(meshes[0].positions).toEqual(meshes[1].positions);
     expect(meshes[0].indices).toEqual(meshes[1].indices);
@@ -62,10 +69,10 @@ it('drops both archived swatches onto their moving supports and measures contact
                     contacts += stats.layerProjections;
                     if (stats.limited) limitedTicks++;
                 }
-                if (step === 119 && upper.layer === 1) {
+                if (step === 119) {
                     const atOneSecond = clearance(mesh, garment.simulation.positions, base, upper);
-                    expect(Math.min(...atOneSecond)).toBeGreaterThan(.0038);
-                    expect(Math.max(...atOneSecond)).toBeLessThan(.0058);
+                    expect(Math.min(...atOneSecond)).toBeGreaterThan(upper.layer === 1 ? .0038 : -3.4);
+                    expect(Math.max(...atOneSecond)).toBeLessThan(upper.layer === 1 ? .0058 : -3.2);
                 }
             }
             const settled = clearance(mesh, garment.simulation.positions, base, upper);
@@ -76,7 +83,7 @@ it('drops both archived swatches onto their moving supports and measures contact
                 expect(Math.max(...settled)).toBeLessThan(.0058);
             } else {
                 expect(contacts).toBe(0);
-                expect(Math.max(...settled)).toBeLessThan(-2);
+                expect(Math.max(...settled)).toBeLessThan(-10);
             }
         } finally { garment.dispose(); }
     }
