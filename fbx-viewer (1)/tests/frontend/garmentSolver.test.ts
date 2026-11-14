@@ -60,10 +60,12 @@ describe('garment fixed-step preview', () => {
 
     it('bends a folded hinge toward its flat rest chart with a fixed support', () => {
         const uv = new Float32Array([0, 0, .2, 0, 0, .2, 0, -.2]);
-        const mesh: CookedGarment = {            
-...coupon(), positions: new Float32Array([0, 0, 0, .2, 0, 0, 0, .2, 0, 0, -.13, .15]),
-            materialUV: uv, restUV: uv, indices: new Uint32Array([0, 1, 2, 1, 0, 3]), pins: [0, 1, 2], hinges: [{ a: 0, b: 1, c: 2, d: 3 }]        
-};
+        const mesh: CookedGarment = {
+            ...coupon(),
+            positions: new Float32Array([0, 0, 0, .2, 0, 0, 0, .2, 0, 0, -.13, .15]),
+            materialUV: uv, restUV: uv, indices: new Uint32Array([0, 1, 2, 1, 0, 3]),
+            pins: [0, 1, 2], hinges: [{ a: 0, b: 1, c: 2, d: 3 }],
+        };
         const a = new GarmentSimulation(mesh, { ...passive, warp: 0, weft: 0, shear: 0, bend: .05, damping: 4 });
         const b = new GarmentSimulation(mesh, { ...passive, warp: 0, weft: 0, shear: 0, bend: 0, damping: 4 });
         for (let i = 0; i < 30; i++) { a.step(h); b.step(h); }
