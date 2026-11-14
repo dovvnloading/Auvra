@@ -5,6 +5,19 @@ export const dot = (a: Point, b: Point) => a[0] * b[0] + a[1] * b[1] + a[2] * b[
 export const sub = (a: Point, b: Point): Point => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
 const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
 
+/** Limit only ill-conditioned pin contacts. Each free vertex has a shared displacement
+ * budget per solve, so tessellating the opposite surface cannot multiply its travel.
+ * A fast crossing increases the budget by the incoming normal sweep. */
+export class PinCorrectionBudget {
+    private readonly used: Float64Array;
+    constructor(vertexCount: number) { this.used = new Float64Array(vertexCount); }
+    reset(): void { this.used.fill(0); }
+    limit(lambda: number, index: number, gradient: number, maxMove: number): number {
+        return gradient > 0 ? Math.min(lambda, Math.max(0, maxMove - this.used[index]) / gradient) : lambda;
+    }
+    record(index: number, move: number): void { this.used[index] += Math.abs(move); }
+}
+
 /** Closest point on the closed triangle, expressed in barycentric coordinates. */
 export function triangleWeights(p: Point, a: Point, b: Point, c: Point): Barycentric | null {
     const ab = sub(b, a), ac = sub(c, a), ap = sub(p, a);

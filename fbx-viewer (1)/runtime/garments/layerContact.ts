@@ -1,14 +1,17 @@
-import { dot, sub, type Point } from './contactGeometry';
+import { dot, sub, type PinCorrectionBudget, type Point } from './contactGeometry';
 import type { CookedGarment } from './pattern';
 
 export interface LayerFace { a: number; b: number; c: number }
 type Weights = [number, number, number];
 interface Corner { inner: Weights; outer: Weights }
-interface Contact extends Corner { innerFace: LayerFace; outerFace: LayerFace; normal: Point }
+interface Contact extends Corner {
+    innerFace: LayerFace; outerFace: LayerFace; normal: Point;
+    denom: number; guardPins: boolean; maxMove: number; blocked: boolean;
+}
 
 export const GARMENT_LAYER_LIMITS = Object.freeze({
     contacts: 4096, passes: 8, minimumNormalDot: 0.5, recoveryGaps: 3,
-    sweptIterations: 48, sweptToleranceFraction: 0.005,
+    sweptIterations: 48, sweptToleranceFraction: 0.005, maxPinLeverage: 4,
 });
 
 export interface LayerContactStats {
@@ -85,7 +88,7 @@ const vertexAt = (f: LayerFace, k: number) => k === 0 ? f.a : k === 1 ? f.b : f.
  * surface offsets. Known pin constraints take precedence over an impossible contact. */
 export class GarmentLayerContact {
     private readonly contacts: Contact[] = [];
-    constructor(private readonly inverseMass: Float64Array) {}
+    constructor(private readonly inverseMass: Float64Array, private readonly pinBudget: PinCorrectionBudget) {}
     reset(): void { this.contacts.length = 0; }
 
     gather(start: Float32Array, end: Float32Array, inner: LayerFace, outer: LayerFace, gap: number,
@@ -117,7 +120,22 @@ export class GarmentLayerContact {
                 stats.layerCapacityLimited = stats.limited = true;
                 break;
             }
-            this.contacts.push({ ...corner, innerFace: inner, outerFace: outer, normal: lo.normal });
+            let pinned = false, maxGradient = 0, denom = 0;
+            for (let k = 0; k < 3; k++) {
+                const m0 = this.inverseMass[vertexAt(inner, k)], m1 = this.inverseMass[vertexAt(outer, k)];
+                pinned ||= (m0 === 0 && corner.inner[k] > 0) || (m1 === 0 && corner.outer[k] > 0);
+                maxGradient = Math.max(maxGradient, m0 * Math.abs(corner.inner[k]), m1 * Math.abs(corner.outer[k]));
+                denom += m0 * corner.inner[k]**2 + m1 * corner.outer[k]**2;
+            }
+            // A contact close to a pinned edge can have arbitrarily small free barycentric
+            // weight. Resolving it exactly would lever the opposite corner metres away.
+            // Bound travel across all such witnesses and solver sweeps, retaining room
+            // to undo a genuinely fast incoming crossing.
+            const s0 = signedGap(start, inner, outer, corner, prevLo.normal);
+            const maxMove = GARMENT_LAYER_LIMITS.maxPinLeverage * Math.max(gap, gap - s1, Math.abs(s1 - s0));
+            const guardPins = pinned && maxGradient > GARMENT_LAYER_LIMITS.maxPinLeverage * denom;
+            this.contacts.push({ ...corner, innerFace: inner, outerFace: outer, normal: lo.normal,
+                denom, guardPins, maxMove, blocked: denom === 0 });
             stats.layerContacts++;
         }
         return true;
@@ -130,19 +148,25 @@ export class GarmentLayerContact {
                 const q = this.contacts[pass % 2 ? this.contacts.length - 1 - i : i];
                 const violation = gap - signedGap(p, q.innerFace, q.outerFace, q, q.normal);
                 if (violation < 1e-7) continue;
-                let denom = 0;
-                for (let k = 0; k < 3; k++) {
-                    denom += this.inverseMass[vertexAt(q.innerFace, k)] * q.inner[k]**2 +
-                        this.inverseMass[vertexAt(q.outerFace, k)] * q.outer[k]**2;
+                if (q.denom <= 0) continue;
+                const requested = violation / q.denom;
+                let lambda = requested;
+                if (q.guardPins) {
+                    for (let k = 0; k < 3; k++) {
+                        const a = vertexAt(q.innerFace, k), b = vertexAt(q.outerFace, k);
+                        lambda = this.pinBudget.limit(lambda, a, this.inverseMass[a] * Math.abs(q.inner[k]), q.maxMove);
+                        lambda = this.pinBudget.limit(lambda, b, this.inverseMass[b] * Math.abs(q.outer[k]), q.maxMove);
+                    }
+                    if (lambda < requested) q.blocked = true;
+                    if (lambda <= 0) continue;
                 }
-                if (denom < 1e-16) {
-                    if (pass === 0) stats.layerBlocked++;
-                    continue;
-                }
-                const lambda = violation / denom;
                 for (let k = 0; k < 3; k++) {
                     const a = vertexAt(q.innerFace, k), b = vertexAt(q.outerFace, k);
                     const da = -lambda * this.inverseMass[a] * q.inner[k], db = lambda * this.inverseMass[b] * q.outer[k];
+                    if (q.guardPins) {
+                        this.pinBudget.record(a, da);
+                        this.pinBudget.record(b, db);
+                    }
                     for (let j = 0; j < 3; j++) {
                         p[3*a+j] += da * q.normal[j];
                         p[3*b+j] += db * q.normal[j];
@@ -154,7 +178,9 @@ export class GarmentLayerContact {
             if (!corrected) break;
         }
         for (const q of this.contacts) {
-            stats.maxLayerDeficit = Math.max(stats.maxLayerDeficit, gap - signedGap(p, q.innerFace, q.outerFace, q, q.normal));
+            const deficit = gap - signedGap(p, q.innerFace, q.outerFace, q, q.normal);
+            if (deficit > 1e-7 && q.blocked) stats.layerBlocked++;
+            stats.maxLayerDeficit = Math.max(stats.maxLayerDeficit, deficit);
         }
     }
 }

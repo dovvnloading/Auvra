@@ -50,6 +50,52 @@ describe('bounded garment self contact', () => {
         expect(sewn.stats.testedFeatures).toBe(0);
     });
 
+    it('advances to a grazing mid-tick crossing during fast tangential slip on equal-rank panels', () => {
+        const mesh = fixture([[-.1,-.1,0],[.1,-.1,0],[0,.1,0],
+            [-.46,-.01,.04],[-.44,-.01,.04],[-.45,.01,.04]], [0,1,2,3,4,5]);
+        const end = mesh.positions.slice(), contact = new GarmentSelfContact(mesh, new Float64Array([0,0,0,1,1,1]));
+        for (let i = 3; i < 6; i++) {
+            end[3*i] += .9;
+            end[3*i+2] = -.04;
+        }
+        contact.solve(mesh.positions, end, .004);
+        expect(contact.stats.advancementLimited).toBe(0);
+        expect(contact.stats.vertexFace + contact.stats.edgeEdge).toBeGreaterThan(0);
+        for (let i = 3; i < 6; i++) expect(end[3*i+2]).toBeGreaterThan(.00399);
+    });
+
+    it('bounds the response at a nearly fixed barycentric witness on an unranked panel', () => {
+        const mesh = fixture([[-.04,.0004,0],[.04,.0004,0],[0,.0009,0],[-.1,0,.001],[.1,0,.001],[0,.2,.001]], [0,1,2,3,4,5]);
+        const end = mesh.positions.slice(), contact = new GarmentSelfContact(mesh, new Float64Array([0,0,0,0,0,1]));
+        contact.solve(mesh.positions, end, .004);
+        expect(end.slice(0, 15)).toEqual(mesh.positions.slice(0, 15));
+        expect(end[17]).toBeGreaterThan(.001);
+        expect(end[17]).toBeCloseTo(.017, 6);
+        expect(contact.stats.pinLimited).toBeGreaterThan(0);
+    });
+
+    it('finds the last overlapping patch on an axis-aligned strip without spending the whole broad-phase budget on disjoint triangles', () => {
+        const vertices: number[][] = [], indices: number[] = [];
+        const faces = 540;
+        for (let i = 0; i <= faces; i++) {
+            const y = .03 * Math.min(i, faces - 1);
+            const z = i === faces ? .001 : 0;
+            vertices.push([0,y,z], [.005,y,z], [0,y+.005,z]);
+            indices.push(3*i, 3*i+1, 3*i+2);
+        }
+        for (const rotate of [false, true]) {
+            const mesh = fixture(rotate ? vertices.map(([x,y,z]) => [x, z, y]) : vertices, indices);
+            const normalAxis = rotate ? 1 : 2;
+            const mass = new Float64Array(vertices.length);
+            mass.fill(1, 3*faces);
+            const contact = new GarmentSelfContact(mesh, mass), end = mesh.positions.slice();
+            contact.solve(mesh.positions, end, .004);
+            expect(contact.stats.broadPhaseLimited).toBe(false);
+            expect(contact.stats.facePairs).toBe(1);
+            for (let i = 3*faces; i < vertices.length; i++) expect(end[3*i + normalAxis]).toBeGreaterThan(.00399);
+        }
+    });
+
     it('reports feature capacity exhaustion on a crowded frame', () => {
         const mesh = fixture([...floor, ...upper], [0, 1, 2, 3, 4, 5]);
         const p = mesh.positions.slice();

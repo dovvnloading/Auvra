@@ -26,6 +26,7 @@ function Reading({ sample, limits }: GarmentContactView) {
         {self && <dl>
             <div className={row}><dt>Cloth face pairs / feature tests</dt><dd>{self.facePairs} / {self.testedFeatures}</dd></div>
             {self.advancementLimited > 0 && <div className={row}><dt>Unresolved swept feature tests</dt><dd>{self.advancementLimited}</dd></div>}
+            {self.pinLimited > 0 && <div className={row}><dt>Self-contact corrections limited by pins</dt><dd>{self.pinLimited}</dd></div>}
             {sample.sameLayer && <div className={row}><dt>Vertex–face / edge–edge corrections</dt><dd>{self.vertexFace} / {self.edgeEdge}</dd></div>}
             {sample.orderedLayers && <>
                 <div className={row}><dt>Layer pairs / fallback pairs</dt><dd>{self.layeredPairs} / {self.layerFallbackPairs}</dd></div>

@@ -1,6 +1,6 @@
 import type { CookedGarment } from './pattern';
 import { GARMENT_LAYER_LIMITS, GarmentLayerContact, hasGarmentLayers, newLayerStats, type LayerContactStats } from './layerContact';
-import { dot, sub, segmentWeights, triangleWeights, type Point } from './contactGeometry';
+import { dot, sub, PinCorrectionBudget, segmentWeights, triangleWeights, type Point } from './contactGeometry';
 type Edge = [number, number];
 interface Face { a: number; b: number; c: number; edges: [number, number, number] }
 interface Bounds { min: Point; max: Point; face: number }
@@ -47,11 +47,12 @@ export interface SelfContactStats extends LayerContactStats {
     broadPhaseLimited: boolean;
     featureCapacityLimited: boolean;
     advancementLimited: number;
+    pinLimited: number;
 }
 
 const EMPTY_CONTACT_STATS: Readonly<SelfContactStats> = Object.freeze({
     ...newLayerStats(), facePairs: 0, testedFeatures: 0, vertexFace: 0, edgeEdge: 0,
-    limited: false, broadPhaseLimited: false, featureCapacityLimited: false, advancementLimited: 0,
+    limited: false, broadPhaseLimited: false, featureCapacityLimited: false, advancementLimited: 0, pinLimited: 0,
 });
 
 /** Bounded preview of contacts within one cooked instance. Each query follows linear
@@ -72,10 +73,12 @@ export class GarmentSelfContact {
     private broadTests = 0;
     private readonly faceRanks: Uint8Array | null;
     private readonly layerContact: GarmentLayerContact | null;
+    private readonly pinBudget: PinCorrectionBudget;
 
     constructor(mesh: CookedGarment, inverseMass: Float64Array, maxFeatures = 40000, maxBroadTests = 120000, private readonly includeSameLayer = true) {
         this.faceRanks = hasGarmentLayers(mesh) ? new Uint8Array(mesh.indices.length / 3) : null;
-        this.layerContact = this.faceRanks ? new GarmentLayerContact(inverseMass) : null;
+        this.pinBudget = new PinCorrectionBudget(inverseMass.length);
+        this.layerContact = this.faceRanks ? new GarmentLayerContact(inverseMass, this.pinBudget) : null;
         if (this.faceRanks) {
             for (const panel of mesh.panelRanges) {
                 this.faceRanks.fill(panel.layer ?? 0, panel.indexStart / 3, (panel.indexStart + panel.indexCount) / 3);
@@ -112,6 +115,7 @@ export class GarmentSelfContact {
 
     reset(): void {
         this.layerContact?.reset();
+        this.pinBudget.reset();
         Object.assign(this.stats, EMPTY_CONTACT_STATS);
     }
 
@@ -134,17 +138,33 @@ export class GarmentSelfContact {
                 box.max[j] = Math.max(start[3 * a + j], start[3 * b + j], start[3 * c + j], positions[3 * a + j], positions[3 * b + j], positions[3 * c + j]);
             }
         }
-        this.bounds.sort((a, b) => a.min[0] - b.min[0] || a.face - b.face);
+        // Estimate work with projected box width / occupied span. A narrow vertical strip
+        // has quadratic overlap on X even when almost every face is separated on Y.
+        // Keep the established order for ordinary garments and switch only for a
+        // strongly directional layout to avoid changing their contact sweep order.
+        const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity], widths = [0, 0, 0];
+        for (const box of this.bounds) {
+            for (let j = 0; j < 3; j++) {
+                min[j] = Math.min(min[j], box.min[j]);
+                max[j] = Math.max(max[j], box.max[j]);
+                widths[j] += box.max[j] - box.min[j];
+            }
+        }
+        const cost = widths.map((w, j) => w / Math.max(1e-12, max[j] - min[j]));
+        const best = cost.indexOf(Math.min(...cost));
+        const axis = cost[best] * 4 < cost[0] ? best : 0;
+        this.bounds.sort((a, b) => a.min[axis] - b.min[axis] || a.face - b.face);
         for (let i = 0; i < this.bounds.length; i++) {
             const a = this.bounds[i];
             for (let j = i + 1; j < this.bounds.length; j++) {
                 const b = this.bounds[j];
-                if (b.min[0] > a.max[0]) break;
+                if (b.min[axis] > a.max[axis]) break;
                 if (++this.broadTests > this.maxBroadTests) {
                     this.stats.broadPhaseLimited = this.stats.limited = true;
                     return;
                 }
-                if (b.min[1] > a.max[1] || a.min[1] > b.max[1] || b.min[2] > a.max[2] || a.min[2] > b.max[2]) continue;
+                if (a.min[0] > b.max[0] || b.min[0] > a.max[0] || a.min[1] > b.max[1] || b.min[1] > a.max[1] ||
+                    a.min[2] > b.max[2] || b.min[2] > a.max[2]) continue;
                 const rankA = this.faceRanks?.[a.face] ?? 0, rankB = this.faceRanks?.[b.face] ?? 0;
                 const ranked = rankA !== rankB;
                 if (!ranked && !this.includeSameLayer) continue;
@@ -168,7 +188,7 @@ export class GarmentSelfContact {
                         const key = v * this.faces.length + id;
                         if (this.vertexFaceSeen.has(key)) continue;
                         this.vertexFaceSeen.add(key);
-                        if (!this.feature(start, positions, gap, [v, tri.a, tri.b, tri.c], true, ranked)) return;
+                        if (!this.feature(start, positions, gap, [v, tri.a, tri.b, tri.c], true)) return;
                     }
                 }
                 for (const ei of fa.edges) for (const ej of fb.edges) {
@@ -176,13 +196,13 @@ export class GarmentSelfContact {
                     if (this.edgeEdgeSeen.has(key)) continue;
                     this.edgeEdgeSeen.add(key);
                     const u = this.edges[ei], v = this.edges[ej];
-                    if (!this.feature(start, positions, gap, [u[0], u[1], v[0], v[1]], false, ranked)) return;
+                    if (!this.feature(start, positions, gap, [u[0], u[1], v[0], v[1]], false)) return;
                 }
             }
         }
     }
 
-    private feature(start: Float32Array, end: Float32Array, gap: number, ids: Stencil, vf: boolean, ranked: boolean): boolean {
+    private feature(start: Float32Array, end: Float32Array, gap: number, ids: Stencil, vf: boolean): boolean {
         if (this.stats.testedFeatures >= this.maxFeatures) {
             this.stats.featureCapacityLimited = this.stats.limited = true;
             return false;
@@ -199,12 +219,9 @@ export class GarmentSelfContact {
         const motion = ids.map(i => sub(sample(end, end, i, 0), sample(start, start, i, 0)));
         // Subtract common translation before bounding relative speed along t in [0,1].
         const relative = motion.map(v => sub(v, motion[0]));
-        const speeds = relative.map(length);
-        const maxSpeed = vf ? Math.max(speeds[1], speeds[2], speeds[3]) : speeds[1] + Math.max(speeds[2], speeds[3]);
-        const tolerance = Math.max(1e-7, gap * (ranked ? GARMENT_LAYER_LIMITS.sweptToleranceFraction : 0.001));
+        const tolerance = Math.max(1e-7, gap * GARMENT_LAYER_LIMITS.sweptToleranceFraction);
         let t = 0;
-        const iterations = ranked ? GARMENT_LAYER_LIMITS.sweptIterations : 12;
-        for (let iteration = 0; iteration < iterations; iteration++) {
+        for (let iteration = 0; iteration < GARMENT_LAYER_LIMITS.sweptIterations; iteration++) {
             const s = separation(ids.map(i => sample(start, end, i, t)), vf);
             if (!s) return true;
             if (s.distance <= gap + tolerance) {
@@ -217,25 +234,33 @@ export class GarmentSelfContact {
                     denom += this.inverseMass[ids[k]] * w * w;
                 }
                 if (signedEnd < gap && denom > 0) {
-                    const lambda = (gap - signedEnd) / denom;
+                    const requested = (gap - signedEnd) / denom;
+                    let lambda = requested;
+                    const maxGradient = Math.max(...ids.map((id, k) => this.inverseMass[id] * Math.abs(s.weights[k])));
+                    const guardPins = maxGradient > GARMENT_LAYER_LIMITS.maxPinLeverage * denom &&
+                        ids.some((id, k) => this.inverseMass[id] === 0 && s.weights[k] !== 0);
+                    if (guardPins) {
+                        const maxMove = GARMENT_LAYER_LIMITS.maxPinLeverage * Math.max(gap, gap - signedEnd);
+                        for (let k = 0; k < 4; k++) {
+                            lambda = this.pinBudget.limit(lambda, ids[k], this.inverseMass[ids[k]] * Math.abs(s.weights[k]), maxMove);
+                        }
+                        if (lambda < requested) this.stats.pinLimited++;
+                        if (lambda <= 0) return true;
+                    }
                     for (let k = 0; k < 4; k++) {
                         const amount = this.inverseMass[ids[k]] * s.weights[k] * lambda;
+                        if (guardPins) this.pinBudget.record(ids[k], amount);
                         for (let j = 0; j < 3; j++) end[3 * ids[k] + j] += amount * s.normal[j];
                     }
                     if (vf) this.stats.vertexFace++; else this.stats.edgeEdge++;
                 }
                 return true;
             }
-            let closingSpeed = maxSpeed;
-            if (ranked) {
-                // The current closest-feature normal separates these convex primitives.
-                // A bound on how quickly that fixed plane can close is tighter than the
-                // full relative speed during tangential sliding. Every constituent
-                // vertex moves linearly, so this cannot skip first contact.
-                const speed = relative.map(v => dot(v, s.normal));
-                closingSpeed = vf ? Math.max(speed[1], speed[2], speed[3]) :
-                    Math.max(speed[2], speed[3]) - Math.min(0, speed[1]);
-            }
+            // The closest-feature normal separates these convex primitives. Bound the
+            // closing speed of that plane, including every linearly moving vertex.
+            const speed = relative.map(v => dot(v, s.normal));
+            const closingSpeed = vf ? Math.max(speed[1], speed[2], speed[3]) :
+                Math.max(speed[2], speed[3]) - Math.min(0, speed[1]);
             if (closingSpeed <= 1e-12) return true;
             const advance = (s.distance - gap) / closingSpeed;
             if (t + advance > 1) return true;

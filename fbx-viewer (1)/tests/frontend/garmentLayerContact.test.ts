@@ -88,6 +88,21 @@ describe('authored layer ordering within one cooked garment', () => {
         expect(bounded.stats.layerProjections).toBeLessThanOrEqual(GARMENT_LAYER_LIMITS.passes);
     });
 
+    it('limits leverage near a pinned edge and exposes the unresolvable thickness instead of launching a free corner', () => {
+        const lower = panel('pad', 0, 0, true, [[-.04,.0004],[.04,.0004],[0,.0009]]);
+        const top = panel('top', 1, 0, false, [[-.1,0],[.1,0],[0,.2]]);
+        top.pins = ['v0', 'v1'];
+        const mesh = cook(lower, top), end = mesh.positions.slice();
+        const contact = new GarmentSelfContact(mesh, masses(mesh));
+        contact.solve(mesh.positions, end, clearance);
+        expect(end.slice(0, 15)).toEqual(mesh.positions.slice(0, 15));
+        // Exact recovery at the closest witness requires 2 m movement of a 20 cm panel.
+        expect(end[17]).toBeGreaterThan(0);
+        expect(end[17]).toBeCloseTo(.016, 6);
+        expect(contact.stats.layerBlocked).toBeGreaterThan(0);
+        expect(contact.stats.maxLayerDeficit).toBeGreaterThan(.003);
+    });
+
     it('defers a back-facing fold to its approached side, and never ranks equal layer IDs', () => {
         const inner = panel('inner', 3, 0, true), outer = panel('outer', 4, -.002);
         outer.placement.u = [-1,0,0];
