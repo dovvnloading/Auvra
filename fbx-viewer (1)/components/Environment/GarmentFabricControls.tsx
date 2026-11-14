@@ -2,6 +2,8 @@ import { useRef, useState } from 'react';
 import type { ComponentInspectorProps } from '../../runtime/components/types';
 import { FABRIC_FIELDS, fabricFieldNames, fabricPreset, readFabricOverrides, type FabricField } from '../../runtime/garments/fitting';
 
+import { GarmentSwatchControls } from './GarmentSwatchControls';
+
 type Props = Pick<ComponentInspectorProps, 'component' | 'onChangeProps'>;
 
 export function GarmentFabricControls({ component, onChangeProps }: Props) {
@@ -49,6 +51,8 @@ export function GarmentFabricControls({ component, onChangeProps }: Props) {
         <button type="button" disabled={!overrides}
             className="rounded border border-gray-700 px-2 py-1 disabled:opacity-40"
             onClick={() => { setError(''); onChangeProps({ fabricProperties: {} }); }}>Restore preset values</button>
+        <GarmentSwatchControls key={component.id} fabric={selected} overrides={overrides} weft={overrides?.weft ?? preset.weft}
+            onApply={fabricProperties => { setError(''); onChangeProps({ fabricProperties }); }} />
         {error && <p className="text-amber-400" role="alert">{error}</p>}
     </details>;
 }

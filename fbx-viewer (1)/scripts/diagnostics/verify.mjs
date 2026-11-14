@@ -462,6 +462,7 @@ const EXEMPT = new Map(Object.entries({
   'runtime/garments/bake.ts': 'pure-derived-state',
   'runtime/garments/cache.ts': 'pure-utility',
   'runtime/garments/contactGeometry.ts': 'hot-loop',
+  'runtime/garments/swatchCalibration.ts': 'pure-derived-state',
   'runtime/garments/fitting.ts': 'pure-derived-state',
   'runtime/garments/selfContact.ts': 'hot-loop',
   'runtime/garments/strain.ts': 'hot-loop',

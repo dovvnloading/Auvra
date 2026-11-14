@@ -35,3 +35,26 @@ it('drops invalid and redundant imported values while preserving explicit zero s
         arealDensity: '100', gravity: 200 })).toEqual({ shear: 0 });
     expect(readFabricOverrides('cotton', { warp: 1800 })).toBeUndefined();
 });
+
+it('previews a measurement fit, then saves only its coefficients together with existing overrides', () => {
+    const save = vi.fn();
+    const component: LevelComponent = { id: 'fit', type: 'garment', enabled: true,
+        props: { fabric: 'linen', fabricProperties: { damping: 4 } } };
+    render(<GarmentFabricControls component={component} onChangeProps={save} />);
+    fireEvent.click(screen.getByText('Fabric properties'));
+    fireEvent.click(screen.getByText('Fit from swatch measurements'));
+    const source = screen.getByLabelText('Swatch measurements');
+    const header = 'test,width_mm,gauge_mm,displacement_mm,force_n,mass_g';
+    fireEvent.change(source, { target: { value: header + '\nmass,100,100,,,2.4' } });
+    expect(screen.getByRole('table')).toHaveTextContent('240 g/m²');
+    expect(save).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Apply fitted properties' }));
+    expect(save).toHaveBeenCalledTimes(1);
+    const applied = save.mock.calls[0][0].fabricProperties;
+    expect(applied.arealDensity).toBeCloseTo(.24, 12);
+    expect(applied.damping).toBe(4);
+    expect(applied.warp).toBeUndefined();
+    fireEvent.change(source, { target: { value: header + '\nwarp,0,100,2,1,' } });
+    expect(screen.getByRole('alert')).toHaveTextContent('positive unloaded dimensions');
+    expect(screen.queryByRole('button', { name: 'Apply fitted properties' })).toBeNull();
+});
