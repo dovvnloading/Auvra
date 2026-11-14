@@ -126,6 +126,19 @@ class SharedPresets {
         return result;
     }
 
+    /** Drain writes started from the shared-preset UI before snapshotting a rename. */
+    async flushPendingWrites(): Promise<void> {
+        // The editor can queue another preset edit while an earlier write runs.
+        // Observe the final queued result, not an intermediate successful one.
+        let pending = this.writes;
+        for (;;) {
+            const saved = await pending;
+            if (saved === false) throw new Error('A shared parameter preset could not be saved. Retry it before renaming.');
+            if (pending === this.writes) return;
+            pending = this.writes;
+        }
+    }
+
     put(graphId: string, preset: GraphPreset): Promise<boolean> {
         return this.write(current => {
             const others = current.filter(candidate => candidate.graphId !== graphId);
