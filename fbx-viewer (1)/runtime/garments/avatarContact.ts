@@ -1,3 +1,4 @@
+import { AvatarSurfaceFeatures, type SurfaceFeatureStats } from './avatarFeatureContact';
 import { dot, sub, triangleWeights, type Barycentric, type Point } from './contactGeometry';
 
 /** An oriented proxy in the cloth simulation frame. Both buffers describe the same
@@ -10,11 +11,14 @@ export interface GarmentAvatarSurface {
 
 export const AVATAR_CONTACT_LIMITS = Object.freeze({
     vertices: 4096, triangles: 8192, nodeVisits: 240000, featurePairs: 40000,
+    surfaceNodeVisits: 360000, surfaceFeaturePairs: 60000,
 });
 
-export interface AvatarContactStats {
+export interface AvatarContactStats extends SurfaceFeatureStats {
+    vertexPhaseLimited: boolean;
     nodeVisits: number;
     testedFeatures: number;
+    /** Primary cloth-vertex corrections. Edge and reciprocal counters are reported separately. */
     corrections: number;
     limited: boolean;
     invalid: boolean;
@@ -104,12 +108,18 @@ function shell(q: Point, f: Triangle, gap: number): Contact | null {
     return { weights: w, normal: faceNormal, correction: gap - signed };
 }
 
-/** Swept BVH and one-way cloth-vertex / animated-triangle contact, in owner-local metres.
- * Covers oriented surface crossings for linear trajectories and discrete closest-feature
- * clearance. Edge-edge, triangle-interior cloth contact and deep initial entanglement
- * require a richer avatar contact solver. Degenerate triangles contribute no constraints. */
+/** Kinematic collision against a bounded, animated triangle proxy. With cooked cloth topology,
+ * oriented vertex/face tests are complemented by two-sided reciprocal vertex/face and
+ * interior edge/edge constraints. The feature counters expose any exhausted budget.
+ * Coplanar nonparallel segments use endpoint entry events. Parallel/coincident edges,
+ * degenerate faces and deep initial intersections need suitable starting clearance. */
 export class GarmentAvatarContact {
-    readonly stats: AvatarContactStats = { nodeVisits: 0, testedFeatures: 0, corrections: 0, limited: false, invalid: false };
+    readonly stats: AvatarContactStats = {
+        nodeVisits: 0, testedFeatures: 0, corrections: 0, limited: false, invalid: false, vertexPhaseLimited: false,
+        testedEdges: 0, testedBodyVertices: 0, edgeCorrections: 0, bodyVertexCorrections: 0,
+        featurePairsLimited: false, featureNodesLimited: false, featureNodeVisits: 0,
+    };
+    private readonly surface: AvatarSurfaceFeatures | null;
     private sourceIndices?: GarmentAvatarSurface['indices'];
     private readonly nodes: Node[] = [];
     private readonly stack: number[] = [];
@@ -118,12 +128,21 @@ export class GarmentAvatarContact {
     private valid = false;
     constructor(private readonly inverseMass: Float64Array,
         private readonly maxFeatures: number = AVATAR_CONTACT_LIMITS.featurePairs,
-        private readonly maxVisits: number = AVATAR_CONTACT_LIMITS.nodeVisits) { }
+        private readonly maxVisits: number = AVATAR_CONTACT_LIMITS.nodeVisits,
+        clothIndices?: Uint32Array,
+        private readonly maxSurfacePairs: number = AVATAR_CONTACT_LIMITS.surfaceFeaturePairs,
+        private readonly maxSurfaceVisits: number = AVATAR_CONTACT_LIMITS.surfaceNodeVisits) {
+        this.surface = clothIndices ? new AvatarSurfaceFeatures(clothIndices, inverseMass) : null;
+    }
 
     prepare(surface: GarmentAvatarSurface, from = 0, to = 1, continuePrevious = false): boolean {
         const wasValid = this.valid;
         const { positions, previousPositions, indices } = surface;
-        Object.assign(this.stats, { nodeVisits: 0, testedFeatures: 0, corrections: 0, limited: false, invalid: false });
+        Object.assign(this.stats, {
+            nodeVisits: 0, testedFeatures: 0, corrections: 0, limited: false, invalid: false,
+            vertexPhaseLimited: false, testedEdges: 0, testedBodyVertices: 0, edgeCorrections: 0, bodyVertexCorrections: 0,
+            featurePairsLimited: false, featureNodesLimited: false, featureNodeVisits: 0
+        });
         this.valid = false;
         if (positions.length > AVATAR_CONTACT_LIMITS.vertices * 3 || indices.length > AVATAR_CONTACT_LIMITS.triangles * 3) {
             this.stats.limited = true;
@@ -203,8 +222,36 @@ export class GarmentAvatarContact {
         return [get(ids[k]), get(ids[k + 1]), get(ids[k + 2])];
     }
 
+    /** Traverses the refitted swept avatar BVH; the supplemental contact budget is
+     * independent from primary particle contacts so a crowded layer can degrade visibly. */
+    private querySurface(lo: Point, hi: Point, visit: (face: number) => boolean): boolean {
+        this.stack.length = 0;
+        this.stack.push(0);
+        while (this.stack.length) {
+            if (this.stats.featureNodeVisits >= this.maxSurfaceVisits) {
+                this.stats.featureNodesLimited = true;
+                return false;
+            }
+            this.stats.featureNodeVisits++;
+            const n = this.nodes[this.stack.pop()!];
+            if (n.lo[0] > hi[0] || n.hi[0] < lo[0] || n.lo[1] > hi[1] || n.hi[1] < lo[1] || n.lo[2] > hi[2] || n.hi[2] < lo[2]) continue;
+            if (n.face < 0) this.stack.push(n.right, n.left);
+            else if (!visit(n.face)) return false;
+        }
+        return true;
+    }
+
     solve(start: Float32Array, end: Float32Array, gap: number, friction: Friction): void {
-        if (!this.valid || this.stats.limited) return;
+        if (!this.valid) return;
+        if (!this.stats.vertexPhaseLimited) this.projectVertices(start, end, gap, friction);
+        if (this.surface && !this.stats.featurePairsLimited && !this.stats.featureNodesLimited) {
+            this.surface.project(start, end, gap, this.start, this.end, this.sourceIndices!,
+                (lo, hi, visit) => this.querySurface(lo, hi, visit), friction, this.stats, this.maxSurfacePairs);
+        }
+        this.stats.limited = this.stats.vertexPhaseLimited || this.stats.featurePairsLimited || this.stats.featureNodesLimited;
+    }
+
+    private projectVertices(start: Float32Array, end: Float32Array, gap: number, friction: Friction): void {
         for (let i = 0; i < this.inverseMass.length; i++) {
             if (this.inverseMass[i] === 0) continue;
             const k = 3 * i;
@@ -214,12 +261,12 @@ export class GarmentAvatarContact {
             this.stack.length = 0;
             this.stack.push(0);
             while (this.stack.length) {
-                if (this.stats.nodeVisits >= this.maxVisits) { this.stats.limited = true; return; }
+                if (this.stats.nodeVisits >= this.maxVisits) { this.stats.vertexPhaseLimited = true; return; }
                 this.stats.nodeVisits++;
                 const n = this.nodes[this.stack.pop()!];
                 if (n.lo[0] > hi[0] || n.hi[0] < lo[0] || n.lo[1] > hi[1] || n.hi[1] < lo[1] || n.lo[2] > hi[2] || n.hi[2] < lo[2]) continue;
                 if (n.face < 0) { this.stack.push(n.right, n.left); continue; }
-                if (this.stats.testedFeatures >= this.maxFeatures) { this.stats.limited = true; return; }
+                if (this.stats.testedFeatures >= this.maxFeatures) { this.stats.vertexPhaseLimited = true; return; }
                 this.stats.testedFeatures++;
                 const a = this.triangle(this.start, n.face), b = this.triangle(this.end, n.face);
                 const hit = crossing(p, q, a, b, gap) ?? shell(q, b, gap);

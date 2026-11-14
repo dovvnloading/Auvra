@@ -223,7 +223,7 @@ export class GarmentSimulation {
                 return { from, to };
             });
             if (avatar) {
-                this.avatarContact ??= new GarmentAvatarContact(this.inverseMass);
+                this.avatarContact ??= new GarmentAvatarContact(this.inverseMass, undefined, undefined, this.mesh.indices);
                 const begin = clamp((tick * GARMENT_STEP - carryBefore) / available, 0, 1);
                 this.avatarContact.prepare(avatar, begin, end, true);
             }
