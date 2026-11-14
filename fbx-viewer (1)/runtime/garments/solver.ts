@@ -2,6 +2,8 @@ import type { ClothCollider, ClothWind } from '../cloth';
 import type { WindVec } from '../wind';
 import type { CookedGarment } from './pattern';
 import { closestAxisTriangle, type Point } from './contactGeometry';
+import { GarmentAvatarContact, type GarmentAvatarSurface, type AvatarContactStats } from './avatarContact';
+export type { GarmentAvatarSurface } from './avatarContact';
 import { GarmentSelfContact, type SelfContactStats } from './selfContact';
 
 /** SI units. This fixed-budget preview uses independent warp, weft and shear terms. */
@@ -95,6 +97,8 @@ export class GarmentSimulation {
     readonly mass: number;
     time = 0;
     droppedTime = 0;
+    private avatarContact: GarmentAvatarContact | null = null;
+    get avatarContactStats(): Readonly<AvatarContactStats> | null { return this.avatarContact?.stats ?? null; }
     private readonly selfContact: GarmentSelfContact | null;
     get selfContactStats(): Readonly<SelfContactStats> | null { return this.selfContact?.stats ?? null; }
     private readonly mesh: CookedGarment;
@@ -173,6 +177,7 @@ export class GarmentSimulation {
         this.previous.set(this.positions);
         this.lastPins.set(this.positions);
         if (this.selfContact) this.selfContact.reset();
+        this.avatarContact = null;
         this.mesh.seams.forEach(({ a, b }, i) => {
             const p = this.positions, u = 3 * a, v = 3 * b;
             this.seamRest[i] = Math.hypot(p[u] - p[v], p[u + 1] - p[v + 1], p[u + 2] - p[v + 2]);
@@ -187,7 +192,8 @@ export class GarmentSimulation {
      * A changing capsule radius/height gets endpoint contact. Exact point sweeps cover translating,
      * fixed-size analytic capsules. The first observation of each ID supplies its initial pose. */
     step(dt: number, matrix: ArrayLike<number> = IDENTITY, wind: ClothWind | null = null,
-        colliders: readonly GarmentCapsule[] = [], ground: number | null = null, down: WindVec = DOWN): number {
+        colliders: readonly GarmentCapsule[] = [], ground: number | null = null, down: WindVec = DOWN,
+        avatar: GarmentAvatarSurface | null = null): number {
         if (!Number.isFinite(dt) || dt <= 0) return 0;
         if (!this.placed) this.reset(matrix);
         for (const i of this.mesh.pins) place(this.incomingPins, i * 3, this.mesh.positions, matrix);
@@ -197,6 +203,7 @@ export class GarmentSimulation {
         const carryBefore = this.carry;
         this.carry += available;
         const steps = Math.min(MAX_TICKS, Math.floor((this.carry + 1e-12) / GARMENT_STEP));
+        if (!avatar) this.avatarContact = null;
         const spans: BodySample[] = [];
         const nextBodies = new Map<string | number, GarmentCapsule>();
         for (let i = 0; i < colliders.length; i++) {
@@ -215,6 +222,11 @@ export class GarmentSimulation {
                 this.lastTickBodies.set(s.key, to);
                 return { from, to };
             });
+            if (avatar) {
+                this.avatarContact ??= new GarmentAvatarContact(this.inverseMass);
+                const begin = clamp((tick * GARMENT_STEP - carryBefore) / available, 0, 1);
+                this.avatarContact.prepare(avatar, begin, end, true);
+            }
             this.substep(wind, motion, ground, down, end);
             this.carry -= GARMENT_STEP;
             this.time += GARMENT_STEP;
@@ -257,13 +269,19 @@ export class GarmentSimulation {
             if (this.material.seamStiffness > 0) this.sew(remaining);
             this.contact(motion, ground);
             if (pass >= PASSES - 2) this.faceContact(motion);
+            if (pass === PASSES - 2) this.applyAvatarContact();
         }
         if (this.selfContact) {
             this.selfContact.solve(this.start, p, 2 * this.material.thickness);
             this.contact(motion, ground);
             this.faceContact(motion);
         }
+        this.applyAvatarContact();
         for (let j = 0; j < p.length; j++) this.previous[j] = this.start[j] + this.frictionShift[j];
+    }
+
+    private applyAvatarContact(): void {
+        this.avatarContact?.solve(this.start, this.positions, this.material.thickness, (...args) => this.friction(...args));
     }
 
     private applyWind(wind: ClothWind): void {
