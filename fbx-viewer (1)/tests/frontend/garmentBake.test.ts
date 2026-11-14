@@ -45,12 +45,13 @@ describe('fitting clip and live component parity', () => {
 
     it('invalidates pre-fix contact bakes while retaining legacy clips with no cloth contacts', async () => {
         const options = fixture(), pattern = options.pattern;
-        const legacy = (input: FittingBakeInput) => createHash('sha256').update(JSON.stringify([
-            1, readGarmentPattern(input.pattern), input.fabric, input.animateTorso, input.selfCollision,
+        const legacy = (input: FittingBakeInput, revision = 1) => createHash('sha256').update(JSON.stringify([
+            revision, readGarmentPattern(input.pattern), input.fabric, input.animateTorso, input.selfCollision,
         ])).digest('hex');
         expect(await fittingBakeRecipe(options)).toBe(legacy(options));
         const self = { ...options, selfCollision: true };
         expect(await fittingBakeRecipe(self)).not.toBe(legacy(self));
+        expect(await fittingBakeRecipe(self)).not.toBe(legacy(self, 2));
         pattern.panels[0].layer = 1;
         expect(await fittingBakeRecipe(options)).not.toBe(legacy(options));
         pattern.panels[1].layer = 1;

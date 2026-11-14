@@ -25,8 +25,9 @@ export function fittingBakeRecipe(input: FittingBakeInput): Promise<string> {
     const pattern = readGarmentPattern(input.pattern);
     const firstLayer = pattern.panels[0].layer ?? 0;
     const usesClothContact = input.selfCollision || pattern.panels.some(p => (p.layer ?? 0) !== firstLayer);
-    // Revision 2 changes cloth-to-cloth contact. Keep clips from the unaffected fitting path usable.
-    const recipe: unknown[] = [usesClothContact ? 2 : 1, pattern, input.fabric, input.animateTorso, input.selfCollision];
+    // Revision 3 includes the completed pin-budget and swept-contact fixes. Revision 2 was
+    // published during the transition. Clips without cloth-to-cloth contact remain compatible.
+    const recipe: unknown[] = [usesClothContact ? 3 : 1, pattern, input.fabric, input.animateTorso, input.selfCollision];
     const overrides = readFabricOverrides(input.fabric, input.material);
     if (overrides) recipe.push(overrides);
     const canonical = JSON.stringify(recipe);
