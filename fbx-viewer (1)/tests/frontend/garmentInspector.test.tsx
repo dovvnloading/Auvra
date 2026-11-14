@@ -70,6 +70,27 @@ describe('garment pattern inspector', () => {
         expect(pattern.panels).toHaveLength(3);
         expect(screen.getByLabelText('Pattern panel')).toHaveValue(pattern.panels[2].id);
     });
+    it('edits a layer, duplicates and selects the independent panel, and adds new pieces at the active rank', () => {
+        const save = mount();
+        expect(screen.getByLabelText('Contact layer')).toHaveValue('0');
+        choose('Contact layer', '3');
+        expect(save).toHaveBeenCalledTimes(1);
+        fireEvent.click(screen.getByRole('button', { name: 'Duplicate panel' }));
+        expect(save).toHaveBeenCalledTimes(2);
+        let pattern = readGarmentPattern(save.mock.lastCall![0].pattern);
+        const copy = pattern.panels[2];
+        expect(screen.getByLabelText('Pattern panel')).toHaveValue(copy.id);
+        expect(screen.getByLabelText('Contact layer')).toHaveValue('4');
+        expect(copy.layer).toBe(4);
+        expect(pattern.seams).toEqual(createSleevelessTop().seams);
+        fireEvent.click(screen.getByRole('button', { name: 'Add panel' }));
+        expect(save).toHaveBeenCalledTimes(3);
+        pattern = readGarmentPattern(save.mock.lastCall![0].pattern);
+        expect(pattern.panels[3].layer).toBe(4);
+        choose('Contact layer', '0');
+        expect(save).toHaveBeenCalledTimes(4);
+        expect(save.mock.lastCall![0].pattern.panels[3]).not.toHaveProperty('layer');
+    });
     it('applies a signed placement rotation in one undoable patch and keeps a rejected operation out of history', () => {
         const save = mount();
         fireEvent.click(screen.getByText('Panel placement', { selector: 'summary' }));

@@ -8,6 +8,8 @@ export interface GarmentPanel {
     boundary: GarmentPoint[];
     /** Unit warp direction in the chart. The normal to its left is the positive weft direction. */
     grain: [number, number];
+    /** Increasing ranks lie outward, along the panel normal. The base layer is zero. */
+    layer?: number;
     placement: { origin: PatternVector3; u: PatternVector3; v: PatternVector3 };
     pins: string[];
 }
@@ -16,7 +18,7 @@ export interface GarmentSeam { id: string; a: GarmentSeamSide; b: GarmentSeamSid
 export interface GarmentPattern { version: 1; edgeLength: number; panels: GarmentPanel[]; seams: GarmentSeam[] }
 export interface GarmentHinge { a: number; b: number; c: number; d: number }
 export interface GarmentStitch { seamId: string; a: number; b: number; weight: number }
-export interface GarmentPanelRange { id: string; vertexStart: number; vertexCount: number; indexStart: number; indexCount: number }
+export interface GarmentPanelRange { id: string; layer?: number; vertexStart: number; vertexCount: number; indexStart: number; indexCount: number }
 export interface CookedGarment {
     positions: Float32Array;
     restUV: Float32Array;
@@ -30,7 +32,7 @@ export interface CookedGarment {
 
 export const GARMENT_LIMITS = Object.freeze({
     panels: 32, boundary: 128, sourceVertices: 512, seams: 256, cookedVertices: 8192,
-    minEdgeLength: 0.005, maxEdgeLength: 1,
+    minEdgeLength: 0.005, maxEdgeLength: 1, maxLayer: 15,
 });
 const EPSILON_AREA = 1e-12;
 const MIN_FEATURE = 1e-5;
@@ -110,7 +112,10 @@ function readPanel(value: unknown): GarmentPanel {
     unique(pins, 'pin in ' + panelId);
     const known = new Set(boundary.map(v => v.id));
     for (const pin of pins) check(known.has(pin), 'Missing pin ' + panelId + '/' + pin + '.');
-    return { id: panelId, name: p.name, boundary, grain, placement: { origin, u, v }, pins };
+    const layer = p.layer === undefined ? 0 : p.layer;
+    check(typeof layer === 'number' && Number.isInteger(layer) && layer >= 0 && layer <= GARMENT_LIMITS.maxLayer,
+        panelId + ' layer must be an integer from 0 to ' + GARMENT_LIMITS.maxLayer + '.');
+    return { id: panelId, name: p.name, boundary, grain, placement: { origin, u, v }, pins, ...(layer ? { layer } : {}) };
 }
 function readSide(value: unknown): GarmentSeamSide {
     const s = object(value, 'Seam side');
@@ -366,7 +371,8 @@ export function cookGarment(value: GarmentPattern): CookedGarment {
         }
         for (const i of g.indices) indices.push(remap[i]);
         for (const pin of p.pins) pins.push(remap[g.source.get(pin)!]);
-        panelRanges.push({ id: p.id, vertexStart, vertexCount: cursor - vertexStart, indexStart, indexCount: indices.length - indexStart });
+        panelRanges.push({ id: p.id, vertexStart, vertexCount: cursor - vertexStart, indexStart, indexCount: indices.length - indexStart,
+            ...(p.layer ? { layer: p.layer } : {}) });
     }
     const stitches: GarmentStitch[] = [];
     for (const s of seams) {
@@ -388,6 +394,29 @@ function nextId(existing: Iterable<string>, base: string): string {
     let suffix = 1;
     while (occupied.has(prefix + '-' + suffix)) suffix++;
     return prefix + '-' + suffix;
+}
+
+/** Place a copy on the next outward layer in 8 mm steps. Pins move with it; sewn spans stay on the source. */
+export function duplicateGarmentPanel(pattern: GarmentPattern, panelId: string): GarmentPattern {
+    const source = pattern.panels.find(p => p.id === panelId);
+    check(source, 'Missing panel ' + panelId + '.');
+    const panel = readPanel(source);
+    panel.id = nextId(pattern.panels.map(p => p.id), panel.id);
+    const suffix = ' (' + panel.id.slice(panel.id.lastIndexOf('-') + 1) + ')';
+    panel.name = panel.name.slice(0, 128 - suffix.length) + suffix;
+    const { origin, u, v } = panel.placement;
+    const normal = unit3(cross3(u, v));
+    let nextLayer = (panel.layer ?? 0) + 1;
+    // Repeatedly duplicating the original should not put multiple copies exactly in the same place.
+    for (let step = 1; step <= pattern.panels.length + 1; step++) {
+        const candidate = mix3(origin, 1, normal, .008 * step);
+        const occupied = pattern.panels.find(p => Math.hypot(p.placement.origin[0] - candidate[0],
+            p.placement.origin[1] - candidate[1], p.placement.origin[2] - candidate[2]) < .004);
+        if (!occupied) { panel.placement.origin = candidate; break; }
+        nextLayer = Math.max(nextLayer, (occupied.layer ?? 0) + 1);
+    }
+    panel.layer = Math.min(nextLayer, GARMENT_LIMITS.maxLayer);
+    return readGarmentPattern({ ...pattern, panels: [...pattern.panels, panel] });
 }
 
 /** Split a boundary edge, preserving normalized stitch correspondence on both sides of a sewn span. */

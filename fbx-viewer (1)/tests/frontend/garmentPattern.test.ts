@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-    cookGarment, createSleevelessTop, readGarmentPattern, removeGarmentPanel, removeGarmentPoint, rotateGarmentPanel, splitGarmentEdge,
+    cookGarment, createSleevelessTop, duplicateGarmentPanel, readGarmentPattern, removeGarmentPanel, removeGarmentPoint, rotateGarmentPanel, splitGarmentEdge,
     type CookedGarment, type GarmentPattern,
 } from '../../runtime/garments/pattern';
 
@@ -143,6 +143,44 @@ describe('polygonal garment patterns', () => {
 
 
 describe('garment placement and removal', () => {
+    it('cooks layer ranks without changing base-layer source, topology or geometry', () => {
+        const source = rectangle(), base = cookGarment(source);
+        const explicit = structuredClone(source);
+        explicit.panels[0].layer = 0;
+        expect(JSON.stringify(readGarmentPattern(explicit))).toBe(JSON.stringify(readGarmentPattern(source)));
+        expect(cookGarment(explicit)).toEqual(base);
+        expect(base.panelRanges[0]).not.toHaveProperty('layer');
+        explicit.panels[0].layer = 12;
+        const raised = cookGarment(JSON.parse(JSON.stringify(explicit)));
+        expect(raised).toEqual({ ...base, panelRanges: [{ ...base.panelRanges[0], layer: 12 }] });
+        for (const bad of [-1, 1.5, 16, '1', NaN, Infinity, null]) {
+            expect(() => readGarmentPattern({ ...source, panels: [{ ...source.panels[0], layer: bad }] })).toThrow(/layer must be an integer/);
+        }
+    });
+
+    it('duplicates on the next layer, translating along the current normal and retaining independent pins and landmarks', () => {
+        const source = rotateGarmentPanel(createSleevelessTop(), 'front', 'v', 90);
+        const initial = JSON.stringify(source);
+        const once = duplicateGarmentPanel(source, 'front'), copy = once.panels[2];
+        expect(copy.id).toBe('front-1');
+        expect(copy.name).toBe('Front (1)');
+        expect(copy.layer).toBe(1);
+        expect(copy.pins).toEqual(source.panels[0].pins);
+        expect(copy.boundary).toEqual(source.panels[0].boundary);
+        expect(copy.boundary[0]).not.toBe(once.panels[0].boundary[0]);
+        expect(copy.placement.origin[0]).toBeCloseTo(.008, 12);
+        expect(copy.placement.origin[2]).toBeCloseTo(source.panels[0].placement.origin[2], 12);
+        expect(once.seams).toEqual(source.seams);
+        expect(cookGarment(once).pins).toHaveLength(4);
+        const twice = duplicateGarmentPanel(once, 'front');
+        expect(twice.panels[3].id).toBe('front-2');
+        expect(twice.panels[3].placement.origin[0]).toBeCloseTo(.016, 12);
+        expect(twice.panels[3].layer).toBe(2);
+        expect(JSON.stringify(source)).toBe(initial);
+        copy.layer = 15;
+        expect(duplicateGarmentPanel(once, copy.id).panels[3].layer).toBe(15);
+    });
+
     it('rotates each panel-local axis independently and preserves all source dimensions and cook topology', () => {
         const source = createSleevelessTop(), original = cookGarment(source), saved = JSON.stringify(source);
         for (const [axis, wantedU, wantedV] of [
