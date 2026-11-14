@@ -34,7 +34,7 @@
     "@fontsource-variable/inter": "5.3.0",
     "@fontsource-variable/jetbrains-mono": "5.3.0",
     "@react-three/drei": "9.122.0",
-    "@react-three/fiber": "8.18.0",
+    "@react-three/fiber": "8.16.6",
     "@react-three/postprocessing": "2.16.2",
     "@react-three/rapier": "1.5.0",
     "@recast-navigation/wasm": "0.44.0",
