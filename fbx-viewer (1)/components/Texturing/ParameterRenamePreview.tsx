@@ -35,7 +35,11 @@ export const ParameterRenamePreview: React.FC<{
     stale: boolean;
     onRefresh: () => void;
     onDismiss: () => void;
-}> = ({ preview, stale, onRefresh, onDismiss }) => {
+    /** A live write is only offered after a fully verified project preflight. */
+    onApply?: () => void;
+    readOnly?: boolean;
+    applying?: boolean;
+}> = ({ preview, stale, onRefresh, onDismiss, onApply, readOnly = false, applying = false }) => {
     const [folder, setFolder] = useState('');
     const [copyMessage, setCopyMessage] = useState('');
     const { impact, documents } = preview;
@@ -70,7 +74,11 @@ export const ParameterRenamePreview: React.FC<{
                     </li>)}
                 </ul>
             </details>
-            <p>Save and close the project. From the Auvra checkout, run the preview in PowerShell to get the saved revision.</p>
+            {onApply && !readOnly && <Button size="sm" disabled={applying} onClick={onApply}>
+                {applying ? 'Applying project rename…' : 'Apply rename to project'}
+            </Button>}
+            {readOnly && <p role="status">This project is read-only. Open it for writing before applying the rename.</p>}
+            <p>Alternatively, save and close the project and run the standalone command in PowerShell to preview its saved revision.</p>
             <label className="block">Project folder
                 <input className="mt-1 block w-full rounded bg-panel p-1" value={folder}
                     placeholder="Folder containing the .auvra file" onChange={event => { setFolder(event.target.value); setCopyMessage(''); }} />
