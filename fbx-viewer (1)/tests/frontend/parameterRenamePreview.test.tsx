@@ -43,4 +43,19 @@ describe('project parameter rename preview', () => {
         expect(refresh).toHaveBeenCalledOnce();
         expect(dismiss).toHaveBeenCalledOnce();
     });
+    it('offers a live project apply only for a current writable preflight', () => {
+        const apply = vi.fn();
+        const view = render(<ParameterRenamePreview preview={preview()} stale={false}
+            onRefresh={() => {}} onDismiss={() => {}} onApply={apply} />);
+        fireEvent.click(screen.getByRole('button', { name: 'Apply rename to project' }));
+        expect(apply).toHaveBeenCalledOnce();
+        view.rerender(<ParameterRenamePreview preview={preview()} stale
+            onRefresh={() => {}} onDismiss={() => {}} onApply={apply} />);
+        expect(screen.queryByRole('button', { name: 'Apply rename to project' })).not.toBeInTheDocument();
+        view.rerender(<ParameterRenamePreview preview={preview()} stale={false} readOnly
+            onRefresh={() => {}} onDismiss={() => {}} onApply={apply} />);
+        expect(screen.queryByRole('button', { name: 'Apply rename to project' })).not.toBeInTheDocument();
+        expect(screen.getByText(/read-only/)).toBeInTheDocument();
+    });
+
 });
