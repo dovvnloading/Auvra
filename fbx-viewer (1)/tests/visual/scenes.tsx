@@ -11,6 +11,8 @@ import { STARTER_MATERIALS } from '../../runtime/materials/starterMaterials';
 import { paintedCopyGraph } from '../../utils/paintedCopies';
 import type { LevelComponent, LevelObject, SkyConfig } from '../../types';
 import { TextureGraphScene, textureGraphScene } from './textureGraphScene';
+import { garmentScene } from './garmentScene';
+import { layeredGarmentScene } from './layeredGarmentScene';
 
 /**
  * The scenes the rendering pictures are taken of: each small, fixed and built from the engine's own lighting, sky,
@@ -26,6 +28,8 @@ export interface SceneSteps {
 export interface VisualScene {
   camera: { position: [number, number, number]; fov: number; near?: number; far?: number };
   Scene: React.FC;
+  /** Load an archived project fixture before mounting its scene. */
+  prepare?: () => Promise<void>;
   /** Frames before the picture. */
   frames?: number;
   /** Instead of `frames`, for a scene that waits on the GPU. */
@@ -446,4 +450,6 @@ export const SCENES: Record<string, VisualScene> = {
       await frames(6);
     },
   },
+  garment: garmentScene,
+  'garment-layers': layeredGarmentScene,
 };

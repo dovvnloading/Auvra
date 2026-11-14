@@ -25,7 +25,7 @@ describe('component registry', () => {
     const types = COMPONENT_DEFINITIONS.map(definition => definition.type);
     expect(types).toEqual([
       'rotator', 'mover', 'pointLight', 'spotLight', 'camera', 'collider', 'rigidBody', 'joint', 'navLink', 'navObstacle',
-      'spline', 'splineMesh', 'splineScatter', 'followSpline', 'proceduralScatter', 'vehicle', 'destructible', 'cloth', 'windZone', 'windSway', 'springBones', 'particles', 'decal', 'water', 'audioSource',
+      'spline', 'splineMesh', 'splineScatter', 'followSpline', 'proceduralScatter', 'vehicle', 'destructible', 'cloth', 'windZone', 'windSway', 'springBones', 'garment', 'particles', 'decal', 'water', 'audioSource',
       'reverbZone', 'musicPlayer',
       'postProcess', 'reflectionProbe', 'lightBakeVolume', 'dynamicGi', 'lodGroup', 'distanceCull', 'levelStreaming', 'worldGrid', 'animation', 'lookAtIK', 'footIK', 'twoBoneIK', 'proceduralRig', 'script', 'netSync', 'timeline',
       'dialogue', 'pickup', 'abilities',
@@ -58,7 +58,7 @@ describe('component registry', () => {
     });
     for (const definition of COMPONENT_DEFINITIONS) {
       const component = createComponent(definition.type);
-      expect(Object.keys(component.props).sort()).toEqual(definition.props.map(prop => prop.key).sort());
+      expect(Object.keys(component.props).sort()).toEqual([...definition.props.map(prop => prop.key), ...Object.keys(definition.createProps?.() ?? {})].sort());
     }
   });
 

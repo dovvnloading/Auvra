@@ -141,6 +141,15 @@ const captureScenes = async (server, outputDir) => {
         } catch (error) {
           failures.push(`${name}: ${error.message}`);
         }
+      } else if (name === 'garment-layers') {
+        if (cost.layeredGarmentPixels?.length !== 2) failures.push('garment-layers: missing contact/control comparison');
+        verdict = 'ranked / freefall';
+        console.log('Layered swatch pixels:', cost.layeredGarmentPixels);
+      } else if (name === 'garment') {
+        // Compare live and replay silhouettes within one renderer. Their exact pixels vary by driver.
+        if (!cost.garmentPixels) failures.push('garment: no live-to-cache pixel report');
+        verdict = 'live / cached silhouette';
+        console.log('Garment pixels:', cost.garmentPixels);
       } else if (updating) {
         writeFileSync(referenceFile, bytes);
       } else if (!realGpu) {

@@ -48,10 +48,14 @@ const isEmptyProp = (object: LevelObject) => object.type === 'prop' && !object.m
 /** Drawn one by one with its own marker rather than in an instanced layer. */
 const isMarkerObject = (object: LevelObject) => MARKER_TYPES.has(object.type) || isEmptyProp(object);
 const isInstancedObject = (object: LevelObject) => object.type !== 'terrain' && !isMarkerObject(object);
-/** Joins the instanced objects drawn on their own: what a previewed timeline moves, and what has material values of its own. */
-const drawnAloneIds = (previewTargets: string, objects: readonly LevelObject[]): string[] => {
+/** Objects that need their own renderable model for posing, per-object materials, or garment binding. */
+export const drawnAloneIds = (previewTargets: string, objects: readonly LevelObject[]): string[] => {
     const ids = new Set(previewTargets ? previewTargets.split('|') : []);
-    for (const object of objects) if (hasObjectMaterialValues(object)) ids.add(object.id);
+    for (const object of objects) {
+        const usesOwnSkeleton = object.components?.some(({ enabled, type, props }) => enabled && type === 'garment' &&
+            [props.followBone, props.collisionMesh].some(name => typeof name === 'string' && name.trim().length > 0));
+        if (usesOwnSkeleton || hasObjectMaterialValues(object)) ids.add(object.id);
+    }
     return [...ids];
 };
 
@@ -769,7 +773,7 @@ export const EnvironmentScene: React.FC<EnvironmentSceneProps> = ({
     // While the Timeline editor previews a timeline, what it moves and poses is drawn on its own, as play draws it.
     const preview = useSyncExternalStore(timelinePreview.subscribe, timelinePreview.get, timelinePreview.get);
     const previewTargets = useMemo(() => (preview ? timelineTargetIds(preview.data).join('|') : ''), [preview]);
-    // Also lifted: objects with material values of their own, which wear materials of their own (materialInstances.ts).
+    // Dedicated model instances own their material values, skeletons and morph weights.
     const previewedObjects = useMemo(
         () => drawnAloneIds(previewTargets, resolvedObjects)
             .map(id => resolvedById.get(id))
@@ -914,29 +918,14 @@ export const EnvironmentScene: React.FC<EnvironmentSceneProps> = ({
                 />
             ))}
 
-            {/* Selected props/foliage, lifted out of their instanced layer so the gizmo can drag them */}
-            {promotedObjects.map(obj => (
+            {/* One keyed list retains the same rig, garment state and timeline target across selection changes. */}
+            {[...promotedObjects, ...previewedObjects].map(obj => (
                 <LevelObjectNode
                     key={obj.id}
                     object={obj}
                     source={objectById.get(obj.id) ?? obj}
                     model={modelById.get(obj.modelId)}
-                    isSelected={isActiveView}
-                    selectable={objectsInteractive}
-                    onRegister={registerNode}
-                    onSelect={handleSelect}
-                    hidden={lodHiddenIds.has(obj.id)}
-                />
-            ))}
-
-            {/* Objects a previewed timeline moves or poses, lifted out of their instanced layer */}
-            {previewedObjects.map(obj => (
-                <LevelObjectNode
-                    key={obj.id}
-                    object={obj}
-                    source={objectById.get(obj.id) ?? obj}
-                    model={modelById.get(obj.modelId)}
-                    isSelected={false}
+                    isSelected={isActiveView && promotedIds.has(obj.id)}
                     selectable={objectsInteractive}
                     onRegister={registerNode}
                     onSelect={handleSelect}

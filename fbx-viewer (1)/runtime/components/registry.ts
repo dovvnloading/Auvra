@@ -8,6 +8,7 @@ import { AUDIO_ZONE_COMPONENTS } from './audioZones';
 import { CAMERA_COMPONENT } from './cameraComponent';
 import { DECAL_COMPONENT } from './decalComponent';
 import { DESTRUCTIBLE_COMPONENT } from './destructibleComponent';
+import { GARMENT_COMPONENT } from './garmentComponent';
 import { WIND_COMPONENTS } from './windComponents';
 import { DIALOGUE_COMPONENT } from './dialogueComponent';
 import { PICKUP_COMPONENT } from './pickupComponent';
@@ -44,6 +45,7 @@ export const COMPONENT_DEFINITIONS: ComponentDefinition[] = [
     VEHICLE_COMPONENT,
     DESTRUCTIBLE_COMPONENT,
     ...WIND_COMPONENTS,
+    GARMENT_COMPONENT,
     PARTICLES_COMPONENT,
     DECAL_COMPONENT,
     WATER_COMPONENT,
@@ -88,6 +90,9 @@ export const createComponent = (type: string): LevelComponent => {
         type,
         enabled: true,
         // Copied so components never share a default array (e.g. a vector3) with the schema or each other.
-        props: Object.fromEntries(definition.props.map(prop => [prop.key, structuredClone(prop.default)]))
+        props: {
+            ...Object.fromEntries(definition.props.map(prop => [prop.key, structuredClone(prop.default)])),
+            ...definition.createProps?.(),
+        }
     };
 };

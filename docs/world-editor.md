@@ -273,6 +273,10 @@ Terrain is solid during play: it gets a matching physics shape, so dynamic bodie
 
 Turn on **Is Trigger** to make a volume the player can walk through, such as a checkpoint, pickup or door sensor. An **On Overlap** event in the level blueprint that targets the object fires once each time the player enters it. See [Level scripting](level-scripting.md#events).
 
+## Garment fitting
+
+Add a **Garment** component for editable panels, sewing, a moving dress form, strain inspection and fitting clips. [Garment authoring and playback](garments.md)
+
 ## Wind, cloth and swaying
 
 The wind is the weather's ([Sky, time of day and weather](#sky-time-of-day-and-weather)): its speed and direction, swelling and easing in gusts that roll across the ground and swirling a little from place to place. It blows in the editor too, so you see foliage and cloth move as they will in play.

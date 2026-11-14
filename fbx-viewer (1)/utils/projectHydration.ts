@@ -690,6 +690,7 @@ export function createGameContentLoader(
   };
 
   const content = (): GameContent => ({
+    readAssetBytes: loadProjectAssetBytes,
     models: inDocumentOrder(models, 'models'),
     blueprints: documents('blueprints') as Blueprint[],
     attachments: inDocumentOrder(attachments, 'attachments'),
