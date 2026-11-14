@@ -11,6 +11,7 @@ import { useScene } from '../../../context/SceneContext';
 import { frontendDiagnostics } from '../../../diagnostics/runtime';
 import { materialLibrary } from '../../../runtime/materials/materialLibrary';
 import { overrideTextureFlipY } from '../../../utils/materialOverrides';
+import { editorSession } from '../../../utils/editorSession';
 import { MESH_MAP_LABELS, MESH_MAPS } from '../../../texturing/graph/nodes/io';
 import { EXTRA_MAPS, EXTRA_MAP_LABELS, type BakeSettings } from '../../../texturing/bake/meshBaker';
 import { readStoredGraph } from '../../../texturing/graph/stored';
@@ -72,6 +73,11 @@ export const PaintWorkspace: React.FC = () => {
     // A model with one texture set opens straight onto it.
     useEffect(() => { setPartKey(parts.length === 1 ? partKeyOf(parts[0]) : null); }, [model?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
+    const editorLease = useSyncExternalStore(editorSession.subscribe, editorSession.getSnapshot);
+    // Reopen Paint on a new ready editor generation. A failed rename can
+    // invalidate the previous generation even when the project ID did not
+    // change; old GPU sessions must not persist stale documents on retry.
+    const readyPaintGeneration = editorLease.phase === 'ready' ? editorLease.generation : null;
     const libraryVersion = useSyncExternalStore((listener) => materialLibrary.subscribe(listener), () => materialLibrary.version);
     const graphs = useMemo(() => materialLibrary.list().filter((asset) => asset.textureGraph && !readStoredGraph(asset.textureGraph).library).map((asset) => ({ id: asset.id, name: asset.name })), [libraryVersion]); // eslint-disable-line react-hooks/exhaustive-deps
     const resolve = useMemo(() => paintGraphResolver(), []);
@@ -93,7 +99,11 @@ export const PaintWorkspace: React.FC = () => {
     const partFound = Boolean(part);
     useEffect(() => {
         const { model, part } = latest.current;
-        if (!model || !part) { setSession(null); setOpening(false); return undefined; }
+        if (readyPaintGeneration === null || !model || !part) {
+            setSession(null);
+            setOpening(false);
+            return undefined;
+        }
         let disposed = false;
         let made: PaintSession | null = null;
         let stopRestored: (() => void) | null = null;
@@ -149,7 +159,7 @@ export const PaintWorkspace: React.FC = () => {
             setSession(null);
             setUv(null);
         };
-    }, [model?.id, model?.object, partKey, partFound, reopen]); // eslint-disable-line react-hooks/exhaustive-deps
+    }, [readyPaintGeneration, model?.id, model?.object, partKey, partFound, reopen]); // eslint-disable-line react-hooks/exhaustive-deps
 
     // A picture finishing loading reaches fills that use it.
     // A picture read at its own depth redraws the fills reading it.
