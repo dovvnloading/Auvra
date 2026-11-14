@@ -1,5 +1,6 @@
 import { verifyPaintViewTarget } from './paintViewTarget';
 import { garmentPixelReport } from './garmentScene';
+import { layeredPixelReport } from './layeredGarmentScene';
 import './instrument';
 import { clearcoatMapPixels } from './clearcoatMapPixels';
 import React, { useEffect } from 'react';
@@ -115,6 +116,7 @@ const capture = async (name: string) => {
   // A WebGPU scene starts on a device of its own (below) at the same moment, so its picture is the same whatever ran
   // before it: the traced light's noise follows the clock.
   if (onWebGpu) resetClock();
+  await scene.prepare?.();
   const stage = document.getElementById('stage')!;
   const root = createRoot(stage);
   const started = realNow();
@@ -187,6 +189,7 @@ const capture = async (name: string) => {
   return { png, numbers: { ...(udimMip ? { udimMip } : {}), ...(deviceLoss ? { deviceLoss } : {}), loadMs, frameMs, calls, triangles, geometries, textures, programs, gpuBytes: bytes,
     ...(clearcoatMap ? { clearcoatMap } : {}),
     ...(name === 'garment' ? { garmentPixels: garmentPixelReport } : {}),
+    ...(name === 'garment-layers' ? { layeredGarmentPixels: layeredPixelReport } : {}),
     ...(cookBenchmark ? { textureCook: cookBenchmark, textureCookProblem: cookProblem } : {}),
     ...(standardCook ? { graphCook: standardCook, graphCookProblem: cookProblem } : {}),
     ...(bc1Parity ? { bc1Parity } : {}),
