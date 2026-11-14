@@ -4,6 +4,7 @@ import { ownMaps } from '../../../runtime/materials/graphMaterial';
 import { materialLibrary, MATERIALS_DOMAIN, materialAssetDocument, type MaterialAsset } from '../../../runtime/materials/materialLibrary';
 import { createMaterialGraph } from '../../../runtime/materials/materialGraph';
 import { projectService } from '../../../utils/projectService';
+import { editorSession } from '../../../utils/editorSession';
 import { overrideTextureFlipY, type MaterialOverrides } from '../../../utils/materialOverrides';
 import { bakeMeshMaps, rebakeRegion, releaseTileBake, spaceOfBox, type BakeSettings, type PositionSpace, type TileBake } from '../../../texturing/bake/meshBaker';
 import { textureGpu, type GpuImage, type TextureGpu } from '../../../texturing/gpu/textureGpu';
@@ -93,6 +94,22 @@ export const MAX_BRANCHES = 12;
 export const HISTORY_BYTES = 256 * 1024 * 1024;
 const SAVE_DELAY_MS = 2500;
 const livePaintSessions = new Set<PaintSession>();
+
+interface PaintSessionOwner {
+    projectId: string | null;
+    libraryGeneration: number;
+    editorGeneration: number;
+}
+const paintSessionOwner = (): PaintSessionOwner => ({
+    projectId: projectService.getStatus().projectId,
+    libraryGeneration: materialLibrary.generation,
+    editorGeneration: editorSession.getSnapshot().generation,
+});
+/** A queued Paint write may never cross a project, material reload or editor transition. */
+export const samePaintSessionOwner = (a: PaintSessionOwner, b: PaintSessionOwner): boolean =>
+    a.projectId === b.projectId
+    && a.libraryGeneration === b.libraryGeneration
+    && a.editorGeneration === b.editorGeneration;
 /** Changes to one thing this close together make one undo step. */
 const COALESCE_MS = 1000;
 
@@ -156,7 +173,7 @@ export class PaintSession {
     private readonly stopListening: () => void;
 
     private constructor(readonly target: PaintTarget, readonly host: PaintSessionHost, part: PartMesh, stack: PaintStack, asset: MaterialAsset,
-        occluder: PaintSession['occluder'], readonly modelSpace: PositionSpace) {
+        occluder: PaintSession['occluder'], readonly modelSpace: PositionSpace, private readonly owner: PaintSessionOwner) {
         this.gpu = stack.host.gpu;
         this.part = part;
         this.picker = stack.picker;
@@ -173,6 +190,16 @@ export class PaintSession {
             this.gpu.canvas.removeEventListener('webglcontextlost', onLost);
             stopRestored();
         };
+    }
+
+    private ownsCurrentProject(): boolean {
+        return samePaintSessionOwner(this.owner, paintSessionOwner());
+    }
+
+    private assertCurrentProject(): void {
+        if (!this.ownsCurrentProject()) {
+            throw new Error('This Paint session belongs to an older project or editor generation; reopen it before saving.');
+        }
     }
 
     /** False while the GPU context is lost (or after it came back, until the set opens again). */
@@ -247,6 +274,7 @@ export class PaintSession {
      * the material library goes back to what it held when the project would not take it.
      */
     async keepDocumentAs(document: PaintDocument): Promise<void> {
+        this.assertCurrentProject();
         const current = materialLibrary.get(this.asset.id) ?? this.asset;
         const next = { ...current, paint: document as unknown as Record<string, unknown> };
         materialLibrary.upsert(next);
@@ -294,6 +322,12 @@ export class PaintSession {
     }
 
     static async open(target: PaintTarget, host: PaintSessionHost): Promise<PaintSession> {
+        const owner = paintSessionOwner();
+        const assertOwner = (): void => {
+            if (!samePaintSessionOwner(owner, paintSessionOwner())) {
+                throw new Error('The project changed while opening the painted set. Open it again.');
+            }
+        };
         // A future painted set must never be mistaken for "no set yet". Otherwise
         // this build could create and save a fresh v1 set over material work it
         // cannot understand. Refuse before allocating the GPU stack or writing.
@@ -313,8 +347,10 @@ export class PaintSession {
         if (!asset || !document) {
             document = startingPaintDocument(target.modelId, target.materialNames, { size: 11, udim: part.udim, space: modelSpace, glows: surfaceGlows(material) });
             asset = { id: crypto.randomUUID(), name: paintedSetName(target.modelName, target.partName), graph: createMaterialGraph(), paint: document as unknown as Record<string, unknown> };
+            assertOwner();
             materialLibrary.upsert(asset);
             await projectService.applyChanges([{ domain: MATERIALS_DOMAIN, operation: 'upsert', id: asset.id, value: materialAssetDocument(asset) }]);
+            assertOwner();
         }
         const own = material ? ownMaps(material) : { map: null, normalMap: null };
         const color = (value: THREE.Color | undefined): [number, number, number] => {
@@ -346,11 +382,13 @@ export class PaintSession {
         let stack: PaintStack;
         try {
             stack = await PaintStack.open(stackHost, part, document);
+            assertOwner();
         } catch (error) {
+            stack?.dispose();
             graphPictures.dispose();
             throw error;
         }
-        const session = new PaintSession(target, host, part, stack, asset, occluder, modelSpace);
+        const session = new PaintSession(target, host, part, stack, asset, occluder, modelSpace, owner);
         session.releasePictures = graphPictures.dispose;
         // Graphs using this set's stack draw from it while it is open.
         session.closeStack = registerOpenStack(asset.id, stack);
@@ -595,6 +633,7 @@ export class PaintSession {
 
     private dirty(): void {
         this.changedSinceApply = true;
+        if (!this.ownsCurrentProject()) { this.retire(); return; }
         if (this.saveTimer) clearTimeout(this.saveTimer);
         // Never saved from a lost GPU context (what it reads back is blank), while locked, or once replaced.
         if (!this.usable || this.lockReason || this.retired) { this.saveTimer = null; return; }
@@ -603,6 +642,7 @@ export class PaintSession {
 
     /** Keeps the document (its layers and the pictures it names) in the project, without keeping any picture. */
     private async keepDocument(): Promise<void> {
+        this.assertCurrentProject();
         const current = materialLibrary.get(this.asset.id) ?? this.asset;
         this.asset = { ...current, paint: this.stack.document as unknown as Record<string, unknown> };
         materialLibrary.upsert(this.asset);
@@ -611,6 +651,7 @@ export class PaintSession {
 
     /** Flush autosave and its pictures before a multi-document project mutation. */
     async flushForProjectRename(): Promise<boolean> {
+        if (!this.ownsCurrentProject()) { this.retire(); return false; }
         if (this.retired) return false;
         if (!this.usable || this.locked || this.busy) {
             throw new Error('Finish or close the current Paint operation before renaming project parameters.');
@@ -627,10 +668,11 @@ export class PaintSession {
     async save(): Promise<void> {
         if (this.saveTimer) { clearTimeout(this.saveTimer); this.saveTimer = null; }
         if (this.saving) { await this.saving; }
-        if (!this.usable || this.lockReason || this.retired) return;
+        if (!this.usable || this.lockReason || this.retired || !this.ownsCurrentProject()) return;
         this.saving = (async () => {
             try {
                 await this.stack.keepPictures();
+                this.assertCurrentProject();
                 await this.keepDocument();
                 this.lastSaveFailure = null;
                 this.status = null;
@@ -808,6 +850,7 @@ export class PaintSession {
     /** Makes the finished pictures, keeps them, and points the surface's materials at a material drawing with them. */
     async apply(): Promise<void> {
         if (this.busy || !this.usable) return;
+        this.assertCurrentProject();
         this.busy = 'Making the pictures';
         this.emit();
         try {
@@ -842,6 +885,7 @@ export class PaintSession {
             for (const picture of pictures) {
                 this.busy = `Keeping ${ROLE_LABELS[picture.role].toLowerCase()}`;
                 this.emit();
+                this.assertCurrentProject();
                 ids[picture.role] = await this.host.storeTexture(picture.blob, `${this.target.partName} ${ROLE_LABELS[picture.role]}`, { width, height }, folder);
             }
             const previous = Object.values(this.stack.document.applied?.textures ?? {}).filter((id): id is string => Boolean(id));
@@ -856,11 +900,13 @@ export class PaintSession {
                 ...rewriteMaterialPictures(materialLibrary.get(this.asset.id) ?? this.asset, ids, { opacityMode: images.opacity ? 'masked' : undefined, tiles: atlas ?? undefined }),
                 paint: document as unknown as Record<string, unknown>,
             };
+            this.assertCurrentProject();
             materialLibrary.upsert(this.asset);
             await projectService.applyChanges([{ domain: MATERIALS_DOMAIN, operation: 'upsert', id: this.asset.id, value: materialAssetDocument(this.asset) }]);
             // The surface's materials draw with the painted material from now on.
             const overrides: MaterialOverrides = { ...(this.host.materialOverrides(this.target.modelId) ?? {}) };
             for (const name of this.target.materialNames) overrides[name] = { ...(overrides[name] ?? {}), materialId: this.asset.id };
+            this.assertCurrentProject();
             await this.host.setMaterialOverrides(this.target.modelId, overrides);
             // The old pictures go only once no save still in flight names them (an autosave begun before they changed).
             if (this.saving) await this.saving.catch(() => undefined);
