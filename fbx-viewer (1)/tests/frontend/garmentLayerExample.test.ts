@@ -54,17 +54,26 @@ it('drops both archived swatches onto their moving supports and measures contact
             const initial = clearance(mesh, garment.simulation.positions, base, upper);
             expect(Math.min(...initial)).toBeCloseTo(.085, 5);
             expect(Math.max(...initial)).toBeCloseTo(.085, 5);
-            let contacts = 0;
-            for (let step = 0; step < 120; step++) {
+            let contacts = 0, limitedTicks = 0;
+            for (let step = 0; step < 240; step++) {
                 garment.advance(GARMENT_STEP, config, component.id);
                 const stats = garment.simulation.selfContactStats;
-                if (stats) contacts += stats.layerProjections;
+                if (stats) {
+                    contacts += stats.layerProjections;
+                    if (stats.limited) limitedTicks++;
+                }
+                if (step === 119 && upper.layer === 1) {
+                    const atOneSecond = clearance(mesh, garment.simulation.positions, base, upper);
+                    expect(Math.min(...atOneSecond)).toBeGreaterThan(.0038);
+                    expect(Math.max(...atOneSecond)).toBeLessThan(.0058);
+                }
             }
             const settled = clearance(mesh, garment.simulation.positions, base, upper);
             if (upper.layer === 1) {
                 expect(contacts).toBeGreaterThan(0);
-                expect(Math.min(...settled)).toBeGreaterThan(.001);
-                expect(Math.max(...settled)).toBeLessThan(.020);
+                expect(limitedTicks).toBe(0);
+                expect(Math.min(...settled)).toBeGreaterThan(.0038);
+                expect(Math.max(...settled)).toBeLessThan(.0058);
             } else {
                 expect(contacts).toBe(0);
                 expect(Math.max(...settled)).toBeLessThan(-2);
