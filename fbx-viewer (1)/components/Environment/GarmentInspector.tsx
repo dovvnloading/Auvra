@@ -27,16 +27,22 @@ function NumberField({ title, value, step = 1, commit }: {
     title: string; value: number; step?: number; commit: (value: number) => void;
 }) {
     const [text, setText] = useState(String(value));
+    const cancelled = useRef(false);
     useLayoutEffect(() => setText(String(value)), [value]);
     return <label className={label}>{title}
         <input className={field} type="number" step={step} value={text} onChange={event => setText(event.target.value)}
             onBlur={() => {
                 setText(String(value));
+                if (cancelled.current) { cancelled.current = false; return; }
                 if (text.trim() && Number.isFinite(Number(text)) && Number(text) !== value) commit(Number(text));
             }}
             onKeyDown={event => {
                 if (event.key === 'Enter') event.currentTarget.blur();
-                if (event.key === 'Escape') { event.stopPropagation(); setText(String(value)); }
+                if (event.key === 'Escape') {
+                    event.stopPropagation();
+                    cancelled.current = true;
+                    event.currentTarget.blur();
+                }
             }} />
     </label>;
 }
@@ -89,9 +95,10 @@ function PatternTools({ pattern, onCommit }: { pattern: GarmentPattern; onCommit
     const editPanel = (change: Partial<GarmentPanel>): GarmentPattern => ({
         ...pattern, panels: pattern.panels.map(item => item.id === panel.id ? { ...panel, ...change } : item),
     });
-    const movePoint = (id: string, x: number, y: number) => save(() => editPanel({
-        boundary: panel.boundary.map(item => item.id === id ? { ...item, x, y } : item),
-    }));
+    const movePoint = (id: string, x: number, y: number) => {
+        if (panel.boundary.some(p => p.id === id && p.x === x && p.y === y)) return;
+        save(() => editPanel({ boundary: panel.boundary.map(item => item.id === id ? { ...item, x, y } : item) }));
+    };
     const cursor = (event: React.PointerEvent<SVGSVGElement>) => {
         const transform = svg.current?.getScreenCTM();
         if (!transform || !svg.current) return null;
@@ -161,7 +168,8 @@ function PatternTools({ pattern, onCommit }: { pattern: GarmentPattern; onCommit
                 if (active.source === pattern && pos && draft) movePoint(active.id, pos.x, pos.y);
                 drag.current = null; setDraft(null);
             }}
-            onPointerCancel={() => { drag.current = null; setDraft(null); }}>
+            onPointerCancel={event => { if (drag.current?.pointer === event.pointerId) { drag.current = null; setDraft(null); } }}
+            onLostPointerCapture={event => { if (drag.current?.pointer === event.pointerId) { drag.current = null; setDraft(null); } }}>
             <polygon points={points.map(p => `${px(p.x)},${py(p.y)}`).join(' ')} fill="#193932" />
             {points.map((a, i) => {
                 const b = points[(i + 1) % points.length];
@@ -175,7 +183,7 @@ function PatternTools({ pattern, onCommit }: { pattern: GarmentPattern; onCommit
             {points.map(p => <circle key={p.id} cx={px(p.x)} cy={py(p.y)} r={p.id === point.id ? 4.8 : 3.6}
                 fill={panel.pins.includes(p.id) ? '#fb923c' : '#cbd5e1'} stroke="#102525" className="cursor-move"
                 onPointerDown={event => {
-                    if (event.button !== 0) return;
+                    if (event.button !== 0 || drag.current) return;
                     select(p.id); drag.current = { id: p.id, pointer: event.pointerId, source: pattern };
                     svg.current?.setPointerCapture(event.pointerId);
                 }}><title>{p.id}</title></circle>)}

@@ -139,6 +139,21 @@ describe('polygonal garment patterns', () => {
         expect(() => readGarmentPattern(null)).toThrow(/must be an object/);
         expect(() => splitGarmentEdge(rectangle(), 'swatch', 'lower_left', 'upper_right')).toThrow(/complete boundary edge/);
     });
+
+    it('rejects Float32 collapse in the chart and arranged pose before publishing a cook', () => {
+        const pattern = rectangle(), panel = pattern.panels[0];
+        panel.grain = [1, 0];
+        panel.pins = [];
+        panel.placement = { origin: [0, 0, 0], u: [1, 0, 0], v: [0, 1, 0] };
+        panel.boundary = [{ id: 'a', x: 0, y: 0 }, { id: 'b', x: .1, y: 0 }, { id: 'c', x: .05, y: .000001 }];
+        pattern.edgeLength = .2;
+        expect(() => cookGarment(pattern)).not.toThrow();
+        panel.placement.origin = [90, 90, 0];
+        expect(() => cookGarment(pattern)).toThrow(/swatch.*placed triangle.*precision/);
+        panel.placement.origin = [-90, -90, 0];
+        for (const p of panel.boundary) { p.x += 90; p.y += 90; }
+        expect(() => cookGarment(pattern)).toThrow(/swatch.*triangle.*precision/);
+    });
 });
 
 

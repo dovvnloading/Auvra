@@ -41,7 +41,9 @@ export function readSwatchMeasurements(text: string): SwatchReading[] {
     if (header < 0) throw new Error('Enter the header and at least one swatch measurement.');
     const separator = lines[header].includes('\t') ? '\t' : ',';
     const cells = (line: string) => line.split(separator).map(x => x.trim().toLowerCase());
-    if (cells(lines[header]).join(',') !== SWATCH_HEADER) throw new Error('Use the header ' + SWATCH_HEADER + '.');
+    const columns = cells(lines[header]), expected = SWATCH_HEADER.split(',');
+    if (columns.length !== expected.length || columns.some((column, i) => column !== expected[i]))
+        throw new Error('Use the header ' + SWATCH_HEADER + '.');
     const rows: SwatchReading[] = [];
     for (let i = header + 1; i < lines.length; i++) {
         if (!lines[i].trim()) continue;
@@ -97,9 +99,12 @@ export function calibrateSwatches(text: string, currentWeft: number): SwatchCali
         let xx = 0, xy = 0;
         for (const { x, y } of pairs) { xx += x * x; xy += x * y; }
         if (!(xx > 0 && Number.isFinite(xx))) throw new Error('The ' + kind + ' readings need a usable nonzero area or displacement.');
-        const coefficient = xy / xx, limits = FABRIC_FIELDS[field];
-        if (!Number.isFinite(coefficient) || coefficient < limits.min || coefficient > limits.max)
+        const slope = xy / xx, limits = FABRIC_FIELDS[field];
+        // Several hundred terms may contribute to each sum. Accept roundoff at an inclusive endpoint.
+        const tolerance = Number.EPSILON * (pairs.length + 4) * Math.abs(slope);
+        if (!Number.isFinite(slope) || slope < limits.min - tolerance || slope > limits.max + tolerance)
             throw new Error('The fitted ' + kind + ' coefficient is outside the supported range. Check units, tare and load direction.');
+        const coefficient = Math.max(limits.min, Math.min(limits.max, slope));
         let squared = 0, maximum = 0;
         for (const { x, y } of pairs) {
             const error = (coefficient * x - y) * (kind === 'mass' ? 1000 : 1);

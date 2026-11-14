@@ -46,6 +46,15 @@ describe('calibration from tared swatch measurements', () => {
         expect(() => readSwatchMeasurements(csv(...Array<string>(513).fill('mass,20,20,,,.1')))).toThrow(/512/);
         expect(() => readSwatchMeasurements('z'.repeat(65537))).toThrow(/64/);
         expect(() => readSwatchMeasurements('test,width,gauge\n')).toThrow(/header/);
+        expect(() => readSwatchMeasurements('test,width_mm\tgauge_mm,displacement_mm\tforce_n,mass_g\nwarp\t50\t100\t2\t2\t')).toThrow(/header/);
+    });
+
+    it('accepts inclusive physical limits after SI conversion and finite-precision least squares', () => {
+        // Both quotients round just beyond the allowed endpoint in binary floating point.
+        expect(calibrateSwatches(csv('mass,50,7,,,.00175'), 0).properties.arealDensity).toBe(.005);
+        expect(calibrateSwatches(csv('warp,50,100,3,1568.175,'), 0).properties.warp).toBe(1e6);
+        expect(() => calibrateSwatches(csv('mass,50,7,,,.00174'), 0)).toThrow(/range/);
+        expect(() => calibrateSwatches(csv('warp,50,100,3,1568.18,'), 0)).toThrow(/range/);
     });
 
     it('carries the calibrated warp into a live loaded strip, predicting deformation under its own weight', () => {

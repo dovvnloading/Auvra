@@ -291,6 +291,29 @@ function buildHinges(indices: number[]): GarmentHinge[] {
     return hinges;
 }
 
+/** Check the Float32 triangles consumed by the solver and renderer after placement and grain rotation. */
+function checkCookedFaces(panel: GarmentPanel, indices: number[], start: number, chart: Float32Array,
+    material: Float32Array, positions: Float32Array): void {
+    const normal = cross3(panel.placement.u, panel.placement.v);
+    const minTwiceArea = 2e-14; // Solver requires a rest area above 1e-14 m².
+    const charts = [chart, material];
+    const restError = panel.id + ' has a triangle below simulation precision. Enlarge the narrow feature or reduce its chart offset.';
+    const placementError = panel.id + ' has a placed triangle below simulation precision. Enlarge the narrow feature or reduce the placement offset.';
+    for (let i = start; i < indices.length; i += 3) {
+        const a = indices[i], b = indices[i + 1], c = indices[i + 2];
+        for (const uv of charts) {
+            const area = (uv[2 * b] - uv[2 * a]) * (uv[2 * c + 1] - uv[2 * a + 1])
+                - (uv[2 * c] - uv[2 * a]) * (uv[2 * b + 1] - uv[2 * a + 1]);
+            check(area > minTwiceArea, restError);
+        }
+        const p = positions, aa = 3 * a, bb = 3 * b, cc = 3 * c;
+        const bx = p[bb] - p[aa], by = p[bb + 1] - p[aa + 1], bz = p[bb + 2] - p[aa + 2];
+        const cx = p[cc] - p[aa], cy = p[cc + 1] - p[aa + 1], cz = p[cc + 2] - p[aa + 2];
+        const area = normal[0] * (by * cz - bz * cy) + normal[1] * (bz * cx - bx * cz) + normal[2] * (bx * cy - by * cx);
+        check(area > minTwiceArea, placementError);
+    }
+}
+
 /** Deterministic, budgeted meshing in material space. Unequal sewn edges share normalized arc samples. */
 export function cookGarment(value: GarmentPattern): CookedGarment {
     const pattern = readGarmentPattern(value);
@@ -370,6 +393,7 @@ export function cookGarment(value: GarmentPattern): CookedGarment {
             cursor++;
         }
         for (const i of g.indices) indices.push(remap[i]);
+        checkCookedFaces(p, indices, indexStart, restUV, materialUV, positions);
         for (const pin of p.pins) pins.push(remap[g.source.get(pin)!]);
         panelRanges.push({ id: p.id, vertexStart, vertexCount: cursor - vertexStart, indexStart, indexCount: indices.length - indexStart,
             ...(p.layer ? { layer: p.layer } : {}) });

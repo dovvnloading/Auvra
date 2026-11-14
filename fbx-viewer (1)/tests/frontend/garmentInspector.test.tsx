@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { GarmentInspector } from '../../components/Environment/GarmentInspector';
 import { createSleevelessTop, readGarmentPattern } from '../../runtime/garments/pattern';
@@ -26,6 +26,43 @@ function editNumber(label: string, value: string) {
 }
 
 describe('garment pattern inspector', () => {
+    it('discards an uncommitted number on Escape, including when the next action changes the panel', () => {
+        const save = mount();
+        const x = screen.getByLabelText('Point X (mm)');
+        act(() => x.focus());
+        choose('Point X (mm)', '-10');
+        fireEvent.keyDown(x, { key: 'Escape' });
+        expect(x).not.toHaveFocus();
+        expect(save).not.toHaveBeenCalled();
+        expect(x).toHaveValue(-215);
+        choose('Pattern panel', 'back');
+        expect(save).not.toHaveBeenCalled();
+    });
+
+    it('drops drag state when capture is lost and avoids pointer-up edits with no geometric change', () => {
+        const save = mount();
+        const svg = screen.getByRole('img') as unknown as SVGSVGElement;
+        const point = svg.querySelector('circle')!;
+        svg.setPointerCapture = vi.fn();
+        svg.getScreenCTM = vi.fn(() => ({ inverse: () => ({}) })) as unknown as typeof svg.getScreenCTM;
+        svg.createSVGPoint = () => ({ x: 0, y: 0, matrixTransform() { return this; } }) as DOMPoint;
+        const pointer = (target: Element, type: string, x: number, y: number, id = 1) => {
+            const event = new MouseEvent(type, { bubbles: true, button: 0, clientX: x, clientY: y });
+            Object.defineProperty(event, 'pointerId', { value: id });
+            fireEvent(target, event);
+        };
+        const x = Number(point.getAttribute('cx')), y = Number(point.getAttribute('cy'));
+        pointer(point, 'pointerdown', x, y);
+        pointer(svg, 'pointermove', x+16, y-10);
+        pointer(svg, 'lostpointercapture', x+16, y-10);
+        pointer(svg, 'pointerup', x+16, y-10);
+        expect(save).not.toHaveBeenCalled();
+        pointer(point, 'pointerdown', x, y);
+        pointer(svg, 'pointermove', x+5, y);
+        pointer(svg, 'pointerup', x, y);
+        expect(save).not.toHaveBeenCalled();
+    });
+
     it('commits one measured edit, rejects invalid mesh detail and leaves the source valid', () => {
         const save = mount();
         const source = createSleevelessTop();
