@@ -1,6 +1,6 @@
 import type { ProjectChange, ProjectSnapshot } from '../../utils/projectService';
 import { readTextureRenameInventory } from './renameSnapshot';
-import type { TextureParameterRenamePlan } from './renameProjectParameter';
+import { planTextureParameterRename, type RenameImpact, type TextureParameterRenamePlan } from './renameProjectParameter';
 
 /**
  * M0.2 — Safe host-bound commit/undo primitive for an exposed texture graph
@@ -26,6 +26,8 @@ export interface RenameProjectHost {
 
 export interface RenameTransactionReceipt {
     projectId: string;
+    /** The source and parameter names are needed to detect NEW dependents on replay. */
+    impact: RenameImpact;
     /** Revision when the original plan was computed. */
     beforeRevision: number;
     /** Revision after the one host commit (the only safe immediate undo base). */
@@ -105,6 +107,7 @@ export const commitTextureParameterRename = async (
     const afterRevision = await applyBatch(host, expected.projectId, expected.revision, plan.changes, afterCommit);
     return {
         projectId: expected.projectId,
+        impact: plan.impact,
         beforeRevision: expected.revision,
         afterRevision,
         undoChanges: plan.undoChanges,
@@ -158,10 +161,27 @@ export const replayTextureParameterRename = async (
         prefabs: new Map(inventory.prefabs.map(doc => [doc.id, doc] as const)),
         metadata: new Map(inventory.metadata.map(doc => [doc.id, doc] as const)),
     };
+    // Full-document equality protects documents changed by the first rename.
+    // It does NOT protect a newly created model, prefab or shared preset that
+    // starts consuming the renamed key later. Re-plan against the complete
+    // current project so reversing this rename cannot strand new references.
+    const impact = receipt.impact;
+    const fresh = planTextureParameterRename({
+        ...inventory,
+        sourceMaterialId: impact.sourceMaterialId,
+        from: direction === 'undo' ? impact.to : impact.from,
+        to: direction === 'undo' ? impact.from : impact.to,
+    });
     const expected = direction === 'undo' ? receipt.redoChanges : receipt.undoChanges;
     const changes = direction === 'undo' ? receipt.undoChanges : receipt.redoChanges;
     if (!expected.length || expected.length !== changes.length) {
         throw new Error('The parameter rename history has incomplete snapshots.');
+    }
+    const originallyAffected = new Set(expected.map(change => `${change.domain}/${change.id ?? ''}`));
+    for (const change of fresh.changes) {
+        if (!originallyAffected.has(`${change.domain}/${change.id ?? ''}`)) {
+            throw new Error(`Cannot ${direction} parameter rename: a new dependent ${change.domain}/${change.id ?? '(unknown)'} now references the parameter. No documents were overwritten.`);
+        }
     }
     for (const change of expected) {
         if (!change.id || change.operation !== 'upsert' || !documents[change.domain]?.has(change.id)
