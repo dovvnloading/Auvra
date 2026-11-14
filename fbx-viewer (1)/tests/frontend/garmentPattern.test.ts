@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-    cookGarment, createSleevelessTop, readGarmentPattern, splitGarmentEdge,
+    cookGarment, createSleevelessTop, readGarmentPattern, removeGarmentPanel, removeGarmentPoint, rotateGarmentPanel, splitGarmentEdge,
     type CookedGarment, type GarmentPattern,
 } from '../../runtime/garments/pattern';
 
@@ -138,5 +138,85 @@ describe('polygonal garment patterns', () => {
         expect(() => cookGarment(huge)).toThrow(/budget exceeded/);
         expect(() => readGarmentPattern(null)).toThrow(/must be an object/);
         expect(() => splitGarmentEdge(rectangle(), 'swatch', 'lower_left', 'upper_right')).toThrow(/complete boundary edge/);
+    });
+});
+
+
+describe('garment placement and removal', () => {
+    it('rotates each panel-local axis independently and preserves all source dimensions and cook topology', () => {
+        const source = createSleevelessTop(), original = cookGarment(source), saved = JSON.stringify(source);
+        for (const [axis, wantedU, wantedV] of [
+            ['u', [1, 0, 0], [0, 0, 1]], ['v', [0, 0, -1], [0, 1, 0]], ['normal', [0, 1, 0], [-1, 0, 0]],
+        ] as const) {
+            const rotated = rotateGarmentPanel(source, 'front', axis, 90);
+            const { u, v, origin } = rotated.panels[0].placement;
+            for (let i = 0; i < 3; i++) {
+                expect(u[i]).toBeCloseTo(wantedU[i], 10);
+                expect(v[i]).toBeCloseTo(wantedV[i], 10);
+            }
+            expect(origin).toEqual(source.panels[0].placement.origin);
+            expect(rotated.panels[1]).toEqual(source.panels[1]);
+            const cooked = cookGarment(rotated);
+            expect(cooked.positions).not.toEqual(original.positions);
+            expect(cooked.restUV).toEqual(original.restUV);
+            expect(cooked.materialUV).toEqual(original.materialUV);
+            expect(cooked.indices).toEqual(original.indices);
+            expect(cooked.seams).toEqual(original.seams);
+        }
+        expect(JSON.stringify(source)).toBe(saved);
+    });
+
+    it('uses the current panel-local frame, composes reversibly, and keeps repeated rotations orthonormal', () => {
+        const initial = createSleevelessTop();
+        let rotated = initial;
+        for (let i = 0; i < 60; i++) {
+            rotated = rotateGarmentPanel(rotated, 'back', 'u', 21.75);
+            rotated = rotateGarmentPanel(rotated, 'back', 'normal', -67.125);
+        }
+        const { u, v } = rotated.panels[1].placement;
+        expect(Math.hypot(...u)).toBeCloseTo(1, 12);
+        expect(Math.hypot(...v)).toBeCloseTo(1, 12);
+        expect(u.reduce((s, x, i) => s + x * v[i], 0)).toBeCloseTo(0, 12);
+        for (let i = 0; i < 60; i++) {
+            rotated = rotateGarmentPanel(rotated, 'back', 'normal', 67.125);
+            rotated = rotateGarmentPanel(rotated, 'back', 'u', -21.75);
+        }
+        const orig = initial.panels[1].placement;
+        for (let i = 0; i < 3; i++) {
+            expect(rotated.panels[1].placement.u[i]).toBeCloseTo(orig.u[i], 11);
+            expect(rotated.panels[1].placement.v[i]).toBeCloseTo(orig.v[i], 11);
+        }
+        expect(() => rotateGarmentPanel(initial, 'front', 'u', NaN)).toThrow(/degrees/);
+    });
+
+    it('removes exactly the pins and seams that refer to a deleted vertex or panel', () => {
+        const p = createSleevelessTop();
+        const point = removeGarmentPoint(p, 'front', 'left_shoulder_outer');
+        expect(point.panels[0].pins).toEqual(['right_shoulder_outer']);
+        expect(point.panels[1]).toEqual(p.panels[1]);
+        expect(point.seams).toEqual(p.seams.filter(s => s.id !== 'left_shoulder'));
+        expect(cookGarment(point).pins).toHaveLength(1);
+        expect(p.panels[0].boundary).toHaveLength(15);
+        const third = rectangle().panels[0];
+        const assembled = { ...p, panels: [...p.panels, third] };
+        const deletion = removeGarmentPanel(assembled, third.id);
+        expect(deletion).toEqual(p);
+        const back = removeGarmentPanel(p, 'front');
+        expect(back.panels.map(p => p.id)).toEqual(['back']);
+        expect(back.seams).toEqual([]);
+        expect(() => removeGarmentPanel(back, 'back')).toThrow(/at least one/);
+    });
+
+    it('refuses to create a degenerate or self-crossing polygon on point removal', () => {
+        const p = rectangle();
+        const tri = removeGarmentPoint(p, 'swatch', 'upper_right');
+        expect(() => removeGarmentPoint(tri, 'swatch', 'upper_left')).toThrow(/three boundary/);
+        // Removing the bottom-right corner connects the two opposite corners across the inward notch.
+        const outline = [[0,0],[3,0],[3,3],[1.5,1],[0,3]];
+        p.panels[0].pins = [];
+        p.panels[0].boundary = outline.map(([x, y], i) => ({ id: 'pt' + i, x, y }));
+        expect(() => readGarmentPattern(p)).not.toThrow();
+        expect(() => removeGarmentPoint(p, 'swatch', 'pt1')).toThrow(/crosses itself|doubles back/);
+        expect(p.panels[0].boundary).toHaveLength(5);
     });
 });

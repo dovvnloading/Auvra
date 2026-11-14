@@ -70,4 +70,38 @@ describe('garment pattern inspector', () => {
         expect(pattern.panels).toHaveLength(3);
         expect(screen.getByLabelText('Pattern panel')).toHaveValue(pattern.panels[2].id);
     });
+    it('applies a signed placement rotation in one undoable patch and keeps a rejected operation out of history', () => {
+        const save = mount();
+        fireEvent.click(screen.getByText('Panel placement', { selector: 'summary' }));
+        choose('Local rotation axis', 'v');
+        choose('Rotate by (°)', '-90');
+        expect(save).not.toHaveBeenCalled();
+        fireEvent.click(screen.getByRole('button', { name: 'Rotate panel' }));
+        expect(save).toHaveBeenCalledTimes(1);
+        const p = readGarmentPattern(save.mock.lastCall![0].pattern);
+        expect(p.panels[0].placement.u[2]).toBeCloseTo(1);
+        expect(p.panels[0].boundary).toEqual(createSleevelessTop().panels[0].boundary);
+        choose('Rotate by (°)', '361');
+        fireEvent.click(screen.getByRole('button', { name: 'Rotate panel' }));
+        expect(screen.getByRole('alert')).toHaveTextContent(/degrees/);
+        expect(save).toHaveBeenCalledTimes(1);
+    });
+    it('removes selected point and panel with affected stitches in single transactions, preserving selection', () => {
+        const save = mount();
+        choose('Point / outgoing edge', 'right_shoulder_outer');
+        fireEvent.click(screen.getByRole('button', { name: 'Delete point' }));
+        expect(save).toHaveBeenCalledTimes(1);
+        const removedPoint = readGarmentPattern(save.mock.lastCall![0].pattern);
+        expect(removedPoint.panels[0].pins).not.toContain('right_shoulder_outer');
+        expect(removedPoint.seams).toHaveLength(3);
+        expect(screen.getByLabelText('Point / outgoing edge')).toHaveValue('right_neck');
+        fireEvent.click(screen.getByRole('button', { name: 'Delete panel' }));
+        expect(save).toHaveBeenCalledTimes(2);
+        const remaining = readGarmentPattern(save.mock.lastCall![0].pattern);
+        expect(remaining.panels.map(p => p.id)).toEqual(['back']);
+        expect(remaining.seams).toHaveLength(0);
+        expect(screen.getByLabelText('Pattern panel')).toHaveValue('back');
+        expect(screen.getByRole('button', { name: 'Delete panel' })).toBeDisabled();
+    });
+
 });

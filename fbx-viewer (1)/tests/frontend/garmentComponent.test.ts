@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { meshLodChain, meshLodReady } from '../../utils/meshLod';
 import { describe, expect, it, vi } from 'vitest';
 import { cookComponentGarment, GarmentInstance, readGarmentSettings } from '../../runtime/components/garmentComponent';
 import { createComponent } from '../../runtime/components/registry';
@@ -53,6 +54,25 @@ describe('garment component in the level transform hierarchy', () => {
         garment.dispose();
         other.dispose();
         for (const disposal of disposals) expect(disposal).toHaveBeenCalledTimes(1);
+    });
+
+    it('uses the cooked triangle connectivity at every pose regardless of which frame is drawn first', async () => {
+        await meshLodReady;
+        const cook = cookComponentGarment(undefined);
+        const live = new GarmentInstance(cook, 'cotton'), cached = new GarmentInstance(cook, 'cotton');
+        const config = { ...settings(), wind: 0 };
+        try {
+            const first = meshLodChain(live.mesh.geometry);
+            for (let i = 0; i < 15; i++) live.advance(1 / 30, config, 'top');
+            cached.presentCachedPose(live.simulation.positions, live.torso.position, config);
+            const replay = meshLodChain(cached.mesh.geometry);
+            expect(cook.indices.length / 3).toBeGreaterThan(300);
+            expect(first).toHaveLength(1);
+            expect(replay).toHaveLength(1);
+            expect(meshLodChain(live.mesh.geometry)).toEqual(first);
+            expect(first[0].geometry.index!.array).toBe(cook.indices);
+            expect(replay[0].geometry.index!.array).toBe(cook.indices);
+        } finally { live.dispose(); cached.dispose(); }
     });
 
     it('shows signed strain on cached positions with current bounds and restores the selected cloth colour', () => {

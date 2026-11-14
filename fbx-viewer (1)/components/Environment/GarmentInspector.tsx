@@ -1,9 +1,10 @@
 import React, { useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { GarmentFabricControls } from './GarmentFabricControls';
 import { GarmentBakeControls } from './GarmentBakeControls';
 import type { ComponentInspectorProps } from '../../runtime/components/types';
 import {
-    cookGarment, createSleevelessTop, readGarmentPattern, splitGarmentEdge,
-    type GarmentPanel, type GarmentPattern, type GarmentSeamSide,
+    cookGarment, createSleevelessTop, readGarmentPattern, removeGarmentPanel, removeGarmentPoint, rotateGarmentPanel, splitGarmentEdge,
+    type GarmentPanel, type GarmentPattern, type GarmentRotationAxis, type GarmentSeamSide,
 } from '../../runtime/garments/pattern';
 
 const field = 'w-full min-w-0 rounded border border-gray-700 bg-gray-950 px-1.5 py-1 text-2xs text-gray-200';
@@ -52,6 +53,8 @@ function sameSpan(a: GarmentSeamSide, b: GarmentSeamSide) {
 function PatternTools({ pattern, onCommit }: { pattern: GarmentPattern; onCommit: (next: GarmentPattern) => void }) {
     const [panelId, selectPanel] = useState(pattern.panels[0].id);
     const [pointId, selectPoint] = useState('');
+    const [rotationAxis, setRotationAxis] = useState<GarmentRotationAxis>('normal');
+    const [degrees, setDegrees] = useState('15');
     const [stitchStart, setStitchStart] = useState<GarmentSeamSide | null>(null);
     const [error, setError] = useState('');
     const [draft, setDraft] = useState<{ id: string; x: number; y: number } | null>(null);
@@ -113,6 +116,13 @@ function PatternTools({ pattern, onCommit }: { pattern: GarmentPattern; onCommit
                 { id: 'c', x: 0.10, y: 0.25 }, { id: 'd', x: -0.10, y: 0.25 }] };
         if (save(() => ({ ...pattern, panels: [...pattern.panels, newPanel] }))) selectPatternPanel(id);
     };
+    const removePanel = () => {
+        const neighbor = pattern.panels[pattern.panels.indexOf(panel) + 1] ?? pattern.panels[pattern.panels.indexOf(panel) - 1];
+        if (save(() => removeGarmentPanel(pattern, panel.id)) && neighbor) selectPatternPanel(neighbor.id);
+    };
+    const removePoint = () => {
+        if (save(() => removeGarmentPoint(pattern, panel.id, point.id))) select(next.id);
+    };
     const pinned = panel.pins.includes(point.id);
     const grainAngle = Math.round(Math.atan2(panel.grain[1], panel.grain[0]) * 180 / Math.PI * 100) / 100;
     return <div className="space-y-2" aria-label="Garment pattern">
@@ -123,6 +133,8 @@ function PatternTools({ pattern, onCommit }: { pattern: GarmentPattern; onCommit
                 </select>
             </label>
             <button type="button" className={button} onClick={addPanel}>Add panel</button>
+            <button type="button" className={button} disabled={pattern.panels.length === 1}
+                title="Delete this panel and its seams" onClick={removePanel}>Delete panel</button>
         </div>
         <svg ref={svg} role="img" aria-label={panel.name + ' pattern outline'} viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
             className="w-full touch-none rounded border border-gray-700 bg-gray-950"
@@ -171,6 +183,8 @@ function PatternTools({ pattern, onCommit }: { pattern: GarmentPattern; onCommit
         </div>
         <div className="flex flex-wrap items-center gap-1">
             <button type="button" className={button} onClick={() => save(() => splitGarmentEdge(pattern, panel.id, point.id, next.id))}>Split edge</button>
+            <button type="button" className={button} disabled={panel.boundary.length === 3}
+                title="Delete this point, its pin and seams on either adjacent edge" onClick={removePoint}>Delete point</button>
             <button type="button" className={button} aria-pressed={pinned} onClick={() => save(() => editPanel({
                 pins: pinned ? panel.pins.filter(id => id !== point.id) : [...panel.pins, point.id],
             }))}>{pinned ? 'Unpin point' : 'Pin point'}</button>
@@ -192,6 +206,20 @@ function PatternTools({ pattern, onCommit }: { pattern: GarmentPattern; onCommit
                     origin[i] = n / 1000;
                     save(() => editPanel({ placement: { ...panel.placement, origin } }));
                 }} />)}</div>
+            <div className="mt-1 flex items-end gap-1">
+                <label className={label + ' flex-1'}>Local rotation axis
+                    <select className={field} value={rotationAxis} onChange={e => setRotationAxis(e.target.value as GarmentRotationAxis)}>
+                        <option value="u">Panel X</option><option value="v">Panel Y</option><option value="normal">Panel normal</option>
+                    </select>
+                </label>
+                <label className={label + ' flex-1'}>Rotate by (°)
+                    <input className={field} type="number" min="-360" max="360" step="any" value={degrees}
+                        onChange={e => setDegrees(e.target.value)} />
+                </label>
+                <button type="button" className={button} disabled={!degrees.trim() || !Number.isFinite(Number(degrees)) || Number(degrees) === 0}
+                    title="Rotate the arranged panel about its chart origin" onClick={() =>
+                        save(() => rotateGarmentPanel(pattern, panel.id, rotationAxis, Number(degrees)))}>Rotate panel</button>
+            </div>
         </details>
         {error && <p role="alert" className="text-2xs text-amber-400">{error}</p>}
     </div>;
@@ -212,6 +240,7 @@ export const GarmentInspector: React.FC<ComponentInspectorProps> = ({ object, co
     </div>;
     return <div className="space-y-3">
         <PatternTools key={component.id} pattern={parsed.pattern} onCommit={pattern => onChangeProps({ pattern })} />
+        <GarmentFabricControls component={component} onChangeProps={onChangeProps} />
         <GarmentBakeControls object={object} component={component} pattern={parsed.pattern} onChangeProps={onChangeProps} />
     </div>;
 };

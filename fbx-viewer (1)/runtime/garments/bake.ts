@@ -1,6 +1,6 @@
 import { cookGarment, readGarmentPattern, type GarmentPattern } from './pattern';
 import { encodeGarmentCache, type GarmentCacheFrame } from './cache';
-import { GARMENT_FABRICS, FITTING_TORSO, fittingOffsetAt } from './fitting';
+import { GARMENT_FABRICS, FITTING_TORSO, fittingOffsetAt, readFabricOverrides, type GarmentFabricOverrides } from './fitting';
 import { GarmentSimulation, GARMENT_STEP } from './solver';
 
 export interface FittingBakeInput {
@@ -8,6 +8,7 @@ export interface FittingBakeInput {
     fabric: keyof typeof GARMENT_FABRICS;
     animateTorso: boolean;
     selfCollision: boolean;
+    material?: GarmentFabricOverrides;
 }
 export interface FittingBakeReference { assetId: string; recipe: string; duration: number }
 export type FittingBakeReply = { progress: number } | { bytes: ArrayBuffer; duration: number } | { error: string };
@@ -19,7 +20,10 @@ export async function fittingDigest(bytes: ArrayBuffer | Uint8Array<ArrayBuffer>
 
 /** Bump the recipe version when changes to the cooker, solver or fitting trajectory invalidate recorded poses. */
 export function fittingBakeRecipe(input: FittingBakeInput): Promise<string> {
-    const canonical = JSON.stringify([1, readGarmentPattern(input.pattern), input.fabric, input.animateTorso, input.selfCollision]);
+    const recipe: unknown[] = [1, readGarmentPattern(input.pattern), input.fabric, input.animateTorso, input.selfCollision];
+    const overrides = readFabricOverrides(input.fabric, input.material);
+    if (overrides) recipe.push(overrides);
+    const canonical = JSON.stringify(recipe);
     return fittingDigest(new TextEncoder().encode(canonical));
 }
 
@@ -39,7 +43,8 @@ export function bakeFitting(input: FittingBakeInput, seconds: number, progress: 
     const cooked = cookGarment(input.pattern);
     const framesNeeded = seconds * fps + 1;
     if (framesNeeded * cooked.positions.length * 4 > 32 * 1024 * 1024) throw new Error('Use a shorter clip or a coarser mesh for this bake.');
-    const simulation = new GarmentSimulation(cooked, { ...GARMENT_FABRICS[input.fabric], selfCollision: input.selfCollision });
+    const simulation = new GarmentSimulation(cooked, { ...GARMENT_FABRICS[input.fabric],
+        ...readFabricOverrides(input.fabric, input.material), selfCollision: input.selfCollision });
     const matrix = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
     const torso = { ...FITTING_TORSO };
     const colliders = [torso];

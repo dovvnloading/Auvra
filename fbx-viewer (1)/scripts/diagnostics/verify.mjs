@@ -467,6 +467,8 @@ const EXEMPT = new Map(Object.entries({
   'runtime/garments/strain.ts': 'hot-loop',
   'runtime/garments/pattern.ts': 'pure-derived-state',
   'runtime/garments/solver.ts': 'hot-loop',
+  'runtime/garments/avatarContact.ts': 'hot-loop',
+  'runtime/garments/skinnedSurface.ts': 'hot-loop',
   'runtime/springBones.ts': 'hot-loop',
   'runtime/daylight.ts': 'pure-derived-state',
   'runtime/postEffects.ts': 'hot-loop',

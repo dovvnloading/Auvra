@@ -97,11 +97,11 @@ describe('fitting bake controls and runtime cache selection', () => {
         });
     });
 
-    it('makes a bake available again when the artist clears a bone-follow binding', async () => {
+    it.each(['followBone', 'collisionMesh'])('makes a bake available again when the artist clears a %s binding', async (binding) => {
         const p = pattern(), editor = mountEditor(p);
         const button = screen.getByRole('button', { name: 'Bake fitting clip' });
         await waitFor(() => expect(button).toBeEnabled());
-        editor.replace(p, { followBone: 'Chest' });
+        editor.replace(p, { [binding]: 'Chest' });
         expect(button).toBeDisabled();
         editor.replace(p);
         await waitFor(() => expect(button).toBeEnabled());

@@ -3,6 +3,7 @@ import type { ComponentInspectorProps } from '../../runtime/components/types';
 import { readGarmentSettings } from '../../runtime/components/garmentComponent';
 import type { GarmentPattern } from '../../runtime/garments/pattern';
 import { fittingBakeRecipe, readFittingBake, type FittingBakeReply } from '../../runtime/garments/bake';
+import { readFabricOverrides } from '../../runtime/garments/fitting';
 import { projectService } from '../../utils/projectService';
 import { editorSession } from '../../utils/editorSession';
 
@@ -10,32 +11,34 @@ const button = 'rounded border border-gray-700 px-2 py-1 text-2xs text-gray-200 
 
 export const GarmentBakeControls: React.FC<ComponentInspectorProps & { pattern: GarmentPattern }> =
     ({ pattern, component, onChangeProps }) => {
-        const { fabric, animateTorso, selfCollision, followBone } = readGarmentSettings(component);
-        const input = useMemo(() => ({ pattern, fabric, animateTorso, selfCollision }), [pattern, fabric, animateTorso, selfCollision]);
+        const { fabric, animateTorso, selfCollision, followBone, collisionMesh } = readGarmentSettings(component);
+        const liveBinding = Boolean(followBone || collisionMesh);
+        const material = useMemo(() => readFabricOverrides(fabric, component.props.fabricProperties), [fabric, component.props.fabricProperties]);
+        const input = useMemo(() => ({ pattern, fabric, animateTorso, selfCollision, material }), [pattern, fabric, animateTorso, selfCollision, material]);
         const [seconds, setSeconds] = useState(2);
         const [progress, setProgress] = useState<number | null>(null);
         const [error, setError] = useState('');
         const [recipe, setRecipe] = useState('');
         const active = useRef<{ worker: Worker; controller: AbortController } | null>(null);
         const ref = readFittingBake(component.props.fittingBake);
-        const compatible = ref && ref.recipe === recipe && !followBone;
+        const compatible = ref && ref.recipe === recipe && !liveBinding;
         const cancel = () => {
             active.current?.worker.terminate(); active.current?.controller.abort(); active.current = null;
         };
         useLayoutEffect(() => {
             cancel(); setProgress(null); setError(''); setRecipe('');
             return cancel;
-        }, [component.id, input, followBone]);
+        }, [component.id, input, liveBinding]);
         useEffect(() => {
             let mounted = true;
             void fittingBakeRecipe(input).then(id => { if (mounted) setRecipe(id); })
                 .catch(() => { if (mounted) setError('Fitting bakes require a secure browser context.'); });
             return () => { mounted = false; };
-        }, [input, followBone, component.id]);
+        }, [input, liveBinding, component.id]);
         const start = () => {
             const lease = editorSession.captureReady();
             const project = projectService.getStatus();
-            if (followBone || active.current || !recipe) return;
+            if (liveBinding || active.current || !recipe) return;
             if (!lease || !project.projectId || lease.projectId !== project.projectId || project.readOnly) {
                 setError('Open a writable project to store the fitting clip.'); return;
             }
@@ -74,13 +77,13 @@ export const GarmentBakeControls: React.FC<ComponentInspectorProps & { pattern: 
         };
         return <details className="space-y-1 text-2xs text-gray-300">
             <summary className="cursor-pointer">Fitting bake</summary>
-            <p>Record the upright fitting form in still air at 30 fps. Bone-following garments use live simulation.</p>
+            <p>Record the upright fitting form in still air at 30 fps. Bone and skinned-mesh bindings use live simulation.</p>
             <div className="flex items-center gap-1"><label>Duration <select value={seconds} disabled={progress !== null}
                 className="rounded border border-gray-700 bg-gray-950" onChange={event => setSeconds(Number(event.target.value))}>
                 {[1, 2, 5, 10].map(value => <option key={value} value={value}>{value} s</option>)}
             </select></label>
             {progress === null
-                ? <button type="button" className={button} disabled={!recipe || Boolean(followBone)} onClick={start}>Bake fitting clip</button>
+                ? <button type="button" className={button} disabled={!recipe || liveBinding} onClick={start}>Bake fitting clip</button>
                 : <button type="button" className={button} onClick={() => { cancel(); setProgress(null); }}>Cancel bake · {progress}%</button>}
             </div>
             {ref && <div className="space-y-1">

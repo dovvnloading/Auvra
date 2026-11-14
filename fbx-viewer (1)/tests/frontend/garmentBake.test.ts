@@ -15,13 +15,13 @@ describe('fitting clip and live component parity', () => {
     beforeEach(() => vi.stubGlobal('crypto', webcrypto));
     afterEach(() => vi.unstubAllGlobals());
 
-    it('records every 30 Hz frame, including both endpoints, as the corresponding still-air live pose and torso', () => {
-        const input = fixture(), cooked = cookGarment(input.pattern);
+    it.each([undefined, { warp: 680, weft: 1300, thickness: .003 }])('records the same poses and torso as live fitting with material %j', (material) => {
+        const input = { ...fixture(), material }, cooked = cookGarment(input.pattern);
         const settings = readGarmentSettings({ id: 'cloth', type: 'garment', enabled: true,
             props: { fabric: input.fabric, animateTorso: input.animateTorso, selfCollision: input.selfCollision, wind: 0 } });
         const progress = vi.fn();
         const cache = decodeGarmentCache(bakeFitting(input, 1, progress), cooked.positions.length / 3);
-        const live = new GarmentInstance(cooked, input.fabric, input.selfCollision);
+        const live = new GarmentInstance(cooked, input.fabric, input.selfCollision, material);
         const out = new Float32Array(cooked.positions.length), center: [number, number, number] = [0, 0, 0];
         expect(cache.frameCount).toBe(31);
         expect(cache.fps).toBe(30);
@@ -49,6 +49,10 @@ describe('fitting clip and live component parity', () => {
         const signature = await fittingBakeRecipe(input);
         expect(signature).toMatch(/^[0-9a-f]{64}$/);
         expect(await fittingBakeRecipe(equivalent)).toBe(signature);
+        expect(await fittingBakeRecipe({ ...input, material: { arealDensity: .22 } })).toBe(signature);
+        expect(await fittingBakeRecipe({ ...input, material: { warp: 330 } })).not.toBe(signature);
+        expect(await fittingBakeRecipe({ ...input, material: { warp: 330, weft: 820 } })).toBe(
+            await fittingBakeRecipe({ ...input, material: { weft: 820, warp: 330 } }));
         const edited = structuredClone(input);
         edited.pattern.panels[0].boundary[0].x -= .015;
         for (const changed of [edited, { ...input, fabric: 'silk' as const },

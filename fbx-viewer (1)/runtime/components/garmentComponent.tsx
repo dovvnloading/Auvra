@@ -6,9 +6,11 @@ import { decodeGarmentCache, GARMENT_CACHE_LIMITS, sampleGarmentCache, type Garm
 import { fittingBakeRecipe, fittingDigest, readFittingBake } from '../garments/bake';
 import type { LevelComponent } from '../../types';
 import { frontendDiagnostics } from '../../diagnostics/runtime';
+import { keepFullDetail } from '../../utils/meshLod';
 import { cookGarment, createSleevelessTop, readGarmentPattern, type CookedGarment } from '../garments/pattern';
 import { GARMENT_STEP, GarmentSimulation } from '../garments/solver';
-import { FITTING_TORSO, fittingOffsetAt, GARMENT_FABRICS, type GarmentFabric } from '../garments/fitting';
+import { FITTING_TORSO, fittingOffsetAt, GARMENT_FABRICS, readFabricOverrides, type GarmentFabric, type GarmentFabricOverrides } from '../garments/fitting';
+import { SkinnedSurfaceBinding } from '../garments/skinnedSurface';
 import { GarmentStrainMap, type GarmentStrainView } from '../garments/strain';
 import { findBone, isDescendantOf } from '../ik';
 import { windAt, windTime, type WindVec } from '../wind';
@@ -22,6 +24,7 @@ export interface GarmentSettings {
     showTorso: boolean;
     selfCollision: boolean;
     followBone: string;
+    collisionMesh: string;
     strainView: GarmentStrainView;
 }
 
@@ -36,6 +39,7 @@ export function readGarmentSettings(component: LevelComponent): GarmentSettings 
         showTorso: p.showTorso !== false,
         selfCollision: p.selfCollision === true,
         followBone: typeof p.followBone === 'string' ? p.followBone.trim() : '',
+        collisionMesh: typeof p.collisionMesh === 'string' ? p.collisionMesh.trim() : '',
         strainView: p.strainView === 'warp' || p.strainView === 'weft' || p.strainView === 'shear' ? p.strainView : 'off',
     };
 }
@@ -72,13 +76,18 @@ export class GarmentInstance {
     private bone: THREE.Object3D | null = null;
     private searchDelay = 0;
     private missingBoneReported = false;
+    private readonly avatar = new SkinnedSurfaceBinding();
+    private avatarIssue = '';
     private carry = 0;
     private time = 0;
 
-    constructor(private readonly cooked: CookedGarment, fabric: GarmentSettings['fabric'], selfCollision = false) {
-        this.simulation = new GarmentSimulation(cooked, { ...GARMENT_FABRICS[fabric], ...(selfCollision ? { selfCollision: true } : {}) });
+    constructor(private readonly cooked: CookedGarment, fabric: GarmentSettings['fabric'], selfCollision = false, fabricOverrides?: GarmentFabricOverrides) {
+        this.simulation = new GarmentSimulation(cooked, { ...GARMENT_FABRICS[fabric], ...readFabricOverrides(fabric, fabricOverrides), ...(selfCollision ? { selfCollision: true } : {}) });
         this.simulation.reset();
         const geometry = new THREE.BufferGeometry();
+        // Static simplification measures its error in the first pose. Edges that are
+        // coplanar at arrangement can become the silhouette of a fold after sewing.
+        keepFullDetail(geometry);
         geometry.setAttribute('position', new THREE.BufferAttribute(this.simulation.positions, 3).setUsage(THREE.DynamicDrawUsage));
         geometry.setAttribute('uv', new THREE.BufferAttribute(cooked.restUV, 2));
         geometry.setIndex(new THREE.BufferAttribute(cooked.indices, 1));
@@ -178,13 +187,18 @@ export class GarmentInstance {
     }
 
     advance(dt: number, settings: GarmentSettings, objectId: string): void {
-        this.torso.visible = settings.showTorso;
+        this.torso.visible = settings.showTorso && !settings.collisionMesh;
         if (!(dt > 0) || !Number.isFinite(dt)) {
             this.updateSurface(settings, false);
             return;
         }
         this.root.updateWorldMatrix(true, false);
-        this.root.visible = this.boneOffset(settings.followBone, objectId, dt);
+        const ready = this.avatar.capture(this.root, objectId, settings.collisionMesh, dt);
+        if (this.avatarIssue !== this.avatar.issue) {
+            this.avatarIssue = this.avatar.issue;
+            if (this.avatarIssue) frontendDiagnostics.warning('garment_collision_mesh_' + this.avatarIssue);
+        }
+        this.root.visible = ready && this.boneOffset(settings.followBone, objectId, dt);
         if (!this.root.visible) return;
         this.root.getWorldQuaternion(this.inverseRotation).invert();
         this.down.copy(_unitUp).negate().applyQuaternion(this.inverseRotation);
@@ -202,15 +216,18 @@ export class GarmentInstance {
         for (let consumed = GARMENT_STEP - oldCarry; this.carry + 1e-12 >= GARMENT_STEP; consumed += GARMENT_STEP) {
             this.carry = Math.max(0, this.carry - GARMENT_STEP);
             const next = this.time + GARMENT_STEP;
-            this.offset.lerpVectors(this.previousOffset, this.endOffset, Math.min(1, consumed / elapsed));
-            if (!settings.followBone) fittingOffsetAt(next, settings.animateTorso, this.offset);
+            const phase = Math.min(1, consumed / elapsed);
+            this.offset.lerpVectors(this.previousOffset, this.endOffset, phase);
+            if (!settings.followBone && !settings.collisionMesh) fittingOffsetAt(next, settings.animateTorso, this.offset);
             this.capsule.x = this.offset.x;
             this.capsule.y = FITTING_TORSO.y + this.offset.y;
             this.capsule.z = this.offset.z;
             this.pins.makeTranslation(this.offset.x, this.offset.y, this.offset.z);
+            const surface = this.avatar.tick(phase);
             const accepted = this.simulation.step(GARMENT_STEP, this.pins.elements,
-                settings.wind > 0 ? this.wind : null, this.colliders, null, this.down);
+                settings.wind > 0 ? this.wind : null, surface ? [] : this.colliders, null, this.down, surface);
             if (!accepted) break;
+            this.avatar.accept();
             this.time = next;
             this.torso.position.set(this.capsule.x, this.capsule.y + FITTING_TORSO.height / 2, this.capsule.z);
             changed = true;
@@ -255,13 +272,14 @@ const GarmentRender: React.FC<ComponentRenderProps> = ({ object, component }) =>
     const wantsCache = component.props.playback === 'cache';
     const ref = useMemo(() => readFittingBake(rawBake), [rawBake]);
     const { readAssetBytes } = useGameContent();
-    const { fabric, animateTorso, selfCollision, followBone } = settings;
+    const { fabric, animateTorso, selfCollision, followBone, collisionMesh } = settings;
+    const material = useMemo(() => readFabricOverrides(fabric, component.props.fabricProperties), [fabric, component.props.fabricProperties]);
     const request = useMemo(() => {
-        if (!wantsCache || !cooked || !ref || !readAssetBytes || followBone) return null;
+        if (!wantsCache || !cooked || !ref || !readAssetBytes || followBone || collisionMesh) return null;
         return { cooked, ref, read: readAssetBytes, input: {
-            fabric, animateTorso, selfCollision, pattern: pattern === undefined ? createSleevelessTop() : readGarmentPattern(pattern),
+            fabric, animateTorso, selfCollision, material, pattern: pattern === undefined ? createSleevelessTop() : readGarmentPattern(pattern),
         } };
-    }, [wantsCache, cooked, ref, readAssetBytes, followBone, fabric, animateTorso, selfCollision, pattern]);
+    }, [wantsCache, cooked, ref, readAssetBytes, followBone, collisionMesh, fabric, animateTorso, selfCollision, material, pattern]);
     const [loaded, setLoaded] = useState<{ request: typeof request; cache: GarmentCache } | null>(null);
     useEffect(() => {
         let current = true;
@@ -284,12 +302,14 @@ const GarmentRender: React.FC<ComponentRenderProps> = ({ object, component }) =>
     }, [request, wantsCache]);
     const cache = loaded && loaded.request === request ? loaded.cache : null;
     // An accepted display-only pose must never seed velocities or multipliers in live simulation.
-    const garment = useMemo(() => cooked ? new GarmentInstance(cooked, fabric, selfCollision) : null,
-        [cooked, fabric, selfCollision, cache]);
+    const garment = useMemo(() => cooked ? new GarmentInstance(cooked, fabric, selfCollision, material) : null,
+        [cooked, fabric, selfCollision, material, cache]);
     useEffect(() => {
         if (!garment) frontendDiagnostics.warning('garment_invalid_pattern');
         return () => garment?.dispose();
     }, [garment]);
+    // Animation, timelines and character IK publish at negative priorities. An ordinary-priority
+    // procedural modifier mounted later contributes its previous pose to this sample.
     useFrame((_state, dt) => { if (!cache) garment?.advance(dt, settings, object.id); });
     if (!garment) return null;
     return cache ? <CachedGarment key={ref!.assetId} instance={garment} settings={settings} cache={cache}
@@ -313,6 +333,7 @@ export const GARMENT_COMPONENT: ComponentDefinition = {
             { label: 'Fabric colour', value: 'off' }, { label: 'Warp extension', value: 'warp' },
             { label: 'Weft extension', value: 'weft' }, { label: 'Shear angle', value: 'shear' },
         ] },
+        { key: 'collisionMesh', label: 'Skinned collision mesh (exact name)', type: 'string', default: '' },
         { key: 'followBone', label: 'Follow bone translation', type: 'string', default: '' },
     ],
     createProps: () => ({ pattern: createSleevelessTop() }),

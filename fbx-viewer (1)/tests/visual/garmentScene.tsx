@@ -11,7 +11,7 @@ const settings = readGarmentSettings({ id: 'top', type: 'garment', enabled: true
     props: { animateTorso: true, wind: 0, showTorso: false, color: '#f74445' } });
 const input = { pattern: createSleevelessTop(), fabric: 'cotton' as const, animateTorso: true, selfCollision: false };
 let active: GarmentInstance | null = null;
-interface PixelReport { initialPixels: number; livePixels: number; playbackPixels: number; motionPixels: number; silhouetteIoU: number }
+interface PixelReport { initialPixels: number; livePixels: number; playbackPixels: number; motionPixels: number; silhouetteIoU: number; maxPositionErrorMeters: number }
 export let garmentPixelReport: PixelReport | null = null;
 
 function Scene() {
@@ -60,6 +60,13 @@ async function verify(steps: SceneSteps) {
         const cache = decodeGarmentCache(bakeFitting(input, 1, () => {}), cook.positions.length / 3);
         const positions = new Float32Array(cook.positions.length), center: [number, number, number] = [0, 0, 0];
         sampleGarmentCache(cache, time, positions, center);
+        let maxPositionErrorMeters = 0;
+        for (let i = 0; i < positions.length; i++) {
+            const error = Math.abs(positions[i] - live.simulation.positions[i]);
+            if (error > cache.quantum[i % 3] / 2 + 2e-7)
+                throw new Error('Garment pose differs beyond its axis quantization bound at coordinate ' + i + ': ' + error);
+            maxPositionErrorMeters = Math.max(maxPositionErrorMeters, error);
+        }
         cached.presentCachedPose(positions, new THREE.Vector3(...center), settings);
         live.root.visible = false;
         scene.add(cached.root);
@@ -77,7 +84,7 @@ async function verify(steps: SceneSteps) {
             if (b && c) intersection++;
         }
         const silhouetteIoU = intersection / Math.max(1, union);
-        const report = { initialPixels, livePixels, playbackPixels, motionPixels, silhouetteIoU };
+        const report = { initialPixels, livePixels, playbackPixels, motionPixels, silhouetteIoU, maxPositionErrorMeters };
         const minVisible = canvas.width * canvas.height * .005;
         if (Math.min(initialPixels, livePixels, playbackPixels) < minVisible || motionPixels < Math.max(20, livePixels * .02) || silhouetteIoU < .97)
             throw new Error('Garment pixel verification failed: ' + JSON.stringify(report));

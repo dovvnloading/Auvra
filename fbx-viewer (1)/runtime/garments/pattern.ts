@@ -424,6 +424,62 @@ export function splitGarmentEdge(pattern: GarmentPattern, panelId: string, from:
     return readGarmentPattern(copy);
 }
 
+/** Remove the panel and each incident seam as one edit. A garment retains at least one panel. */
+export function removeGarmentPanel(pattern: GarmentPattern, panelId: string): GarmentPattern {
+    const copy = readGarmentPattern(pattern);
+    check(copy.panels.some(p => p.id === panelId), 'Missing panel ' + panelId + '.');
+    check(copy.panels.length > 1, 'A garment needs at least one panel.');
+    copy.panels = copy.panels.filter(p => p.id !== panelId);
+    copy.seams = copy.seams.filter(s => s.a.panelId !== panelId && s.b.panelId !== panelId);
+    return copy;
+}
+
+/** Replace the two incident edges by a new, open edge, clearing their stitches and any pin on the point. */
+export function removeGarmentPoint(pattern: GarmentPattern, panelId: string, pointId: string): GarmentPattern {
+    const copy = readGarmentPattern(pattern);
+    const panel = copy.panels.find(p => p.id === panelId);
+    check(panel && panel.boundary.some(p => p.id === pointId), 'Missing point ' + panelId + '/' + pointId + '.');
+    check(panel.boundary.length > 3, 'A panel needs at least three boundary points.');
+    panel.boundary = panel.boundary.filter(p => p.id !== pointId);
+    panel.pins = panel.pins.filter(id => id !== pointId);
+    const touches = (s: GarmentSeamSide) => s.panelId === panelId && (s.from === pointId || s.to === pointId);
+    copy.seams = copy.seams.filter(s => !touches(s.a) && !touches(s.b));
+    return readGarmentPattern(copy);
+}
+
+export type GarmentRotationAxis = 'u' | 'v' | 'normal';
+function cross3(a: PatternVector3, b: PatternVector3): PatternVector3 {
+    return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+}
+function unit3(v: PatternVector3): PatternVector3 {
+    const length = Math.hypot(...v);
+    return [v[0] / length, v[1] / length, v[2] / length];
+}
+function mix3(a: PatternVector3, aScale: number, b: PatternVector3, bScale: number): PatternVector3 {
+    return [a[0] * aScale + b[0] * bScale, a[1] * aScale + b[1] * bScale, a[2] * aScale + b[2] * bScale];
+}
+
+/** Rotate about the selected panel's local chart origin, retaining a right-handed orthonormal placement frame. */
+export function rotateGarmentPanel(pattern: GarmentPattern, panelId: string, axis: GarmentRotationAxis, degrees: number): GarmentPattern {
+    const copy = readGarmentPattern(pattern);
+    const panel = copy.panels.find(p => p.id === panelId);
+    check(panel, 'Missing panel ' + panelId + '.');
+    check(axis === 'u' || axis === 'v' || axis === 'normal', 'Select a panel-local rotation axis.');
+    check(Number.isFinite(degrees) && Math.abs(degrees) <= 360, 'Rotation must be between −360 and 360 degrees.');
+    const u = unit3(panel.placement.u), normal = unit3(cross3(u, panel.placement.v)), v = cross3(normal, u);
+    const radians = degrees * Math.PI / 180, cosine = Math.cos(radians), sine = Math.sin(radians);
+    let newU = u, newV = v;
+    if (axis === 'u') newV = mix3(v, cosine, normal, sine);
+    else if (axis === 'v') newU = mix3(u, cosine, normal, -sine);
+    else {
+        newU = mix3(u, cosine, v, sine);
+        newV = mix3(v, cosine, u, -sine);
+    }
+    panel.placement.u = unit3(newU);
+    panel.placement.v = unit3(cross3(unit3(cross3(newU, newV)), panel.placement.u));
+    return copy;
+}
+
 /** Original two-panel sleeveless top, outward-facing in actor space around a metre-scale torso. */
 export function createSleevelessTop(): GarmentPattern {
     const outline: Array<[string, number, number]> = [
