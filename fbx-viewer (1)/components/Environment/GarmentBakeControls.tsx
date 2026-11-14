@@ -10,7 +10,7 @@ import { editorSession } from '../../utils/editorSession';
 const button = 'rounded border border-gray-700 px-2 py-1 text-2xs text-gray-200 hover:bg-gray-800 disabled:opacity-40';
 
 export const GarmentBakeControls: React.FC<ComponentInspectorProps & { pattern: GarmentPattern }> =
-    ({ pattern, component, onChangeProps }) => {
+    ({ pattern, component, object, onChangeProps }) => {
         const { fabric, animateTorso, selfCollision, followBone, collisionMesh } = readGarmentSettings(component);
         const liveBinding = Boolean(followBone || collisionMesh);
         const material = useMemo(() => readFabricOverrides(fabric, component.props.fabricProperties), [fabric, component.props.fabricProperties]);
@@ -20,6 +20,10 @@ export const GarmentBakeControls: React.FC<ComponentInspectorProps & { pattern: 
         const [error, setError] = useState('');
         const [recipe, setRecipe] = useState('');
         const active = useRef<{ worker: Worker; controller: AbortController } | null>(null);
+        // The inspector's commit callback closes over the current object and its components.
+        // An upload may finish after independent edits, including changes to sibling components.
+        const commitProps = useRef(onChangeProps);
+        useLayoutEffect(() => { commitProps.current = onChangeProps; }, [onChangeProps]);
         const ref = readFittingBake(component.props.fittingBake);
         const compatible = ref && ref.recipe === recipe && !liveBinding;
         const cancel = () => {
@@ -28,13 +32,13 @@ export const GarmentBakeControls: React.FC<ComponentInspectorProps & { pattern: 
         useLayoutEffect(() => {
             cancel(); setProgress(null); setError(''); setRecipe('');
             return cancel;
-        }, [component.id, input, liveBinding]);
+        }, [object.levelId, object.id, component.id, input, liveBinding]);
         useEffect(() => {
             let mounted = true;
             void fittingBakeRecipe(input).then(id => { if (mounted) setRecipe(id); })
                 .catch(() => { if (mounted) setError('Fitting bakes require a secure browser context.'); });
             return () => { mounted = false; };
-        }, [input, liveBinding, component.id]);
+        }, [input, liveBinding, object.levelId, object.id, component.id]);
         const start = () => {
             const lease = editorSession.captureReady();
             const project = projectService.getStatus();
@@ -65,7 +69,7 @@ export const GarmentBakeControls: React.FC<ComponentInspectorProps & { pattern: 
                     const assetId = await projectService.uploadAsset(file, { signal: controller.signal });
                     if (!current()) return;
                     if (!editorSession.isCurrent(lease)) { finish('The project changed before the bake could be attached.'); return; }
-                    onChangeProps({ fittingBake: { assetId, recipe, duration: reply.duration }, playback: 'cache' });
+                    commitProps.current({ fittingBake: { assetId, recipe, duration: reply.duration }, playback: 'cache' });
                     finish();
                 } catch (err) { finish(err instanceof Error ? err.message : 'The fitting clip could not be saved.'); }
             };

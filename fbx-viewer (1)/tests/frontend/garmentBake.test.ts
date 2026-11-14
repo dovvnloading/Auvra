@@ -1,9 +1,9 @@
-import { webcrypto } from 'node:crypto';
+import { createHash, webcrypto } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { GarmentInstance, readGarmentSettings } from '../../runtime/components/garmentComponent';
 import { bakeFitting, fittingBakeRecipe, type FittingBakeInput } from '../../runtime/garments/bake';
 import { decodeGarmentCache, sampleGarmentCache } from '../../runtime/garments/cache';
-import { cookGarment, createSleevelessTop } from '../../runtime/garments/pattern';
+import { cookGarment, createSleevelessTop, readGarmentPattern } from '../../runtime/garments/pattern';
 
 function fixture(): FittingBakeInput {
     const pattern = createSleevelessTop();
@@ -41,6 +41,20 @@ describe('fitting clip and live component parity', () => {
             expect(live.torso.position.x).not.toBeCloseTo(0, 3);
             expect(progress).toHaveBeenLastCalledWith(1);
         } finally { live.dispose(); }
+    });
+
+    it('invalidates pre-fix contact bakes while retaining legacy clips with no cloth contacts', async () => {
+        const options = fixture(), pattern = options.pattern;
+        const legacy = (input: FittingBakeInput) => createHash('sha256').update(JSON.stringify([
+            1, readGarmentPattern(input.pattern), input.fabric, input.animateTorso, input.selfCollision,
+        ])).digest('hex');
+        expect(await fittingBakeRecipe(options)).toBe(legacy(options));
+        const self = { ...options, selfCollision: true };
+        expect(await fittingBakeRecipe(self)).not.toBe(legacy(self));
+        pattern.panels[0].layer = 1;
+        expect(await fittingBakeRecipe(options)).not.toBe(legacy(options));
+        pattern.panels[1].layer = 1;
+        expect(await fittingBakeRecipe(options)).toBe(legacy(options));
     });
 
     it('invalidates fabric, motion, collision or pattern edits while visual controls preserve the fitting recipe', async () => {

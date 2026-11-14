@@ -56,7 +56,7 @@ The strain view colors each vertex from adjacent faces, weighted by rest area. *
 
 In a writable project, open **Fitting bake**, select a duration and click **Bake fitting clip**. The worker advances the upright fitting form in still air at the simulation's 120 Hz step and records 30 samples per second plus the initial pose. It saves the clip as a content-addressed binary asset. Garment and torso positions are sampled together. **Loop clip** restarts from the initial arrangement, which can produce a visible cut. Without looping, the final fit holds. **Use live simulation** restores wind and interactive motion.
 
-Changing the pattern, fabric coefficients, self-contact setting or form motion invalidates the previous bake for that recipe. Restoring the same inputs can make it usable again. A missing, damaged or incompatible clip falls back to live fitting. A bone-driven garment uses live motion. The offline player uses the same garment component, saved pattern, and baked data as the editor.
+Changing the pattern, fabric coefficients, self-contact setting or form motion invalidates the previous bake for that recipe. Restoring the same inputs can make it usable again. Clips baked with the earlier self-contact solver need a new bake when the garment uses general self-collision or mixes panel ranks. The original Garment Studio clip uses its original fitting recipe and remains playable. A missing, damaged or incompatible clip falls back to live fitting. A bone-driven garment uses live motion. The offline player uses the same garment component, saved pattern, and baked data as the editor.
 
 The example opens in live mode and includes a two-second fitting clip. Select **Play fitting clip** to replay it.
 

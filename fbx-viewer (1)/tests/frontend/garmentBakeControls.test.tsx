@@ -157,6 +157,35 @@ describe('fitting bake controls and runtime cache selection', () => {
         expect(editor.save).not.toHaveBeenCalled();
     });
 
+    it('drops an in-flight bake after switching objects that share an identical component ID and pattern', async () => {
+        const p = pattern(), editor = mountEditor(p), worker = await editor.start();
+        const otherSave = vi.fn();
+        editor.rerender(<GarmentBakeControls pattern={p} object={{ ...object, id: 'another-form' }}
+            component={component({ pattern: p })} onChangeProps={otherSave} />);
+        await act(() => worker.reply({ bytes: new ArrayBuffer(4), duration: 1 }));
+        expect(worker.terminate).toHaveBeenCalled();
+        expect(mock.upload).not.toHaveBeenCalled();
+        expect(otherSave).not.toHaveBeenCalled();
+        await waitFor(() => expect(screen.getByRole('button', { name: 'Bake fitting clip' })).toBeEnabled());
+    });
+
+    it('attaches a completed bake to the current inspector state after unrelated edits during an upload', async () => {
+        const p = pattern();
+        const startState = vi.fn(), editedState = vi.fn();
+        const editor = mountEditor(p, startState), worker = await editor.start();
+        let uploaded!: (id: string) => void;
+        mock.upload.mockImplementation(() => new Promise(resolve => { uploaded = resolve; }));
+        let completion!: Promise<void>;
+        act(() => { completion = worker.reply({ bytes: new ArrayBuffer(4), duration: 1 }); });
+        editor.rerender(<GarmentBakeControls pattern={p} object={object}
+            component={component({ pattern: p, color: '#c60c30' })} onChangeProps={editedState} />);
+        await act(async () => { uploaded('a'.repeat(64)); await completion; });
+        expect(editedState).toHaveBeenCalledExactlyOnceWith({
+            fittingBake: expect.objectContaining({ assetId: 'a'.repeat(64) }), playback: 'cache',
+        });
+        expect(startState).not.toHaveBeenCalled();
+    });
+
     it.each(['invalid header', 'corrupted position'] as const)('keeps live cloth running for a cache with %s', async (fault) => {
         const p = pattern(), input = { pattern: p, fabric: 'cotton' as const, animateTorso: true, selfCollision: false };
         const recipe = await fittingBakeRecipe(input);
