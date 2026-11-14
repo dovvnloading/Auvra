@@ -121,6 +121,27 @@ describe('gpu particle state', () => {
 });
 
 describe('gpu particle system', () => {
+  it('clears queued bursts and motion history before the first step of a restarted preview', () => {
+    const system = new GpuParticleSystem(128);
+    system.setEffect(effectWith({ rate: 0, rateOverDistance: 4, bursts: [{ time: 0, count: 2 }] }));
+    const { renderer, cleared } = fakeRenderer();
+    const origin = new THREE.Matrix4();
+    system.play();
+    system.step(renderer, 0.1, origin, null);
+    system.step(renderer, 0.1, new THREE.Matrix4().makeTranslation(5, 0, 0), null);
+    system.emitAt(9, 8, 0, 0);
+    system.restart();
+    expect(system.count).toBe(0);
+    expect(system.object.children[0].visible).toBe(false);
+    system.step(renderer, 1 / 60, origin, null);
+    expect(cleared).toHaveLength(4);
+    expect(system.object.children[0].visible).toBe(true);
+    expect(uniforms(system).trailCount.value).toBe(0);
+    expect(uniforms(system).pointCount.value).toBe(0);
+    expect(system.count).toBe(2);
+    system.dispose();
+  });
+
   it('takes an effect into its passes: shape, forces, life curves and look', () => {
     const system = new GpuParticleSystem(1000);
     expect([system.width, system.height]).toEqual(stateSize(1000));
@@ -248,6 +269,31 @@ describe('gpu particle system', () => {
     expect(u.meshCount.value).toBe(MESH_SIDE * MESH_SIDE);
     system.setMeshSurface(null);
     expect(u.meshCount.value).toBe(0);
+    system.dispose();
+  });
+
+  it('uploads force fields in simulation space and stops using them when an effect is edited', () => {
+    const system = new GpuParticleSystem(4);
+    const { renderer } = fakeRenderer();
+    const matrix = new THREE.Matrix4().makeRotationZ(Math.PI / 2).setPosition(4, 5, 6);
+    const field = sanitizeParticleEffect({
+      forceFields: [{ kind: 'directional', center: [2, 0, 0], axis: [0, 1, 0], strength: 3, radius: 8, falloff: 2 }],
+    }).forceFields[0];
+    const u = uniforms(system);
+    system.setEffect(effectWith({ forceFields: [field] }));
+    system.step(renderer, 0.02, matrix, null);
+    const packed = u.forceFields.value as Float32Array;
+    expect(u.forceFieldCount.value).toBe(1);
+    expect(Array.from(packed.slice(0, 5))).toEqual([4, 7, 6, 8, -1]);
+    expect(Array.from(packed.slice(7, 10))).toEqual([3, 2, 2]);
+
+    system.setEffect(effectWith({ space: 'local', forceFields: [field] }));
+    system.step(renderer, 0.02, matrix, null);
+    expect(u.forceFields.value).toBe(packed);
+    expect(Array.from(packed.slice(0, 8))).toEqual([2, 0, 0, 8, 0, 1, 0, 3]);
+    system.setEffect(effectWith({ forceFields: [] }));
+    system.step(renderer, 0.02, matrix, null);
+    expect(u.forceFieldCount.value).toBe(0);
     system.dispose();
   });
 });

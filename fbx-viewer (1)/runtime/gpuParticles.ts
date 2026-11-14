@@ -1,5 +1,6 @@
 import * as THREE from 'three';
-import { BAKE_SAMPLES, bakeCurve, bakeGradient, linearColor, type ParticleEffect, type ParticleShapeKind } from './particleEffect';
+import { BAKE_SAMPLES, bakeCurve, bakeGradient, linearColor, MAX_PARTICLE_FORCE_FIELDS, type ParticleEffect, type ParticleShapeKind } from './particleEffect';
+import { PARTICLE_FORCE_FIELD_FLOATS, prepareParticleForceFields } from './particleForceFields';
 import { MODE_DEFINE, PARTICLE_CORNER, PARTICLE_FRAGMENT, WorldMesh } from './particleRenderer';
 import { MAX_PARTICLE_STEP, type MeshSurface } from './particleSimulation';
 import { FullscreenPass } from './postEffects';
@@ -54,6 +55,8 @@ uniform vec3 pointVelocity;
 uniform vec3 emitterVelocity;
 uniform float localSpace;
 uniform vec3 force;
+uniform int forceFieldCount;
+uniform vec4 forceFields[${MAX_PARTICLE_FORCE_FIELDS * 3}];
 uniform float gravity;
 uniform vec2 lifetime;
 uniform vec2 speed;
@@ -188,6 +191,28 @@ void spawn( float index, float kind, float along, out vec4 pa, out vec4 vl ) {
     vl = vec4( v, life );
 }
 
+vec3 fieldAcceleration( vec3 position ) {
+    vec3 acceleration = vec3( 0.0 );
+    for ( int i = 0; i < forceFieldCount; ++i ) {
+        vec4 centreRadius = forceFields[i * 3];
+        vec3 offset = position - centreRadius.xyz;
+        float distanceSq = dot( offset, offset );
+        if ( distanceSq >= centreRadius.w * centreRadius.w ) continue;
+        vec4 axisStrength = forceFields[i * 3 + 1];
+        vec4 settings = forceFields[i * 3 + 2];
+        vec3 direction = axisStrength.xyz;
+        if ( settings.x < 2.0 ) {
+            direction = settings.x == 0.0 ? -offset : cross( direction, offset );
+            float lengthSq = dot( direction, direction );
+            if ( lengthSq <= 1e-12 ) continue;
+            direction *= inversesqrt( lengthSq );
+        }
+        float weight = settings.y == 0.0 ? 1.0 : pow( max( 0.0, 1.0 - sqrt( distanceSq ) / centreRadius.w ), settings.y );
+        acceleration += direction * ( axisStrength.w * weight );
+    }
+    return acceleration;
+}
+
 void main() {
     vec2 cell = floor( gl_FragCoord.xy );
     float index = cell.y * stateSize.x + cell.x;
@@ -215,6 +240,7 @@ void main() {
         return;
     }
     vec3 v = vl.xyz + force * dt;
+    if ( forceFieldCount > 0 ) v += fieldAcceleration( pa.xyz ) * dt;
     if ( turbulence > 0.0 ) {
         vec3 q = pa.xyz / turbulenceScale;
         float t = clock * 0.6;
@@ -454,6 +480,10 @@ export class GpuParticleSystem {
     readonly height: number;
     private targets: [THREE.WebGLRenderTarget, THREE.WebGLRenderTarget];
     private readonly simulation: FullscreenPass;
+    private readonly forceFieldsUniform = {
+        value: new Float32Array(MAX_PARTICLE_FORCE_FIELDS * PARTICLE_FORCE_FIELD_FLOATS),
+        needsUpdate: false,
+    };
     private readonly curves = floatTexture(new Float32Array(BAKE_SAMPLES * CURVE_ROWS * 4), BAKE_SAMPLES, CURVE_ROWS);
     private readonly meshPoints = floatTexture(new Float32Array(MESH_POINTS * 4), MESH_SIDE, MESH_SIDE);
     private readonly meshNormals = floatTexture(new Float32Array(MESH_POINTS * 4), MESH_SIDE, MESH_SIDE);
@@ -484,6 +514,7 @@ export class GpuParticleSystem {
             emitter: u(new THREE.Matrix4()), previousEmitter: u(new THREE.Matrix4()),
             pointPosition: u(new THREE.Vector3()), pointVelocity: u(new THREE.Vector3()), emitterVelocity: u(this.emitterVelocity),
             localSpace: u(0), force: u(new THREE.Vector3()), gravity: u(0), lifetime: u(new THREE.Vector2(1, 1)), speed: u(new THREE.Vector2()),
+            forceFieldCount: u(0), forceFields: this.forceFieldsUniform,
             inheritVelocity: u(0), drag: u(0), turbulence: u(0), turbulenceScale: u(1), orbit: u(0), orbitCentre: u(new THREE.Vector3()),
             shapeRadius: u(0), shapeAngle: u(0), shapeSize: u(new THREE.Vector3(1, 1, 1)), shapeVolume: u(1), randomDirection: u(0),
             shapeAxis: u(new THREE.Vector3(0, 1, 0)), meshCount: u(0),
@@ -644,6 +675,18 @@ export class GpuParticleSystem {
         }
     }
 
+    /** Replay from the current transform with an empty pool and emission history. */
+    restart(): void {
+        this.stop(true);
+        this.previous = null;
+        this.emitterVelocity.set(0, 0, 0);
+        this.elapsed = this.cursor = this.serial = 0;
+        this.warm = false;
+        // The targets are cleared when a step has a renderer. Hide the old frame until then.
+        this.mesh.visible = false;
+        this.play();
+    }
+
     /** Runs one looping cycle at once on the next step, as if it had been going a while. */
     prewarm(): void {
         this.warm = true;
@@ -662,6 +705,7 @@ export class GpuParticleSystem {
         const effect = this.effect;
         // The state lives in WebGL targets; the new renderer simulates particles in a compute pass of its own.
         if (!effect || isGpuRenderer(renderer)) return;
+        this.mesh.visible = true;
         const before = renderer.getRenderTarget();
         if (this.needsClear) {
             const alpha = renderer.getClearAlpha();
@@ -726,6 +770,8 @@ export class GpuParticleSystem {
         const force = u.force.value as THREE.Vector3;
         if (local) force.set(e[0] * ax + e[1] * ay + e[2] * az, e[4] * ax + e[5] * ay + e[6] * az, e[8] * ax + e[9] * ay + e[10] * az);
         else force.set(ax, ay, az);
+        u.forceFieldCount.value = prepareParticleForceFields(effect.forceFields, local ? null : e, this.forceFieldsUniform.value);
+        this.forceFieldsUniform.needsUpdate = u.forceFieldCount.value > 0;
         (u.orbitCentre.value as THREE.Vector3).set(local ? 0 : e[12], local ? 0 : e[13], local ? 0 : e[14]);
         const collide = effect.collision.mode === 'world' && ground !== null && !local;
         u.collide.value = collide ? 1 : 0;

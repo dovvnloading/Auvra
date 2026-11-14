@@ -1,13 +1,14 @@
 import { newSkyConfig } from '../../runtime/sky/skyPresets';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { AxesIcon, ChevronDownIcon, ChevronRightIcon, CornerLeftUpIcon, CrosshairIcon, CubeIcon, ImageIcon, LayersIcon, MusicIcon, PersonIcon, PlusIcon, PointerIcon, SearchIcon, SkullIcon, SplineIcon, SunIcon, TrashIcon, TreesIcon } from '../UI/Icons';
+import { AxesIcon, ChevronDownIcon, ChevronRightIcon, CornerLeftUpIcon, CrosshairIcon, CubeIcon, ImageIcon, LayersIcon, MusicIcon, PersonIcon, PlusIcon, PointerIcon, SearchIcon, SkullIcon, SparklesIcon, SplineIcon, SunIcon, TrashIcon, TreesIcon } from '../UI/Icons';
 import { useScene } from '../../context/SceneContext';
-import { LevelObject } from '../../types';
+import type { LevelComponent, LevelObject } from '../../types';
 import { editorSession } from '../../utils/editorSession';
 import { appAlert, appConfirm, appPrompt } from '../../utils/appDialogs';
 import { reparentPreservingWorld, wouldCreateCycle } from '../../utils/sceneGraph';
 import { uniqueObjectName } from '../../utils/levelClipboard';
 import { createComponent } from '../../runtime/components/registry';
+import { createIonVortexEmitters } from './particleSystemTemplate';
 import { SPLINE_COMPONENT_TYPE } from '../../runtime/splines';
 import { PrefabPanel } from './PrefabPanel';
 import { LightingPanel } from './LightingPanel';
@@ -213,43 +214,20 @@ export const EnvironmentSidebar: React.FC<EnvironmentSidebarProps> = ({
         }
     };
 
-    // An object with no model: a place for components (trigger volumes, timelines, level streaming,
-    // cameras) and a parent to group other objects under.
-    const handleAddEmpty = async () => {
+    const addComponentObject = async (name: string, height: number, components: LevelComponent[] = []) => {
         if (!canEdit() || !currentLevelId) return;
         try {
             const [id] = await addLevelObjects([{
                 id: crypto.randomUUID(),
                 levelId: currentLevelId,
                 modelId: '',
-                name: uniqueObjectName('Empty', new Set(levelObjects.map(object => object.name))),
+                name: uniqueObjectName(name, new Set(levelObjects.map(object => object.name))),
                 type: 'prop',
-                position: [0, 1, 0],
+                position: [0, height, 0],
                 rotation: [0, 0, 0],
                 scale: [1, 1, 1],
                 parentId: null,
-            }]);
-            if (id) onSelectObject(id);
-        } catch {
-            // addLevelObjects has already reported the failure.
-        }
-    };
-
-    // A spline in front of the origin: an empty object carrying a Spline component.
-    const handleAddSpline = async () => {
-        if (!canEdit() || !currentLevelId) return;
-        try {
-            const [id] = await addLevelObjects([{
-                id: crypto.randomUUID(),
-                levelId: currentLevelId,
-                modelId: '',
-                name: uniqueObjectName('Spline', new Set(levelObjects.map(object => object.name))),
-                type: 'prop',
-                position: [0, 0, 0],
-                rotation: [0, 0, 0],
-                scale: [1, 1, 1],
-                parentId: null,
-                components: [createComponent(SPLINE_COMPONENT_TYPE)],
+                components,
             }]);
             if (id) onSelectObject(id);
         } catch {
@@ -676,7 +654,7 @@ export const EnvironmentSidebar: React.FC<EnvironmentSidebarProps> = ({
                                 <div className="text-xs font-bold">Audio Emitter</div>
                             </div>
                             <div
-                                onClick={handleAddEmpty}
+                                onClick={() => void addComponentObject('Empty', 1)}
                                 className="flex items-center gap-3 px-3 py-2.5 rounded-md cursor-pointer transition-all border border-transparent hover:bg-gray-800 hover:text-white text-gray-400 group"
                                 title="Add an empty object, for components such as trigger colliders, timelines and level streaming, or to group objects"
                             >
@@ -685,8 +663,19 @@ export const EnvironmentSidebar: React.FC<EnvironmentSidebarProps> = ({
                                 </div>
                                 <div className="text-xs font-bold">Empty Object</div>
                             </div>
+                            <button
+                                type="button"
+                                onClick={() => void addComponentObject('Ion Vortex', 1, createIonVortexEmitters())}
+                                className="w-full flex items-center gap-3 px-3 py-2.5 rounded-md text-left transition-all border border-transparent hover:bg-gray-800 hover:text-white text-gray-400 group"
+                                title="Add an Ion Vortex particle system with two editable emitters"
+                            >
+                                <span className="w-8 h-8 rounded bg-gray-800 border border-gray-700 flex items-center justify-center shrink-0 text-cyan-400 group-hover:border-cyan-500/50">
+                                    <SparklesIcon size={16} />
+                                </span>
+                                <span className="text-xs font-bold">Particle System</span>
+                            </button>
                             <div
-                                onClick={handleAddSpline}
+                                onClick={() => void addComponentObject('Spline', 0, [createComponent(SPLINE_COMPONENT_TYPE)])}
                                 className="flex items-center gap-3 px-3 py-2.5 rounded-md cursor-pointer transition-all border border-transparent hover:bg-gray-800 hover:text-white text-gray-400 group"
                                 title="Add a spline: a curve to bend roads, rails and fences along (Spline Mesh), place copies along (Spline Scatter) or move objects along (Follow Spline)"
                             >

@@ -1,5 +1,6 @@
 import type { LevelComponent, LevelObject, PrefabData } from '../types';
 import { collectSubtree, sortByHierarchy } from './sceneGraph';
+import { rekeyComponents } from './componentIds';
 import type { PrefabObject } from './prefabs';
 
 /**
@@ -33,7 +34,8 @@ const clone = <T>(value: T): T => (value === undefined ? value : JSON.parse(JSON
 const comparable = (field: SyncedField, value: unknown): string => {
   if (field === 'components') {
     const components = (value as LevelComponent[] | undefined) ?? [];
-    return JSON.stringify(components.map(({ id: _id, ...rest }) => rest));
+    // Instance IDs differ, but a link to its second emitter means the same in both copies.
+    return JSON.stringify(rekeyComponents(components, (_component, index) => String(index)));
   }
   return JSON.stringify(value ?? null);
 };
@@ -42,9 +44,9 @@ const sameValue = (field: SyncedField, a: unknown, b: unknown): boolean => compa
 
 /** New component list from the prefab, reusing the instance's component ids where the same type sits at the same index. */
 const syncComponents = (current: LevelComponent[] | undefined, next: LevelComponent[] | undefined): LevelComponent[] =>
-  (next ?? []).map((component, index) => {
+  rekeyComponents(clone(next ?? []), (component, index) => {
     const existing = current?.[index];
-    return { ...clone(component), id: existing && existing.type === component.type ? existing.id : newId() };
+    return existing && existing.type === component.type ? existing.id : newId();
   });
 
 /** Objects heading an instance of `prefabId` (all of them when omitted). */

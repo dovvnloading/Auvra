@@ -1,4 +1,5 @@
 import type { LevelObject, LevelObjectType } from '../types';
+import { rekeyComponents } from './componentIds';
 import { frontendDiagnostics } from '../diagnostics/runtime';
 import { collectSubtree, getWorldMatrix, sortByHierarchy, toLocalTransform, type LocalTransform } from './sceneGraph';
 
@@ -114,7 +115,7 @@ export const pasteLevelObjects = (payload: LevelClipboardPayload, options: Paste
       copy.position = [copy.position[0] + dx, copy.position[1] + dy, copy.position[2] + dz];
       rootIds.push(copy.id);
     }
-    if (copy.components) copy.components = copy.components.map((component) => ({ ...component, id: createId() }));
+    if (copy.components) copy.components = rekeyComponents(copy.components, createId);
     objects.push(copy);
   }
   return { objects, rootIds };

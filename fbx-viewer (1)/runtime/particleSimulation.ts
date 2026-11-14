@@ -3,9 +3,11 @@ import {
     bakeCurve,
     bakeGradient,
     linearColor,
+    MAX_PARTICLE_FORCE_FIELDS,
     type ParticleEffect,
     type SubEmitterTrigger,
 } from './particleEffect';
+import { applyParticleForceFields, PARTICLE_FORCE_FIELD_FLOATS, prepareParticleForceFields } from './particleForceFields';
 
 /**
  * PARTICLE SIMULATION
@@ -103,6 +105,7 @@ export class ParticleSimulation {
     private speedTable!: Float32Array;
     private startA = new Float32Array(3);
     private startB = new Float32Array(3);
+    private readonly forceFields = new Float32Array(MAX_PARTICLE_FORCE_FIELDS * PARTICLE_FORCE_FIELD_FLOATS);
     private wants = { death: false, collision: false };
     private mesh: MeshSampler | null = null;
     private readonly random: () => number;
@@ -185,6 +188,16 @@ export class ParticleSimulation {
         if (clear) this.count = 0;
     }
 
+    /** Replay from the current transform without old motion, sub-emitter events, or particles. */
+    restart(): void {
+        this.stop(true);
+        this.last = null;
+        this.emitterVelocity.fill(0);
+        this.events.length = 0;
+        this.collisionCursor = 0;
+        this.play();
+    }
+
     /** Runs one looping cycle at once, as if it had been going a while. */
     prewarm(matrix: ArrayLike<number> | null, steps = 30): void {
         const dt = this.effect.duration / steps;
@@ -247,6 +260,10 @@ export class ParticleSimulation {
         const orbit = effect.orbit;
         const cx = local ? 0 : world[12], cz = local ? 0 : world[14];
         const collide = raycast && effect.collision.mode === 'world' && !local;
+        const fieldCount = prepareParticleForceFields(effect.forceFields, local ? null : world, this.forceFields);
+        if (fieldCount > 0) {
+            applyParticleForceFields(this.forceFields, fieldCount, step, this.count, this.positions, this.velocities, this.ages, this.lifetimes);
+        }
         let checks = 0;
         const checkFrom = this.collisionCursor;
         let i = 0;

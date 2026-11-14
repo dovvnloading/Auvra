@@ -15,6 +15,28 @@
 export type Range = [number, number];
 export type Vec3 = [number, number, number];
 
+export const PARTICLE_FORCE_FIELD_KINDS = ['radial', 'vortex', 'directional'] as const;
+export const MAX_PARTICLE_FORCE_FIELDS = 4;
+
+export interface ParticleForceField {
+    kind: typeof PARTICLE_FORCE_FIELD_KINDS[number];
+    enabled: boolean;
+    /** Offset in the emitter's local space. */
+    center: Vec3;
+    /** Direction or vortex axis in the emitter's local space. */
+    axis: Vec3;
+    /** Spherical influence radius, in simulation units. */
+    radius: number;
+    /** Peak acceleration in m/s². Positive radial strength attracts. */
+    strength: number;
+    /** Exponent on (1 - distance / radius); zero gives a uniform field. */
+    falloff: number;
+}
+
+export const createParticleForceField = (kind: ParticleForceField['kind'] = 'radial'): ParticleForceField => ({
+    kind, enabled: true, center: [0, 0, 0], axis: [0, 1, 0], radius: 5, strength: 10, falloff: 1,
+});
+
 export interface GradientStop {
     /** 0-1 through the particle's life. */
     t: number;
@@ -173,6 +195,8 @@ export interface ParticleEffect {
     drag: number;
     /** m/s² of world acceleration. */
     wind: Vec3;
+    /** Spatial accelerations evaluated at each live particle. Overlapping fields add together. */
+    forceFields: ParticleForceField[];
     /** m/s² of swirling noise, and the size of its swirls (metres). */
     turbulence: number;
     turbulenceScale: number;
@@ -285,7 +309,7 @@ export const DEFAULT_PARTICLE_EFFECT: ParticleEffect = {
     shape: DEFAULT_SHAPE, space: 'world',
     lifetime: [2.4, 3.6], speed: [0.6, 1], size: [0.5, 0.8], rotation: [0, 360], spin: [-20, 20],
     startColor: ['#a8a8a8', '#8c8c8c'], inheritVelocity: 0,
-    gravity: -0.3, drag: 0.6, wind: [0, 0, 0], turbulence: 0.3, turbulenceScale: 2, orbit: 0,
+    gravity: -0.3, drag: 0.6, wind: [0, 0, 0], forceFields: [], turbulence: 0.3, turbulenceScale: 2, orbit: 0,
     colorOverLife: { stops: [{ t: 0, color: '#ffffff', alpha: 0 }, { t: 0.1, color: '#ffffff', alpha: 0.5 }, { t: 0.6, color: '#d8d8d8', alpha: 0.35 }, { t: 1, color: '#a0a0a0', alpha: 0 }] },
     sizeOverLife: { points: [[0, 0.6], [1, 3]] },
     speedOverLife: { points: [[0, 1], [1, 1]] },
@@ -351,6 +375,26 @@ const curve = (value: unknown, fallback: Curve, min: number, max: number): Curve
 const sprite = (value: unknown, fallback: string): string =>
     typeof value === 'string' && ((BUILTIN_SPRITES as readonly string[]).includes(value) || /^texture:.+/.test(value)) ? value : fallback;
 
+const forceFields = (value: unknown, fallback: ParticleForceField[]): ParticleForceField[] => {
+    const fields = Array.isArray(value) ? value : fallback;
+    const result: ParticleForceField[] = [];
+    for (const entry of fields.slice(0, MAX_PARTICLE_FORCE_FIELDS)) {
+        const field = record(entry);
+        const kind = PARTICLE_FORCE_FIELD_KINDS.find(kind => kind === field.kind);
+        if (!kind) continue;
+        const defaults = createParticleForceField(kind);
+        result.push({
+            kind, enabled: bool(field.enabled, defaults.enabled),
+            center: vec3(field.center, defaults.center, -10000, 10000),
+            axis: vec3(field.axis, defaults.axis, -1, 1),
+            radius: num(field.radius, defaults.radius, 0, 10000),
+            strength: num(field.strength, defaults.strength, -1000, 1000),
+            falloff: num(field.falloff, defaults.falloff, 0, 8),
+        });
+    }
+    return result;
+};
+
 /** An effect from stored data, every field defaulted, clamped and in order. */
 export const sanitizeParticleEffect = (value: unknown, base: ParticleEffect = DEFAULT_PARTICLE_EFFECT): ParticleEffect => {
     const e = record(value);
@@ -394,6 +438,7 @@ export const sanitizeParticleEffect = (value: unknown, base: ParticleEffect = DE
         gravity: num(e.gravity, base.gravity, -100, 100),
         drag: num(e.drag, base.drag, 0, 50),
         wind: vec3(e.wind, base.wind, -200, 200),
+        forceFields: forceFields(e.forceFields, base.forceFields),
         turbulence: num(e.turbulence, base.turbulence, 0, 200),
         turbulenceScale: num(e.turbulenceScale, base.turbulenceScale, 0.05, 100),
         orbit: num(e.orbit, base.orbit, -50, 50),
@@ -507,6 +552,39 @@ export const PARTICLE_PRESETS = {
         render: { sprite: 'star', blending: 'additive', emissive: 4, sort: false },
         light: { enabled: true, color: '#a0c8ff', intensity: 15, range: 5, flicker: 0.1 },
     }),
+    ionVortex: effect({
+        rate: 175, maxParticles: 570, lifetime: [2.5, 3.4], speed: [2.8, 3.3], size: [0.07, 0.135],
+        shape: { kind: 'circle', radius: 0.16, axis: [0.2, 0.45, -1], angle: 2, volume: 0.2 },
+        gravity: 0, drag: 0.3, turbulence: 0.15, startColor: ['#e5faff', '#a2dbff'],
+        forceFields: [
+            { kind: 'radial', enabled: true, center: [1.25, 1, 0], axis: [0, 1, 0], radius: 5, strength: 12, falloff: 1 },
+            { kind: 'vortex', enabled: true, center: [1.25, 1, 0], axis: [0, 1, 0], radius: 5, strength: 4, falloff: 1 },
+            { kind: 'directional', enabled: true, center: [1.25, 1, 0], axis: [0, 1, 0], radius: 3, strength: 3.5, falloff: 1 },
+        ],
+        colorOverLife: { stops: [
+            { t: 0, color: '#edffff', alpha: 0 }, { t: 0.045, color: '#bcffff', alpha: 0.95 },
+            { t: 0.26, color: '#38ddff', alpha: 0.9 }, { t: 0.55, color: '#6d9fff', alpha: 0.82 },
+            { t: 0.86, color: '#b478ff', alpha: 0.68 }, { t: 1, color: '#fd9dee', alpha: 0 },
+        ] },
+        sizeOverLife: { points: [[0, 0.4], [0.12, 1], [0.8, 0.85], [1, 0.1]] },
+        render: { mode: 'stretched', sprite: 'spark', blending: 'additive', emissive: 4.4, stretch: 2, sort: false },
+    }),
+    vortexSparks: effect({
+        rate: 60, maxParticles: 180, lifetime: [2, 3.2], speed: [2.4, 4.2], size: [0.023, 0.052],
+        shape: { kind: 'circle', radius: 0.17, axis: [0.1, 0.65, 1], angle: 5, volume: 0.2 },
+        gravity: -0.6, drag: 0.2, turbulence: 0.4, startColor: ['#ffead6', '#ffc4a6'],
+        forceFields: [
+            { kind: 'radial', enabled: true, center: [1.25, 1, 0], axis: [0, 1, 0], radius: 5, strength: 9, falloff: 1 },
+            { kind: 'vortex', enabled: true, center: [1.25, 1, 0], axis: [0, 1, 0], radius: 5, strength: -3, falloff: 1 },
+        ],
+        colorOverLife: { stops: [
+            { t: 0, color: '#fff0cb', alpha: 0 }, { t: 0.09, color: '#ffdd93', alpha: 1 },
+            { t: 0.4, color: '#ffad54', alpha: 1 }, { t: 0.82, color: '#ff6d37', alpha: 0.8 },
+            { t: 1, color: '#ff4475', alpha: 0 },
+        ] },
+        sizeOverLife: { points: [[0, 0.5], [0.15, 1], [1, 0.3]] },
+        render: { mode: 'stretched', sprite: 'glow', blending: 'additive', emissive: 5.5, stretch: 2.4, sort: false },
+    }),
     rain: effect({
         rate: 1500, lifetime: [0.9, 1.1], speed: [11, 13], size: [0.02, 0.03], gravity: 0, drag: 0, turbulence: 0, maxParticles: 4000,
         shape: { kind: 'box', size: [30, 0.1, 30], angle: 2, axis: [0, -1, 0] }, startColor: ['#c0d4e8', '#a8c0d8'],
@@ -618,7 +696,12 @@ export const PARTICLE_PRESET_LABELS: Record<ParticlePresetId, string> = {
     rain: 'Rain', snow: 'Snow', steam: 'Steam', leaves: 'Falling leaves', confetti: 'Confetti', fireflies: 'Fireflies',
     waterfall: 'Waterfall mist', muzzleFlash: 'Muzzle flash', shockwave: 'Shockwave', trail: 'Trail', debris: 'Debris',
     fountain: 'Fountain (GPU)', swarm: 'Swarm (GPU)', downpour: 'Downpour (GPU)',
+    ionVortex: 'Ion vortex', vortexSparks: 'Vortex sparks',
 };
+
+/** The artist's optional name for a particle component within a layered effect. */
+export const particleEmitterName = (props: Record<string, unknown>): string =>
+    typeof props.emitterName === 'string' ? props.emitterName.trim() : '';
 
 const isPreset = (value: unknown): value is ParticlePresetId =>
     typeof value === 'string' && Object.prototype.hasOwnProperty.call(PARTICLE_PRESETS, value);

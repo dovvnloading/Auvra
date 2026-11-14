@@ -4,9 +4,13 @@ import { useScene } from '../../context/SceneContext';
 import type { ComponentInspectorProps } from '../../runtime/components/types';
 import {
     BUILTIN_SPRITES,
+    createParticleForceField,
+    MAX_PARTICLE_FORCE_FIELDS,
     PARTICLE_BLENDINGS,
     PARTICLE_COLLISION_MODES,
     PARTICLE_FRAME_MODES,
+    PARTICLE_FORCE_FIELD_KINDS,
+    particleEmitterName,
     PARTICLE_PRESET_IDS,
     PARTICLE_PRESET_LABELS,
     PARTICLE_PRESETS,
@@ -19,6 +23,7 @@ import {
     type Curve,
     type Gradient,
     type ParticleEffect,
+    type ParticleForceField,
     type ParticlePresetId,
     type Range,
     type Vec3,
@@ -36,6 +41,12 @@ const MODE_LABELS: Record<string, string> = {
     billboard: 'Facing the camera', stretched: 'Stretched along motion', horizontal: 'Flat (facing up)', vertical: 'Upright', ribbon: 'Ribbon (trail)',
 };
 
+const FORCE_HINTS: Record<ParticleForceField['kind'], string> = {
+    radial: 'Positive strength pulls toward the center. Negative strength pushes outward.',
+    vortex: 'Particles turn around the axis. Negative strength reverses the swirl.',
+    directional: 'Positive strength pushes along the axis. Negative strength pushes against it.',
+};
+
 /** A number typed in and taken on Enter or when the field is left. */
 const NumberInput: React.FC<{ label: string; value: number; onCommit: (value: number) => void; step?: number }> = ({ label, value, onCommit, step = 0.1 }) => {
     const shown = String(Math.round(value * 1000) / 1000);
@@ -43,8 +54,8 @@ const NumberInput: React.FC<{ label: string; value: number; onCommit: (value: nu
     useEffect(() => setText(shown), [shown]);
     const take = () => {
         const parsed = Number(text);
-        if (Number.isFinite(parsed) && parsed !== value) onCommit(parsed);
-        else setText(shown);
+        setText(shown);
+        if (text.trim() && Number.isFinite(parsed) && parsed !== value) onCommit(parsed);
     };
     return (
         <input
@@ -92,15 +103,21 @@ const RangeInputs: React.FC<{ label: string; value: Range; step?: number; onComm
 );
 
 const VectorInputs: React.FC<{ label: string; value: Vec3; step?: number; onCommit: (value: Vec3) => void }> = ({ label, value, step, onCommit }) => (
-    <Row label={label}>
-        {(['X', 'Y', 'Z'] as const).map((axis, i) => (
-            <NumberInput key={axis} label={`${label} ${axis}`} value={value[i]} step={step} onCommit={(next) => {
-                const out: Vec3 = [...value];
-                out[i] = next;
-                onCommit(out);
-            }} />
-        ))}
-    </Row>
+    <fieldset className="min-w-0">
+        <legend className={LABEL}>{label}</legend>
+        <div className="grid grid-cols-3 gap-1">
+            {(['X', 'Y', 'Z'] as const).map((axis, i) => (
+                <label key={axis} className="flex min-w-0 items-center gap-1">
+                    <span className="text-2xs text-gray-500">{axis}</span>
+                    <NumberInput label={`${label} ${axis}`} value={value[i]} step={step} onCommit={(next) => {
+                        const out: Vec3 = [...value];
+                        out[i] = next;
+                        onCommit(out);
+                    }} />
+                </label>
+            ))}
+        </div>
+    </fieldset>
 );
 
 const ColorInput: React.FC<{ label: string; value: string; onCommit: (value: string) => void }> = ({ label, value, onCommit }) => (
@@ -169,13 +186,43 @@ const CurveEditor: React.FC<{ label: string; value: Curve; onCommit: (value: Cur
     );
 };
 
+const ForceFieldEditor: React.FC<{ fields: ParticleForceField[]; onChange: (fields: ParticleForceField[]) => void }> = ({ fields, onChange }) => {
+    const edit = (index: number, patch: Partial<ParticleForceField>) =>
+        onChange(fields.map((field, i) => i === index ? { ...field, ...patch } : field));
+    return (
+        <Section title="Force fields" open={fields.length > 0}>
+            {fields.map((field, index) => (
+                <fieldset key={index} className="min-w-0 space-y-1 border-b border-gray-800 pb-2">
+                    <legend className="text-2xs font-semibold text-gray-300">Field {index + 1}</legend>
+                    <div className="flex items-center gap-1">
+                        <Toggle label="Field enabled" value={field.enabled} onChange={(enabled) => edit(index, { enabled })} />
+                        <Select label="Field type" value={field.kind} options={PARTICLE_FORCE_FIELD_KINDS} labels={{ radial: 'Radial', vortex: 'Vortex', directional: 'Directional' }} onChange={(kind) => edit(index, { kind })} />
+                        <button type="button" aria-label={`Remove field ${index + 1}`} className={BUTTON} onClick={() => onChange(fields.filter((_, i) => i !== index))}><TrashIcon size={11} /></button>
+                    </div>
+                    <VectorInputs label="Center (m)" value={field.center} onCommit={(center) => edit(index, { center })} />
+                    {field.kind !== 'radial' && <VectorInputs label="Axis" value={field.axis} onCommit={(axis) => edit(index, { axis })} />}
+                    <Row label="Radius (m)"><NumberInput label="Field radius" value={field.radius} onCommit={(radius) => edit(index, { radius })} /></Row>
+                    <Row label="Strength (m/s²)"><NumberInput label="Field strength" value={field.strength} onCommit={(strength) => edit(index, { strength })} /></Row>
+                    <p className={LABEL}>{FORCE_HINTS[field.kind]}</p>
+                    <Row label="Falloff exponent"><NumberInput label="Field falloff" value={field.falloff} step={0.25} onCommit={(falloff) => edit(index, { falloff })} /></Row>
+                </fieldset>
+            ))}
+            {fields.length > 0 && <p className={LABEL}>Centers follow the emitter. Falloff 0 gives full strength throughout the radius. A value of 1 fades linearly to the edge.</p>}
+            <button type="button" className={BUTTON + ' disabled:opacity-40'} disabled={fields.length >= MAX_PARTICLE_FORCE_FIELDS} onClick={() => onChange([...fields, createParticleForceField()])}>
+                <PlusIcon size={10} /> Add force field ({fields.length}/{MAX_PARTICLE_FORCE_FIELDS})
+            </button>
+        </Section>
+    );
+};
+
 /** The Particles component's effect: a preset to start from, and every module of it. */
 export const ParticlesInspector: React.FC<ComponentInspectorProps> = ({ object, component, onChangeProps }) => {
     const { textures } = useScene();
     const effect = resolveParticleEffect(component.props);
     const update = (patch: Partial<ParticleEffect>) => onChangeProps({ effect: sanitizeParticleEffect({ ...effect, ...patch }) });
     const preset = typeof component.props.preset === 'string' && component.props.preset in PARTICLE_PRESETS ? component.props.preset as ParticlePresetId : null;
-    const siblings = (object.components ?? []).filter(entry => entry.type === 'particles' && entry.id !== component.id);
+    const emitters = (object.components ?? []).filter(entry => entry.type === 'particles');
+    const siblings = emitters.filter(entry => entry.id !== component.id);
     const sprites = [...BUILTIN_SPRITES, ...textures.map(texture => `texture:${texture.id}`)];
     const spriteLabels: Record<string, string> = Object.fromEntries(textures.map(texture => [`texture:${texture.id}`, `Texture: ${texture.name}`]));
     const custom = effect.render.sprite.startsWith('texture:');
@@ -200,7 +247,7 @@ export const ParticlesInspector: React.FC<ComponentInspectorProps> = ({ object, 
 
             <Section title="Emission" open>
                 <Row label="Simulation"><Select label="Simulation" value={effect.simulation} options={PARTICLE_SIMULATION_MODES} labels={{ cpu: 'CPU (every feature)', gpu: 'GPU (up to a million)' }} onChange={(simulation) => update({ simulation })} /></Row>
-                {effect.simulation === 'gpu' && <p className="text-2xs text-gray-500">On the GPU: no sub-emitters, ribbons draw as quads, particles are not sorted, and world collision is with the ground under the emitter.</p>}
+                {effect.simulation === 'gpu' && <p className="text-2xs text-gray-500">WebGL2 GPU mode draws unsorted sprites and collides with the ground under the emitter. Choose CPU for ribbons or sub-emitters on WebGL2.</p>}
                 <Row label="Rate (per s)"><NumberInput label="Rate" value={effect.rate} step={1} onCommit={(rate) => update({ rate })} /></Row>
                 <Row label="Per metre moved"><NumberInput label="Rate over distance" value={effect.rateOverDistance} step={0.5} onCommit={(rateOverDistance) => update({ rateOverDistance })} /></Row>
                 <Row label="Cycle (s)"><NumberInput label="Duration" value={effect.duration} onCommit={(duration) => update({ duration })} /></Row>
@@ -252,6 +299,8 @@ export const ParticlesInspector: React.FC<ComponentInspectorProps> = ({ object, 
                 <Row label="Orbit (rad/s)"><NumberInput label="Orbit" value={effect.orbit} onCommit={(orbit) => update({ orbit })} /></Row>
             </Section>
 
+            <ForceFieldEditor fields={effect.forceFields} onChange={(forceFields) => update({ forceFields })} />
+
             <Section title="Over life">
                 <GradientEditor label="Colour and alpha" value={effect.colorOverLife} onCommit={(colorOverLife) => update({ colorOverLife })} />
                 <CurveEditor label="Size" value={effect.sizeOverLife} onCommit={(sizeOverLife) => update({ sizeOverLife })} />
@@ -275,7 +324,7 @@ export const ParticlesInspector: React.FC<ComponentInspectorProps> = ({ object, 
                         <Row label="Set off">
                             <select aria-label={`Sub-emitter ${index + 1} target`} value={sub.target} onChange={(event) => update({ subEmitters: effect.subEmitters.map((entry, i) => (i === index ? { ...entry, target: event.target.value } : entry)) })} className={FIELD}>
                                 <option value="">Choose…</option>
-                                {siblings.map((entry, i) => <option key={entry.id} value={entry.id}>{`Particles ${i + 2}`}{typeof entry.props.preset === 'string' ? ` (${PARTICLE_PRESET_LABELS[entry.props.preset as ParticlePresetId] ?? entry.props.preset})` : ''}</option>)}
+                                {siblings.map(entry => <option key={entry.id} value={entry.id}>{particleEmitterName(entry.props) || `Particles ${emitters.indexOf(entry) + 1}`}{typeof entry.props.preset === 'string' ? ` (${PARTICLE_PRESET_LABELS[entry.props.preset as ParticlePresetId] ?? entry.props.preset})` : ''}</option>)}
                             </select>
                         </Row>
                         <Row label="Count"><NumberInput label={`Sub-emitter ${index + 1} count`} value={sub.count} step={1} onCommit={(count) => update({ subEmitters: effect.subEmitters.map((entry, i) => (i === index ? { ...entry, count } : entry)) })} /></Row>

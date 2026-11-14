@@ -12,7 +12,7 @@ The **Environment** tab is where levels are built.
 | Terrain | — | Create, sculpt and texture-paint terrain (see [Terrain](#terrain)) |
 | Mask | M | Create texture masks on objects |
 
-The left panel's **Logic Actors** add a Player Start, an Enemy Spawner, an Audio Emitter, a Sky Sphere, an **Empty Object** (an object with no model, drawn in the editor as a small marker, for components such as trigger colliders, timelines, cameras and level streaming, or as a parent to group other objects under) and a **Spline** (an empty object with a [Spline](#splines) component).
+The left panel's **Logic Actors** add a Player Start, an Enemy Spawner, an Audio Emitter, a Sky Sphere, a **Particle System** (the layered [Ion Vortex](#building-a-layered-particle-system) effect), an **Empty Object** (an object with no model, drawn in the editor as a small marker, for components such as trigger colliders, timelines, cameras and level streaming, or as a parent to group other objects under) and a **Spline** (an empty object with a [Spline](#splines) component).
 
 Select an Enemy Spawner to set what it spawns: the **Enemy** blueprint, a new one **Every** so many seconds, and **Max** in all (0 for no limit). Enemies appear around the spawner. A spawner with no enemy chosen spawns nothing. With a **Patrol Path** (an object with a Spline component) its enemies patrol along the spline instead of wandering around where they spawned (see [Patrol paths](characters.md#patrol-paths)).
 
@@ -477,15 +477,36 @@ Add a **Particles** component to an object for a particle effect: smoke, fire, s
 | Shape | Where particles come from and which way they go: a **Point**, **Sphere** or **Hemisphere** (outwards), a **Cone** opening by its spread, a **Box**, a **Disc**, a **Line**, or the **model's surface** (along its faces: embers off a burning crate, sparkles off a statue). **Spread** is the cone around the **Launch axis** (up by default; rain and snow fall down it); **Fill** is 0 for the shape's edge only, 1 for anywhere in it; **Random dir.** mixes in random directions |
 | Start | Each particle's **Lifetime**, **Speed**, **Size**, **Rotation** and **Spin**, picked between two values; a colour between two; how much of the object's own motion it starts with; and whether it stays in the **World** where it was left or moves with the object (**Local**: a jet's flame) |
 | Forces | **Gravity** (negative rises), **Drag**, **Wind**, **Turbulence** (swirling, the size of its swirls set by **Swirl size**) and **Orbit** round the object's up axis |
+| Force fields | Up to four radial, vortex or directional fields with individual centers, radii and falloff. See [Building a layered particle system](#building-a-layered-particle-system). |
 | Over life | A **Colour and alpha** gradient and **Size** and **Speed** curves across each particle's life, with previews |
 | Collision | **With the world**: particles bounce off what they hit (**Bounce**, **Friction**) or die there (**Die on hit**). It only runs in play |
 | Sub-emitters | Another Particles component on the same object, set off where these particles **die** or **hit something**: rain that splashes, fireworks that burst, sparks that smoke |
 | Rendering | **Draw as** camera-facing sprites, **stretched along their motion** (sparks, rain), **flat** (ripples, shockwaves), **upright**, or a **ribbon** through them (trails). The **Sprite** is one of the engine's (soft, smoke, spark, glow, ring, star, an animated flame, droplet, snowflake, leaf, square, debris) or a texture of the project, which can be a flipbook (columns and rows) played over each particle's life, at a frame rate, or one frame at random. **Blending** added glows, blended layers; **Brightness** above 1 glows with bloom |
 | Light | A light that brightens and dims with the effect, and can flicker: a fire's glow, an explosion's flash |
 
+### Building a layered particle system
+
+In the World Editor, choose **Particle System** under **Logic Actors** to place **Ion Vortex** in the current level. Its two named Particles components form a cyan ion stream and a counter-rotating spray of warm sparks. Disable either component to see the other layer on its own. To use one layer on another object, add a **Particles** component and choose **Ion vortex** or **Vortex sparks** from **Preset**.
+
+Under **Particle preview**, **Pause** freezes the selected object’s emitters together. **Step 1/60 s** advances every layer by one tick and leaves playback paused. **Play** resumes the preview and **Restart** clears the particles and plays the system from its start.
+
+Open **Force fields** on either emitter. Up to four spherical fields can overlap. Their accelerations add together before drag and movement. Each field acts only on particles belonging to that emitter.
+
+| Field | Positive strength | Negative strength |
+|---|---|---|
+| Radial | Pulls particles toward the center | Pushes particles away from the center |
+| Vortex | Turns particles around the axis using the right-hand rule | Reverses the swirl |
+| Directional | Accelerates particles along the axis | Accelerates them against the axis |
+
+**Center** and **Axis** follow the emitter. **Radius** uses the particle simulation's coordinate space. Scaling a local-space emitter scales the field with its particles. A world-space emitter keeps the same radius in world metres. The selected object's wireframe guides show the enabled fields' bounds.
+
+**Strength** is acceleration in m/s². With **Falloff exponent** at 0, the force has full strength throughout the interior. At 1 it decreases linearly, reaching half strength halfway to the edge. At 2 it reaches quarter strength there. Particles on or outside the boundary feel zero acceleration from that field.
+
+To experiment with Ion Vortex, disable the vortex field on **Ion stream** to see how the inward pull and lift shape the stream, then re-enable it and change its strength from positive to negative to reverse the twist. The project saves the field settings alongside the emitter, including in prefabs and built games.
+
 ### GPU particles
 
-Set **Simulation** to **GPU** for effects of hundreds of thousands of particles: a fountain, a storm of rain over a whole valley, a swarm, a model dissolving into light. The graphics card moves and draws them, so an emitter holds up to 1,048,576 particles in play (131,072 in the editor's preview) and emits up to a million a second. Shapes (the model's surface too), forces, the curves over life, sprites and flipbooks, the light and the scripting nodes work as they do on the CPU. Some things are different:
+Set **Simulation** to **GPU** for effects of hundreds of thousands of particles: a fountain, a storm of rain over a whole valley, a swarm, a model dissolving into light. The graphics card moves and draws them, so an emitter holds up to 1,048,576 particles in play (131,072 in the editor's preview) and emits up to a million a second. Shapes (the model's surface too), forces, the curves over life, sprites and flipbooks, the light and the scripting nodes work as they do on the CPU. The WebGL2 GPU simulation has these limits.
 
 - **Collision** is with the ground under the emitter rather than with every surface, looked for a few times a second.
 - **Sub-emitters** do not run, **ribbons** draw as camera-facing sprites, and particles are not **sorted**: added (glowing) blending suits them best.

@@ -1,6 +1,8 @@
 /// <reference types="@webgpu/types" />
 import { VERTEX_WGSL } from "../geometryPool";
 import { CAMERA_BINDINGS_WGSL, VIEW_WGSL } from "../shaders";
+import { MAX_PARTICLE_FORCE_FIELDS } from "../../../runtime/particleEffect";
+import { PARTICLE_FORCE_FIELD_FLOATS } from "../../../runtime/particleForceFields";
 
 /**
  * PARTICLE SHADERS
@@ -27,7 +29,8 @@ export const EVENT_HEADER_BYTES = 16;
 export const MAX_REQUESTS = 256;
 export const REQUEST_BYTES = 80;
 export const REQUEST_WORDS = REQUEST_BYTES / 4;
-export const PARAMS_WORDS = 120;
+export const FORCE_FIELDS_OFFSET_WORDS = 120;
+export const PARAMS_WORDS = FORCE_FIELDS_OFFSET_WORDS + MAX_PARTICLE_FORCE_FIELDS * PARTICLE_FORCE_FIELD_FLOATS;
 export const PARAMS_BYTES = PARAMS_WORDS * 4;
 /** 64 rows of colour and alpha over life, then 64 of size (x) and speed (y). */
 export const CURVE_ROWS = 128;
@@ -97,6 +100,13 @@ struct Particle {
   link: u32,
 }
 
+struct ForceField {
+  centreRadius: vec4f,
+  axisStrength: vec4f,
+  // Kind and falloff, followed by two padding words.
+  settings: vec4f,
+}
+
 struct Params {
   emitter: mat4x4f,
   previousEmitter: mat4x4f,
@@ -121,7 +131,8 @@ struct Params {
   fogColor: vec3f, fogDensity: f32,
   trailEvery: f32, spawnTotal: u32, requestCount: u32, seed: u32,
   shapeKind: u32, flags: u32, meshCount: u32, mode: u32,
-  frameMode: u32, fogMode: u32, gridCells: u32, pad: u32,
+  frameMode: u32, fogMode: u32, gridCells: u32, forceFieldCount: u32,
+  forceFields: array<ForceField, ${MAX_PARTICLE_FORCE_FIELDS}>,
 }
 
 struct Curves { rows: array<vec4f, ${CURVE_ROWS}> }
@@ -514,6 +525,30 @@ fn worldPointOf(position: vec3f) -> vec3f {
   return (params.emitter * vec4f(position, 1.0)).xyz;
 }
 
+fn fieldAcceleration(position: vec3f) -> vec3f {
+  var acceleration = vec3f(0.0);
+  for (var i = 0u; i < params.forceFieldCount; i++) {
+    let field = params.forceFields[i];
+    let offset = position - field.centreRadius.xyz;
+    let radius = field.centreRadius.w;
+    let distanceSq = dot(offset, offset);
+    if (distanceSq >= radius * radius) { continue; }
+    var direction = field.axisStrength.xyz;
+    if (field.settings.x < 2.0) {
+      direction = select(cross(direction, offset), -offset, field.settings.x == 0.0);
+      let lengthSq = dot(direction, direction);
+      if (lengthSq <= 1e-12) { continue; }
+      direction *= inverseSqrt(lengthSq);
+    }
+    var weight = 1.0;
+    if (field.settings.y != 0.0) {
+      weight = pow(max(0.0, 1.0 - sqrt(distanceSq) / radius), field.settings.y);
+    }
+    acceleration += direction * (field.axisStrength.w * weight);
+  }
+  return acceleration;
+}
+
 fn worldDirectionOf(direction: vec3f) -> vec3f {
   if ((params.flags & FLAG_LOCAL) == 0u) { return direction; }
   let m = params.emitter;
@@ -705,6 +740,9 @@ fn sceneHitOf(start: vec3f, stop: vec3f, velocity: vec3f) -> SceneHit {
   }
 
   var velocity = before.velocity + params.force * dt;
+  if (params.forceFieldCount > 0u) {
+    velocity += fieldAcceleration(before.position) * dt;
+  }
   if (params.turbulence > 0.0) {
     let q = before.position / params.turbulenceScale;
     let t = params.clock * 0.6;

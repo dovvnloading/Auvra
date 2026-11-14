@@ -1,6 +1,7 @@
 /// <reference types="@webgpu/types" />
 import * as THREE from "three";
 import { EmissionClock, MESH_SIDE, sampleSurface } from "../../../runtime/gpuParticles";
+import { PARTICLE_FORCE_FIELD_FLOATS, prepareParticleForceFields } from "../../../runtime/particleForceFields";
 import { BAKE_SAMPLES, bakeCurve, bakeGradient, linearColor, type ParticleEffect, type ParticleShapeKind } from "../../../runtime/particleEffect";
 import { MODE_DEFINE } from "../../../runtime/particleRenderer";
 import { MAX_PARTICLE_STEP, type MeshSurface } from "../../../runtime/particleSimulation";
@@ -16,6 +17,7 @@ import {
   EVENT_BYTES,
   EVENT_HEADER_BYTES,
   EVENT_TRIGGER,
+  FORCE_FIELDS_OFFSET_WORDS,
   LINK_BYTES,
   MAX_REQUESTS,
   NO_LINK,
@@ -82,7 +84,7 @@ export interface EmitterHome {
   readonly fieldSampler: GPUSampler;
   readonly noStorage: GPUBuffer;
   readonly noEvents: GPUBuffer;
-  /** Counts up each frame any emitter steps: an event is only read the step after it was raised. */
+  /** Monotonic batch ID shared by emitters that simulated in the same frame. */
   readonly stepTick: number;
   forget(emitter: ComputeEmitter): void;
 }
@@ -115,10 +117,13 @@ let nextEmitterId = 1;
 /** A sub-emitter wired from one emitter's events into another's spawning. */
 class ParticleLink {
   readonly uniform: GPUBuffer;
+  /** A source's last event batch stays on the GPU until its next simulation step. */
+  consumedTick: number;
   private bindGroup: GPUBindGroup | null = null;
   private boundEvents: GPUBuffer | null = null;
 
-  constructor(readonly source: ComputeEmitter, readonly target: ComputeEmitter, readonly settings: ComputeSubEmitter, device: GPUDevice, salt: number) {
+  constructor(readonly source: ComputeEmitter, readonly target: ComputeEmitter, readonly settings: ComputeSubEmitter, device: GPUDevice, salt: number, currentTick: number) {
+    this.consumedTick = currentTick;
     this.uniform = device.createBuffer({ label: "gpu particle link", size: LINK_BYTES, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     const data = new ArrayBuffer(LINK_BYTES);
     const words = new Uint32Array(data);
@@ -195,6 +200,7 @@ export class ComputeEmitter {
 
   private readonly paramWords = new Uint32Array(PARAMS_WORDS);
   private readonly paramFloats = new Float32Array(this.paramWords.buffer);
+  private readonly forceFields = this.paramFloats.subarray(FORCE_FIELDS_OFFSET_WORDS);
   private readonly requestWords = new Uint32Array(MAX_REQUESTS * REQUEST_WORDS);
   private readonly requestFloats = new Float32Array(this.requestWords.buffer);
   private readonly curveData = new Float32Array(CURVE_ROWS * 4);
@@ -242,6 +248,7 @@ export class ComputeEmitter {
   private inFlight = 0;
   private sinceCopy = 0;
   private readState: "idle" | "copied" | "mapping" = "idle";
+  private discardRead = false;
   private framesSinceRead = 0;
   private disposed = false;
 
@@ -345,7 +352,7 @@ export class ComputeEmitter {
     this.wantsCollision = false;
     this.trailEvery = 0;
     for (const sub of list) {
-      const link = new ParticleLink(this, sub.target, sub, this.device, this.linkSalt++);
+      const link = new ParticleLink(this, sub.target, sub, this.device, this.linkSalt++, this.eventsTick);
       this.outgoing.push(link);
       sub.target.incoming.push(link);
 
@@ -385,6 +392,20 @@ export class ComputeEmitter {
       this.needsClear = true;
       this.bursts.length = 0;
     }
+  }
+
+  /** Replay without motion, requests or events from the previous run. */
+  restart(): void {
+    this.stop(true);
+    this.hasPrevious = false;
+    this.emitterVelocity.set(0, 0, 0);
+    this.elapsed = this.serial = this.pendingStep = 0;
+    this.stepAsked = this.warm = false;
+    this.eventsTick = -1;
+    for (const link of this.incoming) link.consumedTick = link.source.eventsTick;
+    this.lastRead = this.inFlight = this.sinceCopy = 0;
+    this.discardRead = this.readState !== "idle";
+    this.play();
   }
 
   /** Runs one looping cycle at once on the next step, as if it had been going a while. */
@@ -486,7 +507,7 @@ export class ComputeEmitter {
     const step = this.pendingStep;
     this.pendingStep = 0;
     this.buildStep(step, frame, depthUsable, lightingReady);
-    const eventsComing = this.incoming.some((link) => !link.source.quiet);
+    const eventsComing = this.incoming.some((link) => this.hasUnreadEvents(link));
     this.stepping = this.spawnTotal > 0 || eventsComing || !this.quiet;
     return this.stepping;
   }
@@ -770,7 +791,9 @@ export class ComputeEmitter {
     u[115] = render.mode === "ribbon" ? 0 : MODE_DEFINE[render.mode];
     u[116] = FRAME_NUMBER[render.frameMode];
     u[118] = this.heightGrid ? this.heightGrid.cells : 0;
-    this.device.queue.writeBuffer(this.params, 0, this.paramWords);
+    u[119] = prepareParticleForceFields(effect.forceFields, local ? null : e, this.forceFields);
+    const activeWords = FORCE_FIELDS_OFFSET_WORDS + u[119] * PARTICLE_FORCE_FIELD_FLOATS;
+    this.device.queue.writeBuffer(this.params, 0, this.paramWords, 0, activeWords);
   }
 
   private emitterGroup(): GPUBindGroup {
@@ -808,7 +831,13 @@ export class ComputeEmitter {
     return this.spawnGroup;
   }
 
-  /** Both steps of the frame in which this emitter has any: what the CPU asked for, then what others set off. */
+  /** Each target can pause independently without rereading the same source event list on resume. */
+  private hasUnreadEvents(link: ParticleLink): boolean {
+    const tick = link.source.eventsTick;
+    return tick >= 0 && tick !== link.consumedTick;
+  }
+
+  /** Spawn everything due before any emitter overwrites the event batch from its last step. */
   encodeSpawn(pass: GPUComputePassEncoder, frame: GpuFrame, withEvents: boolean): void {
     const { pipelines } = this.home;
     pass.setBindGroup(0, frame.cameraBindGroup, [frame.mainViewOffset]);
@@ -823,7 +852,8 @@ export class ComputeEmitter {
     if (!withEvents) return;
     for (const link of this.incoming) {
       const { source } = link;
-      if (source.eventsTick !== this.home.stepTick - 1 || !source.events) continue;
+      if (!this.hasUnreadEvents(link) || !source.events) continue;
+      link.consumedTick = source.eventsTick;
       pass.setPipeline(pipelines.spawnEvents);
       pass.setBindGroup(3, link.group(this.device, pipelines, source.events));
       pass.dispatchWorkgroupsIndirect(source.args, ARGS.events * 4);
@@ -958,11 +988,13 @@ export class ComputeEmitter {
     this.readState = "mapping";
     staging.mapAsync(GPUMapMode.READ).then(() => {
       if (this.disposed) return;
-      this.lastRead = new Uint32Array(staging.getMappedRange())[0];
+      if (!this.discardRead) this.lastRead = new Uint32Array(staging.getMappedRange())[0];
+      this.discardRead = false;
       staging.unmap();
       this.inFlight = 0;
       this.readState = "idle";
     }).catch(() => {
+      this.discardRead = false;
       this.inFlight = 0;
       this.readState = "idle";
     });

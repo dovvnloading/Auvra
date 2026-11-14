@@ -1,5 +1,6 @@
 import * as THREE from 'three';
-import type { LevelComponent, LevelObject, LevelObjectType, PrefabData } from '../types';
+import { rekeyComponents } from './componentIds';
+import type { LevelObject, LevelObjectType, PrefabData } from '../types';
 import { collectSubtree, getWorldMatrix } from './sceneGraph';
 
 /**
@@ -121,7 +122,7 @@ export const instantiatePrefab = (prefab: PrefabData, levelId: string, position:
   const ids = new Map(ordered.map((object) => [object.id, newId()]));
   return ordered.map((object): LevelObject => {
     const isRoot = object.id === prefab.rootId;
-    const components = object.components?.map((component): LevelComponent => ({ ...component, id: newId() }));
+    const components = object.components && rekeyComponents(object.components, newId);
     return {
       ...object,
       id: ids.get(object.id)!,
