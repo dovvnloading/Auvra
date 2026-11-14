@@ -37,6 +37,8 @@ from release.windows_lifecycle import WINDOWS_LIFECYCLE_SCRIPT, run_windows_life
 
 
 REPOSITORY = Path(__file__).parents[2]
+FRONTEND_LOCK = json.loads((REPOSITORY / "fbx-viewer (1)" / "package-lock.json").read_text(encoding="utf-8"))["packages"]
+REACT_VERSION = FRONTEND_LOCK["node_modules/react"]["version"]
 
 
 def _notices(title: str, component: str) -> bytes:
@@ -198,7 +200,7 @@ class ReleasePipelineTests(unittest.TestCase):
             "game-player/auvra-player.exe": b"player",
             # Third-party notices: Vite emits the frontend file, stage_inputs.ps1
             # writes the Rust crate files, and Python notices come from dist-info.
-            "frontend/THIRD_PARTY_NOTICES.txt": _notices("Third-party software notices", "react@18.2.0 (MIT)"),
+            "frontend/THIRD_PARTY_NOTICES.txt": _notices("Third-party software notices", f"react@{REACT_VERSION} (MIT)"),
             "native/THIRD_PARTY_NOTICES.txt": _notices("Native engine crates", "wgpu@30.0.1 (MIT OR Apache-2.0)"),
             "game-player/THIRD_PARTY_NOTICES.txt": _notices("Game player crates", "wry@0.57.1 (Apache-2.0 OR MIT)"),
             "python-site-packages/example_package-1.0.0.dist-info/METADATA":
@@ -301,7 +303,7 @@ class ReleasePipelineTests(unittest.TestCase):
             verify_package(output, expected_channel="beta")
             sbom = json.loads((output / "sbom.json").read_text(encoding="utf-8"))
             names = {(item.get("purl"), item.get("name")) for item in sbom["components"]}
-            self.assertIn(("pkg:npm/react@18.2.0", "react"), names)
+            self.assertIn((f"pkg:npm/react@{REACT_VERSION}", "react"), names)
             self.assertTrue(any(item.get("purl", "").startswith("pkg:cargo/wgpu@") for item in sbom["components"]))
             self.assertTrue(any(item.get("purl", "").startswith("pkg:pypi/jsonschema@") for item in sbom["components"]))
             # MakeAppx adds container metadata when an MSIX is unpacked. It is

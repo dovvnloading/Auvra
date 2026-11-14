@@ -331,7 +331,7 @@ class RustNoticesTests(unittest.TestCase):
 
 
 def staged_editor_inputs(root: Path) -> Path:
-    write(root / "frontend" / NOTICES_FILE, staged_notices("Third-party software notices", "react@18.2.0 (MIT)",
+    write(root / "frontend" / NOTICES_FILE, staged_notices("Third-party software notices", f"react@{release_fixtures.REACT_VERSION} (MIT)",
                                                            "@babel/runtime@7.29.7 (MIT)"))
     write(root / "native" / NOTICES_FILE, staged_notices("Native crates", "wgpu@30.0.1 (MIT OR Apache-2.0)"))
     write(root / "game-player" / NOTICES_FILE, staged_notices("Player crates", "wry@0.57.1 (Apache-2.0 OR MIT)",
@@ -438,7 +438,7 @@ class ReleasePackageNoticesTests(unittest.TestCase):
             text = (output / NOTICES_FILE).read_text(encoding="utf-8")
             self.assertEqual(verify_editor_notices(text),
                              {"frontend": 1, "python": 1, "native": 1, "player": 1, "runtimes": 3})
-            self.assertIn("react@18.2.0 (MIT)", text)
+            self.assertIn(f"react@{release_fixtures.REACT_VERSION} (MIT)", text)
             self.assertIn("example-package@1.0.0 (MIT)", text)
             self.assertIn("wgpu@30.0.1 (MIT OR Apache-2.0)", text)
             self.assertIn("wry@0.57.1 (Apache-2.0 OR MIT)", text)
@@ -448,7 +448,7 @@ class ReleasePackageNoticesTests(unittest.TestCase):
             verify_installed_package(output)
             sbom = json.loads((output / "sbom.json").read_text(encoding="utf-8"))
             licenses = {item.get("purl"): item.get("licenses") for item in sbom["components"]}
-            self.assertEqual(licenses["pkg:npm/react@18.2.0"], [{"license": {"name": "MIT"}}])
+            self.assertEqual(licenses[f"pkg:npm/react@{release_fixtures.REACT_VERSION}"], [{"license": {"name": "MIT"}}])
             self.assertEqual(licenses["pkg:cargo/wgpu@30.0.1"], [{"license": {"name": "MIT OR Apache-2.0"}}])
             self.assertEqual(licenses["pkg:pypi/example-package@1.0.0"], [{"license": {"name": "MIT"}}])
             self.assertTrue(any(purl.startswith("pkg:cargo/wry@") for purl in licenses if purl))
