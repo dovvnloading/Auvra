@@ -37,6 +37,79 @@ describe('weapons', () => {
     expect(stepWeapons(state, weapons, press, 0.1).shots).toBe(1);
   });
 
+  it.each(['semi', 'auto'] as const)('does not bypass %s fire rate on a rapid second press', mode => {
+    const weapons = [resolveWeapon({ id: mode, name: mode, fireMode: mode, fireRate: 1, magazine: 10, reserve: -1 })];
+    const state = createWeaponState(weapons);
+    expect(stepWeapons(state, weapons, press, 1 / 60).shots).toBe(1);
+    expect(state.cooldown).toBeCloseTo(1);
+    stepWeapons(state, weapons, idle, 1 / 60);
+    expect(stepWeapons(state, weapons, press, 1 / 60).shots).toBe(0);
+    expect(state.cooldown).toBeGreaterThan(0.9);
+    expect(state.ammo[0].loaded).toBe(9);
+  });
+
+  it.each(['semi', 'auto'] as const)('limits %s shots when Fire is pressed every other frame', mode => {
+    const weapons = [resolveWeapon({ id: mode, name: mode, fireMode: mode, fireRate: 1, magazine: 100, reserve: -1 })];
+    const state = createWeaponState(weapons);
+    let shots = 0;
+    for (let frame = 0; frame < 120; frame += 1) {
+      shots += stepWeapons(state, weapons, frame % 2 === 0 ? press : idle, 1 / 60).shots;
+    }
+    expect(shots).toBe(2);
+    expect(state.ammo[0].loaded).toBe(98);
+  });
+
+  it('preserves automatic cadence and semi-automatic one-shot-per-hold behavior', () => {
+    for (const mode of ['semi', 'auto'] as const) {
+      const weapons = [resolveWeapon({ id: mode, name: mode, fireMode: mode, fireRate: 5, magazine: 100, reserve: -1 })];
+      const state = createWeaponState(weapons);
+      let shots = stepWeapons(state, weapons, press, 1 / 60).shots;
+      for (let frame = 1; frame < 60; frame += 1) shots += stepWeapons(state, weapons, hold, 1 / 60).shots;
+      expect(shots).toBe(mode === 'auto' ? 5 : 1);
+    }
+  });
+
+  it('still fires on a new semi-automatic press after the normal cooldown expires', () => {
+    const weapons = [resolveWeapon({ id: 'semi', name: 'Semi', fireMode: 'semi', fireRate: 2, magazine: 10, reserve: -1 })];
+    const state = createWeaponState(weapons);
+    expect(stepWeapons(state, weapons, press, 1 / 60).shots).toBe(1);
+    stepWeapons(state, weapons, idle, 0.5);
+    expect(stepWeapons(state, weapons, press, 1 / 60).shots).toBe(1);
+    expect(state.ammo[0].loaded).toBe(8);
+  });
+
+  it.each(['semi', 'auto'] as const)('enforces %s cooldown across uneven, low-rate frames', mode => {
+    const weapons = [resolveWeapon({ id: mode, name: mode, fireMode: mode, fireRate: 2, magazine: 10, reserve: -1 })];
+    const state = createWeaponState(weapons);
+    expect(stepWeapons(state, weapons, press, 1 / 60).shots).toBe(1);
+    stepWeapons(state, weapons, idle, 0.13);
+    expect(stepWeapons(state, weapons, press, 0.17).shots).toBe(0);
+    stepWeapons(state, weapons, idle, 0.11);
+    expect(stepWeapons(state, weapons, press, 0.05).shots).toBe(0);
+    stepWeapons(state, weapons, idle, 0.05);
+    expect(stepWeapons(state, weapons, press, 0.025).shots).toBe(1);
+    expect(state.ammo[0].loaded).toBe(8);
+  });
+
+  it('does not bank automatic shots while idle after a long frame', () => {
+    const weapons = [resolveWeapon({ id: 'auto', name: 'Auto', fireMode: 'auto', fireRate: 10, magazine: 30, reserve: -1 })];
+    const state = createWeaponState(weapons);
+    expect(stepWeapons(state, weapons, press, 1 / 60).shots).toBe(1);
+    stepWeapons(state, weapons, idle, 0.75);
+    expect(stepWeapons(state, weapons, press, 1 / 60).shots).toBe(1);
+    expect(state.ammo[0].loaded).toBe(28);
+  });
+
+  it('retains automatic catch-up for uneven frames while the trigger stays held', () => {
+    const weapons = [resolveWeapon({ id: 'auto', name: 'Auto', fireMode: 'auto', fireRate: 5, magazine: 30, reserve: -1 })];
+    const state = createWeaponState(weapons);
+    expect(stepWeapons(state, weapons, press, 1 / 60).shots).toBe(1);
+    expect(stepWeapons(state, weapons, hold, 0.55).shots).toBe(2);
+    expect(stepWeapons(state, weapons, hold, 0.02).shots).toBe(0);
+    expect(stepWeapons(state, weapons, hold, 0.19).shots).toBe(1);
+    expect(state.ammo[0].loaded).toBe(26);
+  });
+
   it('reloads from the reserve, on its own when empty, and stops when the reserve runs out', () => {
     const weapons = [pistol];
     const state = createWeaponState(weapons);
