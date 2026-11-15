@@ -23,6 +23,7 @@ import os
 import plistlib
 import re
 import shutil
+import stat
 import tempfile
 import uuid
 from dataclasses import dataclass
@@ -454,22 +455,96 @@ def _readme(target: str, game_name: Any, executable: str) -> bytes:
     return ("\n".join(lines) + "\n").encode("utf-8")
 
 
+def _is_reparse(info: os.stat_result) -> bool:
+    """Windows junctions and other reparse points must not be followed or removed."""
+    return bool(getattr(info, "st_file_attributes", 0) & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0))
+
+
 def is_marked_build(path: Path) -> bool:
-    """True when ``path`` is a real folder holding a valid Auvra build marker."""
+    """Only a complete, unmodified build tree may be replaced; an unlisted file belongs to the user."""
 
     path = Path(path)
     try:
-        if path.is_symlink() or not path.is_dir():
+        root_info = path.lstat()
+        marker_path = path / BUILD_MARKER
+        marker_info = marker_path.lstat()
+        if (not stat.S_ISDIR(root_info.st_mode) or _is_reparse(root_info)
+                or not stat.S_ISREG(marker_info.st_mode) or _is_reparse(marker_info)):
             return False
-        marker = json.loads((path / BUILD_MARKER).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        marker = json.loads(marker_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, RecursionError):
         return False
-    return (
-        isinstance(marker, dict)
-        and marker.get("schema") == BUILD_SCHEMA
-        and marker.get("kind") == BUILD_KIND
-        and isinstance(marker.get("files"), list)
-    )
+
+    if (not isinstance(marker, dict) or type(marker.get("schema")) is not int
+            or marker["schema"] != BUILD_SCHEMA or marker.get("kind") != BUILD_KIND
+            or not isinstance(marker.get("buildId"), str) or not marker["buildId"].strip()
+            or marker.get("target") not in BUILD_TARGETS
+            or not isinstance(marker.get("files"), list) or not marker["files"]):
+        return False
+
+    recorded: dict[str, dict[str, Any]] = {}
+    folded: set[str] = set()
+    directories: set[str] = set()
+    for entry in marker["files"]:
+        if not isinstance(entry, dict):
+            return False
+        relative, size, sha256 = entry.get("path"), entry.get("size"), entry.get("sha256")
+        if (not _is_safe_relative(relative) or relative.casefold() == BUILD_MARKER.casefold()
+                or relative.casefold() in folded
+                or type(size) is not int or size < 0
+                or not isinstance(sha256, str) or len(sha256) != 64 or not set(sha256) <= _HEX):
+            return False
+        if "mode" in entry and (type(entry["mode"]) is not int or entry["mode"] != EXECUTABLE_MODE):
+            return False
+        recorded[relative] = entry
+        folded.add(relative.casefold())
+        parts = relative.split("/")
+        directories.update("/".join(parts[:i]) for i in range(1, len(parts)))
+
+    # Do not follow links (including Windows junctions), or accept even an empty
+    # unlisted directory. A marker's file list is an inventory, not permission to
+    # recursively delete arbitrary additions beside those files.
+    found: set[str] = set()
+    pending = [(path, "")]
+    try:
+        while pending:
+            directory, prefix = pending.pop()
+            with os.scandir(directory) as entries:
+                for entry in entries:
+                    relative = prefix + entry.name
+                    info = entry.stat(follow_symlinks=False)
+                    if _is_reparse(info):
+                        return False
+                    if stat.S_ISDIR(info.st_mode):
+                        if relative not in directories:
+                            return False
+                        pending.append((Path(entry.path), relative + "/"))
+                    elif stat.S_ISREG(info.st_mode):
+                        if relative != BUILD_MARKER and (
+                                relative not in recorded or info.st_size != recorded[relative]["size"]):
+                            return False
+                        found.add(relative)
+                    else:
+                        return False
+        if found != set(recorded) | {BUILD_MARKER}:
+            return False
+
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
+        for relative, record in recorded.items():
+            file = path.joinpath(*relative.split("/"))
+            digest = hashlib.sha256()
+            with os.fdopen(os.open(file, flags), "rb") as reader:
+                info = os.fstat(reader.fileno())
+                if (not stat.S_ISREG(info.st_mode) or _is_reparse(info)
+                        or info.st_size != record["size"]):
+                    return False
+                for chunk in iter(lambda: reader.read(_CHUNK), b""):
+                    digest.update(chunk)
+            if digest.hexdigest() != record["sha256"]:
+                return False
+    except OSError:
+        return False
+    return True
 
 
 def normalize_game_settings(value: Any) -> dict[str, Any]:
