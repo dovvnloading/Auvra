@@ -561,10 +561,22 @@ class ProjectRepository:
                 all_points.extend((p, recovery_root) for p in recovery_root.iterdir() if p.is_dir())
         all_points.sort(key=lambda pair: pair[0].stat().st_mtime)
         total = sum(f.stat().st_size for point, _ in all_points for f in point.rglob("*") if f.is_file())
-        while all_points and total > PROJECT_CAP:
-            point, _ = all_points.pop(0)
+        # The cap is a retention budget, not a maximum valid project size.
+        # In particular, never evict the point just published: a single
+        # complete snapshot may exceed the cap even when every asset is valid.
+        for point, _ in all_points:
+            if total <= PROJECT_CAP:
+                break
+            if point == stamp:
+                continue
             total -= sum(f.stat().st_size for f in point.rglob("*") if f.is_file())
             shutil.rmtree(point, ignore_errors=True)
+        if total > PROJECT_CAP:
+            logging.getLogger(__name__).warning(
+                "Recovery storage exceeds the %d-byte retention budget (%d bytes); "
+                "preserving the newest %s recovery point %s",
+                PROJECT_CAP, total, kind, stamp.name,
+            )
     def autosave_due(self, *, dirty_since: float | None, last_mutation: float | None, now: float | None = None) -> bool:
         if self.read_only or not self._dirty or dirty_since is None or last_mutation is None: return False
         now = now or time.time(); return now - dirty_since >= 60 and now - last_mutation >= 5
