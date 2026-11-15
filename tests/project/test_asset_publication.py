@@ -245,6 +245,34 @@ class AssetPublicationTests(unittest.TestCase):
         self.assertIn(asset_id, self._records())
         self._assert_manifest_matches_blobs()
 
+    def test_locked_publication_marker_does_not_fail_committed_import(self) -> None:
+        assert self.repo is not None
+        data = b"success-even-if-marker-is-locked"
+        asset_id = hashlib.sha256(data).hexdigest()
+        marker = self.content / ".incoming" / f".publish-{asset_id}"
+        original_unlink = Path.unlink
+
+        def locked_marker(path, *args, **kwargs):
+            if Path(path) == marker:
+                raise PermissionError("marker is locked")
+            return original_unlink(path, *args, **kwargs)
+
+        with mock.patch.object(Path, "unlink", new=locked_marker):
+            reference = self.repo.assets.put_stream(io.BytesIO(data))
+
+        self.assertEqual(reference.asset_id, asset_id)
+        self.assertTrue(marker.exists())
+        self.assertIn(asset_id, self._records())
+        self.repo.apply_changes(
+            {"models": [{"id": "committed", "name": "Committed", "assetId": asset_id}]},
+            expected_revision=0,
+        )
+        self._reopen()
+        assert self.repo is not None
+        self.assertTrue(self.repo.assets.verify(asset_id))
+        self.assertFalse(marker.exists())
+        self._assert_manifest_matches_blobs()
+
     def test_successful_ingest_and_existing_metadata_upgrade_are_unchanged(self) -> None:
         assert self.repo is not None
         store = self.repo.assets
