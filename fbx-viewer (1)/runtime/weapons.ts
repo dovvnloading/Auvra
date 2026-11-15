@@ -348,11 +348,13 @@ export const stepWeapons = (state: WeaponState, weapons: readonly ResolvedWeapon
     }
 
     if (!input.firing) state.triggerSpent = false;
-    if (input.firePressed) {
-        state.warmup = input.firstShotDelay;
-        state.cooldown = 0;
-    }
+    if (input.firePressed) state.warmup = input.firstShotDelay;
     if (state.cooldown > 0) state.cooldown -= delta;
+    // Cooldowns may expire while idle, reloading or warming up, but missed shots must not
+    // accumulate for the next press. Keep overshoot only for continuous automatic fire.
+    if (!input.firing || state.reloading > 0 || state.warmup > 0) {
+        state.cooldown = Math.max(0, state.cooldown);
+    }
     if (!input.firing || state.reloading > 0) return result;
     if (state.warmup > 0) {
         state.warmup -= delta;
