@@ -136,6 +136,14 @@ class ProjectRepository:
                 raise InvalidProjectError(str(exc)) from exc
             if not ready:
                 raise RecoveryRequiredError("pending asset deletion requires the writer lock")
+            # An interrupted import can leave an unlisted live blob. Reconcile
+            # its durable publication marker before the strict file-set check.
+            try:
+                ready = self.assets.recover_pending_publications(writable=not self.read_only)
+            except ValueError as exc:
+                raise InvalidProjectError(str(exc)) from exc
+            if not ready:
+                raise RecoveryRequiredError("pending asset publication requires the writer lock")
             self._reconcile_recovery_assets(writable=not self.read_only)
             if pending: self._migrate()
             _validate_project_tree(self.path, allow_internal=True)
