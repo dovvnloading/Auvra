@@ -8,16 +8,15 @@ import os
 import subprocess
 import sys
 import tempfile
-import unittest
 from pathlib import Path
-from unittest import mock
+from unittest import TestCase, main, mock
 
 from Auvra.project import ProjectRepository
 from Auvra.project.assets import AssetStore, GENERIC_MIME, OBJ_MIME
 from Auvra.project.errors import RecoveryRequiredError
 
 
-class AssetPublicationTests(unittest.TestCase):
+class AssetPublicationTests(TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name) / "project"
@@ -297,4 +296,4 @@ class AssetPublicationTests(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    main()
