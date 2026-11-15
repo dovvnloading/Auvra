@@ -196,8 +196,11 @@ class AssetStore:
                         self._rollback_unpublished_blob(asset_id, target, marker)
                         raise
                     else:
-                        marker.unlink()
-                        sync_directory(staging)
+                        # A locked marker is only deferred housekeeping; both
+                        # published files already agree, so the import succeeded.
+                        with suppress(OSError):
+                            marker.unlink()
+                            sync_directory(staging)
             return AssetReference(asset_id, total, mime, name)
         finally:
             try: tmp.unlink()
