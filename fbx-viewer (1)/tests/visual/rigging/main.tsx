@@ -2,7 +2,7 @@ import React from 'react';
 import { createRoot } from 'react-dom/client';
 import { flushSync } from 'react-dom';
 import { fireEvent, screen, waitFor } from '@testing-library/dom';
-import { Canvas } from '@react-three/fiber';
+import { AuvraCanvas } from '../../../renderer/AuvraCanvas';
 import { OrbitControls } from '@react-three/drei';
 import * as THREE from 'three';
 import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
@@ -94,12 +94,12 @@ async function start() {
   });
   createRoot(document.getElementById('root')!).render(
     <main className="editor-shell" style={{ display: 'grid', height: '100%', gridTemplateColumns: 'minmax(0,1fr) 336px' }}>
-      <Canvas camera={{ position: [0, 1, 3], fov: 42 }} dpr={1}>
+      <AuvraCanvas surfaceId="visual-rig-workbench" backend="webgl2" camera={{ position: [0, 1, 3], fov: 42 }} dpr={1}>
         <color attach="background" args={['#24262c']} /><hemisphereLight intensity={2.2} /><directionalLight position={[2, 4, 3]} intensity={2} />
         <gridHelper args={[12, 48, '#515359', '#34363a']} />
         <primitive object={root} /><RigMarkers modelId={model.id} root={root} /><RigPreview modelId={model.id} root={root} />
         <OrbitControls makeDefault target={[0, 0.9, 0]} />
-      </Canvas>
+      </AuvraCanvas>
       <aside className="flex min-h-0 flex-col bg-panel"><AutoRigPanel model={model} /><Observer /></aside>
     </main>,
   );
