@@ -100,6 +100,17 @@ describe('weapons', () => {
     expect(state.ammo[0].loaded).toBe(28);
   });
 
+  it('does not bank automatic shots while a re-press waits for its firing pose', () => {
+    const weapons = [resolveWeapon({ id: 'auto', name: 'Auto', fireMode: 'auto', fireRate: 10, magazine: 30, reserve: -1 })];
+    const state = createWeaponState(weapons);
+    expect(stepWeapons(state, weapons, press, 1 / 60).shots).toBe(1);
+    stepWeapons(state, weapons, idle, 1 / 60);
+    expect(stepWeapons(state, weapons, { ...press, firstShotDelay: 0.3 }, 0.27).shots).toBe(0);
+    expect(stepWeapons(state, weapons, hold, 0.05).shots).toBe(0);
+    expect(stepWeapons(state, weapons, hold, 1 / 60).shots).toBe(1);
+    expect(state.ammo[0].loaded).toBe(28);
+  });
+
   it('retains automatic catch-up for uneven frames while the trigger stays held', () => {
     const weapons = [resolveWeapon({ id: 'auto', name: 'Auto', fireMode: 'auto', fireRate: 5, magazine: 30, reserve: -1 })];
     const state = createWeaponState(weapons);
