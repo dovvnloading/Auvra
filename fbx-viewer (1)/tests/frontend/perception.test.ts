@@ -40,11 +40,11 @@ describe('noises', () => {
   });
 });
 
-describe('line of sight', () => {
-  const physics = (hit: Partial<PhysicsRaycastHit> | null) => ({
-    raycast: () => (hit ? { objectId: null, point: v(0, 0, 0), normal: v(0, 1, 0), distance: 0, ...hit } : null),
-  });
+const physics = (hit: Partial<PhysicsRaycastHit> | null) => ({
+  raycast: () => (hit ? { objectId: null, point: v(0, 0, 0), normal: v(0, 1, 0), distance: 0, ...hit } : null),
+});
 
+describe('line of sight', () => {
   it('is clear when nothing, or only the player, is in the way', () => {
     expect(lineOfSight(physics(null), v(0, 1.6, 0), v(10, 1, 0))).toBe(true);
     expect(lineOfSight(physics({ objectId: PLAYER_PHYSICS_ID, distance: 9.8 }), v(0, 1.6, 0), v(10, 1, 0))).toBe(true);
