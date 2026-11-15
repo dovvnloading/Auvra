@@ -413,10 +413,119 @@ class ProjectTests(unittest.TestCase):
     def test_recovery_count_and_byte_cap(self):
         self.repo.apply_changes({"metadata": [{"id":"m", "description":"0123456789"}]}, expected_revision=0)
         with mock.patch.object(repository_module, "PROJECT_CAP", 1):
-            for _ in range(7): self.repo.save()
-        self.assertLessEqual(len(self.repo.recovery_points("manual")), 5)
+            with self.assertLogs(repository_module.__name__, level="WARNING") as logs:
+                for _ in range(7): self.repo.save()
+        # A retention budget smaller than one valid point cannot erase the
+        # latest backup; each subsequent save still replaces the older one.
+        self.assertEqual(len(self.repo.recovery_points("manual")), 1)
         root = self.root / ".auvra" / "backups"
-        self.assertLessEqual(sum(f.stat().st_size for f in root.rglob("*") if f.is_file()), 1)
+        self.assertGreater(sum(f.stat().st_size for f in root.rglob("*") if f.is_file()), 1)
+        self.assertTrue(any("retention budget" in entry for entry in logs.output))
+
+    def test_recovery_retention_at_the_two_gib_boundary(self):
+        # Two valid, distinct assets each remain below the per-asset limit.
+        # Simulate their *snapshot* sizes; never allocate multi-GiB data.
+        refs = [
+            self.repo.assets.put_stream(io.BytesIO(content))
+            for content in (b"first-asset", b"second-asset")
+        ]
+        self.repo.apply_changes({
+            "models": [
+                {"id": f"model-{index}", "name": f"Model {index}", "assetId": ref.asset_id}
+                for index, ref in enumerate(refs)
+            ],
+        }, expected_revision=0)
+        self.repo.save()
+        backups = self.root / ".auvra" / "backups"
+        template = backups / self.repo.recovery_points("manual")[0]["name"]
+        baseline = sum(f.stat().st_size for f in template.rglob("*") if f.is_file())
+        asset_bytes = sum((template / "Content" / "sha256" / ref.asset_id).stat().st_size for ref in refs)
+        overhead = baseline - asset_bytes
+        import shutil
+        shutil.rmtree(template)
+
+        real_stat = Path.stat
+        logger = repository_module.logging.getLogger(repository_module.__name__)
+        for difference in (-1, 0, 1):
+            with self.subTest(bytes_relative_to_2_gib=difference):
+                # File size metadata is replaced only while retention computes
+                # its budget. Stored blobs remain real and hash-valid for restore.
+                modeled_assets = repository_module.PROJECT_CAP + difference - overhead
+                sizes = {
+                    refs[0].asset_id: modeled_assets // 2,
+                    refs[1].asset_id: modeled_assets - modeled_assets // 2,
+                }
+                self.assertTrue(all(0 < size < repository_module.PROJECT_CAP for size in sizes.values()))
+
+                def logical_stat(path, *args, **kwargs):
+                    current = real_stat(path, *args, **kwargs)
+                    if (path.name in sizes and path.parent.name == "sha256"
+                            and path.parent.parent.name == "Content"
+                            and path.parent.parent.parent.parent.name in ("backups", "autosaves")):
+                        return os.stat_result((*current[:6], sizes[path.name], *current[7:]))
+                    return current
+
+                with mock.patch.object(Path, "stat", logical_stat), mock.patch.object(logger, "warning") as warning:
+                    self.repo.save()
+                points = self.repo.recovery_points("manual")
+                self.assertEqual(len(points), 1)
+                self.assertEqual(warning.called, difference > 0)
+                retained = backups / points[0]["name"]
+                for ref, content in zip(refs, (b"first-asset", b"second-asset")):
+                    self.assertEqual((retained / "Content" / "sha256" / ref.asset_id).read_bytes(), content)
+                shutil.rmtree(retained)
+
+    def test_large_saves_keep_a_restorable_point_across_manual_and_autosave(self):
+        asset = self.repo.assets.put_stream(io.BytesIO(b"snapshot-model"))
+        self.repo.apply_changes({
+            "models": [{"id": "model", "name": "Model", "assetId": asset.asset_id}],
+            "metadata": [{"id": "original", "name": "Original"}],
+        }, expected_revision=0)
+        self.repo.save()
+        original = self.repo.recovery_points("manual")[0]["name"]
+
+        self.repo.apply_changes({"metadata": [{"id": "manual", "name": "Manual"}]}, expected_revision=1)
+        with mock.patch.object(repository_module, "PROJECT_CAP", 1):
+            with self.assertLogs(repository_module.__name__, level="WARNING"):
+                self.repo.save()
+                manual_points = self.repo.recovery_points("manual")
+                self.assertEqual(len(manual_points), 1)
+                self.assertNotEqual(manual_points[0]["name"], original)
+                self.assertFalse(self.repo.status.dirty)
+
+                self.repo.apply_changes({"metadata": [{"id": "autosaved", "name": "Autosaved"}]}, expected_revision=2)
+                self.repo.autosave()
+        self.assertEqual(self.repo.recovery_points("manual"), [])
+        autosaved = self.repo.recovery_points("autosave")
+        self.assertEqual(len(autosaved), 1)
+        self.repo.apply_changes({"metadata": [{"id": "later", "name": "Later"}]}, expected_revision=3)
+        self.repo.restore_recovery("autosave", autosaved[0]["name"])
+        self.assertEqual(self.repo.get_domain("metadata")["documents"][0]["id"], "autosaved")
+        self.assertTrue(self.repo.assets.verify(asset.asset_id))
+
+    def test_failed_recovery_copy_reports_error_and_preserves_older_point(self):
+        self.repo.save()
+        original = self.repo.recovery_points("manual")[0]["name"]
+        asset = self.repo.assets.put_stream(io.BytesIO(b"asset-that-must-be-copied"))
+        self.repo.apply_changes({
+            "models": [{"id": "model", "name": "Model", "assetId": asset.asset_id}],
+        }, expected_revision=0)
+        source = self.repo.assets.path_for(asset.asset_id)
+        original_copy = repository_module.shutil.copy2
+
+        def disk_full(from_path, to_path, *args, **kwargs):
+            if Path(from_path) == source:
+                raise OSError("No space left on device while retaining a recovery point")
+            return original_copy(from_path, to_path, *args, **kwargs)
+
+        with mock.patch.object(repository_module.shutil, "copy2", side_effect=disk_full):
+            with self.assertRaisesRegex(OSError, "No space left on device"):
+                self.repo.save(expected_revision=1)
+        self.assertTrue(self.repo.status.dirty)
+        self.assertEqual([point["name"] for point in self.repo.recovery_points("manual")], [original])
+        self.assertEqual(
+            [p for p in (self.root / ".auvra" / "backups").iterdir() if p.name.startswith(".manual-")], []
+        )
 
     def test_save_failure_retains_dirty_state_until_recovery_is_retained(self):
         self.repo.apply_changes({"metadata": [{"id": "m"}]}, expected_revision=0)
@@ -450,12 +559,19 @@ class ProjectTests(unittest.TestCase):
         self.assertNotIn(point, {item["name"] for item in self.repo.recovery_points("manual")})
     def test_recovery_cap_combines_manual_and_autosave(self):
         self.repo.apply_changes({"metadata": [{"id":"m", "description":"0123456789"}]}, expected_revision=0)
-        with mock.patch.object(repository_module, "PROJECT_CAP", 1000):
-            for _ in range(4): self.repo.save()
+        self.repo.save()
+        first = self.root / ".auvra" / "backups" / self.repo.recovery_points("manual")[0]["name"]
+        point_size = sum(p.stat().st_size for p in first.rglob("*") if p.is_file())
+        budget = 2 * point_size
+        with mock.patch.object(repository_module, "PROJECT_CAP", budget):
+            for _ in range(3): self.repo.save()
             for _ in range(4): self.repo.autosave()
         roots = [self.root / ".auvra" / "backups", self.root / ".auvra" / "autosaves"]
         total = sum(f.stat().st_size for r in roots for f in r.rglob("*") if f.is_file())
-        self.assertLessEqual(total, 1000); self.assertLessEqual(len(list(roots[0].iterdir())), 5); self.assertLessEqual(len(list(roots[1].iterdir())), 10)
+        self.assertLessEqual(total, budget)
+        self.assertEqual(len(self.repo.recovery_points()), 2)
+        self.assertLessEqual(len(list(roots[0].iterdir())), 5)
+        self.assertLessEqual(len(list(roots[1].iterdir())), 10)
     def test_recovery_selection_restores_atomically(self):
         self.repo.apply_changes({"metadata": [{"id":"first", "name":"First"}]}, expected_revision=0); self.repo.save()
         point = self.repo.recovery_points("manual")[0]["name"]
