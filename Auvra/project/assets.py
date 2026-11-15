@@ -23,6 +23,10 @@ _MANIFEST_LOCK = threading.RLock()
 # The blob is moved to this same-volume staging location before its manifest
 # entry is removed. A writer can replay either side of the deletion on open.
 _PENDING_DELETE = re.compile(r"^\.delete-([0-9a-f]{64})$")
+# An import leaves this durable marker until both the blob and the manifest
+# entry are published. A writer can discard an unlisted live blob after a crash.
+_PENDING_PUBLISH = re.compile(r"^\.publish-([0-9a-f]{64})$")
+_PENDING_MANIFEST_TEMP = re.compile(r"^manifest\.json\.tmp-[0-9]+-[0-9a-f]{32}$")
 
 
 
@@ -119,6 +123,8 @@ class AssetStore:
             raise ValueError("asset exceeds project size limit")
         staging = self.content / ".incoming"
         staging.mkdir(parents=True, exist_ok=True)
+        if staging.is_symlink() or _is_reparse(staging):
+            raise ValueError("unsafe asset staging directory")
         tmp = staging / f"asset-{os.getpid()}-{uuid.uuid4().hex}"
         if chunk_size <= 0: raise ValueError("chunk_size must be positive")
         digest = hashlib.sha256(); total = 0; prefix = bytearray()
@@ -159,23 +165,65 @@ class AssetStore:
                 validate_skin_paint_file(tmp)
             asset_id = digest.hexdigest(); target = self.path_for(asset_id)
             target.parent.mkdir(parents=True, exist_ok=True)
-            # Serialize same-digest ingestion with manifest publication.  An
+            # Serialize same-digest ingestion with manifest publication. An
             # existing filename is not proof of valid content: repair a
             # corrupt or truncated blob with the freshly verified stream.
             with _MANIFEST_LOCK:
                 if target.exists() and self.verify(asset_id, expected_size=total):
                     tmp.unlink()
+                    self._record(asset_id, total, mime, name)
                 else:
-                    _forget_verified(target)
-                    os.replace(tmp, target)
-                    # The bytes now at ``target`` were hashed while staging.
-                    with suppress(OSError):
-                        _remember_verified(target, target.stat())
-                self._record(asset_id, total, mime, name)
+                    # The marker MUST be durable before the new live filename:
+                    # otherwise a crash before _record commits leaves an
+                    # unidentifiable orphan that fails strict project reopen.
+                    marker = staging / f".publish-{asset_id}"
+                    with marker.open("xb") as output:
+                        output.flush()
+                        os.fsync(output.fileno())
+                    sync_directory(self.content)
+                    sync_directory(staging)
+                    try:
+                        _forget_verified(target)
+                        os.replace(tmp, target)
+                        sync_directory(self.content)
+                        # The bytes at target were hashed while staging.
+                        with suppress(OSError):
+                            _remember_verified(target, target.stat())
+                        self._record(asset_id, total, mime, name)
+                    except BaseException:
+                        # _record may raise *after* its atomic manifest rename.
+                        # Never roll back a blob that the manifest now owns.
+                        self._rollback_unpublished_blob(asset_id, target, marker)
+                        raise
+                    else:
+                        # A locked marker is only deferred housekeeping; both
+                        # published files already agree, so the import succeeded.
+                        with suppress(OSError):
+                            marker.unlink()
+                            sync_directory(staging)
             return AssetReference(asset_id, total, mime, name)
         finally:
             try: tmp.unlink()
             except FileNotFoundError: pass
+
+    def _rollback_unpublished_blob(self, asset_id: str, target: Path, marker: Path) -> None:
+        """Best-effort rollback; leave the marker for replay if cleanup fails."""
+        manifest = self.root / "manifest.json"
+        try:
+            values = json.loads(manifest.read_text(encoding="utf-8")) if manifest.exists() else {}
+        except (OSError, ValueError):
+            return  # Unknown commit state: the next opener must decide.
+        if not isinstance(values, dict) or asset_id in values:
+            return
+        try:
+            target.unlink(missing_ok=True)
+            _forget_verified(target)
+            sync_directory(self.content)
+        except OSError:
+            return  # An unlisted blob remains marked for next writable open.
+        with suppress(OSError):
+            marker.unlink(missing_ok=True)
+            sync_directory(marker.parent)
 
     def open(self, asset_id: str) -> BinaryIO:
         path = self.path_for(asset_id)
@@ -313,6 +361,72 @@ class AssetStore:
                 sync_directory(staged.parent)
             return existed
 
+    def recover_pending_publications(self, *, writable: bool) -> bool:
+        """Reconcile unfinished imports before strict manifest/file validation.
+
+        Only a marker recorded before installing a blob authorizes deletion.
+        A referenced blob is never deleted, even if publication subsequently
+        raised. Read-only openers must ask for the writer when an orphan exists.
+        """
+
+        staging = self.content / ".incoming"
+        if not staging.exists():
+            return True
+        if staging.is_symlink() or _is_reparse(staging) or not staging.is_dir():
+            raise ValueError("unsafe asset staging directory")
+        with _MANIFEST_LOCK:
+            entries = list(staging.iterdir())
+            pending = sorted(
+                (entry for entry in entries if _PENDING_PUBLISH.fullmatch(entry.name)),
+                key=lambda entry: entry.name,
+            )
+            if pending:
+                manifest = self.root / "manifest.json"
+                if manifest.is_symlink() or (manifest.exists() and _is_reparse(manifest)):
+                    raise ValueError("unsafe asset manifest")
+                try:
+                    values = json.loads(manifest.read_text(encoding="utf-8")) if manifest.exists() else {}
+                except (OSError, ValueError) as exc:
+                    raise ValueError("asset manifest is corrupt") from exc
+                if not isinstance(values, dict):
+                    raise ValueError("asset manifest is corrupt")
+                for marker in pending:
+                    info = marker.lstat()
+                    if (not stat.S_ISREG(info.st_mode) or marker.is_symlink()
+                            or _is_reparse(marker) or info.st_size != 0):
+                        raise ValueError("unsafe pending asset publication")
+                    asset_id = _PENDING_PUBLISH.fullmatch(marker.name).group(1)
+                    target = self.path_for(asset_id)
+                    if target.is_symlink() or (target.exists() and _is_reparse(target)):
+                        raise ValueError("unsafe asset path")
+                    if asset_id not in values and target.exists():
+                        if not self.verify(asset_id):
+                            raise ValueError("pending asset publication has invalid blob")
+                        if not writable:
+                            return False
+                        target.unlink()
+                        _forget_verified(target)
+                        sync_directory(self.content)
+                    if writable:
+                        # A marker left behind by a locked file is harmless
+                        # after the live set and manifest agree.
+                        with suppress(OSError):
+                            marker.unlink()
+                            sync_directory(staging)
+            if writable:
+                # Interrupted writes to the *staged* manifest are never part
+                # of the validated project. Reap them on the next writer open.
+                for entry in entries:
+                    if _PENDING_MANIFEST_TEMP.fullmatch(entry.name):
+                        info = entry.lstat()
+                        if (not stat.S_ISREG(info.st_mode) or entry.is_symlink()
+                                or _is_reparse(entry)):
+                            raise ValueError("unsafe staged asset manifest")
+                        with suppress(OSError):
+                            entry.unlink()
+                            sync_directory(staging)
+            return True
+
     def recover_pending_deletions(self, *, writable: bool) -> bool:
         """Reconcile interrupted removals before the project's tree check.
 
@@ -421,7 +535,13 @@ class AssetStore:
                     raise ValueError("asset metadata conflicts with existing content")
                 candidate = {"size": size, "mime": mime if known == GENERIC_MIME else known, "name": existing.get("name") or name}
             values[asset_id] = candidate
-            temp = manifest.with_name(f"manifest.json.tmp-{os.getpid()}-{uuid.uuid4().hex}")
+            # A crash during the temporary write must not leave an unknown
+            # entry in Content/, which is validated strictly on project open.
+            staging = self.content / ".incoming"
+            staging.mkdir(parents=True, exist_ok=True)
+            if staging.is_symlink() or _is_reparse(staging):
+                raise ValueError("unsafe asset staging directory")
+            temp = staging / f"manifest.json.tmp-{os.getpid()}-{uuid.uuid4().hex}"
             try:
                 temp.write_text(json.dumps(values, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8", newline="\n")
                 with temp.open("a", encoding="utf-8") as stream: stream.flush(); os.fsync(stream.fileno())
