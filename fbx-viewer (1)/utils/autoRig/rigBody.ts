@@ -4,7 +4,7 @@ import { readBody, turnAboutY, turnSoupAboutY, type BodyExtents, type BodyMarker
 import { bodySkeleton, fourLegSkeleton, turnJointsAboutY, type RigJoint } from './bodySkeleton';
 import { looksFourLegged, readFourLegs, type FourLegExtents, type FourLegMarkerName, type FourLegMarkers, type FourLegReading } from './fourLegReading';
 import { readFingers } from './handReading';
-import { bindSkin, type PartWeights, type SkinnedPart } from './skinWeights';
+import { bindSkin, type PartWeights, type SkinBindingSettings, type SkinnedPart } from './skinWeights';
 import { soupBounds, voxelIndex, voxelize, voxelOf, type TriangleSoup, type VoxelGrid } from './voxels';
 
 /**
@@ -312,6 +312,7 @@ export const rigBody = (
   original?: RigMarkers,
   withFingers = true,
   withTail = true,
+  binding?: SkinBindingSettings,
 ): RiggedBody => {
   // Everything is worked out on a body turned to face +Z, then turned back.
   const cos = reading.facing[1];
@@ -325,6 +326,6 @@ export const rigBody = (
     : personJoints(uprightTriangles, reading, up, moved, original, withFingers);
   onProgress?.(0.05);
   const uprightParts = square ? parts : parts.map((part) => ({ ...part, positions: turnSoupAboutY(part.positions, sin, cos) }));
-  const weights = bindSkin(uprightTriangles, joints, uprightParts, (share) => onProgress?.(0.05 + share * 0.95));
+  const weights = bindSkin(uprightTriangles, joints, uprightParts, (share) => onProgress?.(0.05 + share * 0.95), binding);
   return { joints: square ? joints : turnJointsAboutY(joints, -sin, cos), weights };
 };

@@ -238,6 +238,6 @@ export const SkeletonPanel: React.FC<ClipPlayback> = (playback) => {
   const model = models.find((candidate) => candidate.id === selectedModelId);
   const hasBones = useMemo(() => (model ? skeletonBones(model.object).length > 0 : false), [model]);
   if (!model) return <Empty>Select a model to see its skeleton.</Empty>;
-  if (!hasBones) return <AutoRigPanel model={model} />;
+  if (!hasBones) return <AutoRigPanel key={model.object.uuid} model={model} />;
   return <BoneTree key={model.id} model={model} playback={playback} />;
 };

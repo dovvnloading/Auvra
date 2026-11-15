@@ -1,77 +1,14 @@
-import React, { useEffect, useMemo, useRef } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
-import { Html } from '@react-three/drei';
+import { Billboard, Html } from '@react-three/drei';
 import { useFrame, useThree, type ThreeEvent } from '@react-three/fiber';
-import type { MarkerName, Point } from '../../utils/autoRig/bodyMarkers';
-import type { FourLegMarkerName } from '../../utils/autoRig/fourLegReading';
+import type { Point } from '../../utils/autoRig/bodyMarkers';
 import type { RigMarkerName, RigReading } from '../../utils/autoRig/rigBody';
-import { moveRigMarker, setActiveRigMarker, useRigSession } from '../../utils/autoRig/rigSession';
+import { guideLinksFor, listRigGuides, markerAt, projectGuidePoint } from '../../utils/autoRig/guideEditing';
+import { beginRigGuideDrag, endRigGuideDrag, handleRigGuideKey, setRigGuidePosition, setActiveRigMarker, useRigSession } from '../../utils/autoRig/rigSession';
 
-const MARKER_COLOR = '#ff9a3d';
-const ACTIVE_COLOR = '#ffffff';
-const LINE_COLOR = '#ff9a3d';
-
-/** What a person's marker is called on screen. */
-const PERSON_LABEL: Record<MarkerName, string> = {
-  chin: 'Chin',
-  groin: 'Groin',
-  leftShoulder: 'Shoulder',
-  rightShoulder: 'Shoulder',
-  leftElbow: 'Elbow',
-  rightElbow: 'Elbow',
-  leftWrist: 'Wrist',
-  rightWrist: 'Wrist',
-  leftKnee: 'Knee',
-  rightKnee: 'Knee',
-  leftAnkle: 'Ankle',
-  rightAnkle: 'Ankle',
-};
-
-/** What an animal's marker is called on screen. */
-const FOUR_LEG_LABEL: Record<FourLegMarkerName, string> = {
-  nose: 'Nose',
-  head: 'Head',
-  neck: 'Neck',
-  hips: 'Hips',
-  leftShoulder: 'Shoulder',
-  rightShoulder: 'Shoulder',
-  leftElbow: 'Elbow',
-  rightElbow: 'Elbow',
-  leftWrist: 'Wrist',
-  rightWrist: 'Wrist',
-  leftFrontPaw: 'Paw',
-  rightFrontPaw: 'Paw',
-  leftHip: 'Hip',
-  rightHip: 'Hip',
-  leftKnee: 'Knee',
-  rightKnee: 'Knee',
-  leftHock: 'Hock',
-  rightHock: 'Hock',
-  leftHindPaw: 'Paw',
-  rightHindPaw: 'Paw',
-  tailBase: 'Tail',
-  tailTip: 'Tail tip',
-};
-
-/** Markers joined by lines, to show the skeleton they make. */
-const PERSON_LINKS: readonly [MarkerName, MarkerName][] = [
-  ['chin', 'groin'],
-  ['leftShoulder', 'leftElbow'], ['leftElbow', 'leftWrist'],
-  ['rightShoulder', 'rightElbow'], ['rightElbow', 'rightWrist'],
-  ['leftShoulder', 'rightShoulder'],
-  ['groin', 'leftKnee'], ['leftKnee', 'leftAnkle'],
-  ['groin', 'rightKnee'], ['rightKnee', 'rightAnkle'],
-];
-
-const FOUR_LEG_LINKS: readonly [FourLegMarkerName, FourLegMarkerName][] = [
-  ['nose', 'head'], ['head', 'neck'], ['neck', 'hips'], ['hips', 'tailBase'], ['tailBase', 'tailTip'],
-  ['neck', 'leftShoulder'], ['leftShoulder', 'leftElbow'], ['leftElbow', 'leftWrist'], ['leftWrist', 'leftFrontPaw'],
-  ['neck', 'rightShoulder'], ['rightShoulder', 'rightElbow'], ['rightElbow', 'rightWrist'], ['rightWrist', 'rightFrontPaw'],
-  ['hips', 'leftHip'], ['leftHip', 'leftKnee'], ['leftKnee', 'leftHock'], ['leftHock', 'leftHindPaw'],
-  ['hips', 'rightHip'], ['rightHip', 'rightKnee'], ['rightKnee', 'rightHock'], ['rightHock', 'rightHindPaw'],
-];
-
-const markerAt = (reading: RigReading, name: RigMarkerName): Point | undefined => (reading.markers as unknown as Record<string, Point | undefined>)[name];
+const GUIDE_COLORS = { Left: '#6edbd6', Right: '#c4a3fb', Center: '#ffab61' };
+const NO_LINKS = [] as const;
 
 /** A marker's size against the body. */
 const MARKER_SIZE = 0.013;
@@ -117,13 +54,18 @@ const shownHeightOf = (canvas: HTMLCanvasElement): number => {
  * lost in it.
  */
 export const RigMarkers: React.FC<{ modelId: string; root: THREE.Object3D }> = ({ modelId, root }) => {
-  const { stage, modelId: rigging, reading, activeMarker, bothSides } = useRigSession();
-  const shown = stage === 'placing' && rigging === modelId && reading;
+  const { stage, modelId: rigging, reading, activeMarker, bothSides, frameRequest } = useRigSession();
+  const shown = stage === 'placing' && rigging === modelId && !!reading;
   const camera = useThree((three) => three.camera);
   const canvas = useThree((three) => three.gl.domElement);
+  const viewportWidth = useThree((three) => three.size.width);
+  const viewportHeight = useThree((three) => three.size.height);
   const controls = useThree((three) => three.controls) as unknown as { enabled: boolean; target: THREE.Vector3; update: () => void } | null;
   const invalidate = useThree((three) => three.invalidate);
   const group = useRef<THREE.Group>(null);
+
+  const [hover, setHover] = useState<RigMarkerName | null>(null);
+  const stopDrag = useRef<((cancel?: boolean) => void) | null>(null);
 
   // The markers sit beside the model, so they share its place.
   useFrame(() => {
@@ -150,8 +92,11 @@ export const RigMarkers: React.FC<{ modelId: string; root: THREE.Object3D }> = (
       framedFor.current = null;
       return;
     }
-    if (framedFor.current === modelId) return;
-    framedFor.current = modelId;
+    const frame = modelId + '/' + frameRequest;
+    if (framedFor.current === frame || viewportWidth <= 0 || viewportHeight <= 0) return;
+    const bounds = canvas.getBoundingClientRect();
+    if (bounds.width <= 0 || bounds.height <= 0) return;
+    framedFor.current = frame;
     root.updateWorldMatrix(true, false);
     const up = new THREE.Vector3(0, 1, 0);
     const right = new THREE.Vector3().crossVectors(up, worldView).normalize();
@@ -171,7 +116,6 @@ export const RigMarkers: React.FC<{ modelId: string; root: THREE.Object3D }> = (
       highAcross = Math.max(highAcross, across);
       nearest = Math.max(nearest, world.clone().sub(floor).dot(worldView));
     }
-    const bounds = canvas.getBoundingClientRect();
     const shownShare = shownHeightOf(canvas) / bounds.height;
     const tangent = Math.tan(THREE.MathUtils.degToRad(((camera as THREE.PerspectiveCamera).fov ?? 50) / 2));
     const toFitHeight = (high - floor.y) / VIEW_FILL / shownShare / 2 / tangent;
@@ -189,16 +133,25 @@ export const RigMarkers: React.FC<{ modelId: string; root: THREE.Object3D }> = (
       controls.update();
     }
     invalidate();
-  }, [shown, reading, modelId, root, camera, canvas, controls, worldView, invalidate]);
+  }, [shown, reading, modelId, root, camera, canvas, controls, worldView, invalidate, frameRequest, viewportWidth, viewportHeight]);
 
-  // Markers can go while the pointer is on one.
-  useEffect(() => () => { canvas.style.cursor = ''; }, [canvas, shown]);
+  useEffect(() => {
+    if (!shown) return;
+    const previousTabIndex = canvas.getAttribute('tabindex');
+    if (previousTabIndex === null) canvas.tabIndex = 0;
+    canvas.addEventListener('keydown', handleRigGuideKey, true);
+    return () => {
+      stopDrag.current?.(true);
+      canvas.style.cursor = '';
+      canvas.removeEventListener('keydown', handleRigGuideKey, true);
+      if (previousTabIndex === null) canvas.removeAttribute('tabindex');
+    };
+  }, [canvas, shown]);
 
   const size = reading ? sizeOf(reading) : 1;
-
-  // An animal seen side on has its other side right behind this one: it moves with it, so it is left out.
-  const farHidden = sideOn && bothSides;
-  const links = useMemo(() => (sideOn ? FOUR_LEG_LINKS : PERSON_LINKS) as readonly [RigMarkerName, RigMarkerName][], [sideOn]);
+  // In side view the legs overlap. Selecting a far-side guide in the list brings that side forward.
+  const hiddenSide = sideOn && bothSides ? (activeMarker?.startsWith('right') ? 'left' : 'right') : null;
+  const links = reading ? guideLinksFor(reading) : NO_LINKS;
   const lines = useMemo(() => {
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(links.length * 6), 3));
@@ -212,85 +165,122 @@ export const RigMarkers: React.FC<{ modelId: string; root: THREE.Object3D }> = (
     for (const [from, to] of links) {
       const a = markerAt(reading, from);
       const b = markerAt(reading, to);
-      if (!a || !b || (farHidden && (from.startsWith('right') || to.startsWith('right')))) continue;
+      if (!a || !b || (hiddenSide && (from.startsWith(hiddenSide) || to.startsWith(hiddenSide)))) continue;
       places.setXYZ(drawn * 2, ...a);
       places.setXYZ(drawn * 2 + 1, ...b);
       drawn += 1;
     }
     lines.setDrawRange(0, drawn * 2);
     places.needsUpdate = true;
-  }, [lines, links, reading, farHidden]);
+  }, [lines, links, reading, hiddenSide]);
 
-  // Dragging a marker: the pointer's ray meets the plane through the marker, square to the view of the body.
-  const dragging = useRef<RigMarkerName | null>(null);
   const beginDrag = (name: RigMarkerName, event: ThreeEvent<PointerEvent>): void => {
+    if (event.button !== 0 || !reading || stopDrag.current) return;
+    const place = markerAt(reading, name);
+    if (!place) return;
     event.stopPropagation();
-    dragging.current = name;
+    canvas.focus({ preventScroll: true });
     setActiveRigMarker(name);
+    beginRigGuideDrag();
+
+    // Keep the initial grab offset. The pointer moves in the current camera plane, while the guide
+    // can only move horizontally and vertically in its fitting plane, even if the artist has orbited.
+    const pointerId = event.pointerId;
+    const controlsEnabled = controls?.enabled ?? false;
     if (controls) controls.enabled = false;
+    canvas.style.cursor = 'grabbing';
+    const start = root.localToWorld(new THREE.Vector3(...place));
+    const cameraPlane = new THREE.Plane().setFromNormalAndCoplanarPoint(camera.getWorldDirection(new THREE.Vector3()), start);
+    const grab = event.ray.intersectPlane(cameraPlane, new THREE.Vector3()) ?? start.clone();
     const raycaster = new THREE.Raycaster();
-    const plane = new THREE.Plane();
-    const hit = new THREE.Vector3();
+    const drag = new THREE.Vector3();
     const pointer = new THREE.Vector2();
     const onMove = (move: PointerEvent): void => {
-      const current = dragging.current;
-      const place = current && reading ? markerAt(reading, current) : undefined;
-      if (!current || !place) return;
+      if (move.pointerId !== pointerId) return;
       const bounds = canvas.getBoundingClientRect();
       pointer.set(((move.clientX - bounds.left) / bounds.width) * 2 - 1, -((move.clientY - bounds.top) / bounds.height) * 2 + 1);
       raycaster.setFromCamera(pointer, camera);
-      root.updateWorldMatrix(true, false);
-      const at = root.localToWorld(new THREE.Vector3(...place));
-      plane.setFromNormalAndCoplanarPoint(worldView, at);
-      if (!raycaster.ray.intersectPlane(plane, hit)) return;
-      root.worldToLocal(hit);
-      moveRigMarker(current, [hit.x, hit.y, hit.z] as Point);
+      if (!raycaster.ray.intersectPlane(cameraPlane, drag)) return;
+      root.worldToLocal(drag.sub(grab).add(start));
+      const [u, v] = projectGuidePoint(reading, [drag.x, drag.y, drag.z]);
+      setRigGuidePosition(name, u, v);
       invalidate();
     };
-    const onUp = (): void => {
-      dragging.current = null;
-      setActiveRigMarker(null);
-      if (controls) controls.enabled = true;
+    const finish = (cancel = false): void => {
+      stopDrag.current = null;
+      canvas.style.cursor = '';
+      if (controls) controls.enabled = controlsEnabled;
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onCancel);
+      window.removeEventListener('blur', onBlur);
+      window.removeEventListener('keydown', onKey, true);
+      endRigGuideDrag(cancel);
     };
+    const onUp = (e: PointerEvent): void => { if (e.pointerId === pointerId) finish(); };
+    const onCancel = (e: PointerEvent): void => { if (e.pointerId === pointerId) finish(true); };
+    const onBlur = (): void => finish(true);
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        finish(true);
+      }
+    };
+    stopDrag.current = finish;
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onCancel);
+    window.addEventListener('blur', onBlur);
+    window.addEventListener('keydown', onKey, true);
   };
 
   if (!shown || !reading) return null;
   const radius = size * MARKER_SIZE;
-  const labels = (sideOn ? FOUR_LEG_LABEL : PERSON_LABEL) as Record<string, string>;
-  const names = (Object.keys(labels) as RigMarkerName[]).filter((name) => markerAt(reading, name) && !(farHidden && name.startsWith('right')));
+  const guides = listRigGuides(reading).filter(({ name }) => !hiddenSide || !name.startsWith(hiddenSide));
   return (
     <group ref={group}>
       <lineSegments geometry={lines} renderOrder={1000} frustumCulled={false} raycast={NOTHING}>
-        <lineBasicMaterial color={LINE_COLOR} depthTest={false} transparent opacity={0.7} toneMapped={false} fog={false} />
+        <lineBasicMaterial color="#ffe0b6" depthTest={false} depthWrite={false} transparent opacity={0.65} toneMapped={false} fog={false} />
       </lineSegments>
-      {names.map((name) => {
-        const active = activeMarker === name;
-        const isRight = name.startsWith('right');
-        const label = labels[name];
+      {guides.map(({ name, label, side, point }) => {
+        const selected = activeMarker === name;
+        const showLabel = selected || hover === name;
+        const color = GUIDE_COLORS[side];
         return (
           <mesh
             key={name}
-            position={markerAt(reading, name)}
+            position={point}
             renderOrder={1001}
             onPointerDown={(event) => beginDrag(name, event)}
-            onPointerOver={(event) => { event.stopPropagation(); if (!dragging.current) setActiveRigMarker(name); canvas.style.cursor = 'grab'; }}
-            onPointerOut={() => { if (!dragging.current) setActiveRigMarker(null); canvas.style.cursor = ''; }}
+            onPointerOver={(event) => { event.stopPropagation(); setHover(name); if (!stopDrag.current) canvas.style.cursor = 'grab'; }}
+            onPointerOut={() => { setHover(null); if (!stopDrag.current) canvas.style.cursor = ''; }}
             onClick={(event) => event.stopPropagation()}
           >
             <sphereGeometry args={[radius, 16, 12]} />
-            <meshBasicMaterial color={active ? ACTIVE_COLOR : MARKER_COLOR} depthTest={false} transparent toneMapped={false} fog={false} />
-            <Html zIndexRange={[20, 0]} style={{ pointerEvents: 'none' }}>
-              <span
-                className={`absolute whitespace-nowrap rounded bg-black/60 px-1 py-px text-2xs ${active ? 'text-white' : 'text-ink-2'}`}
-                style={{ ...(isRight ? { right: 8 } : { left: 8 }), top: sideOn ? -8 : label === 'Elbow' ? 6 : label === 'Shoulder' || label === 'Wrist' ? -24 : -8 }}
-              >
-                {label}
-              </span>
-            </Html>
+            <meshBasicMaterial color={color} depthTest={false} depthWrite={false} transparent toneMapped={false} fog={false} />
+            <mesh>
+              <sphereGeometry args={[radius * 1.65, 12, 8]} />
+              <meshBasicMaterial visible={false} />
+            </mesh>
+            {selected && (
+              <Billboard>
+                <mesh renderOrder={1002} raycast={NOTHING}>
+                  <ringGeometry args={[radius * 1.32, radius * 1.56, 36]} />
+                  <meshBasicMaterial color="#ffffff" depthTest={false} depthWrite={false} transparent toneMapped={false} fog={false} />
+                </mesh>
+              </Billboard>
+            )}
+            {showLabel && (
+              <Html zIndexRange={[20, 0]} style={{ pointerEvents: 'none' }}>
+                <span
+                  className="absolute top-[-10px] whitespace-nowrap rounded border bg-black/90 px-1.5 py-0.5 text-2xs font-medium text-white"
+                  style={{ ...(side === 'Right' ? { right: 14 } : { left: 14 }), borderColor: color }}
+                >
+                  {label}
+                </span>
+              </Html>
+            )}
           </mesh>
         );
       })}

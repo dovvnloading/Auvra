@@ -10,6 +10,7 @@ import { SocketController, resolveSocketFlashTextureUrl } from './SocketControll
 import { SkeletonOverlay } from './SkeletonOverlay';
 import { clipPlace } from '../../utils/skeletonView';
 import { RigMarkers } from './RigMarkers';
+import { RigPreview } from './RigPreview';
 import { previewHeldWeapon, weaponMoveClips, weaponPlacements } from '../../runtime/weapons';
 import { weaponLocomotionGraph } from '../AnimationGraph/utils/clipMatching';
 import { CharacterIK, heldWeaponGrip } from '../Sandbox/CharacterIK';
@@ -223,6 +224,7 @@ export const ModelViewer: React.FC<ModelViewerProps> = ({
 
          {isSelected && <SkeletonOverlay root={data.object} />}
          {isSelected && <RigMarkers modelId={data.id} root={data.object} />}
+         {isSelected && <RigPreview modelId={data.id} root={data.object} />}
 
          {/* Blueprint Runtime Engine */}
          {isBlueprintActive && blueprint && previewGraph && (
