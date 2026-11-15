@@ -94,7 +94,7 @@ async function start() {
   });
   createRoot(document.getElementById('root')!).render(
     <main className="editor-shell" style={{ display: 'grid', height: '100%', gridTemplateColumns: 'minmax(0,1fr) 336px' }}>
-      <AuvraCanvas surfaceId="visual-rig-workbench" backend="webgl2" camera={{ position: [0, 1, 3], fov: 42 }} dpr={1}>
+      <AuvraCanvas surfaceId={`visual-rig-${model.id}`} role="reference" backend="webgl2" camera={{ position: [0, 1, 3], fov: 42 }} dpr={1}>
         <color attach="background" args={['#24262c']} /><hemisphereLight intensity={2.2} /><directionalLight position={[2, 4, 3]} intensity={2} />
         <gridHelper args={[12, 48, '#515359', '#34363a']} />
         <primitive object={root} /><RigMarkers modelId={model.id} root={root} /><RigPreview modelId={model.id} root={root} />
