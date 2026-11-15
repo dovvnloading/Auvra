@@ -562,7 +562,7 @@ def _require_replaceable(destination: Path) -> None:
     if not destination.exists() and not destination.is_symlink():
         return
     if not is_marked_build(destination):
-        raise GameBuildError("invalid_request", "destination exists and is not an Auvra build")
+        raise GameBuildError("invalid_request", "destination is not an Auvra build or contains unlisted or modified files; nothing was replaced")
 
 
 def _read_template(root: Path) -> list[dict[str, Any]]:
