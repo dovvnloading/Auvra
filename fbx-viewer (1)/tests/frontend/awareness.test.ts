@@ -26,6 +26,46 @@ describe('awareness', () => {
     expect(rate(at(0, -2))).toBe(Infinity);
   });
 
+  it('requires unobstructed sight before the immediate proximity detection, including from behind', () => {
+    const target = at(0, 2);
+    const input = { enemyPosition: eye, enemyForward: forward, targetPosition: target, distToTarget: 2 };
+    const blocked = { lineOfSight: false, heard: null };
+
+    expect(rate(target, false)).toBe(0);
+    expect(rate(at(0, -2), false)).toBe(0);
+    expect(perceive(new Awareness(), input, DEFAULT_AI_TUNING, blocked, 0)).toMatchObject({
+      canSee: false, investigate: null, stage: 'unaware', level: 0,
+    });
+
+    // An already-alerted enemy remembers the target, but cannot currently see it through the wall.
+    const alerted = new Awareness();
+    alerted.alert();
+    expect(perceive(alerted, input, DEFAULT_AI_TUNING, blocked, 0.05)).toMatchObject({
+      canSee: false, investigate: null, stage: 'alerted',
+    });
+  });
+
+  it('uses the ordinary sight cone and finite rate at the exact near-radius boundary', () => {
+    const radius = DEFAULT_AWARENESS_TUNING.nearRadius;
+    expect(rate(at(0, radius - 0.001), true)).toBe(Infinity);
+    const edgeRate = rate(at(0, radius), true);
+    expect(edgeRate).toBeGreaterThan(0);
+    expect(Number.isFinite(edgeRate)).toBe(true);
+    expect(rate(at(0, radius), false)).toBe(0);
+    expect(rate(at(0, -radius), true)).toBe(0);
+    expect(rate(at(0, radius + 0.001), false)).toBe(0);
+  });
+
+  it('keeps sound-event investigation separate from sight blocked by a nearby wall', () => {
+    const target = at(0, 2);
+    const heard = at(7, -3);
+    const input = { enemyPosition: eye, enemyForward: forward, targetPosition: target, distToTarget: 2 };
+    const frame = perceive(new Awareness(), input, DEFAULT_AI_TUNING, { lineOfSight: false, heard }, 0);
+    expect(frame).toMatchObject({
+      canSee: false, investigate: heard, stage: 'suspicious', level: SUSPICIOUS_LEVEL,
+    });
+  });
+
   it('fills to suspicious, then alerted; holds, fades, and calms only below suspicion', () => {
     const awareness = new Awareness(2);
     expect(awareness.update(1, false, 0.2)).toBe('unaware');

@@ -19,7 +19,7 @@ export interface AwarenessTuning {
     centralFov: number;
     /** The wider cone seen out of the corner of the eye, in degrees across. */
     peripheralFov: number;
-    /** Within this distance the target is noticed at once, whichever way the AI faces. */
+    /** Within this distance a visible target is noticed at once, whichever way the AI faces. */
     nearRadius: number;
     /** Seconds to notice a target close by and straight ahead; farther or to the side takes longer. */
     reactionSeconds: number;
@@ -68,9 +68,9 @@ export const sightRate = (
     _toTarget.subVectors(target, eye);
     _toTarget.y = 0;
     const distance = _toTarget.length();
-    if (distance >= tuning.range) return 0;
+    // Proximity can skip the vision cone, never the obstruction test.
+    if (distance >= tuning.range || !lineOfSight) return 0;
     if (distance < tuning.nearRadius) return Infinity;
-    if (!lineOfSight) return 0;
     const flatForward = Math.hypot(forward.x, forward.z);
     const cosine = flatForward > 1e-6 && distance > 1e-6 ? (forward.x * _toTarget.x + forward.z * _toTarget.z) / (flatForward * distance) : 1;
     const angle = THREE.MathUtils.radToDeg(Math.acos(THREE.MathUtils.clamp(cosine, -1, 1)));
