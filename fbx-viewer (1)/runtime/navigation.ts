@@ -27,7 +27,26 @@ export const NAV_REBAKE_INTERVAL_MS = 500;
 
 let worker: Worker | null = null;
 let nextBake = 1;
-const pending = new Map<number, { resolve: (data: Uint8Array) => void; reject: (error: Error) => void }>();
+/** A worker may stop replying without dispatching an error; do not strand its jobs forever. */
+export const NAV_BAKE_WORKER_TIMEOUT_MS = 120_000;
+const pending = new Map<number, {
+    resolve: (data: Uint8Array) => void;
+    reject: (error: Error) => void;
+    timeout: ReturnType<typeof setTimeout>;
+}>();
+
+/** A crashed worker can neither complete its active bake nor the requests queued behind it. */
+const failWorker = (source: Worker, error: Error): void => {
+    // Events from a terminated worker must not interfere with its replacement.
+    if (worker !== source) return;
+    worker = null;
+    try { source.terminate(); } catch { /* The failed worker may already be gone. */ }
+    for (const job of pending.values()) {
+        clearTimeout(job.timeout);
+        job.reject(error);
+    }
+    pending.clear();
+};
 
 /** Bakes in the shared worker, or in this thread where there are no workers. */
 const bakeData = async (input: NavBakeInput): Promise<Uint8Array> => {
@@ -36,21 +55,46 @@ const bakeData = async (input: NavBakeInput): Promise<Uint8Array> => {
         await recastReady();
         return bakeNavMeshData(input);
     }
-    if (!worker) {
-        worker = new Worker(new URL('../workers/navBake.worker.ts', import.meta.url), { type: 'module' });
-        worker.onmessage = (event: MessageEvent<BakeResponse>) => {
-            const job = pending.get(event.data.id);
+    let active = worker;
+    if (!active) {
+        try {
+            active = new Worker(new URL('../workers/navBake.worker.ts', import.meta.url), { type: 'module' });
+        } catch (error) {
+            throw new Error('Navmesh bake worker could not start', { cause: error });
+        }
+        worker = active;
+        const created = active;
+        created.onmessage = (event: MessageEvent<BakeResponse>) => {
+            if (worker !== created) return;
+            const response = event.data;
+            if (!response || typeof response.id !== 'number') {
+                failWorker(created, new Error('Navmesh bake worker returned an invalid response'));
+                return;
+            }
+            const job = pending.get(response.id);
             if (!job) return;
-            pending.delete(event.data.id);
-            if ('error' in event.data) job.reject(new Error(event.data.error));
-            else job.resolve(event.data.data);
+            pending.delete(response.id);
+            clearTimeout(job.timeout);
+            if ('error' in response) job.reject(new Error(response.error));
+            else job.resolve(response.data);
         };
+        created.onerror = (event: ErrorEvent) => failWorker(
+            created,
+            new Error(`Navmesh bake worker failed${event.message ? `: ${event.message}` : ''}`),
+        );
+        created.onmessageerror = () => failWorker(created, new Error('Navmesh bake worker response could not be read'));
     }
+    const current = active;
     const id = nextBake++;
     return new Promise((resolve, reject) => {
-        pending.set(id, { resolve, reject });
+        const timeout = setTimeout(() => failWorker(current, new Error('Navmesh bake worker timed out')), NAV_BAKE_WORKER_TIMEOUT_MS);
+        pending.set(id, { resolve, reject, timeout });
         // Copies, so the caller's geometry survives; the worker's own copy is transferred back as the result.
-        worker!.postMessage({ id, input });
+        try {
+            current.postMessage({ id, input });
+        } catch (error) {
+            failWorker(current, new Error('Navmesh bake worker could not accept the request', { cause: error }));
+        }
     });
 };
 
