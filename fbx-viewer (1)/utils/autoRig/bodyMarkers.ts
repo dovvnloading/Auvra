@@ -398,6 +398,69 @@ const readArm = (grid: VoxelGrid, line: LimbLine, like?: ArmReading & { length: 
   };
 };
 
+const inCells = (grid: VoxelGrid, point: Point): Point => [
+  (point[0] - grid.ox) / grid.size - 0.5, (point[1] - grid.oy) / grid.size - 0.5, (point[2] - grid.oz) / grid.size - 0.5,
+];
+
+/**
+ * A hand against the hip can give the wave a shortcut from the sleeve into the waist. Recover
+ * a missing upper arm only where the outside silhouette actually continues to a shoulder cap.
+ */
+const recoverHangingShoulder = (grid: VoxelGrid, mask: Uint8Array, arm: ArmReading, side: 1 | -1, middleX: number, height: number): void => {
+  const shoulder = inCells(grid, arm.shoulder);
+  const wrist = inCells(grid, arm.wrist);
+  const tip = inCells(grid, arm.tip);
+  const span = stepLength(shoulder, tip);
+  // A full-length limb, a horizontal arm, or a hand extending far away from the torso already has a reliable path.
+  if (span > height * 0.27 || shoulder[1] - tip[1] < span * 0.75 || (shoulder[0] - middleX) * side > height * 0.22) return;
+
+  const stride = grid.nx * grid.ny;
+  const minDepth = Math.max(2, Math.round(height * 0.025));
+  const depthAt = (x: number, y: number): { length: number; middle: number } => {
+    let run = 0;
+    let length = 0;
+    let middle = 0;
+    for (let z = 0; z < grid.nz; z += 1) {
+      run = mask[x + y * grid.nx + z * stride] ? run + 1 : 0;
+      if (run > length) { length = run; middle = z - (run - 1) / 2; }
+    }
+    return { length, middle };
+  };
+  // Use a substantial section of the silhouette so a thin spike does not determine the shoulder cap.
+  const outer = (y: number): number | null => {
+    for (let x = side === 1 ? grid.nx - 1 : 0; (x - middleX) * side > 0; x -= side) {
+      if (depthAt(x, y).length >= minDepth) return x;
+    }
+    return null;
+  };
+  const sideWidth = (shoulder[0] - middleX) * side;
+  let cap = -1;
+  for (let y = Math.round(shoulder[1]); y < grid.ny; y += 1) {
+    const edge = outer(y);
+    if (edge === null || (edge - middleX) * side < sideWidth * 0.74) break;
+    cap = y;
+  }
+  if (cap < shoulder[1] + height * 0.12) return;
+  // The arm column is measured at the elbow. It continues inward from the outside silhouette by its radius.
+  const forearm = inCells(grid, arm.elbow);
+  const forearmDepth = depthAt(Math.round(forearm[0]), Math.round(forearm[1])).length;
+  const radius = Math.max(2, height * 0.023, Math.min(height * 0.055, forearmDepth * 0.55));
+  const at = (y: number, inset: number): Point | null => {
+    const edge = outer(y);
+    if (edge === null) return null;
+    const x = edge - side * Math.round(radius * inset);
+    const depth = depthAt(x, y);
+    if (!depth.length) return null;
+    return [x, y, depth.middle];
+  };
+  const joint = at(Math.round(cap - radius), 1);
+  if (!joint) return;
+  const elbow = at(Math.round((joint[1] + wrist[1]) / 2), 0.9);
+  if (!elbow) return;
+  arm.shoulder = placeOf(grid, joint);
+  arm.elbow = placeOf(grid, elbow);
+};
+
 /**
  * The band of a wave from the top of the head at the chin: the narrowest place between the head and
  * the shoulders, else a usual neck's length from the middle of the shoulders, as a big head on no
@@ -855,10 +918,14 @@ export const readBody = (triangles: TriangleSoup, knownFacing?: [number, number]
   const leftArm = shorter === leftLine ? shorterArm : longerArm;
   const rightArm = shorter === leftLine ? longerArm : shorterArm;
 
+  if (!runsOn) {
+    recoverHangingShoulder(grid, mask, leftArm, 1, middleX, voxels);
+    recoverHangingShoulder(grid, mask, rightArm, -1, middleX, voxels);
+  }
+
   // The head: around the middle of the body, standing out past the shoulders. Of those the highest,
   // unless it is no more than a tuft on something much bigger. A hunched head can be down by the shoulders.
-  const inVoxels = (place: Point): Point => [(place[0] - grid.ox) / grid.size - 0.5, (place[1] - grid.oy) / grid.size - 0.5, (place[2] - grid.oz) / grid.size - 0.5];
-  const shoulders: Point = inVoxels([(leftArm.shoulder[0] + rightArm.shoulder[0]) / 2, (leftArm.shoulder[1] + rightArm.shoulder[1]) / 2, (leftArm.shoulder[2] + rightArm.shoulder[2]) / 2]);
+  const shoulders: Point = inCells(grid, [(leftArm.shoulder[0] + rightArm.shoulder[0]) / 2, (leftArm.shoulder[1] + rightArm.shoulder[1]) / 2, (leftArm.shoulder[2] + rightArm.shoulder[2]) / 2]);
   const aroundMiddle = clear.filter((part) => part !== leftHand && part !== rightHand && Math.abs(cellOf(grid, part.tip)[0] - middleX) <= voxels * 0.15);
   const pickHead = (from: Protrusion[]): Protrusion | null => {
     let best: Protrusion | null = null;

@@ -273,3 +273,6 @@ const main = async () => {
 };
 
 await main();
+if (!updating && !only && !onWebGpu && !textureBench && !realGpu && !process.exitCode) {
+  await import('./rigging.mjs');
+}

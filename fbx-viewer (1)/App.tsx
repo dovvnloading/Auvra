@@ -1,3 +1,4 @@
+import { cancelRig, syncRigTarget } from './utils/autoRig/rigSession';
 
 import React, { useEffect, useState } from 'react';
 import * as THREE from 'three';
@@ -32,6 +33,9 @@ const TabLoading: React.FC = () => (
 
 const AppContent: React.FC = () => {
   const { models, selectedModelId } = useScene();
+  const rigTarget = models.find(model => model.id === selectedModelId)?.object ?? null;
+  useEffect(() => { syncRigTarget(selectedModelId, rigTarget); }, [selectedModelId, rigTarget]);
+  useEffect(() => () => cancelRig(), []);
   
   // App Mode
   const [activeTab, setActiveTab] = useState<'scene' | 'graph' | 'blueprint' | 'sandbox' | 'hud' | 'retexture' | 'paint' | 'materials' | 'environment'>('scene');

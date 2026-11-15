@@ -17,7 +17,9 @@ const CLICK_SLOP = 4;
 const WEIGHT_ORDER = 900;
 
 /** Bones drawn over the model as lines from each joint to its parent, the picked bone in the accent colour. */
-const SkeletonLines: React.FC<{ root: THREE.Object3D; selectedBone: string | null; pickable: boolean }> = ({ root, selectedBone, pickable }) => {
+const selectBone = (name: string): void => setSkeletonView({ selectedBone: name });
+
+export const SkeletonLines: React.FC<{ root: THREE.Object3D; selectedBone: string | null; pickable: boolean; onPick?: (name: string) => void }> = ({ root, selectedBone, pickable, onPick = selectBone }) => {
   const bones = useMemo(() => skeletonBones(root), [root]);
   const linked = useMemo(() => bones.filter((entry) => entry.parent >= 0), [bones]);
   const lines = useMemo(() => {
@@ -67,7 +69,7 @@ const SkeletonLines: React.FC<{ root: THREE.Object3D; selectedBone: string | nul
       if (!pressedAt || Math.hypot(event.clientX - pressedAt.x, event.clientY - pressedAt.y) > CLICK_SLOP) return;
       const bounds = canvas.getBoundingClientRect();
       const picked = boneAtScreen(bones, camera, event.clientX - bounds.left, event.clientY - bounds.top, bounds.width, bounds.height);
-      if (picked) setSkeletonView({ selectedBone: picked.name });
+      if (picked) onPick(picked.name);
     };
     canvas.addEventListener('pointerdown', onDown);
     canvas.addEventListener('pointerup', onUp);
@@ -75,7 +77,7 @@ const SkeletonLines: React.FC<{ root: THREE.Object3D; selectedBone: string | nul
       canvas.removeEventListener('pointerdown', onDown);
       canvas.removeEventListener('pointerup', onUp);
     };
-  }, [bones, camera, canvas, pickable]);
+  }, [bones, camera, canvas, pickable, onPick]);
 
   // The picked bone's name goes by its joint, and follows it.
   const pickedBone = bones.find((entry) => entry.name === selectedBone)?.bone ?? null;

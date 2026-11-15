@@ -138,3 +138,9 @@ body {
   border-radius: 4px;
 }
 ::-webkit-scrollbar-thumb:hover { background-color: rgb(255 255 255 / 0.26); }
+
+/* Native selects keep keyboard search available for long bone and guide lists. */
+.rig-select {
+  @apply block h-7 w-full min-w-0 rounded border border-line bg-well px-2 text-xs font-normal text-ink focus:border-accent;
+  color-scheme: dark;
+}

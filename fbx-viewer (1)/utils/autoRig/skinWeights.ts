@@ -26,19 +26,26 @@ export interface PartWeights {
   weights: Float32Array;
 }
 
+export interface SkinBindingSettings {
+  /** Maximum nonzero weights in each four-slot glTF vertex attribute. */
+  maxInfluences: 1 | 2 | 4;
+  /** How quickly a bone's influence diminishes with geodesic distance. */
+  falloff: 'soft' | 'balanced' | 'firm';
+}
+
+export const DEFAULT_SKIN_BINDING: Readonly<SkinBindingSettings> = { maxInfluences: 4, falloff: 'balanced' };
+const FALLOFF_EXPONENT: Record<SkinBindingSettings['falloff'], number> = { soft: 3, balanced: 5, firm: 7 };
+
 /** Voxels along the longest side when binding. */
 const BIND_RESOLUTION = 256;
-/** How sharply a bone's pull falls off with distance: the higher, the crisper the joints. */
-const FALLOFF = 5;
 /** Added to a distance in limb thicknesses, so a vertex right on a bone stays finite. */
 const NEAREST_DISTANCE = 0.25;
 /** Thinnest a limb is taken to be, in voxels. */
 const LEAST_THICKNESS = 1.5;
 /** Bones this many steps from a vertex's nearest bone may move it; further ones (the other leg) may not. */
 const HOPS_ALLOWED = 2;
-/** Bones a vertex keeps while smoothing, and in the end. */
+/** Bones a vertex keeps while smoothing, before the final influence limit is applied. */
 const KEPT_WHILE_SMOOTHING = 8;
-const KEPT = 4;
 /** Smallest share kept: less than this moves nothing you would see. */
 const LEAST_SHARE = 0.01;
 const SMOOTHING_ROUNDS = 2;
@@ -206,7 +213,7 @@ interface HandBinding {
   sharesAt: (x: number, y: number, z: number, out: Float32Array) => boolean;
 }
 
-const bindHand = (triangles: TriangleSoup, joints: readonly RigJoint[], moving: readonly number[], hand: number, bodyGrid: VoxelGrid, body: Uint8Array): HandBinding | null => {
+const bindHand = (triangles: TriangleSoup, joints: readonly RigJoint[], moving: readonly number[], hand: number, bodyGrid: VoxelGrid, body: Uint8Array, falloff: number): HandBinding | null => {
   const childrenOf = (index: number): number[] => joints.flatMap((joint, at) => (joint.parent === index ? [at] : []));
   const fingers = moving.filter((joint) => joints[joint].handOf === hand);
   if (!fingers.length) return null;
@@ -267,7 +274,7 @@ const bindHand = (triangles: TriangleSoup, joints: readonly RigJoint[], moving: 
       let nearestShare = -1;
       for (let bone = 0; bone < ownBones.length; bone += 1) {
         const distance = distances[bone][voxel];
-        const share = distance === FAR ? 0 : (1 / (distance / 10 / thickness[bone] + NEAREST_DISTANCE)) ** FALLOFF;
+        const share = distance === FAR ? 0 : (1 / (distance / 10 / thickness[bone] + NEAREST_DISTANCE)) ** falloff;
         out[bone] = share;
         if (share > nearestShare) {
           nearestShare = share;
@@ -375,7 +382,9 @@ export const bindSkin = (
   joints: readonly RigJoint[],
   parts: readonly SkinnedPart[],
   onProgress?: (share: number) => void,
+  settings: Readonly<SkinBindingSettings> = DEFAULT_SKIN_BINDING,
 ): PartWeights[] => {
+  const falloff = FALLOFF_EXPONENT[settings.falloff];
   const grid = voxelize(triangles, BIND_RESOLUTION);
   if (!grid) throw new Error('The mesh has no surface to bind.');
   const mask = bridgedBody(grid);
@@ -416,7 +425,7 @@ export const bindSkin = (
   });
 
   const hands = moving.flatMap((joint) => {
-    const binding = moving.some((other) => joints[other].handOf === joint) ? bindHand(triangles, joints, moving, joint, grid, mask) : null;
+    const binding = moving.some((other) => joints[other].handOf === joint) ? bindHand(triangles, joints, moving, joint, grid, mask, falloff) : null;
     return binding ? [{ slot: moving.indexOf(joint), binding, shares: new Float32Array(binding.slots.length) }] : [];
   });
   const hops = hopsBetween(joints, moving);
@@ -448,7 +457,7 @@ export const bindSkin = (
       if (hops[nearest * boneCount + bone] > HOPS_ALLOWED) continue;
       const distance = number >= 0 ? distances[bone]?.[number] ?? FAR : FAR;
       if (distance === FAR) continue;
-      pull[bone] = (1 / (distance / 10 / thickness[bone] + NEAREST_DISTANCE)) ** FALLOFF;
+      pull[bone] = (1 / (distance / 10 / thickness[bone] + NEAREST_DISTANCE)) ** falloff;
     }
     // What goes to a hand with fingers is shared out among them.
     for (const { slot, binding, shares: handShares } of hands) {
@@ -497,7 +506,7 @@ export const bindSkin = (
   }
   onProgress?.(0.92);
 
-  // The four strongest of each, back on every part's own vertices.
+  // The strongest weights, renormalized and zero-padded to four slots for glTF.
   const weights = parts.map((_, partIndex) => {
     const partIds = ids[partIndex];
     const outJoints = new Uint16Array(partIds.length * 4);
@@ -506,7 +515,7 @@ export const bindSkin = (
       const id = partIds[vertex];
       let total = 0;
       let kept = 0;
-      for (let slot = 0; slot < KEPT; slot += 1) {
+      for (let slot = 0; slot < settings.maxInfluences; slot += 1) {
         const share = shares[id * KEPT_WHILE_SMOOTHING + slot];
         const bone = bones[id * KEPT_WHILE_SMOOTHING + slot];
         if (bone < 0 || share < LEAST_SHARE) continue;

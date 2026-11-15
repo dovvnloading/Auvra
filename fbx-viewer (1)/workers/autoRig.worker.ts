@@ -3,13 +3,13 @@
 import { isDedicatedWorkerMessage } from './dedicatedWorkerMessage';
 import { readAnyBody, readAs, rigBody, type BodyKind, type RigMarkerName, type RigMarkers, type RigReading } from '../utils/autoRig/rigBody';
 import type { RigJoint } from '../utils/autoRig/bodySkeleton';
-import type { PartWeights, SkinnedPart } from '../utils/autoRig/skinWeights';
+import type { PartWeights, SkinBindingSettings, SkinnedPart } from '../utils/autoRig/skinWeights';
 
 // Reads a body from its mesh and fits a skeleton and weights to it, which takes too long for the UI thread.
 export type AutoRigRequest =
   /** `kind` is the body to read it as, and `facing` the way it faces, where those have been chosen. */
   | { type: 'read'; triangles: Float32Array; kind?: BodyKind; facing?: [number, number] }
-  | { type: 'rig'; triangles: Float32Array; parts: SkinnedPart[]; reading: RigReading; moved: RigMarkerName[]; original: RigMarkers; withFingers: boolean; withTail: boolean };
+  | { type: 'rig'; triangles: Float32Array; parts: SkinnedPart[]; reading: RigReading; moved: RigMarkerName[]; original: RigMarkers; withFingers: boolean; withTail: boolean; binding?: SkinBindingSettings };
 
 export type AutoRigResponse =
   | { type: 'progress'; share: number }
@@ -31,7 +31,7 @@ scope.onmessage = (event: MessageEvent<AutoRigRequest>) => {
     }
     const { joints, weights } = rigBody(request.triangles, request.parts, request.reading, request.moved, (share) => {
       scope.postMessage({ type: 'progress', share } satisfies AutoRigResponse);
-    }, request.original, request.withFingers, request.withTail);
+    }, request.original, request.withFingers, request.withTail, request.binding);
     const buffers = weights.flatMap((part) => [part.joints.buffer, part.weights.buffer]) as ArrayBuffer[];
     scope.postMessage({ type: 'rigged', joints, weights } satisfies AutoRigResponse, buffers);
   } catch (error) {
