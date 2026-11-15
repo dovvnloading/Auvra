@@ -46,6 +46,58 @@ describe('awareness', () => {
     expect(awareness.stage).toBe('alerted');
   });
 
+  it('notices a nearby target immediately even on a zero-length frame', () => {
+    const awareness = new Awareness();
+    expect(awareness.update(rate(at(0, -2)), false, 0)).toBe('alerted');
+    expect(awareness.level).toBe(1);
+    expect(Number.isFinite(awareness.level)).toBe(true);
+
+    // The real AI senses path must also chase a nearby target on its first frame.
+    const input = { enemyPosition: eye, enemyForward: forward, targetPosition: at(0, -2), distToTarget: 2 };
+    const frame = perceive(new Awareness(), input, DEFAULT_AI_TUNING, { lineOfSight: true, heard: null }, 0);
+    expect(frame).toMatchObject({ canSee: true, investigate: null, stage: 'alerted', level: 1 });
+    expect(new Awareness().update(Infinity, false, -0.01)).toBe('alerted');
+  });
+
+  it('preserves normal meter updates for zero, tiny, and regular frame lengths', () => {
+    const awareness = new Awareness(2);
+    expect(awareness.update(2, false, 0)).toBe('unaware');
+    expect(awareness.level).toBe(0);
+    awareness.update(2, false, 1e-9);
+    expect(awareness.level).toBe(2e-9);
+    awareness.update(2, false, 0.25);
+    expect(awareness.level).toBeCloseTo(0.500000002, 10);
+    awareness.update(0, false, 1.5);
+    expect(awareness.level).toBeCloseTo(0.500000002, 10);
+    awareness.update(0, false, 0.25);
+    expect(awareness.level).toBeCloseTo(0.375000002, 10);
+  });
+
+  it('does not rewind seeing or forgetting on negative or non-finite frame lengths', () => {
+    const awareness = new Awareness(2);
+    awareness.update(1, false, 0.5);
+    for (const delta of [-0.1, -Infinity, NaN, Infinity]) {
+      awareness.update(1, false, delta);
+      expect(awareness.level).toBe(0.5);
+    }
+    awareness.update(0, false, 2);
+    expect(awareness.level).toBe(0);
+    awareness.update(0, false, -0.25);
+    expect(awareness.level).toBe(0);
+    expect(Number.isFinite(awareness.level)).toBe(true);
+  });
+
+  it('recovers a previously poisoned awareness meter on the next frame', () => {
+    const awareness = new Awareness();
+    awareness.level = NaN; // A corrupted value from a prior zero-delta frame (or saved state).
+    awareness.alerted = true;
+    expect(awareness.update(1, false, 0.2)).toBe('unaware');
+    expect(awareness.level).toBeCloseTo(0.2, 10);
+    expect(awareness.alerted).toBe(false);
+    expect(awareness.update(1, false, 0.8)).toBe('alerted');
+    expect(awareness.level).toBe(1);
+  });
+
   it('investigates a glimpse until alerted, and only then gives chase', () => {
     const awareness = new Awareness();
     const input = { enemyPosition: eye, enemyForward: forward, targetPosition: at(0, 8), distToTarget: 8 };

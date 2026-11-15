@@ -97,12 +97,16 @@ export class Awareness {
 
     /** Advances the meter by `delta` seconds of seeing at `rate` (sightRate), having heard a noise or not. */
     update(rate: number, heard: boolean, delta: number): AwarenessStage {
+        const elapsed = Number.isFinite(delta) ? Math.max(0, delta) : 0;
+        // A previously corrupted meter must not propagate NaN into later frames.
+        this.level = Number.isFinite(this.level) ? Math.min(1, Math.max(0, this.level)) : 0;
         if (rate > 0) {
-            this.level = Math.min(1, this.level + rate * delta);
+            // Infinity means immediate proximity detection, not a rate to multiply by zero.
+            this.level = rate === Infinity ? 1 : Math.min(1, this.level + rate * elapsed);
             this.outOfSight = 0;
         } else {
-            this.outOfSight += delta;
-            if (this.outOfSight > HOLD_SECONDS) this.level = Math.max(0, this.level - delta / Math.max(this.forgetSeconds, 1e-3));
+            this.outOfSight += elapsed;
+            if (this.outOfSight > HOLD_SECONDS) this.level = Math.max(0, this.level - elapsed / Math.max(this.forgetSeconds, 1e-3));
         }
         if (heard) this.level = Math.max(this.level, SUSPICIOUS_LEVEL);
         if (this.level >= 1) this.alerted = true;
