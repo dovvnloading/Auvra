@@ -53,15 +53,16 @@ export interface Perception {
 export const OPEN_PERCEPTION: Perception = { lineOfSight: true, heard: null };
 
 /**
- * Whether the AI sees the target: within `sightRange`, and either in its vision cone with nothing
- * in the way, or close enough (AI_CONFIG's HEARING distance) to notice it whichever way it faces.
+ * Whether the AI sees the target: within `sightRange` and with nothing solid in the way.
+ * At close range (AI_CONFIG's HEARING distance), it can ignore facing, but not walls.
+ * Actual hearing is a separate noise event in `perception.heard`.
  */
 export const seesTarget = (input: SensoryInput, sightRange: number, perception: Perception = OPEN_PERCEPTION): boolean => {
     const { distToTarget } = input;
-    if (distToTarget >= sightRange) return false;
+    if (distToTarget >= sightRange || !perception.lineOfSight) return false;
     if (distToTarget < AI_CONFIG.DISTANCES.HEARING) return true;
     const { canSee: inCone } = checkVisibility({ ...input, distToTarget: AI_CONFIG.DISTANCES.HEARING });
-    return inCone && perception.lineOfSight;
+    return inCone;
 };
 
 /** An enemy's awareness tunables: its sight range and reaction time, AI_CONFIG's cones and near radius. */
