@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -86,6 +87,28 @@ class AssetPublicationTests(unittest.TestCase):
         self.assertTrue(self.repo.assets.verify(existing.asset_id))
         self.assertFalse((self.content / asset_id).exists())
 
+    def test_blob_install_failure_never_publishes_manifest(self) -> None:
+        assert self.repo is not None
+        data = b"blob-rename-refused"
+        asset_id = hashlib.sha256(data).hexdigest()
+        target = self.content / asset_id
+        original_replace = os.replace
+
+        def refuse_blob(source, destination):
+            if Path(destination) == target:
+                raise PermissionError("blob destination is locked")
+            return original_replace(source, destination)
+
+        with mock.patch("Auvra.project.assets.os.replace", side_effect=refuse_blob):
+            with self.assertRaises(PermissionError):
+                self.repo.assets.put_stream(io.BytesIO(data))
+
+        self.assertFalse(target.exists())
+        self.assertNotIn(asset_id, self._records())
+        self.assertFalse((self.content / ".incoming" / f".publish-{asset_id}").exists())
+        self._reopen()
+        self._assert_manifest_matches_blobs()
+
     def test_partial_manifest_write_and_failed_temp_cleanup_leave_project_openable(self) -> None:
         assert self.repo is not None
         data = b"partial-manifest-failure"
@@ -110,7 +133,9 @@ class AssetPublicationTests(unittest.TestCase):
                 self.repo.assets.put_stream(io.BytesIO(data))
 
         self.assertFalse((self.content / asset_id).exists())
+        self.assertTrue(list((self.content / ".incoming").glob("manifest.json.tmp-*")))
         self._reopen()
+        self.assertFalse(list((self.content / ".incoming").glob("manifest.json.tmp-*")))
         self._assert_manifest_matches_blobs()
 
     def test_process_exit_after_blob_install_before_manifest_commit_is_replayed(self) -> None:
@@ -145,8 +170,10 @@ class AssetPublicationTests(unittest.TestCase):
             f"AssetStore(sys.argv[1]).put_stream(io.BytesIO({data!r}))\n",
             74,
         )
+        self.assertTrue(list((self.content / ".incoming").glob("manifest.json.tmp-*")))
         self._reopen()
         self.assertFalse((self.content / asset_id).exists())
+        self.assertFalse(list((self.content / ".incoming").glob("manifest.json.tmp-*")))
         self._assert_manifest_matches_blobs()
 
     def test_failed_rollback_can_be_retried_on_next_writable_open(self) -> None:
