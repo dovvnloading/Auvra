@@ -298,15 +298,158 @@ class GameBuildTests(unittest.TestCase):
 
     def test_overwrites_a_marked_build(self):
         self.build("build-1")
-        (self.destination / "stale.txt").write_text("old", encoding="utf-8")
         player = self.root / "auvra-player.exe"
         player.write_bytes(b"MZ-player")
         report = self.build("build-2", target="windows", player_executable=player)
         self.assertEqual(report.build_id, "build-2")
         self.assertEqual(self.load("game/game.json")["buildId"], "build-2")
         self.assertEqual(self.load(BUILD_MARKER)["target"], "windows")
-        self.assertFalse((self.destination / "stale.txt").exists())
+        self.assertEqual((self.destination / "Demo.exe").read_bytes(), b"MZ-player")
         self.assert_no_leftovers()
+
+    def assert_rebuild_refused_without_deleting(self):
+        with self.assertRaises(GameBuildError) as caught:
+            self.build("build-2")
+        self.assertEqual(caught.exception.code, "invalid_request")
+        self.assertTrue(self.destination.is_dir())
+        self.assert_no_leftovers()
+
+    def test_rebuild_refuses_user_added_files_and_nested_folders(self):
+        self.build()
+        user_files = {
+            "important-user-notes.txt": b"personal notes",
+            "save-backup.zip": b"saved progress",
+            "mods/custom/data.json": b'{"mod":true}',
+            "game/assets/user-textures/favorite.png": b"custom texture",
+        }
+        for relative, data in user_files.items():
+            path = self.destination / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+        self.assert_rebuild_refused_without_deleting()
+        for relative, data in user_files.items():
+            self.assertEqual((self.destination / relative).read_bytes(), data)
+        self.assertEqual(self.load("game/game.json")["buildId"], "build-1")
+
+    def test_rebuild_refuses_unlisted_empty_folders_and_build_lookalike_files(self):
+        self.build()
+        (self.destination / "mods" / "empty").mkdir(parents=True)
+        lookalikes = [
+            self.destination / "assets" / "player.js.map",
+            self.destination / "game" / "assets" / (("e" * 64) + ".png"),
+            self.destination / "game" / "content" / "levels.json.backup",
+        ]
+        for path in lookalikes:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"user, not build")
+        self.assert_rebuild_refused_without_deleting()
+        self.assertTrue((self.destination / "mods" / "empty").is_dir())
+        for path in lookalikes:
+            self.assertEqual(path.read_bytes(), b"user, not build")
+
+    def test_rebuild_refuses_modified_build_outputs(self):
+        self.build()
+        player = self.destination / "assets/player.js"
+        player.write_bytes(b"my locally modified player")
+        self.assert_rebuild_refused_without_deleting()
+        self.assertEqual(player.read_bytes(), b"my locally modified player")
+        self.assertEqual(self.load(BUILD_MARKER)["buildId"], "build-1")
+
+    def test_missing_corrupt_or_forged_marker_cannot_authorize_rebuild(self):
+        self.build()
+        marker_path = self.destination / BUILD_MARKER
+        original = self.load(BUILD_MARKER)
+        cases = (
+            None,
+            "{corrupt json",
+            json.dumps({**original, "files": []}),
+            json.dumps({**original, "files": [{"path": "assets/player.js"}]}),
+            json.dumps({**original, "files": [{**original["files"][0], "sha256": "0" * 64}]}),
+        )
+        for marker in cases:
+            with self.subTest(marker=marker):
+                if marker is None:
+                    marker_path.unlink(missing_ok=True)
+                else:
+                    marker_path.write_text(marker, encoding="utf-8")
+                self.assert_rebuild_refused_without_deleting()
+                self.assertEqual(self.load("game/game.json")["buildId"], "build-1")
+        marker_path.write_text(json.dumps(original), encoding="utf-8")
+
+        # A marker with the right header but no verified file inventory is not proof of ownership.
+        marker_path.write_text(json.dumps({"schema": 1, "kind": "auvra-game-build", "files": []}), encoding="utf-8")
+        self.assert_rebuild_refused_without_deleting()
+
+    def test_unsafe_and_duplicate_manifest_entries_are_rejected(self):
+        self.build()
+        marker_path = self.destination / BUILD_MARKER
+        original = self.load(BUILD_MARKER)
+        valid = {"size": 0, "sha256": sha256(b"")}
+        for unsafe in ("../outside", "game/../../outside", "/absolute", "C:/outside", "game\\outside", "game//outside", BUILD_MARKER):
+            with self.subTest(unsafe=unsafe):
+                marker_path.write_text(json.dumps({
+                    **original, "files": [*original["files"], {"path": unsafe, **valid}],
+                }), encoding="utf-8")
+                self.assert_rebuild_refused_without_deleting()
+        with self.subTest(duplicate="case-insensitive"):
+            entry = original["files"][0]
+            marker_path.write_text(json.dumps({
+                **original, "files": [*original["files"], {**entry, "path": entry["path"].upper()}],
+            }), encoding="utf-8")
+            self.assert_rebuild_refused_without_deleting()
+
+    def test_rebuild_rejects_symlinks_instead_of_following_or_deleting_them(self):
+        self.build()
+        outside = self.root / "outside-user-file"
+        outside.write_bytes(TEMPLATE_FILES["index.html"])
+        generated = self.destination / "index.html"
+        generated.unlink()
+        try:
+            generated.symlink_to(outside)
+        except (OSError, NotImplementedError) as error:
+            self.skipTest(f"symlinks are unavailable: {error}")
+        self.assert_rebuild_refused_without_deleting()
+        self.assertTrue(generated.is_symlink())
+        self.assertEqual(outside.read_bytes(), TEMPLATE_FILES["index.html"])
+
+        generated.unlink()
+        generated.write_bytes(TEMPLATE_FILES["index.html"])
+        external_dir = self.root / "external-mods"
+        external_dir.mkdir()
+        (external_dir / "notes.txt").write_bytes(b"important")
+        linked_dir = self.destination / "mods"
+        linked_dir.symlink_to(external_dir, target_is_directory=True)
+        self.assert_rebuild_refused_without_deleting()
+        self.assertTrue(linked_dir.is_symlink())
+        self.assertEqual((external_dir / "notes.txt").read_bytes(), b"important")
+
+        linked_dir.unlink()
+        marker = self.destination / BUILD_MARKER
+        original = marker.read_bytes()
+        safe_copy = self.root / "build-record.json"
+        safe_copy.write_bytes(original)
+        marker.unlink()
+        marker.symlink_to(safe_copy)
+        self.assert_rebuild_refused_without_deleting()
+        self.assertTrue(marker.is_symlink())
+        self.assertEqual(safe_copy.read_bytes(), original)
+
+    def test_publish_keeps_unexpected_files_added_during_the_swap(self):
+        self.build("build-1")
+        real_replace = os.replace
+
+        def replace(source, target):
+            real_replace(source, target)
+            if Path(source) == self.destination:
+                (Path(target) / "late-user-notes.txt").write_bytes(b"added during swap")
+
+        with mock.patch.object(game_build_module.os, "replace", side_effect=replace):
+            report = self.build("build-2")
+        backups = list(self.output.glob(f".{self.destination.name}.previous-*"))
+        self.assertEqual(len(backups), 1)
+        self.assertEqual((backups[0] / "late-user-notes.txt").read_bytes(), b"added during swap")
+        self.assertTrue(any("changed during the build and was kept" in msg for msg in report.warnings))
+        self.assertEqual(self.load("game/game.json")["buildId"], "build-2")
 
     def test_refuses_an_unmarked_destination(self):
         self.destination.mkdir(parents=True)
