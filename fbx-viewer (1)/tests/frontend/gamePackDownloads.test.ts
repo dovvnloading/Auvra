@@ -186,6 +186,25 @@ describe('game-pack asset download budgets', () => {
     expect(objectUrls).toEqual([]);
   });
 
+  it('admits a fitting queued request when a larger request ahead of it is cancelled', async () => {
+    // Two active reservations leave exactly one byte. c (two bytes) blocks d (one byte).
+    assets = [asset('a', MAX_GAME_PACK_ASSET_BYTES), asset('b', MAX_GAME_PACK_ASSET_BYTES - 1), asset('c', 2), asset('d', 1)];
+    for (const item of assets) downloads.set(item.file, signal => new Promise<Response>((_resolve, reject) => {
+      signal.addEventListener('abort', () => reject(new DOMException('cancelled', 'AbortError')), { once: true });
+    }));
+    const source = await load();
+    const a = source.resolveAssetUrl('a');
+    const b = source.resolveAssetUrl('b');
+    const c = source.resolveAssetUrl('c');
+    const d = source.resolveAssetUrl('d');
+    await vi.waitFor(() => expect(requested).toEqual(['a.bin', 'b.bin']));
+    source.releaseAssetUrl('c');
+    await expect(c).rejects.toMatchObject({ name: 'AbortError' });
+    await vi.waitFor(() => expect(requested).toEqual(['a.bin', 'b.bin', 'd.bin']));
+    source.dispose();
+    await Promise.all([a, b, d].map(pending => expect(pending).rejects.toMatchObject({ name: 'AbortError' })));
+  });
+
   it('permits simultaneous small downloads without imposing a fixed two-request bottleneck', async () => {
     assets = [asset('a', 1), asset('b', 1), asset('c', 1)];
     const gates: (() => void)[] = [];
