@@ -116,26 +116,19 @@ describe('game-pack asset download budgets', () => {
     source.dispose();
   });
 
-  it('consumes a stream without response.arrayBuffer or a second full-sized JS Blob input', async () => {
+  it('streams to a Blob without a full response ArrayBuffer or an application-level Blob copy', async () => {
     const bytes = Uint8Array.from([0, 255, 18, 0, 42, 128, 3, 1, 200]);
     assets = [asset('stream', bytes.length, 'audio/ogg')];
     downloads.set('stream.bin', () => bodyResponse([bytes.subarray(0, 2), bytes.subarray(2, 7), bytes.subarray(7)], '9'));
     const readAll = vi.spyOn(Response.prototype, 'arrayBuffer').mockImplementation(() => {
       throw new Error('Full response ArrayBuffer allocation is forbidden');
     });
-    const OriginalBlob = Blob;
-    vi.stubGlobal('Blob', class extends OriginalBlob {
-      constructor(parts: BlobPart[] = [], options?: BlobPropertyBag) {
-        if (parts.some(part => part instanceof ArrayBuffer || ArrayBuffer.isView(part))) {
-          throw new Error('A second full-size Blob copy is forbidden');
-        }
-        super(parts, options);
-      }
-    });
+    const readAsBlob = vi.spyOn(Response.prototype, 'blob');
     const source = await load();
     const url = await source.resolveAssetUrl('stream');
     expect(url).toBe('blob:test-0');
     expect(readAll).not.toHaveBeenCalled();
+    expect(readAsBlob).toHaveBeenCalledTimes(1);
     expect(objectUrls).toHaveLength(1);
     expect(objectUrls[0].blob.type).toBe('audio/ogg');
     expect(new Uint8Array(await objectUrls[0].blob.arrayBuffer())).toEqual(bytes);
