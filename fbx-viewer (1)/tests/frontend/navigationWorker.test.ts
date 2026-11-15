@@ -172,7 +172,7 @@ describe('shared navmesh bake worker failures', () => {
     });
 
     it('times out a silent worker, settling every pending job and allowing recovery', async () => {
-        const { bakeLevelNavMesh, NAV_BAKE_WORKER_TIMEOUT_MS } = await import('../../runtime/navigation');
+        const { bakeLevelNavMesh } = await import('../../runtime/navigation');
         vi.useFakeTimers();
         const first = bakeLevelNavMesh([]);
         const second = bakeLevelNavMesh([]);
@@ -180,7 +180,7 @@ describe('shared navmesh bake worker failures', () => {
             expect(first).rejects.toThrow('Navmesh bake worker timed out'),
             expect(second).rejects.toThrow('Navmesh bake worker timed out'),
         ];
-        await vi.advanceTimersByTimeAsync(NAV_BAKE_WORKER_TIMEOUT_MS + 1);
+        await vi.advanceTimersByTimeAsync(120_001);
         await Promise.all(results);
         expect(StubWorker.instances[0].terminated).toBe(true);
 
