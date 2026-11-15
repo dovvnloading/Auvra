@@ -2,7 +2,9 @@ import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
 import { PLAYER_PHYSICS_ID, type PhysicsRaycastHit } from '../../runtime/physicsQueries';
 import { NoiseBus, characterHeight, lineOfSight } from '../../runtime/perception';
-import { OPEN_PERCEPTION, seesTarget } from '../../components/Sandbox/AI/AISenses';
+import { OPEN_PERCEPTION, perceive, seesTarget } from '../../components/Sandbox/AI/AISenses';
+import { DEFAULT_AI_TUNING, AI_CONFIG } from '../../components/Sandbox/AI/AIConfig';
+import { Awareness } from '../../runtime/awareness';
 import { evaluateNextState, type DecisionContext } from '../../components/Sandbox/AI/AIStateMachine';
 
 const v = (x: number, y: number, z: number) => new THREE.Vector3(x, y, z);
@@ -77,7 +79,45 @@ describe('what an enemy sees', () => {
     expect(seesTarget(sense(v(0, 0, 10)), 15, blocked)).toBe(false);
     expect(seesTarget(sense(v(0, 0, 20)), 15, OPEN_PERCEPTION)).toBe(false);
     expect(seesTarget(sense(v(0, 0, -10)), 15, OPEN_PERCEPTION)).toBe(false);
-    expect(seesTarget(sense(v(0, 0, -2)), 15, blocked)).toBe(true);
+    expect(seesTarget(sense(v(0, 0, -2)), 15, OPEN_PERCEPTION)).toBe(true);
+    expect(seesTarget(sense(v(0, 0, -2)), 15, blocked)).toBe(false);
+    expect(seesTarget(sense(v(0, 0, 2)), 15, blocked)).toBe(false);
+  });
+
+  it('treats the exact close-range boundary as cone-based sight, never as hearing through walls', () => {
+    const radius = AI_CONFIG.DISTANCES.HEARING;
+    const blocked = { lineOfSight: false, heard: null };
+    expect(seesTarget(sense(v(0, 0, radius - 0.001)), 15, OPEN_PERCEPTION)).toBe(true);
+    expect(seesTarget(sense(v(0, 0, radius - 0.001)), 15, blocked)).toBe(false);
+    expect(seesTarget(sense(v(0, 0, radius)), 15, OPEN_PERCEPTION)).toBe(true);
+    expect(seesTarget(sense(v(0, 0, radius)), 15, blocked)).toBe(false);
+    expect(seesTarget(sense(v(0, 0, -radius)), 15, OPEN_PERCEPTION)).toBe(false);
+    expect(seesTarget(sense(v(0, 0, radius)), radius, OPEN_PERCEPTION)).toBe(false);
+  });
+
+  it('honors a partially obscured chest ray in both near-target sight paths without changing ray tolerance', () => {
+    const target = v(0, 0, 2);
+    const eye = v(0, 1.6, 0);
+    const chest = v(0, 1.08, 2);
+    const distance = eye.distanceTo(chest);
+    // Cover masks the target's chest ray even if another part of the target is exposed.
+    const covered = lineOfSight(physics({ objectId: 'cover', distance: distance - 0.5 }), eye, chest);
+    expect(covered).toBe(false);
+    const input = sense(target);
+    const occluded = { lineOfSight: covered, heard: null };
+    expect(seesTarget(input, 15, occluded)).toBe(false);
+    expect(perceive(new Awareness(), input, DEFAULT_AI_TUNING, occluded, 0)).toMatchObject({
+      canSee: false, investigate: null, stage: 'unaware', level: 0,
+    });
+
+    // An obstruction only at the target retains the existing ray endpoint tolerance.
+    const atTarget = lineOfSight(physics({ objectId: 'cover', distance: distance - 0.1 }), eye, chest);
+    expect(atTarget).toBe(true);
+    const visible = { lineOfSight: atTarget, heard: null };
+    expect(seesTarget(input, 15, visible)).toBe(true);
+    expect(perceive(new Awareness(), input, DEFAULT_AI_TUNING, visible, 0)).toMatchObject({
+      canSee: true, investigate: null, stage: 'alerted', level: 1,
+    });
   });
 
   it('goes to look when it hears a noise while idle or on patrol', () => {
