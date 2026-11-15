@@ -23,14 +23,17 @@ const assetAbortError = (): DOMException => new DOMException('Game pack asset do
 // Shared across GamePackSource instances. Queued downloads have not fetched or retained a body.
 let reservedAssetBytes = 0;
 const waitingAssetDownloads: { bytes: number; grant: () => void }[] = [];
+const admitWaitingDownloads = () => {
+    while (waitingAssetDownloads.length && reservedAssetBytes + waitingAssetDownloads[0].bytes <= MAX_GAME_PACK_IN_FLIGHT_BYTES) {
+        waitingAssetDownloads.shift()?.grant();
+    }
+};
 const acquireAssetDownload = (bytes: number, signal: AbortSignal): Promise<() => void> => new Promise((resolve, reject) => {
     if (signal.aborted) { reject(assetAbortError()); return; }
     const release = () => {
         reservedAssetBytes -= bytes;
         // FIFO: once space is available, admit as many waiting assets as fit.
-        while (waitingAssetDownloads.length && reservedAssetBytes + waitingAssetDownloads[0].bytes <= MAX_GAME_PACK_IN_FLIGHT_BYTES) {
-            waitingAssetDownloads.shift()?.grant();
-        }
+        admitWaitingDownloads();
     };
     const grant = () => {
         signal.removeEventListener('abort', onAbort);
@@ -39,7 +42,10 @@ const acquireAssetDownload = (bytes: number, signal: AbortSignal): Promise<() =>
     };
     const onAbort = () => {
         const index = waitingAssetDownloads.findIndex(waiter => waiter.grant === grant);
-        if (index !== -1) waitingAssetDownloads.splice(index, 1);
+        if (index !== -1) {
+            waitingAssetDownloads.splice(index, 1);
+            admitWaitingDownloads();
+        }
         signal.removeEventListener('abort', onAbort);
         reject(assetAbortError());
     };
