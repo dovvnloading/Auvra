@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, onTestFinished } from 'vitest';
 import {
   appendSplinePoint,
   buildSpline,
@@ -32,7 +32,7 @@ import { flattenTerrainAlongSpline, paintTerrainAlongSpline } from '../../compon
 import { collectNavGeometry } from '../../runtime/navGeometry';
 import type { LevelObject } from '../../types';
 import { SplinePatrol } from '../../runtime/patrolPath';
-import { liveSplineQuery, type LiveSpline } from '../../runtime/splineRegistry';
+import { getLiveSpline, liveSplineQuery, registerLiveSpline, type LiveSpline } from '../../runtime/splineRegistry';
 import { flowNodeOutputValue, type FlowNode } from '../../hooks/levelBlueprintNodes/flow';
 import { WORLD_NODE_DEFINITIONS, WORLD_NODE_EXECUTORS, type WorldNodeServices, type WorldNodeType } from '../../hooks/levelBlueprintNodes/world';
 import { createLevelVariablesStore } from '../../runtime/levelVariables';
@@ -368,6 +368,32 @@ const live = (data: SplineData, position: SplineVec3 = [0, 0, 0], scale = 1): Li
   node.updateMatrixWorld(true);
   return { objectId: 'path', mode: 'runtime', spline: buildSpline(data), node };
 };
+
+describe('live spline registry', () => {
+  it.each(['editor', 'runtime'] as const)('keeps lookups separate when %s mounts first', firstMode => {
+    const data = spline([[0, 0, 0], [5, 0, 0]], {}, 'linear');
+    const editor: LiveSpline = { ...live(data, [10, 0, 0]), mode: 'editor' };
+    const runtime = live(data, [0, 0, 20]);
+    const [first, second] = firstMode === 'editor' ? [editor, runtime] : [runtime, editor];
+
+    const removeFirst = registerLiveSpline(first);
+    onTestFinished(removeFirst);
+    expect(getLiveSpline('path', first.mode)).toBe(first);
+    expect(getLiveSpline('path', second.mode)).toBeNull();
+
+    const removeSecond = registerLiveSpline(second);
+    onTestFinished(removeSecond);
+    expect(getLiveSpline('path', 'editor')).toBe(editor);
+    expect(getLiveSpline('path', 'runtime')).toBe(runtime);
+    expect(getLiveSpline('path')).toBe(second);
+
+    removeSecond();
+    expect(getLiveSpline('path', second.mode)).toBeNull();
+    expect(getLiveSpline('path')).toBe(first);
+    removeFirst();
+    expect(getLiveSpline('path')).toBeNull();
+  });
+});
 
 describe('patrol paths', () => {
   it('joins an open path where it is nearest, walks it to the end and back, pausing at the end', () => {
