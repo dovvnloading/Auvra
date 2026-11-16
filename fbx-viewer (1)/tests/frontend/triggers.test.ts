@@ -3,6 +3,7 @@ import { act, renderHook } from '@testing-library/react';
 import * as THREE from 'three';
 import { describe, expect, it, vi } from 'vitest';
 import type { SandboxEntityHandle } from '../../components/Sandbox/SandboxEntity';
+import { frontendDiagnostics } from '../../diagnostics/runtime';
 import { useLevelBlueprintRuntime, UseLevelBlueprintRuntimeProps } from '../../hooks/useLevelBlueprintRuntime';
 import { createTriggerEvents, TriggerEvent, TriggerEvents, TriggerEventsProvider, useTriggerEvents } from '../../runtime/triggers';
 import type { LevelBlueprintData, LevelObject, LogicNode, LogicPin, PinDataType, PinDirection } from '../../types';
@@ -71,6 +72,35 @@ describe('trigger events', () => {
 
     expect(first.mock.calls).toEqual([[enter('door')]]);
     expect(second.mock.calls).toEqual([[enter('door')], [exit('door')]]);
+  });
+
+  it('isolates throwing listeners, reports failures, and keeps emitting future events', () => {
+    const events = createTriggerEvents();
+    const failure = vi.spyOn(frontendDiagnostics, 'failure').mockImplementation(() => undefined);
+    const firstError = new Error('script failed');
+    const secondError = new Error('component failed');
+    const received: string[] = [];
+
+    events.subscribe(event => { received.push(`first:${event.kind}`); throw firstError; });
+    events.subscribe(event => { received.push(`second:${event.kind}`); throw secondError; });
+    events.subscribe(event => { received.push(`third:${event.kind}`); });
+
+    try {
+      expect(() => events.emit(enter('door'))).not.toThrow();
+      expect(() => events.emit(exit('door'))).not.toThrow();
+      expect(received).toEqual([
+        'first:enter', 'second:enter', 'third:enter',
+        'first:exit', 'second:exit', 'third:exit',
+      ]);
+      expect(failure.mock.calls).toEqual([
+        ['runtime_trigger_event_listener_failed', firstError],
+        ['runtime_trigger_event_listener_failed', secondError],
+        ['runtime_trigger_event_listener_failed', firstError],
+        ['runtime_trigger_event_listener_failed', secondError],
+      ]);
+    } finally {
+      failure.mockRestore();
+    }
   });
 
   it('shares one bus per provider and is inert outside one', () => {
