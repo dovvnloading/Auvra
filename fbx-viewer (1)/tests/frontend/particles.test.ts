@@ -146,6 +146,41 @@ describe('particle simulation', () => {
     expect(warmed.count).toBe(20);
   });
 
+  it.each([5, 10])('prewarms the full %i-second emission cycle', duration => {
+    const warmed = new ParticleSimulation(effectOf({
+      ...still, duration, loop: true, rate: 10, lifetime: [30, 30], bursts: [],
+    }), 128, seeded());
+    warmed.prewarm(null);
+    expect(warmed.count).toBe(duration * 10);
+  });
+
+  it('keeps requested prewarm resolution without skipping long-cycle time', () => {
+    const effect = effectOf({ ...still, duration: 5, rate: 10, lifetime: [30, 30], bursts: [] });
+    const coarse = new ParticleSimulation(effect, 128, seeded());
+    const coarseSteps = vi.spyOn(coarse, 'step');
+    coarse.prewarm(null, 1);
+    expect(coarseSteps).toHaveBeenCalledTimes(50);
+    expect(coarse.count).toBe(50);
+
+    const fine = new ParticleSimulation(effect, 128, seeded());
+    const fineSteps = vi.spyOn(fine, 'step');
+    fine.prewarm(null, 200);
+    expect(fineSteps).toHaveBeenCalledTimes(200);
+    expect(fine.count).toBe(50);
+  });
+
+  it('prewarms the maximum 120-second cycle in bounded steps', () => {
+    const warmed = new ParticleSimulation(effectOf({
+      ...still, duration: 120, loop: true, rate: 0, lifetime: [60, 60],
+      bursts: [{ time: 119.5, count: 2 }],
+    }), 4, seeded());
+    const steps = vi.spyOn(warmed, 'step');
+    warmed.prewarm(null);
+    expect(warmed.count).toBe(2);
+    expect(steps).toHaveBeenCalledTimes(1200);
+    expect(Math.max(...steps.mock.calls.map(([dt]) => dt))).toBeLessThanOrEqual(MAX_PARTICLE_STEP);
+  });
+
   it('launches inside its cone around the axis, turned and placed by the emitter matrix', () => {
     const simulation = new ParticleSimulation(effectOf({ ...still, rate: 100, speed: [2, 2], lifetime: [5, 5], shape: { kind: 'point', angle: 10, axis: [0, 1, 0] } }), 64, seeded());
     // The emitter lies on its side at (5, 0, 0): its up is world +X.
