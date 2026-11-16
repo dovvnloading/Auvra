@@ -88,7 +88,9 @@ export const launchBrowser = async ({ executable, argsForProfile, profileDir, at
       return { browser, endpoint };
     } catch (error) {
       browser.kill();
-      failures.push('Attempt ' + attempt + ': ' + (error instanceof Error ? error.message : String(error)));
+      const reason = error instanceof Error ? error.message : String(error);
+      failures.push('Attempt ' + attempt + ': ' + reason);
+      if (attempt < attempts) console.warn('Chromium startup attempt ' + attempt + ' failed: ' + reason + '\nRetrying with an independent profile.');
     }
   }
   throw new Error('Chromium failed to start after ' + attempts + ' attempt(s):\n' + failures.join('\n'));

@@ -7,7 +7,7 @@ import { launchBrowser } from './browser.mjs';
 
 const endpoint = 'ws://127.0.0.1:43210/devtools/browser/00000000-0000-0000-0000-000000000000';
 
-test('retries a failed Chromium startup with a separate profile', async (t) => {
+test('retries a Chromium startup timeout with a separate profile', async (t) => {
   const root = mkdtempSync(path.join(tmpdir(), 'auvra-browser-start-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const script = path.join(root, 'fake-browser.mjs');
@@ -17,18 +17,18 @@ test('retries a failed Chromium startup with a separate profile', async (t) => {
     "const marker = path.join(path.dirname(process.argv[2]), 'launched-once');",
     "if (!existsSync(marker)) {",
     "  writeFileSync(marker, '1');",
-    "  console.error('temporary launch failure');",
-    "  process.exit(23);",
+    "  setInterval(() => {}, 1000);",
+    "} else {",
+    "  console.error('DevTools listening on " + endpoint + "');",
+    "  setInterval(() => {}, 1000);",
     "}",
-    "console.error('DevTools listening on " + endpoint + "');",
-    "setInterval(() => {}, 1000);",
   ].join('\n'));
   const { browser, endpoint: actual } = await launchBrowser({
     executable: process.execPath,
     argsForProfile: (profile) => [script, profile],
     profileDir: root,
     attempts: 2,
-    timeoutMs: 3000,
+    timeoutMs: 1500,
   });
   try {
     assert.equal(actual, endpoint);
