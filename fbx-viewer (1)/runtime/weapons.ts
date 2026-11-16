@@ -262,7 +262,11 @@ export const restoreWeapons = (state: WeaponState, weapons: readonly ResolvedWea
         };
     });
     const active = weapons.findIndex(weapon => weapon.id === saved.active);
-    if (active >= 0 && state.owned[active]) state.active = active;
+    // A removed or no-longer-owned saved selection must not leave an unowned default slot active.
+    // When nothing is carried, keep slot 0 as the harmless no-weapon fallback (as at creation).
+    state.active = active >= 0 && state.owned[active]
+        ? active
+        : Math.max(0, state.owned.findIndex(owned => owned));
     state.reloading = 0;
     state.cooldown = 0;
     state.warmup = 0;
