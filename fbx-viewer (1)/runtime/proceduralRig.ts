@@ -64,7 +64,7 @@ const name = (value: unknown): string => (typeof value === 'string' ? value.slic
 const sanitizeTarget = (value: unknown): RigTarget => {
     const t = record(value);
     if (t.kind === 'player') return { kind: 'player' };
-    if (t.kind === 'object' && typeof t.id === 'string') return { kind: 'object', id: t.id.slice(0, 128) };
+    if (t.kind === 'object' && typeof t.id === 'string') return { kind: 'object', id: t.id };
     if (t.kind === 'point') return { kind: 'point', point: triple(t.point, [0, 0, 0], -1e6, 1e6) };
     return { kind: 'camera' };
 };

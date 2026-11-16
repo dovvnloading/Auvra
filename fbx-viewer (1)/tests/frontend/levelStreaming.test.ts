@@ -1,7 +1,9 @@
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
 import { insideStreamingBox, LEVEL_STREAMING_DEFAULTS, resolveLevelStreamingSettings } from '../../runtime/components/levelStreamingComponent';
+import { readReachIKSettings } from '../../runtime/components/ikComponents';
 import { objectsByLevel, streamedObjectId, streamedObjects, streamedRoots } from '../../runtime/levelStreaming';
+import { readRigConstraints } from '../../runtime/proceduralRig';
 import type { LevelObject } from '../../types';
 
 const object = (id: string, levelId: string, extra: Partial<LevelObject> = {}): LevelObject => ({
@@ -30,6 +32,93 @@ describe('streamed objects', () => {
     const streamed = streamedObjects('cave', cave, 'town');
     streamed[0].position[0] = 99;
     expect(cave[0].position[0]).toBe(0);
+  });
+
+  it('connects a follower to its streamed spline and preserves external and custom fields', () => {
+    const cart = object('cart', 'cave', { components: [
+      { id: 'follow', type: 'followSpline', enabled: true, props: { spline: 'path' } },
+      { id: 'external', type: 'followSpline', enabled: true, props: { spline: 'town-path' } },
+      { id: 'custom', type: 'custom', enabled: true, props: { spline: 'path' } },
+    ] });
+    const path = object('path', 'cave', { components: [{ id: 's', type: 'spline', enabled: true, props: {} }] });
+    const [streamedCart, streamedPath] = streamedObjects('cave', [cart, path], 'town');
+    expect(streamedCart.components?.map(component => component.props.spline)).toEqual([streamedPath.id, 'town-path', 'path']);
+    expect(cart.components?.[0].props.spline).toBe('path');
+  });
+
+  it('remaps timeline object and camera targets while preserving cue data and external targets', () => {
+    const tracks = [
+      { id: 'move', kind: 'transform', objectId: 'cart', label: 'cart' },
+      { id: 'hide', kind: 'visibility', objectId: 'cart', keys: [] },
+      { id: 'pose', kind: 'animation', objectId: 'cart', keys: [] },
+      { id: 'sound', kind: 'audio', objectId: 'cart', keys: [] },
+      { id: 'sparks', kind: 'particle', objectId: 'cart', componentId: 'cart', keys: [] },
+      { id: 'cut', kind: 'camera', keys: ['cart', 'town-camera', 'sky', ''].map((value, time) => ({ time, value })) },
+      { id: 'cue', kind: 'event', keys: [{ time: 0, value: 'cart' }] },
+      { id: 'actor', kind: 'animation', objectId: 'player', keys: [] },
+    ];
+    const owner = object('sequence', 'cave', { components: [
+      { id: 'timeline', type: 'timeline', enabled: true, props: { timeline: { duration: 5, tracks } } },
+    ] });
+    const source = [owner, object('cart', 'cave'), object('player', 'cave'), object('sky', 'cave', { type: 'sky_sphere' })];
+    const authored = structuredClone(source);
+    const [sequence, cart] = streamedObjects('cave', source, 'town');
+    expect(sequence.components?.[0].props.timeline).toMatchObject({ tracks: [
+      { objectId: cart.id, label: 'cart' },
+      { objectId: cart.id },
+      { objectId: cart.id },
+      { objectId: cart.id },
+      { objectId: cart.id, componentId: 'cart' },
+      { keys: [cart.id, 'town-camera', 'sky', ''].map((value, time) => ({ time, value })) },
+      { keys: [{ time: 0, value: 'cart' }] },
+      { objectId: 'player' },
+    ] });
+    expect(source).toEqual(authored);
+  });
+
+  it('binds patrols, AI vehicles, physics joints and IK to their streamed targets', () => {
+    const spawner = object('spawner', 'cave', { type: 'spawn_point', spawnConfig: {
+      blueprintId: 'path', interval: 5, maxSpawns: 1, team: 'Enemy', patrolPath: 'path',
+    } });
+    const riggedVehicle = object('vehicle', 'cave', { components: [
+      { id: 'drive', type: 'vehicle', enabled: true, props: { aiPath: 'path' } },
+      { id: 'hinge', type: 'joint', enabled: true, props: { connectedObjectId: ' path ' } },
+      { id: 'reach', type: 'twoBoneIK', enabled: true, props: { target: ' path ', endBone: 'path' } },
+      { id: 'player-reach', type: 'twoBoneIK', enabled: true, props: { target: ' player ' } },
+    ] });
+    const [spawn, vehicle, path] = streamedObjects('cave', [spawner, riggedVehicle, object('path', 'cave'), object('player', 'cave')], 'town');
+    expect(spawn.spawnConfig).toMatchObject({ blueprintId: 'path', patrolPath: path.id });
+    const [drive, joint, reach, playerReach] = vehicle.components!;
+    expect(drive.props.aiPath).toBe(path.id);
+    expect(joint.props.connectedObjectId).toBe(path.id);
+    expect(readReachIKSettings(reach)).toMatchObject({ target: path.id, endBone: 'path' });
+    expect(readReachIKSettings(playerReach).target).toBe('player');
+  });
+
+  it('keeps self-targets distinct from the gameplay player on a timeline host named player', () => {
+    const kinds = ['transform', 'visibility', 'audio', 'animation'];
+    const timeline = { duration: 1, tracks: kinds.map(kind => ({ id: kind, kind, objectId: 'player', keys: [] })) };
+    const host = object('player', 'cave', { components: [{ id: 't', type: 'timeline', enabled: true, props: { timeline } }] });
+    const [streamedHost] = streamedObjects('cave', [host], 'town');
+    expect(streamedHost.components![0].props.timeline).toMatchObject({ tracks: [
+      { kind: 'transform', objectId: streamedHost.id }, { kind: 'visibility', objectId: streamedHost.id },
+      { kind: 'audio', objectId: streamedHost.id }, { kind: 'animation', objectId: 'player' },
+    ] });
+  });
+
+  it('keeps the full streamed target ID when reading a rig and leaves bone names alone', () => {
+    const targetId = 't'.repeat(128);
+    const rig = object('rig', 'cave', { components: [{
+      id: 'aim', type: 'proceduralRig', enabled: true, props: { constraints: [
+        { kind: 'aim', bone: targetId, target: { kind: 'object', id: targetId } },
+        { kind: 'copyRotation', bone: 'hand', source: targetId },
+      ] },
+    }] });
+    const [streamedRig, target] = streamedObjects('cave', [rig, object(targetId, 'cave')], 'town');
+    const [aim, copyRotation] = readRigConstraints(streamedRig.components![0].props);
+    expect(aim.target).toEqual({ kind: 'object', id: target.id });
+    expect(aim.bone).toBe(targetId);
+    expect(copyRotation.source).toBe(targetId);
   });
 
   it('groups objects by level', () => {
