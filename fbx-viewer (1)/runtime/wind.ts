@@ -119,9 +119,9 @@ export const windUniforms = {
 
 let clock = 0;
 
-/** Moves the wind on by `dt` and sets what swaying surfaces read. */
+/** Advances the gust phase by the full elapsed frame time and updates the surface uniforms. */
 export const stepWind = (dt: number, weather: WeatherState = worldClock.weather): void => {
-    if (dt > 0 && Number.isFinite(dt)) clock += Math.min(dt, 0.1);
+    if (dt > 0 && Number.isFinite(dt)) clock += dt;
     const [wx, wz] = windVelocity(weather);
     const speed = Math.hypot(wx, wz);
     windUniforms.uWindTime.value = clock;
