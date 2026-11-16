@@ -41,28 +41,58 @@ export const serve = (root, route = () => false) => new Promise((resolve) => {
   server.listen(0, '127.0.0.1', () => resolve(server));
 });
 
-// Chromium announces its own debugging endpoint on stderr after binding the ephemeral loopback port.
+// Chromium announces its debugger endpoint on stderr. Keep the last messages when it fails:
+// a startup timeout alone does not distinguish a slow CI runner from a Chromium crash.
 const waitForDebugger = (browser, limitMs) => new Promise((resolve, reject) => {
+  const recent = [];
   const lines = createInterface({ input: browser.stderr });
-  const timer = setTimeout(() => finish(new Error('The browser did not start')), limitMs);
+  let settled = false;
+  const timer = setTimeout(() => finish(new Error('The browser did not start within ' + limitMs + ' ms')), limitMs);
   function finish(error, url) {
+    if (settled) return;
+    settled = true;
     clearTimeout(timer);
     browser.off('error', onError);
     lines.off('close', onClose);
     lines.close();
     browser.stderr.resume();
-    if (error) reject(error);
-    else resolve(url);
+    if (error) {
+      const detail = recent.length ? '\nChromium stderr:\n' + recent.join('\n') : '';
+      reject(new Error(error.message + detail));
+    } else resolve(url);
   }
   const onError = (error) => finish(error);
   const onClose = () => finish(new Error('The browser closed before its debugger was ready'));
   browser.once('error', onError);
   lines.once('close', onClose);
   lines.on('line', (line) => {
+    if (line.trim()) {
+      recent.push(line);
+      if (recent.length > 12) recent.shift();
+    }
     const match = /^DevTools listening on (ws:\/\/(?:127\.0\.0\.1|\[::1\]):\d{1,5}\/devtools\/browser\/[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12})$/i.exec(line);
     if (match) finish(null, match[1]);
   });
 });
+
+// Retry only the browser's launch, not tests or page work. Each attempt has its own profile,
+// so a crashed or slow first Chromium cannot lock the retry's profile.
+export const launchBrowser = async ({ executable, argsForProfile, profileDir, attempts = process.env.CI ? 2 : 1, timeoutMs = 30_000 }) => {
+  const failures = [];
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    const browser = spawn(executable, argsForProfile(path.join(profileDir, 'launch-' + attempt)), {
+      stdio: ['ignore', 'ignore', 'pipe'],
+    });
+    try {
+      const endpoint = await waitForDebugger(browser, timeoutMs);
+      return { browser, endpoint };
+    } catch (error) {
+      browser.kill();
+      failures.push('Attempt ' + attempt + ': ' + (error instanceof Error ? error.message : String(error)));
+    }
+  }
+  throw new Error('Chromium failed to start after ' + attempts + ' attempt(s):\n' + failures.join('\n'));
+};
 
 /** Just enough of the browser's debugging protocol: one page, and running script in it. */
 const connect = async (url) => {
@@ -102,26 +132,30 @@ export const SOFTWARE_WEBGL = ['--use-gl=angle', '--use-angle=swiftshader', '--e
  * the page and hands back its value (a promise's, once settled), failing after `limitMs` or on a thrown error.
  */
 export const openPage = async ({ profileDir, gpuFlags, url, windowSize = '800,600' }) => {
-  const browser = spawn(browserPath(), [
-    '--headless=new',
-    `--user-data-dir=${profileDir}`,
-    '--remote-debugging-port=0',
-    '--no-first-run',
-    '--no-default-browser-check',
-    '--disable-extensions',
-    '--disable-background-networking',
-    '--disable-renderer-backgrounding',
-    '--disable-backgrounding-occluded-windows',
-    '--disable-background-timer-throttling',
-    '--force-device-scale-factor=1',
-    '--force-color-profile=srgb',
-    `--window-size=${windowSize}`,
-    ...(process.env.CI ? ['--no-sandbox'] : []),
-    ...gpuFlags,
-    'about:blank',
-  ], { stdio: ['ignore', 'ignore', 'pipe'] });
+  const { browser, endpoint } = await launchBrowser({
+    executable: browserPath(),
+    profileDir,
+    argsForProfile: (launchProfile) => [
+      '--headless=new',
+      '--user-data-dir=' + launchProfile,
+      '--remote-debugging-port=0',
+      '--no-first-run',
+      '--no-default-browser-check',
+      '--disable-extensions',
+      '--disable-background-networking',
+      '--disable-renderer-backgrounding',
+      '--disable-backgrounding-occluded-windows',
+      '--disable-background-timer-throttling',
+      '--force-device-scale-factor=1',
+      '--force-color-profile=srgb',
+      '--window-size=' + windowSize,
+      ...(process.env.CI ? ['--no-sandbox'] : []),
+      ...gpuFlags,
+      'about:blank',
+    ],
+  });
   try {
-    const client = await connect(await waitForDebugger(browser, 30_000));
+    const client = await connect(endpoint);
     const { targetId } = await client.send('Target.createTarget', { url: 'about:blank' });
     const { sessionId } = await client.send('Target.attachToTarget', { targetId, flatten: true });
     const send = (method, params) => client.send(method, params, sessionId);
