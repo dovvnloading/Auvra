@@ -98,11 +98,12 @@ export const registerLiveSpline = (entry: LiveSpline): (() => void) => {
     };
 };
 
-/** The spline drawn for `objectId`, preferring one drawn in `mode`; null when none is. */
+/** Finds a spline in the requested mode, or the latest registration when mode is omitted. */
 export const getLiveSpline = (objectId: string, mode?: SplineRegistryMode): LiveSpline | null => {
     const list = live.get(objectId);
     if (!list || list.length === 0) return null;
-    return (mode ? list.find(entry => entry.mode === mode) : undefined) ?? list[list.length - 1];
+    if (mode !== undefined) return list.find(entry => entry.mode === mode) ?? null;
+    return list[list.length - 1];
 };
 
 /** A spline sampled in world space: positions and directions through its object's transform. */
