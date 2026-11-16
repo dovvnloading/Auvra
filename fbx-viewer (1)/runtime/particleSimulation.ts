@@ -204,10 +204,15 @@ export class ParticleSimulation {
         this.play();
     }
 
-    /** Runs one looping cycle at once, as if it had been going a while. */
+    /** Runs one full looping cycle at once, as if it had been going a while. */
     prewarm(matrix: ArrayLike<number> | null, steps = 30): void {
-        const dt = this.effect.duration / steps;
-        for (let i = 0; i < steps; i++) this.step(dt, matrix);
+        // step() clamps large deltas to MAX_PARTICLE_STEP. Subdivide long cycles
+        // instead of silently skipping time; at the 120s effect limit the default
+        // is 1,200 steps. Preserve finer caller-requested subdivisions.
+        const requestedSteps = Number.isFinite(steps) && steps > 0 ? Math.ceil(steps) : 30;
+        const totalSteps = Math.max(requestedSteps, Math.ceil(this.effect.duration / MAX_PARTICLE_STEP));
+        const dt = this.effect.duration / totalSteps;
+        for (let i = 0; i < totalSteps; i++) this.step(dt, matrix);
         this.events.length = 0;
     }
 
