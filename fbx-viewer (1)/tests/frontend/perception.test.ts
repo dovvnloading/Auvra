@@ -38,6 +38,38 @@ describe('noises', () => {
     bus.report(v(100, 0, 0), 1);
     expect(bus.heardSince(v(0, 0, 0), -1)).toBeNull();
   });
+
+  it('expires noise after silence without requiring another report', () => {
+    let now = 10;
+    const bus = new NoiseBus(() => now);
+    const listener = v(0, 0, 0);
+    bus.report([0, 0, 0], 20, 'player');
+
+    expect(bus.heardSince(listener, 0, 'enemy')?.source).toBe('player');
+    now = 12; // Exactly at the two-second lifetime boundary, the noise is still valid.
+    expect(bus.heardSince(listener, 0, 'enemy')?.source).toBe('player');
+    now = 60; // No report() in the intervening time.
+    expect(bus.heardSince(listener, 0, 'enemy')).toBeNull();
+
+    bus.report([0, 0, 0], 20, 'other');
+    expect(bus.heardSince(listener, 0, 'enemy')?.source).toBe('other');
+  });
+
+  it('removes only expired sounds while retaining recent noises', () => {
+    let now = 0;
+    const bus = new NoiseBus(() => now);
+    const listener = v(0, 0, 0);
+    bus.report([0, 0, 0], 100, 'old');
+    now = 1;
+    bus.report([2, 0, 0], 10, 'recent');
+
+    now = 2.5; // The louder old noise has expired; the quieter recent one has not.
+    expect(bus.heardSince(listener, -1)?.source).toBe('recent');
+    now = 3; // The recent noise is exactly two seconds old.
+    expect(bus.heardSince(listener, -1)?.source).toBe('recent');
+    now = 3.01;
+    expect(bus.heardSince(listener, -1)).toBeNull();
+  });
 });
 
 const physics = (hit: Partial<PhysicsRaycastHit> | null) => ({
