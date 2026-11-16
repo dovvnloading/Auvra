@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState } from 'react';
+import { frontendDiagnostics } from '../diagnostics/runtime';
 
 /**
  * Trigger overlap events for a play session. The physics world emits one 'enter' when another body
@@ -19,7 +20,7 @@ export type TriggerEventListener = (event: TriggerEvent) => void;
 export interface TriggerEvents {
     /** Returns the unsubscribe function. */
     subscribe(listener: TriggerEventListener): () => void;
-    /** Delivers the event to every current listener, in subscription order. */
+    /** Delivers the event to every current listener, in subscription order. Throwing listeners are reported and skipped. */
     emit(event: TriggerEvent): void;
 }
 
@@ -32,7 +33,13 @@ export const createTriggerEvents = (): TriggerEvents => {
         },
         emit(event) {
             // Copy so a listener that unsubscribes (or subscribes another) mid-delivery does not skip or repeat one.
-            [...listeners].forEach(listener => listener(event));
+            [...listeners].forEach(listener => {
+                try {
+                    listener(event);
+                } catch (error) {
+                    frontendDiagnostics.failure('runtime_trigger_event_listener_failed', error);
+                }
+            });
         },
     };
 };
