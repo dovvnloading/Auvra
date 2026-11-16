@@ -41,12 +41,18 @@ export class NoiseBus {
         return this.clock();
     }
 
+    /** Drop expired noises on both writes and reads, including after a quiet period. */
+    private pruneExpired(time: number): void {
+        while (this.events.length && time - this.events[0].time > NOISE_LIFETIME) this.events.shift();
+    }
+
     report(position: THREE.Vector3 | readonly [number, number, number], radius: number, source: string | null = null): void {
         if (!(radius > 0) || !Number.isFinite(radius)) return;
         const at = Array.isArray(position) ? new THREE.Vector3(...position) : (position as THREE.Vector3).clone();
         if (![at.x, at.y, at.z].every(Number.isFinite)) return;
         const time = this.now();
-        while (this.events.length && (this.events.length >= MAX_NOISES || time - this.events[0].time > NOISE_LIFETIME)) this.events.shift();
+        this.pruneExpired(time);
+        while (this.events.length >= MAX_NOISES) this.events.shift();
         this.events.push({ position: at, radius, source, time });
     }
 
@@ -55,6 +61,7 @@ export class NoiseBus {
      * it, the one heard loudest (most carry left over at the listener). Null when none does.
      */
     heardSince(listener: THREE.Vector3, since: number, self: string | null = null, hearing = 1): NoiseEvent | null {
+        this.pruneExpired(this.now());
         let best: NoiseEvent | null = null;
         let bestMargin = 0;
         for (const event of this.events) {
