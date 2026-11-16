@@ -1,5 +1,3 @@
-import type { ResourceHandle } from "./contracts";
-
 export type GraphResourceId = string;
 export type GraphAccess = "read" | "write" | "readwrite";
 export type GraphResourceKind = "texture" | "buffer";
@@ -81,6 +79,12 @@ export function compileRenderGraph(description: RenderGraphDescription): Compile
   }
   for (const pass of passes.values()) for (const resourceId of pass.reads ?? []) {
     if (!producer.has(resourceId) && !resources.get(resourceId)?.external) diagnostics.push({ code: "missing-producer", resourceId, passId: pass.id, message: `Resource '${resourceId}' read by '${pass.id}' has no producer` });
+  }
+  // Exported outputs are liveness roots. Validate them before culling passes so
+  // a misspelling cannot silently turn a meaningful graph into an empty one.
+  for (const resourceId of description.outputs ?? []) {
+    if (!resources.has(resourceId)) diagnostics.push({ code: "invalid-resource", resourceId, message: `Render graph output '${resourceId}' references an undeclared resource` });
+    else if (!producer.has(resourceId) && !resources.get(resourceId)?.external) diagnostics.push({ code: "missing-producer", resourceId, message: `Render graph output '${resourceId}' has no producer` });
   }
   if (diagnostics.length) throw new RenderGraphValidationError(diagnostics);
 

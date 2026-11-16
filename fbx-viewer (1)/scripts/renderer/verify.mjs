@@ -100,6 +100,10 @@ async function behaviorTests() {
   expectGraphError(graph, { resources, passes: [{ id: "p", reads: ["a"] }] }, "missing-producer", "missing producer");
   expectGraphError(graph, { resources, passes: [{ id: "p1", writes: ["a"] }, { id: "p2", writes: ["a"] }] }, "duplicate-producer", "duplicate producer");
   expectGraphError(graph, { resources, passes: [{ id: "p1", reads: ["b"], writes: ["a"] }, { id: "p2", reads: ["a"], writes: ["b"] }] }, "cycle", "render graph cycle");
+  expectGraphError(graph, { resources, passes: [{ id: "draw", writes: ["a"] }], outputs: ["typo"] }, "invalid-resource", "undeclared render graph output");
+  expectGraphError(graph, { resources, passes: [], outputs: ["a"] }, "missing-producer", "unproduced render graph output");
+  const externalOutput = graph.compileRenderGraph({ resources: [{ id: "swapchain", kind: "texture", external: true }], passes: [], outputs: ["swapchain"] });
+  check(externalOutput.passes.length === 0, "external render graph output without a producer was rejected");
 
   // The registry has no DOM dependency until a real canvas is registered.
   check(typeof registry.rendererCoordinator.getSnapshot === "function", "renderer registry is not DOM-independent at import time");
