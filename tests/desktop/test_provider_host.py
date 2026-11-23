@@ -370,6 +370,54 @@ class ProviderHostTests(unittest.TestCase):
             finally:
                 host.shutdown()
 
+    def test_fal_restart_replays_pending_cancellation_on_original_queue(self) -> None:
+        class RecoveredFal:
+            def __init__(self) -> None:
+                self.cancelled = []
+                self.polled = []
+
+            def cancel(self, job):
+                self.cancelled.append((job.request_id, job.queue_root))
+                return True
+
+            def status(self, job):
+                self.polled.append((job.request_id, job.queue_root))
+                return {"status": "COMPLETED"}
+
+            def status_state(self, status):
+                return "succeeded"
+
+            def result(self, _job):
+                raise AssertionError("cancelled recovery must never download a result")
+
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw) / "provider"
+            first = NativeProviderHost(root, project_host=_Project())
+            try:
+                job = first.jobs.create(
+                    project_id="project-1", provider="fal", model="fal-ai/flux/dev",
+                    capability=Capability.MEDIA_GENERATE.value, prompt_hash="a" * 64,
+                )
+                first.jobs.transition(
+                    job.job_id, JobState.SUBMITTING, remote_id="request-123",
+                    reconcile={"durable": True, "remote_root": "fal-ai/custom-route"},
+                )
+                first.jobs.transition(job.job_id, JobState.RUNNING)
+                first.jobs.request_cancel(job.job_id)
+            finally:
+                first.shutdown()
+
+            adapter = RecoveredFal()
+            restarted = NativeProviderHost(root, project_host=_Project(), adapters={"fal": adapter})
+            try:
+                restarted._futures[job.job_id].result(timeout=5)
+                self.assertEqual(adapter.cancelled, [("request-123", "fal-ai/custom-route")])
+                self.assertEqual(adapter.polled, [("request-123", "fal-ai/custom-route")])
+                self.assertEqual(restarted.jobs.get(job.job_id).state, JobState.CANCELLED)
+                self.assertFalse(any(event.state == JobState.SUCCEEDED for event in restarted.jobs.events(job.job_id)))
+            finally:
+                restarted.shutdown()
+
     def test_reframe_restart_terminalizes_legacy_durable_job_and_notifies_editor(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw) / "provider"

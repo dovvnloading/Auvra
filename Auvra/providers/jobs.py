@@ -326,8 +326,19 @@ class SQLiteJobStore:
             # Older versions incorrectly stored durable=True for it. Fal also
             # needs a remote request ID before polling can resume.
             if job.provider == "fal" and job.remote_id and bool(job.reconcile.get("durable", False)):
-                try: durable.append(self.transition(job.job_id, JobState.RECOVERING, message="restart requires remote reconciliation", reconcile={"durable": True, "restart_pending": True}))
-                except ValueError: durable.append(job)
+                # The queue endpoint can differ from the model identifier; it must
+                # survive every restart. A cancellation requested before shutdown
+                # remains pending even though RECOVERING is the persisted state.
+                metadata = {**job.reconcile, "durable": True, "restart_pending": True}
+                if job.state == JobState.CANCEL_REQUESTED or metadata.get("cancel_pending"):
+                    metadata["cancel_pending"] = True
+                try:
+                    durable.append(self.transition(
+                        job.job_id, JobState.RECOVERING,
+                        message="restart requires remote reconciliation", reconcile=metadata,
+                    ))
+                except ValueError:
+                    durable.append(job)
             else:
                 try:
                     self.transition(
@@ -391,7 +402,7 @@ def _is_project_id(value: str) -> bool:
 
 def _safe_json(value: Mapping[str, Any]) -> None:
     if not isinstance(value, Mapping): raise ValueError("metadata must be an object")
-    allowed = {"durable", "restart_pending", "remote_state", "progress", "route", "provider", "model", "capability", "route_consent", "content_hash", "prompt_hash", "remote_request_id", "remote_root", "cost_micro_usd", "error_code", "retryable"}
+    allowed = {"durable", "restart_pending", "cancel_pending", "remote_state", "progress", "route", "provider", "model", "capability", "route_consent", "content_hash", "prompt_hash", "remote_request_id", "remote_root", "cost_micro_usd", "error_code", "retryable"}
     if any(not isinstance(key, str) or key not in allowed for key in value): raise ValueError("metadata key is not allowlisted")
     if any(not isinstance(item, (str, int, float, bool, type(None))) or (isinstance(item, str) and (len(item) > 512 or "://" in item or "\\" in item)) or (isinstance(item, float) and not math.isfinite(item)) for item in value.values()): raise ValueError("metadata value is not a bounded primitive")
     # An error code is one of ours, and "provider_authorization" is not a secret: refusing it would leave the job running for ever.
