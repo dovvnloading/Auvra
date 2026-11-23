@@ -1,3 +1,4 @@
+import * as THREE from 'three';
 import {
     BAKE_SAMPLES,
     bakeCurve,
@@ -220,13 +221,28 @@ export class ParticleSimulation {
      * Spawns `count` particles from the shape placed at a world point (a sub-emitter's or a
      * script's burst), starting with `velocity` (world, m/s) on top of their own launch.
      */
-    emitAt(count: number, x: number, y: number, z: number, vx = 0, vy = 0, vz = 0): void {
+    emitAt(count: number, x: number, y: number, z: number, vx = 0, vy = 0, vz = 0,
+           emitterWorld?: ArrayLike<number> | null): void {
+        if (count <= 0) return;
         const matrix = IDENTITY.slice();
         matrix[12] = x;
         matrix[13] = y;
         matrix[14] = z;
         const local = this.effect.space === 'local';
-        for (let i = 0; i < count; i++) this.spawn(local ? null : matrix, 0, vx, vy, vz, local ? [x, y, z] : null);
+        let offset: number[] | null = null;
+        if (local) {
+            // Caller-supplied matrix works before the first simulation frame;
+            // otherwise use the last sampled transform (or identity).
+            const world = new THREE.Matrix4().fromArray(Array.from(emitterWorld ?? this.last ?? IDENTITY));
+            if (Math.abs(world.determinant()) < 1e-12) return;
+            const inverse = world.invert();
+            offset = new THREE.Vector3(x, y, z).applyMatrix4(inverse).toArray();
+            // A world velocity is a vector, not a point: do not translate or normalize it.
+            const inherited = new THREE.Vector3(vx, vy, vz)
+                .applyMatrix3(new THREE.Matrix3().setFromMatrix4(inverse));
+            vx = inherited.x; vy = inherited.y; vz = inherited.z;
+        }
+        for (let i = 0; i < count; i++) this.spawn(local ? null : matrix, 0, vx, vy, vz, offset);
     }
 
     /**
