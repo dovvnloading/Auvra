@@ -308,21 +308,50 @@ class NativeProviderHost:
             job = self.jobs.get(job_id)
             adapter = self._adapter("fal")
             remote = MediaJob("fal", job.model, job.remote_id or "", job.reconcile.get("remote_root"))
-            self.jobs.transition(job_id, "running")
+            if job.reconcile.get("cancel_pending"):
+                # The caller asked to cancel before shutdown. Replay that
+                # remote request before polling; a 202 is not terminal.
+                self.jobs.transition(job_id, "cancel_requested")
+                adapter.cancel(remote)
+            else:
+                self.jobs.transition(job_id, "running")
             for wait in self._poll_waits():
                 if self._shutdown_event.is_set():
                     return
                 state = adapter.status_state(adapter.status(remote))
-                if state == "succeeded":
+                if state in {"succeeded", "cancelled"}:
                     if self._shutdown_event.is_set():
                         return
-                    self._ingest_media(job_id, adapter.result(remote), adapter, self._meta[job_id])
+                    current = self.jobs.get(job_id)
+                    if state == "cancelled" or current.state == JobState.CANCEL_REQUESTED:
+                        finished = self.jobs.reconcile(
+                            job_id, remote_state=state, project_id=current.project_id,
+                        )
+                        self._queue_job_event(job_id, finished.state.value, 1, self.registry.get("fal"))
+                        return
+                    result = adapter.result(remote)
+                    # A cancellation can race the result fetch; it must never
+                    # turn into a published completed job on recovery.
+                    if self.jobs.get(job_id).state == JobState.CANCEL_REQUESTED:
+                        finished = self.jobs.reconcile(
+                            job_id, remote_state="succeeded", project_id=current.project_id,
+                        )
+                        self._queue_job_event(job_id, finished.state.value, 1, self.registry.get("fal"))
+                        return
+                    self._ingest_media(job_id, result, adapter, self._meta[job_id])
                     if self._shutdown_event.is_set():
+                        return
+                    current = self.jobs.get(job_id)
+                    if current.state == JobState.CANCEL_REQUESTED:
+                        finished = self.jobs.reconcile(
+                            job_id, remote_state="succeeded", project_id=current.project_id,
+                        )
+                        self._queue_job_event(job_id, finished.state.value, 1, self.registry.get("fal"))
                         return
                     self.jobs.transition(job_id, "succeeded", artifact_hash=self._meta[job_id].get("artifactHash"))
                     self._queue_job_event(job_id, "succeeded", 1, self.registry.get("fal"))
                     return
-                if state in {"failed", "cancelled"}:
+                if state == "failed":
                     raise ProviderError("remote", "durable media request failed", "fal")
                 if self._shutdown_event.wait(wait):
                     return
