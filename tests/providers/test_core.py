@@ -413,6 +413,37 @@ class ProviderCoreTests(unittest.TestCase):
             reopened = SQLiteJobStore(db); durable = reopened.reconcile_restart()
             self.assertEqual(durable[0].state, JobState.RECOVERING); reopened.close()
 
+    def test_restart_preserves_fal_queue_root_and_pending_cancel_twice(self):
+        with tempfile.TemporaryDirectory() as folder:
+            database = str(Path(folder) / "jobs.sqlite")
+            store = SQLiteJobStore(database)
+            job = store.create(
+                project_id="project-1", provider="fal", model="fal-ai/flux/dev",
+                capability="media.generate", prompt_hash="a" * 64,
+            )
+            store.transition(
+                job.job_id, JobState.SUBMITTING, remote_id="request-123",
+                reconcile={"durable": True, "remote_root": "fal-ai/custom-route", "provider": "fal"},
+            )
+            store.transition(job.job_id, JobState.RUNNING)
+            store.request_cancel(job.job_id)
+            store.close()
+
+            # A restart can itself be interrupted. The original endpoint and
+            # cancellation must remain durable across both recovery attempts.
+            for attempt in range(2):
+                reopened = SQLiteJobStore(database)
+                try:
+                    pending = reopened.reconcile_restart()
+                    self.assertEqual(len(pending), 1)
+                    self.assertEqual(pending[0].state, JobState.RECOVERING)
+                    self.assertEqual(pending[0].remote_id, "request-123")
+                    self.assertEqual(pending[0].reconcile["remote_root"], "fal-ai/custom-route")
+                    self.assertTrue(pending[0].reconcile["cancel_pending"])
+                    self.assertTrue(pending[0].reconcile["restart_pending"])
+                finally:
+                    reopened.close()
+
     def test_restart_fails_legacy_local_and_remote_jobs_without_a_remote_id(self):
         with tempfile.TemporaryDirectory() as folder:
             db = str(Path(folder) / "jobs.sqlite")
