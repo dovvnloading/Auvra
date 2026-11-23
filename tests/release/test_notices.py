@@ -333,7 +333,7 @@ class RustNoticesTests(unittest.TestCase):
 def staged_editor_inputs(root: Path) -> Path:
     write(root / "frontend" / NOTICES_FILE, staged_notices("Third-party software notices", f"react@{release_fixtures.REACT_VERSION} (MIT)",
                                                            "@babel/runtime@7.29.7 (MIT)"))
-    write(root / "native" / NOTICES_FILE, staged_notices("Native crates", "wgpu@30.0.1 (MIT OR Apache-2.0)"))
+    write(root / "native" / NOTICES_FILE, staged_notices("Native crates", "wgpu@30.0.2 (MIT OR Apache-2.0)"))
     write(root / "game-player" / NOTICES_FILE, staged_notices("Player crates", "wry@0.57.1 (Apache-2.0 OR MIT)",
                                                               "tao@0.37.2 (Apache-2.0)"))
     dist_info = root / "python-site-packages" / "jsonschema-4.26.0.dist-info"
@@ -440,7 +440,7 @@ class ReleasePackageNoticesTests(unittest.TestCase):
                              {"frontend": 1, "python": 1, "native": 1, "player": 1, "runtimes": 3})
             self.assertIn(f"react@{release_fixtures.REACT_VERSION} (MIT)", text)
             self.assertIn("example-package@1.0.0 (MIT)", text)
-            self.assertIn("wgpu@30.0.1 (MIT OR Apache-2.0)", text)
+            self.assertIn("wgpu@30.0.2 (MIT OR Apache-2.0)", text)
             self.assertIn("wry@0.57.1 (Apache-2.0 OR MIT)", text)
             self.assertEqual((output / "game-player" / NOTICES_FILE).read_bytes(),
                              (inputs / "game-player" / NOTICES_FILE).read_bytes())
@@ -449,7 +449,7 @@ class ReleasePackageNoticesTests(unittest.TestCase):
             sbom = json.loads((output / "sbom.json").read_text(encoding="utf-8"))
             licenses = {item.get("purl"): item.get("licenses") for item in sbom["components"]}
             self.assertEqual(licenses[f"pkg:npm/react@{release_fixtures.REACT_VERSION}"], [{"license": {"name": "MIT"}}])
-            self.assertEqual(licenses["pkg:cargo/wgpu@30.0.1"], [{"license": {"name": "MIT OR Apache-2.0"}}])
+            self.assertEqual(licenses["pkg:cargo/wgpu@30.0.2"], [{"license": {"name": "MIT OR Apache-2.0"}}])
             self.assertEqual(licenses["pkg:pypi/example-package@1.0.0"], [{"license": {"name": "MIT"}}])
             self.assertTrue(any(purl.startswith("pkg:cargo/wry@") for purl in licenses if purl))
 
