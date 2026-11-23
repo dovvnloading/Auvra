@@ -62,14 +62,18 @@ const inferKind = (value: unknown): VariableKind | null => {
  * their type on set(), undeclared names are created on first write. Every change is pushed to sync
  * (by default gameState vars) so HUD bindings 'vars.<name>' follow along.
  */
-export const createLevelVariablesStore = (sync: (vars: Record<string, LevelVariableValue>) => void = vars => gameState.update({ vars })) => {
+export const createLevelVariablesStore = (
+    sync: (vars: Record<string, LevelVariableValue>, replace?: boolean) => void = (vars, replace) =>
+        replace ? gameState.replaceVars(vars) : gameState.update({ vars }),
+) => {
     let values: Readonly<Record<string, LevelVariableValue>> = {};
     let kinds: Record<string, VariableKind> = {};
     const listeners = new Set<() => void>();
 
-    const commit = (next: Record<string, LevelVariableValue>, changed: Record<string, LevelVariableValue>) => {
+    const commit = (next: Record<string, LevelVariableValue>, changed: Record<string, LevelVariableValue>, replace = false) => {
         values = next;
-        if (Object.keys(changed).length > 0) sync(changed);
+        if (replace) sync(next, true);
+        else if (Object.keys(changed).length > 0) sync(changed);
         listeners.forEach(listener => listener());
     };
 
@@ -103,7 +107,7 @@ export const createLevelVariablesStore = (sync: (vars: Record<string, LevelVaria
                 next[key] = coerce(kind, variable.value) ?? defaultFor(kind);
             }
             kinds = nextKinds;
-            commit(next, next);
+            commit(next, next, true);
         },
         subscribe(listener: () => void) {
             listeners.add(listener);

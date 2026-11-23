@@ -340,9 +340,34 @@ fn makeParticle(input: SpawnInput) -> Particle {
 
   var placed: vec3f;
   var heading = direction;
+  var inheritedVelocity = input.velocity;
   if (input.kind == 2u) {
-    // At a point, in whatever space the emitter keeps its particles.
-    placed = position + input.point;
+    // Point bursts (including sub-emitter events) arrive in world space.
+    // Convert the position AND inherited velocity into the target emitter's
+    // local frame. Invert the affine 3x3 using its column cross-products;
+    // this supports rotated and non-uniformly scaled emitters.
+    var point = input.point;
+    if ((params.flags & FLAG_LOCAL) != 0u) {
+      let a = params.emitter[0].xyz;
+      let b = params.emitter[1].xyz;
+      let c = params.emitter[2].xyz;
+      let bc = cross(b, c);
+      let ca = cross(c, a);
+      let ab = cross(a, b);
+      let determinant = dot(a, bc);
+      if (abs(determinant) > 1e-12) {
+        let relative = input.point - params.emitter[3].xyz;
+        point = vec3f(dot(relative, bc), dot(relative, ca), dot(relative, ab)) / determinant;
+        inheritedVelocity = vec3f(
+          dot(input.velocity, bc), dot(input.velocity, ca), dot(input.velocity, ab)
+        ) / determinant;
+      } else {
+        // There is no inverse for a collapsed world transform.
+        point = vec3f(0.0);
+        inheritedVelocity = vec3f(0.0);
+      }
+    }
+    placed = position + point;
   } else if ((params.flags & FLAG_LOCAL) != 0u) {
     placed = position;
   } else {
@@ -354,7 +379,7 @@ fn makeParticle(input: SpawnInput) -> Particle {
     let m = params.emitter;
     heading = normalize(mat3x3f(m[0].xyz, m[1].xyz, m[2].xyz) * direction + vec3f(1e-6));
   }
-  let velocity = heading * between(params.speed) + params.emitterVelocity * params.inheritVelocity + input.velocity;
+  let velocity = heading * between(params.speed) + params.emitterVelocity * params.inheritVelocity + inheritedVelocity;
   // Where it would be after its share of the step, so emission within a step is smooth.
   let offset = select(params.dt * (1.0 - input.along), 0.0, input.kind == 2u);
 

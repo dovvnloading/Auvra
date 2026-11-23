@@ -27,6 +27,23 @@ describe('level variables', () => {
     expect(readGameStateBinding(gameState.get(), 'vars.DoorOpen')).toBe(true);
   });
 
+  it('replaces HUD vars across level restarts, including reset to an empty level', () => {
+    levelVariables.reset([{ name: 'Old', type: 'Float', value: 10 }]);
+    levelVariables.set('Dynamic', 'temporary');
+    expect(gameState.get().vars).toEqual({ Old: 10, Dynamic: 'temporary' });
+
+    levelVariables.reset([{ name: 'New', type: 'Float', value: 20 }]);
+    expect(levelVariables.get('Old')).toBeUndefined();
+    expect(gameState.get().vars).toEqual({ New: 20 });
+    expect(readGameStateBinding(gameState.get(), 'vars.Old')).toBeNull();
+    expect(readGameStateBinding(gameState.get(), 'vars.Dynamic')).toBeNull();
+
+    levelVariables.reset([]);
+    expect(levelVariables.all()).toEqual({});
+    expect(gameState.get().vars).toEqual({});
+    expect(readGameStateBinding(gameState.get(), 'vars.New')).toBeNull();
+  });
+
   it('keeps declared types and rejects values that do not fit', () => {
     const store = createLevelVariablesStore(() => {});
     store.reset([...blueprintVariables, { name: 'Broken', type: 'Float', value: Number.NaN }]);

@@ -213,9 +213,14 @@ const CpuParticles: React.FC<EmitterProps> = ({ object, component, mode, effect 
             if (!host) return;
             host.updateWorldMatrix(true, false);
             const at = new THREE.Vector3().setFromMatrixPosition(host.matrixWorld);
-            simulation.emitAt(Math.max(0, Math.round(count)), at.x, at.y, at.z);
+            simulation.emitAt(Math.max(0, Math.round(count)), at.x, at.y, at.z, 0, 0, 0, host.matrixWorld.elements);
         },
-        emitAt: (count, x, y, z, vx = 0, vy = 0, vz = 0) => simulation.emitAt(Math.max(0, Math.round(count)), x, y, z, vx, vy, vz),
+        emitAt: (count, x, y, z, vx = 0, vy = 0, vz = 0) => {
+            const host = anchor.current?.parent;
+            if (!host) return;
+            host.updateWorldMatrix(true, false);
+            simulation.emitAt(Math.max(0, Math.round(count)), x, y, z, vx, vy, vz, host.matrixWorld.elements);
+        },
         isPlaying: () => simulation.isEmitting,
         alive: () => simulation.count,
     }), [scope, object.id, component.id, simulation]);

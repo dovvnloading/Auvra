@@ -315,6 +315,35 @@ describe('particle simulation', () => {
     expect(dying.events[0]).toMatchObject({ trigger: 'death', y: 0 });
   });
 
+  it('reports local-space death positions and velocities in the current world frame', () => {
+    const effect = effectOf({
+      ...still, space: 'local', rate: 0, bursts: [{ time: 0, count: 1 }],
+      speed: [1, 1], lifetime: [0.05, 0.05],
+      shape: { ...DEFAULT_PARTICLE_EFFECT.shape, kind: 'point', angle: 0, axis: [0, 1, 0] },
+      subEmitters: [{ trigger: 'death', target: 'sparks', count: 1, inheritVelocity: 1 }],
+    });
+    const simulation = new ParticleSimulation(effect, 4, seeded());
+    const rotated = new THREE.Matrix4()
+      .makeRotationZ(Math.PI / 2)
+      .scale(new THREE.Vector3(2, 3, 1))
+      .setPosition(10, 0, 0);
+    simulation.step(0.01, rotated.elements);
+    expect(simulation.count).toBe(1);
+    const localY = simulation.positions[1];
+    // Move the emitter before the death event. Both point and direction must
+    // use the current world matrix, not the previous frame's transform.
+    const moved = rotated.clone().setPosition(20, 4, 0);
+    simulation.step(0.05, moved.elements);
+    expect(simulation.events).toHaveLength(1);
+    const death = simulation.events[0];
+    expect(death.trigger).toBe('death');
+    expect(death.x).toBeCloseTo(20 - 3 * localY, 4);
+    expect(death.y).toBeCloseTo(4, 4);
+    expect(death.vx).toBeCloseTo(-3, 4);
+    expect(death.vy).toBeCloseTo(0, 4);
+    expect(death.vz).toBeCloseTo(0, 4);
+  });
+
   it('bursts from its shape at a world point, starting with a given velocity', () => {
     const simulation = new ParticleSimulation(effectOf({ ...still, rate: 0, lifetime: [5, 5], shape: { ...DEFAULT_PARTICLE_EFFECT.shape, kind: 'point' } }), 16, seeded());
     simulation.stop();
@@ -325,6 +354,29 @@ describe('particle simulation', () => {
     // Never past its capacity.
     simulation.emitAt(100, 0, 0, 0);
     expect(simulation.count).toBe(16);
+  });
+
+  it('transforms world-point bursts into local positions and velocity before the first step', () => {
+    const sim = new ParticleSimulation(effectOf({
+      ...still, space: 'local', rate: 0, lifetime: [5, 5], inheritVelocity: 0,
+      shape: { ...DEFAULT_PARTICLE_EFFECT.shape, kind: 'point', angle: 0 },
+    }), 8, seeded());
+    sim.stop();
+    const world = new THREE.Matrix4()
+      .makeRotationZ(Math.PI / 2)
+      .scale(new THREE.Vector3(2, 3, 4))
+      .setPosition(10, 20, 30);
+    const target = new THREE.Vector3(7, 26, 38);
+    const velocity = new THREE.Vector3(-3, 2, 4);
+    sim.emitAt(1, target.x, target.y, target.z, velocity.x, velocity.y, velocity.z, world.elements);
+    expect(sim.count).toBe(1);
+    const localPoint = new THREE.Vector3().fromArray(sim.positions, 0).applyMatrix4(world);
+    const localVelocity = new THREE.Vector3().fromArray(sim.velocities, 0)
+      .applyMatrix3(new THREE.Matrix3().setFromMatrix4(world));
+    expect(localPoint.distanceTo(target)).toBeLessThan(1e-5);
+    expect(localVelocity.distanceTo(velocity)).toBeLessThan(1e-5);
+    sim.emitAt(1, 10, 20, 30, 0, 0, 0, world.elements);
+    expect(new THREE.Vector3().fromArray(sim.positions, 3).length()).toBeLessThan(1e-5);
   });
 
   it('colours, sizes and frames particles over their life', () => {

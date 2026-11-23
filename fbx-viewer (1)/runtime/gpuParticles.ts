@@ -799,8 +799,17 @@ export class GpuParticleSystem {
         (u.emitter.value as THREE.Matrix4).copy(matrix);
         (u.previousEmitter.value as THREE.Matrix4).copy(previous ?? matrix);
         if (burst) {
-            (u.pointPosition.value as THREE.Vector3).fromArray(burst.position);
-            (u.pointVelocity.value as THREE.Vector3).fromArray(burst.velocity);
+            const position = u.pointPosition.value as THREE.Vector3;
+            const velocity = u.pointVelocity.value as THREE.Vector3;
+            position.fromArray(burst.position);
+            velocity.fromArray(burst.velocity);
+            if (local) {
+                // The public emitAt API accepts world-space points and velocities.
+                // Shader-local particles need the inverse emitter transform.
+                const inverse = new THREE.Matrix4().copy(matrix).invert();
+                position.applyMatrix4(inverse);
+                velocity.applyMatrix3(new THREE.Matrix3().setFromMatrix4(inverse));
+            }
         }
         // Gravity and wind act along world axes; a local-space emitter feels them turned into its frame.
         const ax = effect.wind[0], ay = effect.wind[1] - effect.gravity, az = effect.wind[2];
