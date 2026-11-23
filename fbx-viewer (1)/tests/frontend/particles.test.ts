@@ -341,13 +341,13 @@ describe('particle simulation', () => {
     const velocity = new THREE.Vector3(-3, 2, 4);
     sim.emitAt(1, target.x, target.y, target.z, velocity.x, velocity.y, velocity.z, world.elements);
     expect(sim.count).toBe(1);
-    const localPoint = new THREE.Vector3(...sim.positions.slice(0, 3)).applyMatrix4(world);
-    const localVelocity = new THREE.Vector3(...sim.velocities.slice(0, 3))
+    const localPoint = new THREE.Vector3().fromArray(sim.positions, 0).applyMatrix4(world);
+    const localVelocity = new THREE.Vector3().fromArray(sim.velocities, 0)
       .applyMatrix3(new THREE.Matrix3().setFromMatrix4(world));
     expect(localPoint.distanceTo(target)).toBeLessThan(1e-5);
     expect(localVelocity.distanceTo(velocity)).toBeLessThan(1e-5);
     sim.emitAt(1, 10, 20, 30, 0, 0, 0, world.elements);
-    expect(new THREE.Vector3(...sim.positions.slice(3, 6)).length()).toBeLessThan(1e-5);
+    expect(new THREE.Vector3().fromArray(sim.positions, 3).length()).toBeLessThan(1e-5);
   });
 
   it('colours, sizes and frames particles over their life', () => {
