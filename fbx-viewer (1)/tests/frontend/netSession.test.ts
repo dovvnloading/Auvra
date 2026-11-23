@@ -231,6 +231,44 @@ describe('net session', () => {
     expect(session.status()).toBe('connected');
   });
 
+  it('ignores queued messages from a superseded socket or after close', () => {
+    const { session, socket: oldSocket } = connect();
+    welcome(oldSocket);
+    const states = vi.fn();
+    const events = vi.fn();
+    const changes = vi.fn();
+    session.onState(states);
+    session.onEvent(events);
+    session.onChange(changes);
+
+    oldSocket.drop();
+    vi.advanceTimersByTime(1000);
+    const nextSocket = FakeSocket.instances[1];
+    nextSocket.open();
+    nextSocket.receive({ t: 'welcome', v: 1, you: 'fresh', host: 'fresh', peers: [{ id: 'friend', name: 'Friend' }], serverTime: 6000 });
+    expect(session.status()).toBe('connected');
+    const changeCount = changes.mock.calls.length;
+
+    // Already-queued callbacks from A must not mutate the live B session.
+    oldSocket.receive({ t: 'welcome', v: 1, you: 'stale', host: 'bob', peers: [], serverTime: 100 });
+    oldSocket.receive({ t: 'host', id: 'bob' });
+    oldSocket.receive({ t: 'state', from: 'bob', seq: 1, time: 1, entities: [] });
+    oldSocket.receive({ t: 'event', from: 'bob', name: 'stale', payload: 1 });
+    expect(session.selfId()).toBe('fresh');
+    expect(session.hostId()).toBe('fresh');
+    expect(session.peers().map(peer => peer.id)).toEqual(['friend']);
+    expect(states).not.toHaveBeenCalled();
+    expect(events).not.toHaveBeenCalled();
+    expect(changes).toHaveBeenCalledTimes(changeCount);
+
+    session.close();
+    const closedChanges = changes.mock.calls.length;
+    nextSocket.receive({ t: 'welcome', v: 1, you: 'late', host: 'late', peers: [], serverTime: 100 });
+    expect(session.status()).toBe('closed');
+    expect(session.selfId()).toBe('fresh');
+    expect(changes).toHaveBeenCalledTimes(closedChanges);
+  });
+
   it('reconnects with backoff after an unexpected close, and stops after close()', () => {
     const { session, socket } = connect();
     welcome(socket);
