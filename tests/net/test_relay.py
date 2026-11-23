@@ -132,6 +132,84 @@ class RelayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await cat.receive())["t"], "left")
         self.assertEqual(await cat.receive(), {"t": "host", "id": bob_id})
 
+    async def test_global_connection_budget_includes_half_open_handshakes(self) -> None:
+        handle = await relay.start_relay("127.0.0.1", 0, max_connections=1)
+        raw_writer = None
+        rejected = None
+        try:
+            _reader, raw_writer = await asyncio.open_connection("127.0.0.1", handle.port)
+            for _ in range(50):
+                if len(handle.relay._writers) == 1:
+                    break
+                await asyncio.sleep(0.01)
+            self.assertEqual(len(handle.relay._writers), 1)
+            rejected = await Client.connect(handle.port)
+            self.assertEqual(rejected.status, "503")
+            self.assertLessEqual(len(handle.relay._writers), 1)
+
+            raw_writer.close()
+            await raw_writer.wait_closed()
+            for _ in range(50):
+                if not handle.relay._writers:
+                    break
+                await asyncio.sleep(0.01)
+            self.assertFalse(handle.relay._writers)
+            permitted = await Client.connect(handle.port)
+            self.assertEqual(permitted.status, "101")
+            await permitted.close()
+        finally:
+            if raw_writer is not None:
+                raw_writer.close()
+            if rejected is not None:
+                await rejected.close()
+            await handle.close()
+
+    async def test_global_room_limit_rejects_new_rooms_but_allows_existing_ones(self) -> None:
+        handle = await relay.start_relay("127.0.0.1", 0, max_rooms=2)
+        clients = []
+        try:
+            async def client():
+                instance = await Client.connect(handle.port)
+                clients.append(instance)
+                return instance
+
+            first, second, rejected, same_room = await client(), await client(), await client(), await client()
+            self.assertEqual((await first.hello(room="alpha"))["t"], "welcome")
+            self.assertEqual((await second.hello(room="beta"))["t"], "welcome")
+            rejected_error = await rejected.hello(room="third")
+            self.assertEqual(rejected_error["code"], "full")
+            self.assertEqual(len(handle.relay.rooms), 2)
+            self.assertEqual((await same_room.hello(room="alpha"))["t"], "welcome")
+            await first.receive()  # joined
+
+            await second.close()
+            for _ in range(50):
+                if "beta" not in handle.relay.rooms:
+                    break
+                await asyncio.sleep(0.01)
+            self.assertNotIn("beta", handle.relay.rooms)
+            next_room = await client()
+            self.assertEqual((await next_room.hello(room="third"))["t"], "welcome")
+        finally:
+            for item in clients:
+                await item.close()
+            await handle.close()
+
+    async def test_idle_joined_client_is_disconnected_and_room_reclaimed(self) -> None:
+        handle = await relay.start_relay("127.0.0.1", 0, max_rooms=1, idle_timeout=0.05)
+        client = await Client.connect(handle.port)
+        try:
+            self.assertEqual((await client.hello(room="temporary"))["t"], "welcome")
+            self.assertIsNone(await client.receive(timeout=1))
+            for _ in range(50):
+                if not handle.relay.rooms:
+                    break
+                await asyncio.sleep(0.01)
+            self.assertEqual(handle.relay.rooms, {})
+        finally:
+            await client.close()
+            await handle.close()
+
     async def test_cancelled_join_does_not_leave_a_ghost_peer_or_room(self) -> None:
 
         hello = json.dumps({"t": "hello", "v": 1, "game": "demo", "room": "main", "name": "Late"}).encode()
