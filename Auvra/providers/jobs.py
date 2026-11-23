@@ -326,8 +326,19 @@ class SQLiteJobStore:
             # Older versions incorrectly stored durable=True for it. Fal also
             # needs a remote request ID before polling can resume.
             if job.provider == "fal" and job.remote_id and bool(job.reconcile.get("durable", False)):
-                try: durable.append(self.transition(job.job_id, JobState.RECOVERING, message="restart requires remote reconciliation", reconcile={"durable": True, "restart_pending": True}))
-                except ValueError: durable.append(job)
+                # The queue endpoint can differ from the model identifier; it must
+                # survive every restart. A cancellation requested before shutdown
+                # remains pending even though RECOVERING is the persisted state.
+                metadata = {**job.reconcile, "durable": True, "restart_pending": True}
+                if job.state == JobState.CANCEL_REQUESTED or metadata.get("cancel_pending"):
+                    metadata["cancel_pending"] = True
+                try:
+                    durable.append(self.transition(
+                        job.job_id, JobState.RECOVERING,
+                        message="restart requires remote reconciliation", reconcile=metadata,
+                    ))
+                except ValueError:
+                    durable.append(job)
             else:
                 try:
                     self.transition(
