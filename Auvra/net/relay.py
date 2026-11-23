@@ -418,7 +418,12 @@ class Relay:
             if not isinstance(message.get("seq"), int) or isinstance(message.get("seq"), bool) or not _finite(message.get("time")):
                 raise ProtocolError("bad_message", "state needs a seq and a time")
             entities = validate_entities(message.get("entities"))
-            await self.broadcast(room, {"t": "state", "from": peer.id, "seq": message["seq"], "time": message["time"], "entities": entities}, skip=peer)
+            relayed = {"t": "state", "from": peer.id, "seq": message["seq"], "time": message["time"], "entities": entities}
+            # The added sender ID must fit the same 64-KiB limit the browser
+            # validates. Otherwise peers silently discard a valid input state.
+            if len(_wire_bytes(relayed)) > MAX_MESSAGE_BYTES:
+                raise ProtocolError("bad_message", "state is too large to relay")
+            await self.broadcast(room, relayed, skip=peer)
         elif kind == "event":
             name = message.get("name")
             if not isinstance(name, str) or not 0 < len(name) <= MAX_EVENT_NAME_LENGTH or not _payload(message.get("payload")):
