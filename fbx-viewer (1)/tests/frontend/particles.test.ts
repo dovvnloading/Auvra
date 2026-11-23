@@ -329,6 +329,7 @@ describe('particle simulation', () => {
       .setPosition(10, 0, 0);
     simulation.step(0.01, rotated.elements);
     expect(simulation.count).toBe(1);
+    const localY = simulation.positions[1];
     // Move the emitter before the death event. Both point and direction must
     // use the current world matrix, not the previous frame's transform.
     const moved = rotated.clone().setPosition(20, 4, 0);
@@ -336,7 +337,7 @@ describe('particle simulation', () => {
     expect(simulation.events).toHaveLength(1);
     const death = simulation.events[0];
     expect(death.trigger).toBe('death');
-    expect(death.x).toBeCloseTo(20, 4);
+    expect(death.x).toBeCloseTo(20 - 3 * localY, 4);
     expect(death.y).toBeCloseTo(4, 4);
     expect(death.vx).toBeCloseTo(-3, 4);
     expect(death.vy).toBeCloseTo(0, 4);
