@@ -201,7 +201,7 @@ class ReleasePipelineTests(unittest.TestCase):
             # Third-party notices: Vite emits the frontend file, stage_inputs.ps1
             # writes the Rust crate files, and Python notices come from dist-info.
             "frontend/THIRD_PARTY_NOTICES.txt": _notices("Third-party software notices", f"react@{REACT_VERSION} (MIT)"),
-            "native/THIRD_PARTY_NOTICES.txt": _notices("Native engine crates", "wgpu@30.0.1 (MIT OR Apache-2.0)"),
+            "native/THIRD_PARTY_NOTICES.txt": _notices("Native engine crates", "wgpu@30.0.2 (MIT OR Apache-2.0)"),
             "game-player/THIRD_PARTY_NOTICES.txt": _notices("Game player crates", "wry@0.57.1 (Apache-2.0 OR MIT)"),
             "python-site-packages/example_package-1.0.0.dist-info/METADATA":
                 b"Metadata-Version: 2.4\nName: example-package\nVersion: 1.0.0\nLicense-Expression: MIT\nLicense-File: LICENSE\n",
