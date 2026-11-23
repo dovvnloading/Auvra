@@ -282,7 +282,8 @@ export const driveTorque = (
     const coupledRpm = radiansToRpm(Math.abs(drivenOmega * ratio));
     if (transmission.shifting > 0 || ratio === 0) {
         out.wheelTorque = 0;
-        out.rpm = Math.max(engine.idleRpm, Math.min(engine.redlineRpm, engine.idleRpm + throttle * (engine.redlineRpm - engine.idleRpm) * 0.6, coupledRpm));
+        // With an open clutch, wheel speed must not cap the engine's free revs.
+        out.rpm = Math.max(engine.idleRpm, Math.min(engine.redlineRpm, engine.idleRpm + throttle * (engine.redlineRpm - engine.idleRpm) * 0.6));
         out.clutchSlip = true;
         return out;
     }
