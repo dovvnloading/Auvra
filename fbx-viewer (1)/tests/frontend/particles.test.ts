@@ -327,6 +327,29 @@ describe('particle simulation', () => {
     expect(simulation.count).toBe(16);
   });
 
+  it('transforms world-point bursts into local positions and velocity before the first step', () => {
+    const sim = new ParticleSimulation(effectOf({
+      ...still, space: 'local', rate: 0, lifetime: [5, 5], inheritVelocity: 0,
+      shape: { ...DEFAULT_PARTICLE_EFFECT.shape, kind: 'point', angle: 0 },
+    }), 8, seeded());
+    sim.stop();
+    const world = new THREE.Matrix4()
+      .makeRotationZ(Math.PI / 2)
+      .scale(new THREE.Vector3(2, 3, 4))
+      .setPosition(10, 20, 30);
+    const target = new THREE.Vector3(7, 26, 38);
+    const velocity = new THREE.Vector3(-3, 2, 4);
+    sim.emitAt(1, target.x, target.y, target.z, velocity.x, velocity.y, velocity.z, world.elements);
+    expect(sim.count).toBe(1);
+    const localPoint = new THREE.Vector3(...sim.positions.slice(0, 3)).applyMatrix4(world);
+    const localVelocity = new THREE.Vector3(...sim.velocities.slice(0, 3))
+      .applyMatrix3(new THREE.Matrix3().setFromMatrix4(world));
+    expect(localPoint.distanceTo(target)).toBeLessThan(1e-5);
+    expect(localVelocity.distanceTo(velocity)).toBeLessThan(1e-5);
+    sim.emitAt(1, 10, 20, 30, 0, 0, 0, world.elements);
+    expect(new THREE.Vector3(...sim.positions.slice(3, 6)).length()).toBeLessThan(1e-5);
+  });
+
   it('colours, sizes and frames particles over their life', () => {
     const simulation = new ParticleSimulation(effectOf({
       ...still, rate: 0, bursts: [{ time: 0, count: 1 }], lifetime: [1, 1], size: [2, 2], startColor: ['#ffffff', '#ffffff'],
