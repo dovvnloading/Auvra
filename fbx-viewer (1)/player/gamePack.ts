@@ -91,16 +91,8 @@ export const loadGamePack = async (baseUrl: string, signal?: AbortSignal): Promi
 
     const domains: Record<string, unknown[]> = {};
     await Promise.all(manifest.domains.map(async domain => {
-        const content = await fetchJson(new URL(`content/${encodeURIComponent(domain)}.json`, root).href, signal);
-        if (!content || typeof content !== 'object' || Array.isArray(content)
-            || (content as { schemaVersion?: unknown }).schemaVersion !== 1) {
-            throw new Error(`Game-pack domain "${domain}" has an unsupported or missing schema version`);
-        }
-        const documents = (content as { documents?: unknown }).documents;
-        if (!Array.isArray(documents)) {
-            throw new Error(`Game-pack domain "${domain}" has an invalid documents array`);
-        }
-        domains[domain] = documents;
+        const content = await fetchJson(new URL(`content/${encodeURIComponent(domain)}.json`, root).href, signal) as { documents?: unknown[] };
+        domains[domain] = Array.isArray(content.documents) ? content.documents : [];
     }));
 
     const assets = new Map(manifest.assets.map(asset => [asset.id, asset]));

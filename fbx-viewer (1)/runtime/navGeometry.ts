@@ -562,22 +562,6 @@ const heightsToken = (heights: readonly number[] | undefined): number => {
     return token;
 };
 
-/** A compact content signature of cut-out terrain cells, including in-place edits. */
-const terrainHolesSignature = (holes: readonly number[] | undefined): string => {
-    if (!holes) return '';
-    let first = 0x811c9dc5;
-    let second = 0x9e3779b9;
-    let count = 0;
-    // Only cells that cut triangles affect the generated walkable surface.
-    for (let index = 0; index < holes.length; index++) {
-        if (!holes[index]) continue;
-        count++;
-        first = Math.imul(first ^ (index + 1), 0x01000193);
-        second = Math.imul(second ^ (index + 1), 0x85ebca6b);
-    }
-    return `${holes.length}:${count}:${first >>> 0}:${second >>> 0}`;
-};
-
 /**
  * A key that changes only when something the navmesh bakes changes: terrains, static objects that
  * can block, nav links, and the ancestors their world transforms come from. Objects that are never
@@ -610,7 +594,7 @@ export function navGeometrySignature(levelObjects: readonly LevelObject[]): stri
             object.rotation.join(','),
             object.scale.join(','),
             object.components?.length ? JSON.stringify(object.components) : '',
-            terrain ? `${terrain.resolution}:${terrain.width}:${terrain.depth}:${heightsToken(terrain.heights)}:${terrainHolesSignature(terrain.holes)}` : '',
+            terrain ? `${terrain.resolution}:${terrain.width}:${terrain.depth}:${heightsToken(terrain.heights)}` : '',
         ].join('|'));
     }
     return parts.join(';');

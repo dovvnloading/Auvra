@@ -86,16 +86,7 @@ export class InputState {
     mouseUp(button: number) { this.mouse.delete(button); }
     setGamepads(gamepads: (Gamepad | null)[]) { this.gamepads = gamepads; }
     /** Releases everything held on every source, virtual included. */
-    clear() {
-        this.keys.clear();
-        this.mouse.clear();
-        this.gamepads = [];
-        this.tappedKeys.clear();
-        this.tappedButtons.clear();
-        this.clearVirtual();
-        this.previous.clear();
-        this.current.clear();
-    }
+    clear() { this.keys.clear(); this.mouse.clear(); this.tappedKeys.clear(); this.tappedButtons.clear(); this.clearVirtual(); }
 
     /** Analog strength 0..1 of an action from a virtual stick (values outside are clamped, non-finite is 0); 0 releases it. */
     setVirtualAxis(action: string, value: number) {
@@ -196,13 +187,10 @@ export const useInputActions = (map: InputActionMap, enabled = true): InputState
         // pointer, or one on editor/HUD UI, must not fire or aim. Releases stay ungated so a held button always clears.
         const mouseDown = (event: MouseEvent) => { if (document.pointerLockElement) input.mouseDown(event.button); };
         const mouseUp = (event: MouseEvent) => input.mouseUp(event.button);
-        let focused = true;
-        const blur = () => { focused = false; input.clear(); };
-        const focus = () => { focused = true; };
+        const blur = () => input.clear();
         let frame = 0;
         const poll = () => {
-            // A blurred window must not immediately re-acquire the gamepad state cleared above.
-            if (focused && typeof navigator !== 'undefined' && navigator.getGamepads) input.setGamepads(Array.from(navigator.getGamepads()));
+            if (typeof navigator !== 'undefined' && navigator.getGamepads) input.setGamepads(Array.from(navigator.getGamepads()));
             frame = requestAnimationFrame(poll);
         };
         window.addEventListener('keydown', down);
@@ -210,7 +198,6 @@ export const useInputActions = (map: InputActionMap, enabled = true): InputState
         window.addEventListener('mousedown', mouseDown);
         window.addEventListener('mouseup', mouseUp);
         window.addEventListener('blur', blur);
-        window.addEventListener('focus', focus);
         frame = requestAnimationFrame(poll);
         return () => {
             window.removeEventListener('keydown', down);
@@ -218,7 +205,6 @@ export const useInputActions = (map: InputActionMap, enabled = true): InputState
             window.removeEventListener('mousedown', mouseDown);
             window.removeEventListener('mouseup', mouseUp);
             window.removeEventListener('blur', blur);
-            window.removeEventListener('focus', focus);
             cancelAnimationFrame(frame);
             input.clear();
         };

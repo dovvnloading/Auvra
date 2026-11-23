@@ -45,10 +45,6 @@ PEER_SEND_TIMEOUT_SECONDS = 1.0
 MAX_HANDSHAKE_BYTES = 8 * 1024
 HANDSHAKE_TIMEOUT_SECONDS = 10.0
 HELLO_TIMEOUT_SECONDS = 10.0
-# Global budgets cover half-open upgrades as well as joined rooms.
-MAX_TOTAL_CONNECTIONS = 256
-MAX_ROOMS = 128
-IDLE_TIMEOUT_SECONDS = 60.0
 NAME_PATTERN = re.compile(r"^[A-Za-z0-9 _.-]+$")
 _WEBSOCKET_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
@@ -306,15 +302,8 @@ class Room:
 class Relay:
     """The room bookkeeping shared by every connection of one server."""
 
-    def __init__(self, max_players: int = MAX_PEERS_PER_ROOM, allowed_origins: Iterable[str] = (),
-                 *, max_connections: int = MAX_TOTAL_CONNECTIONS, max_rooms: int = MAX_ROOMS,
-                 idle_timeout: float = IDLE_TIMEOUT_SECONDS) -> None:
-        if max_connections < 1 or max_rooms < 1 or not math.isfinite(idle_timeout) or idle_timeout <= 0:
-            raise ValueError("connection, room and idle-timeout budgets must be positive")
+    def __init__(self, max_players: int = MAX_PEERS_PER_ROOM, allowed_origins: Iterable[str] = ()) -> None:
         self.max_players = max(1, min(MAX_PEERS_PER_ROOM, max_players))
-        self.max_connections = max_connections
-        self.max_rooms = max_rooms
-        self.idle_timeout = idle_timeout
         self.allowed_origins = frozenset(allowed_origins)
         self.rooms: dict[str, Room] = {}
         self._started = time.monotonic()
@@ -332,12 +321,6 @@ class Relay:
             await asyncio.gather(*(peer.send(message) for peer in recipients))
 
     async def handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-        # Check before the first await, so concurrent half-open handshakes
-        # cannot bypass the server-wide connection limit.
-        if len(self._writers) >= self.max_connections:
-            writer.write(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
-            writer.close()
-            return
         self._writers.add(writer)
         peer: Peer | None = None
         room: Room | None = None
@@ -346,9 +329,7 @@ class Relay:
             await asyncio.wait_for(handshake(reader, writer, self.allowed_origins), HANDSHAKE_TIMEOUT_SECONDS)
             peer, room = await asyncio.wait_for(self._join(reader, writer, control_budget), HELLO_TIMEOUT_SECONDS)
             while True:
-                received = await asyncio.wait_for(
-                    read_message(reader, writer, control_budget), self.idle_timeout,
-                )
+                received = await read_message(reader, writer, control_budget)
                 if received is None or received[0] == _OP_CLOSE:
                     break
                 self._count(peer)
@@ -393,8 +374,6 @@ class Relay:
             raise ProtocolError("bad_message", "hello needs a game id, a room and a name")
         room = self.rooms.get(room_name)
         if room is None:
-            if len(self.rooms) >= self.max_rooms:
-                raise ProtocolError("full", "the relay has reached its room limit")
             room = self.rooms[room_name] = Room(room_name, game)
         elif room.game != game:
             raise ProtocolError("game_mismatch", "this room is playing a different game")
@@ -439,12 +418,7 @@ class Relay:
             if not isinstance(message.get("seq"), int) or isinstance(message.get("seq"), bool) or not _finite(message.get("time")):
                 raise ProtocolError("bad_message", "state needs a seq and a time")
             entities = validate_entities(message.get("entities"))
-            relayed = {"t": "state", "from": peer.id, "seq": message["seq"], "time": message["time"], "entities": entities}
-            # The added sender ID must fit the same 64-KiB limit the browser
-            # validates. Otherwise peers silently discard a valid input state.
-            if len(_wire_bytes(relayed)) > MAX_MESSAGE_BYTES:
-                raise ProtocolError("bad_message", "state is too large to relay")
-            await self.broadcast(room, relayed, skip=peer)
+            await self.broadcast(room, {"t": "state", "from": peer.id, "seq": message["seq"], "time": message["time"], "entities": entities}, skip=peer)
         elif kind == "event":
             name = message.get("name")
             if not isinstance(name, str) or not 0 < len(name) <= MAX_EVENT_NAME_LENGTH or not _payload(message.get("payload")):
@@ -513,11 +487,9 @@ class RelayHandle:
 
 
 async def start_relay(host: str = "127.0.0.1", port: int = 7777, *, max_players: int = MAX_PEERS_PER_ROOM,
-                      allowed_origins: Iterable[str] = (), max_connections: int = MAX_TOTAL_CONNECTIONS,
-                      max_rooms: int = MAX_ROOMS, idle_timeout: float = IDLE_TIMEOUT_SECONDS) -> RelayHandle:
+                      allowed_origins: Iterable[str] = ()) -> RelayHandle:
     """Starts a relay; port 0 picks a free port (see the handle's port)."""
-    relay = Relay(max_players, allowed_origins, max_connections=max_connections,
-                  max_rooms=max_rooms, idle_timeout=idle_timeout)
+    relay = Relay(max_players, allowed_origins)
     server = await asyncio.start_server(relay.handle, host, port, limit=MAX_HANDSHAKE_BYTES)
     bound = server.sockets[0].getsockname()[1]
     return RelayHandle(server, relay, bound)
@@ -539,17 +511,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--host", default="0.0.0.0", help="address to listen on (default all interfaces)")
     parser.add_argument("--port", type=int, default=7777)
     parser.add_argument("--max-players", type=int, default=MAX_PEERS_PER_ROOM, help=f"players per room, at most {MAX_PEERS_PER_ROOM}")
-    parser.add_argument("--max-connections", type=int, default=MAX_TOTAL_CONNECTIONS, help="maximum concurrent sockets, including handshakes")
-    parser.add_argument("--max-rooms", type=int, default=MAX_ROOMS, help="maximum active rooms across all games")
-    parser.add_argument("--idle-timeout", type=float, default=IDLE_TIMEOUT_SECONDS, help="seconds without an application message before disconnect")
     parser.add_argument("--allow-origin", action="append", default=[], help="accept only browsers from this origin (repeatable)")
     args = parser.parse_args(argv)
 
     async def serve() -> None:
         asyncio.get_running_loop().set_exception_handler(_quiet_disconnects)
-        handle = await start_relay(args.host, args.port, max_players=args.max_players, allowed_origins=args.allow_origin,
-                                   max_connections=args.max_connections, max_rooms=args.max_rooms,
-                                   idle_timeout=args.idle_timeout)
+        handle = await start_relay(args.host, args.port, max_players=args.max_players, allowed_origins=args.allow_origin)
         print(f"Auvra relay listening on {args.host}:{handle.port}", flush=True)
         try:
             await asyncio.Event().wait()

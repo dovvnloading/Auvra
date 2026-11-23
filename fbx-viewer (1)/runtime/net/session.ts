@@ -281,7 +281,6 @@ export const createNetSession = (options: NetSessionOptions): NetSession => {
             outboundSentAt.push(now());
         };
         current.onmessage = (event: MessageEvent) => {
-            if (socket !== current || closed) return;
             const message = parseServerMessage(event.data);
             if (message) handle(message);
             else frontendDiagnostics.warning('net_message_rejected');
@@ -303,7 +302,6 @@ export const createNetSession = (options: NetSessionOptions): NetSession => {
             reconnectDelay = Math.min(RECONNECT_MAX_MS, reconnectDelay * 2);
         };
         current.onerror = () => {
-            if (socket !== current || closed) return;
             frontendDiagnostics.warning('net_socket_error');
         };
     };

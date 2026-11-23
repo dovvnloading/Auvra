@@ -75,13 +75,6 @@ export const gameState = {
         snapshot = { levelId, player, vars, abilities: abilitiesChanged ? abilities : snapshot.abilities };
         emit();
     },
-    /** Replaces the entire HUD variable namespace when a level session starts. */
-    replaceVars(vars: GameStateSnapshot['vars']) {
-        const keys = Object.keys(vars);
-        if (keys.length === Object.keys(snapshot.vars).length && keys.every(key => vars[key] === snapshot.vars[key])) return;
-        snapshot = { ...snapshot, vars: { ...vars } };
-        emit();
-    },
     reset() {
         snapshot = INITIAL;
         emit();

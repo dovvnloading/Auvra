@@ -10,8 +10,6 @@ const asset = (id: string, size: number, mime = 'image/png'): Asset => ({ id, fi
 const base = 'https://game.example/player/';
 
 let assets: Asset[];
-let manifestDomains: string[];
-let domainDocuments: Record<string, unknown>;
 let downloads: Map<string, (signal: AbortSignal) => Response | Promise<Response>>;
 let requested: string[];
 let objectUrls: { url: string; blob: Blob }[];
@@ -35,8 +33,6 @@ const load = () => loadGamePack(base);
 
 beforeEach(() => {
   assets = [];
-  manifestDomains = [];
-  domainDocuments = {};
   downloads = new Map();
   requested = [];
   objectUrls = [];
@@ -45,13 +41,9 @@ beforeEach(() => {
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = String(input);
     if (url.endsWith('/game/game.json')) {
-      return Response.json({ format: 'auvra.game', schema: 1, gameId: 'test', startupLevelId: 'main', domains: manifestDomains, assets });
+      return Response.json({ format: 'auvra.game', schema: 1, gameId: 'test', startupLevelId: 'main', domains: [], assets });
     }
     const file = url.split('/').at(-1)!;
-    if (url.includes('/game/content/')) {
-      const domain = decodeURIComponent(file.slice(0, -'.json'.length));
-      return Response.json(domainDocuments[domain]);
-    }
     requested.push(file);
     const handler = downloads.get(file);
     return handler ? handler(init?.signal as AbortSignal) : new Response(null, { status: 404 });
@@ -70,32 +62,6 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
-});
-
-describe('game-pack domain validation', () => {
-  it('accepts a versioned domain with documents, including an empty array', async () => {
-    manifestDomains = ['objects', 'models'];
-    domainDocuments = {
-      objects: { schemaVersion: 1, documents: [{ id: 'object-one' }] },
-      models: { schemaVersion: 1, documents: [] },
-    };
-    const source = await load();
-    expect(source.domains).toEqual({ objects: [{ id: 'object-one' }], models: [] });
-    source.dispose();
-  });
-
-  it.each([
-    [{ schemaVersion: 999, documents: [] }, /objects.*schema version/],
-    [{ documents: [] }, /objects.*schema version/],
-    [{ schemaVersion: 1, documents: {} }, /objects.*documents array/],
-    [{ schemaVersion: 1 }, /objects.*documents array/],
-    [null, /objects.*schema version/],
-  ] as const)('rejects a corrupt or unsupported domain payload %#', async (payload, reason) => {
-    manifestDomains = ['objects'];
-    domainDocuments = { objects: payload };
-    await expect(load()).rejects.toThrow(reason);
-    expect(objectUrls).toEqual([]);
-  });
 });
 
 describe('game-pack asset download budgets', () => {

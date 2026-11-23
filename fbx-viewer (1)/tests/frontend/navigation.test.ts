@@ -171,31 +171,6 @@ describe('level navmesh', () => {
     gentle.dispose();
   });
 
-  it('invalidates terrain navigation when holes change without replacing the height array', () => {
-    const heights = Array(25).fill(0);
-    const holes = Array(16).fill(0);
-    const terrain = levelObject('terrain', {
-      type: 'terrain',
-      modelId: '',
-      terrainData: { resolution: 4, width: 20, depth: 20, heights, holes },
-    });
-    const initial = navGeometrySignature([terrain]);
-    const triangles = collectNavGeometry([terrain]).indices.length;
-
-    // The editor can update the existing hole map while preserving the height
-    // array reference, so an identity token for heights is insufficient.
-    holes[6] = 1;
-    const carved = navGeometrySignature([terrain]);
-    expect(carved).not.toBe(initial);
-    expect(collectNavGeometry([terrain]).indices.length).toBe(triangles - 6);
-    holes[6] = 0;
-    expect(navGeometrySignature([terrain])).toBe(initial);
-    expect(collectNavGeometry([terrain]).indices.length).toBe(triangles);
-    holes[7] = 1;
-    expect(navGeometrySignature([terrain])).not.toBe(initial);
-    expect(navGeometrySignature([terrain])).not.toBe(carved);
-  });
-
   it('advances past waypoints the agent has reached', () => {
     const path = [new THREE.Vector3(0, 0, 0), new THREE.Vector3(1, 0, 0), new THREE.Vector3(1, 0, 4), new THREE.Vector3(5, 0, 4)];
     expect(advanceWaypoint(path, 1, { x: 0.2, z: 0 }, 0.45)).toBe(1);

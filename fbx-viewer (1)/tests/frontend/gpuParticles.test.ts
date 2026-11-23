@@ -265,27 +265,6 @@ describe('gpu particle system', () => {
     system.dispose();
   });
 
-  it('transforms WebGL local-space point burst uniforms through the emitter inverse', () => {
-    const system = new GpuParticleSystem(16);
-    system.setEffect(effectWith({ space: 'local', rate: 0, speed: [0, 0], inheritVelocity: 0 }));
-    const { renderer } = fakeRenderer();
-    const world = new THREE.Matrix4()
-      .makeRotationZ(Math.PI / 2)
-      .scale(new THREE.Vector3(2, 3, 4))
-      .setPosition(10, 20, 30);
-    const target = new THREE.Vector3(7, 26, 38);
-    const velocity = new THREE.Vector3(-3, 2, 4);
-    system.emitAt(1, target.x, target.y, target.z, velocity.x, velocity.y, velocity.z);
-    system.step(renderer, 0.01, world, null);
-    const u = uniforms(system);
-    const worldPoint = (u.pointPosition.value as THREE.Vector3).clone().applyMatrix4(world);
-    const worldVelocity = (u.pointVelocity.value as THREE.Vector3).clone()
-      .applyMatrix3(new THREE.Matrix3().setFromMatrix4(world));
-    expect(worldPoint.distanceTo(target)).toBeLessThan(1e-5);
-    expect(worldVelocity.distanceTo(velocity)).toBeLessThan(1e-5);
-    system.dispose();
-  });
-
   it('collides with the ground it is given, feels forces in its own space when local, and clears on a hard stop', () => {
     const system = new GpuParticleSystem(100);
     const { renderer, cleared } = fakeRenderer();

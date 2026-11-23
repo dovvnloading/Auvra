@@ -37,7 +37,7 @@ TEMPLATE_FILES = {
 }
 PLAYER_BYTES = b"\x7fELF-or-Mach-O player"
 PLAYER_NOTICES = b"Third-party software notices: the Auvra game player\n\nwry@0.57.1 (Apache-2.0 OR MIT)\n"
-MODEL_ID = hashlib.sha256(b"fbx-bytes").hexdigest()
+MODEL_ID = "a" * 64
 
 
 def write_template(root: Path) -> Path:

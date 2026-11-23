@@ -1,4 +1,3 @@
-import * as THREE from 'three';
 import {
     BAKE_SAMPLES,
     bakeCurve,
@@ -221,28 +220,13 @@ export class ParticleSimulation {
      * Spawns `count` particles from the shape placed at a world point (a sub-emitter's or a
      * script's burst), starting with `velocity` (world, m/s) on top of their own launch.
      */
-    emitAt(count: number, x: number, y: number, z: number, vx = 0, vy = 0, vz = 0,
-           emitterWorld?: ArrayLike<number> | null): void {
-        if (count <= 0) return;
+    emitAt(count: number, x: number, y: number, z: number, vx = 0, vy = 0, vz = 0): void {
         const matrix = IDENTITY.slice();
         matrix[12] = x;
         matrix[13] = y;
         matrix[14] = z;
         const local = this.effect.space === 'local';
-        let offset: number[] | null = null;
-        if (local) {
-            // Caller-supplied matrix works before the first simulation frame;
-            // otherwise use the last sampled transform (or identity).
-            const world = new THREE.Matrix4().fromArray(Array.from(emitterWorld ?? this.last ?? IDENTITY));
-            if (Math.abs(world.determinant()) < 1e-12) return;
-            const inverse = world.invert();
-            offset = new THREE.Vector3(x, y, z).applyMatrix4(inverse).toArray();
-            // A world velocity is a vector, not a point: do not translate or normalize it.
-            const inherited = new THREE.Vector3(vx, vy, vz)
-                .applyMatrix3(new THREE.Matrix3().setFromMatrix4(inverse));
-            vx = inherited.x; vy = inherited.y; vz = inherited.z;
-        }
-        for (let i = 0; i < count; i++) this.spawn(local ? null : matrix, 0, vx, vy, vz, offset);
+        for (let i = 0; i < count; i++) this.spawn(local ? null : matrix, 0, vx, vy, vz, local ? [x, y, z] : null);
     }
 
     /**
@@ -298,7 +282,7 @@ export class ParticleSimulation {
         while (i < this.count) {
             const age = this.ages[i] + step;
             if (age >= this.lifetimes[i]) {
-                if (this.wants.death) this.pushEvent('death', i, world);
+                if (this.wants.death) this.pushEvent('death', i);
                 this.remove(i);
                 continue;
             }
@@ -338,12 +322,12 @@ export class ParticleSimulation {
                     if (this.wants.collision) {
                         p[v] = hit.x; p[v + 1] = hit.y; p[v + 2] = hit.z;
                         vel[v] = vx; vel[v + 1] = vy; vel[v + 2] = vz;
-                        this.pushEvent('collision', i, world);
+                        this.pushEvent('collision', i);
                     }
                     if (effect.collision.kill) {
                         if (this.wants.death) {
                             p[v] = hit.x; p[v + 1] = hit.y; p[v + 2] = hit.z;
-                            this.pushEvent('death', i, world);
+                            this.pushEvent('death', i);
                         }
                         this.remove(i);
                         continue;
@@ -589,25 +573,18 @@ export class ParticleSimulation {
         this.count = i + 1;
     }
 
-    private pushEvent(trigger: SubEmitterTrigger, i: number, world: ArrayLike<number>): void {
+    private pushEvent(trigger: SubEmitterTrigger, i: number): void {
         if (this.events.length >= 256) return;
         const v = i * 3;
         let x = this.positions[v], y = this.positions[v + 1], z = this.positions[v + 2];
-        let vx = this.velocities[v], vy = this.velocities[v + 1], vz = this.velocities[v + 2];
-        if (this.effect.space === 'local') {
+        if (this.effect.space === 'local' && this.last) {
+            const m = this.last;
             const lx = x, ly = y, lz = z;
-            x = world[0] * lx + world[4] * ly + world[8] * lz + world[12];
-            y = world[1] * lx + world[5] * ly + world[9] * lz + world[13];
-            z = world[2] * lx + world[6] * ly + world[10] * lz + world[14];
-            // The event API is world-space: rotate and scale velocity as a
-            // direction, never translate it. Use this step's transform for
-            // both values rather than the previous frame's matrix.
-            const lvx = vx, lvy = vy, lvz = vz;
-            vx = world[0] * lvx + world[4] * lvy + world[8] * lvz;
-            vy = world[1] * lvx + world[5] * lvy + world[9] * lvz;
-            vz = world[2] * lvx + world[6] * lvy + world[10] * lvz;
+            x = m[0] * lx + m[4] * ly + m[8] * lz + m[12];
+            y = m[1] * lx + m[5] * ly + m[9] * lz + m[13];
+            z = m[2] * lx + m[6] * ly + m[10] * lz + m[14];
         }
-        this.events.push({ trigger, x, y, z, vx, vy, vz });
+        this.events.push({ trigger, x, y, z, vx: this.velocities[v], vy: this.velocities[v + 1], vz: this.velocities[v + 2] });
     }
 
     private remove(index: number): void {

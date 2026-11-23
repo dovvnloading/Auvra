@@ -47,34 +47,6 @@ describe('input actions', () => {
     expect(input.wasPressed('Pause')).toBe(false);
   });
 
-  it('clears held gamepad buttons, axes and stale press/release edges', () => {
-    const input = new InputState(DEFAULT_INPUT_MAP);
-    const buttons = Array(8).fill(0);
-    buttons[7] = 1; // Fire / Throttle
-    input.setGamepads([pad([0, -1], buttons)]);
-    input.endFrame();
-    expect(input.value('Fire')).toBe(1);
-    expect(input.isDown('MoveForward')).toBe(true);
-    expect(input.wasPressed('Fire')).toBe(true);
-
-    input.clear();
-    expect(input.value('Fire')).toBe(0);
-    expect(input.value('MoveForward')).toBe(0);
-    expect(input.isDown('Fire')).toBe(false);
-    expect(input.wasPressed('Fire')).toBe(false);
-    expect(input.wasReleased('Fire')).toBe(false);
-    input.endFrame();
-    expect(input.wasReleased('Fire')).toBe(false);
-
-    input.setGamepads([pad([0, 0], buttons)]);
-    input.endFrame();
-    expect(input.wasPressed('Fire')).toBe(true);
-    input.keyDown('Space');
-    input.clear();
-    input.endFrame();
-    expect(input.wasPressed('Jump')).toBe(false);
-  });
-
   it('applies rebinding overrides', () => {
     const map = applyBindingOverrides(DEFAULT_INPUT_MAP, { Jump: [{ device: 'keyboard', code: 'KeyJ' }] });
     const input = new InputState(map);
