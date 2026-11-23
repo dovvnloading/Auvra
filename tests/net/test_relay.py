@@ -242,6 +242,37 @@ class RelayTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(asyncio.TimeoutError):
             await ann.receive(timeout=0.2)
 
+    async def test_state_relay_rejects_outbound_frame_over_receiver_budget(self) -> None:
+        # A near-limit inbound state can grow past 64 KiB when the relay
+        # appends its sender ID. Keep the incoming packet valid in both the
+        # ASCII and UTF-8 cases, so only the outgoing check can reject it.
+        for prefix in ("x" * 200, "\u00e9" * 20 + "x" * 150):
+            with self.subTest(prefix=prefix[:4]):
+                ann, bob = await self.client(), await self.client()
+                ann_id = (await ann.hello(name="Ann"))["you"]
+                await bob.hello(name="Bob")
+                await ann.receive()  # joined
+                entity = {"id": prefix, "position": [0, 0, 0], "rotation": [0, 0, 0]}
+                message = {"t": "state", "seq": 1, "time": 1, "entities": [dict(entity) for _ in range(256)]}
+                remaining = relay.MAX_MESSAGE_BYTES - 4 - len(relay._wire_bytes(message))
+                self.assertGreater(remaining, 0)
+                for current in message["entities"]:
+                    grow = min(remaining, 256 - len(current["id"]))
+                    current["id"] += "x" * grow
+                    remaining -= grow
+                    if not remaining:
+                        break
+                self.assertEqual(remaining, 0)
+                inbound = relay._wire_bytes(message)
+                self.assertEqual(len(inbound), relay.MAX_MESSAGE_BYTES - 4)
+                outgoing = {"t": "state", "from": ann_id, "seq": 1, "time": 1, "entities": message["entities"]}
+                self.assertGreater(len(relay._wire_bytes(outgoing)), relay.MAX_MESSAGE_BYTES)
+
+                await ann.send_raw(0x1, inbound)
+                await self.assertRejected(ann, "bad_message")
+                self.assertEqual((await bob.receive(max_payload_bytes=relay.MAX_MESSAGE_BYTES))["t"], "left")
+                await bob.close()
+
     async def test_large_unicode_and_ascii_events_reach_all_peers_within_wire_budget(self) -> None:
         ann, bob, cat = await self.client(), await self.client(), await self.client()
         ann_id = (await ann.hello(name="Ann"))["you"]
