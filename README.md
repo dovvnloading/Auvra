@@ -249,6 +249,14 @@ issue describing the problem and the files it would affect. Keep pull requests
 focused, include the checks used to verify the change, and avoid unrelated
 cleanup.
 
+Merge one pull request at a time, and only once its own checks have passed. A
+pull request's checks run against the `main` it started from and cover only the
+folders it touches, so the Verify run that a merge starts on `main` is the real
+check. Wait for it to pass before merging the next one: a new merge cancels the
+run still in progress. If a run on `main` fails, stop and fix `main` before
+merging anything else. Automated agents do not open rollback or revert pull
+requests, or rewrite branches they did not create, unless the maintainer asks.
+
 ## License
 
 Auvra is licensed under the [Apache License 2.0](LICENSE).

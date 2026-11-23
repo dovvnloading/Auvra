@@ -9,6 +9,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import tomllib
 import unittest
 import unittest.mock as mock
 import xml.etree.ElementTree as ET
@@ -39,6 +40,10 @@ from release.windows_lifecycle import WINDOWS_LIFECYCLE_SCRIPT, run_windows_life
 REPOSITORY = Path(__file__).parents[2]
 FRONTEND_LOCK = json.loads((REPOSITORY / "fbx-viewer (1)" / "package-lock.json").read_text(encoding="utf-8"))["packages"]
 REACT_VERSION = FRONTEND_LOCK["node_modules/react"]["version"]
+# The SBOM lists the crates in native/Cargo.lock, so the staged notices must name the
+# locked wgpu. Reading it here keeps a Dependabot bump from breaking these tests.
+NATIVE_LOCK = tomllib.loads((REPOSITORY / "native" / "Cargo.lock").read_text(encoding="utf-8"))["package"]
+WGPU_VERSION = next(package["version"] for package in NATIVE_LOCK if package["name"] == "wgpu")
 
 
 def _notices(title: str, component: str) -> bytes:
@@ -201,7 +206,7 @@ class ReleasePipelineTests(unittest.TestCase):
             # Third-party notices: Vite emits the frontend file, stage_inputs.ps1
             # writes the Rust crate files, and Python notices come from dist-info.
             "frontend/THIRD_PARTY_NOTICES.txt": _notices("Third-party software notices", f"react@{REACT_VERSION} (MIT)"),
-            "native/THIRD_PARTY_NOTICES.txt": _notices("Native engine crates", "wgpu@30.0.2 (MIT OR Apache-2.0)"),
+            "native/THIRD_PARTY_NOTICES.txt": _notices("Native engine crates", f"wgpu@{WGPU_VERSION} (MIT OR Apache-2.0)"),
             "game-player/THIRD_PARTY_NOTICES.txt": _notices("Game player crates", "wry@0.57.1 (Apache-2.0 OR MIT)"),
             "python-site-packages/example_package-1.0.0.dist-info/METADATA":
                 b"Metadata-Version: 2.4\nName: example-package\nVersion: 1.0.0\nLicense-Expression: MIT\nLicense-File: LICENSE\n",

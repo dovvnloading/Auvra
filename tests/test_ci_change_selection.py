@@ -35,10 +35,18 @@ class CheckSelectionTests(unittest.TestCase):
         self.assertEqual(classify(["fbx-viewer (1)/host/generated/protocolV1.ts"]), set(ALL))
 
     def test_native_change_checks_windows_integration(self):
-        self.assertEqual(classify(["native/src/lib.rs"]), {"native", "smoke"})
+        self.assertEqual(classify(["native/src/lib.rs"]), {"native", "smoke", "python"})
 
     def test_player_change_runs_every_platform(self):
-        self.assertEqual(classify(["player-desktop/src/main.rs"]), {"player"})
+        self.assertEqual(classify(["player-desktop/src/main.rs"]), {"player", "python"})
+
+    def test_rust_dependency_bump_runs_the_python_tests(self):
+        # The notices tests read both Cargo.lock files. On 2026-11-23 a wgpu bump
+        # skipped them on its own pull request and broke main's next Python run.
+        for path in ("native/Cargo.lock", "native/Cargo.toml", "player-desktop/Cargo.lock",
+                     "player-desktop/Cargo.toml", "Cargo.lock", "Cargo.toml"):
+            with self.subTest(path=path):
+                self.assertIn("python", classify([path]))
 
     def test_python_change_checks_integration(self):
         self.assertEqual(classify(["Auvra/desktop/controller.py"]), {"python", "smoke"})
@@ -53,7 +61,8 @@ class CheckSelectionTests(unittest.TestCase):
         self.assertEqual(classify(["tools/ci/select_checks.py"]), set(ALL))
 
     def test_multi_area_change_is_union(self):
-        self.assertEqual(classify(["native/src/lib.rs", "player-desktop/src/main.rs"]), {"native", "smoke", "player"})
+        self.assertEqual(classify(["native/src/lib.rs", "player-desktop/src/main.rs"]),
+                         {"native", "smoke", "player", "python"})
 
     def test_licensing_change_is_not_skipped(self):
         self.assertEqual(classify(["LICENSE"]), set(ALL))
