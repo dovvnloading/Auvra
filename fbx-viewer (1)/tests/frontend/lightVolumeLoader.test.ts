@@ -36,12 +36,14 @@ describe('light-volume source ownership', () => {
     setLightVolumeSource(async () => 'blob:project-b', releaseB);
     resumeA(response());
     await expect(pendingA).rejects.toThrow(/source changed during load/);
-    expect(releaseA).toHaveBeenCalledExactlyOnceWith('volume');
+    expect(releaseA).toHaveBeenCalledTimes(1);
+    expect(releaseA).toHaveBeenCalledWith('volume');
     expect(releaseB).not.toHaveBeenCalled();
 
     const fromB = await loadLightVolume(probes);
     expect(fromB).toHaveLength(SH_FLOATS_PER_PROBE);
-    expect(releaseB).toHaveBeenCalledExactlyOnceWith('volume');
+    expect(releaseB).toHaveBeenCalledTimes(1);
+    expect(releaseB).toHaveBeenCalledWith('volume');
   });
 
   it('releases an acquired URL even when its fetch fails', async () => {
@@ -49,6 +51,7 @@ describe('light-volume source ownership', () => {
     setLightVolumeSource(async () => 'blob:failure', release);
     vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 404 })));
     await expect(loadLightVolume(probes)).rejects.toThrow(/download failed/);
-    expect(release).toHaveBeenCalledExactlyOnceWith('volume');
+    expect(release).toHaveBeenCalledTimes(1);
+    expect(release).toHaveBeenCalledWith('volume');
   });
 });
