@@ -95,7 +95,8 @@ export const createCameraDirector = (): CameraDirector => {
             const targetFov = target ? target.fov : gameplayFov ?? view.fov;
             let t = 1;
             if (blend) {
-                blend.elapsed += Math.max(0, Math.min(delta, 0.1));
+                // Consume full elapsed game time, including frames longer than 100 ms.
+                blend.elapsed += Number.isFinite(delta) ? Math.max(0, delta) : 0;
                 t = Math.min(1, blend.elapsed / blend.duration);
             }
             if (blend && t < 1) {

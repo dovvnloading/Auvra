@@ -132,6 +132,84 @@ class RelayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await cat.receive())["t"], "left")
         self.assertEqual(await cat.receive(), {"t": "host", "id": bob_id})
 
+    async def test_global_connection_budget_includes_half_open_handshakes(self) -> None:
+        handle = await relay.start_relay("127.0.0.1", 0, max_connections=1)
+        raw_writer = None
+        rejected = None
+        try:
+            _reader, raw_writer = await asyncio.open_connection("127.0.0.1", handle.port)
+            for _ in range(50):
+                if len(handle.relay._writers) == 1:
+                    break
+                await asyncio.sleep(0.01)
+            self.assertEqual(len(handle.relay._writers), 1)
+            rejected = await Client.connect(handle.port)
+            self.assertEqual(rejected.status, "503")
+            self.assertLessEqual(len(handle.relay._writers), 1)
+
+            raw_writer.close()
+            await raw_writer.wait_closed()
+            for _ in range(50):
+                if not handle.relay._writers:
+                    break
+                await asyncio.sleep(0.01)
+            self.assertFalse(handle.relay._writers)
+            permitted = await Client.connect(handle.port)
+            self.assertEqual(permitted.status, "101")
+            await permitted.close()
+        finally:
+            if raw_writer is not None:
+                raw_writer.close()
+            if rejected is not None:
+                await rejected.close()
+            await handle.close()
+
+    async def test_global_room_limit_rejects_new_rooms_but_allows_existing_ones(self) -> None:
+        handle = await relay.start_relay("127.0.0.1", 0, max_rooms=2)
+        clients = []
+        try:
+            async def client():
+                instance = await Client.connect(handle.port)
+                clients.append(instance)
+                return instance
+
+            first, second, rejected, same_room = await client(), await client(), await client(), await client()
+            self.assertEqual((await first.hello(room="alpha"))["t"], "welcome")
+            self.assertEqual((await second.hello(room="beta"))["t"], "welcome")
+            rejected_error = await rejected.hello(room="third")
+            self.assertEqual(rejected_error["code"], "full")
+            self.assertEqual(len(handle.relay.rooms), 2)
+            self.assertEqual((await same_room.hello(room="alpha"))["t"], "welcome")
+            await first.receive()  # joined
+
+            await second.close()
+            for _ in range(50):
+                if "beta" not in handle.relay.rooms:
+                    break
+                await asyncio.sleep(0.01)
+            self.assertNotIn("beta", handle.relay.rooms)
+            next_room = await client()
+            self.assertEqual((await next_room.hello(room="third"))["t"], "welcome")
+        finally:
+            for item in clients:
+                await item.close()
+            await handle.close()
+
+    async def test_idle_joined_client_is_disconnected_and_room_reclaimed(self) -> None:
+        handle = await relay.start_relay("127.0.0.1", 0, max_rooms=1, idle_timeout=0.05)
+        client = await Client.connect(handle.port)
+        try:
+            self.assertEqual((await client.hello(room="temporary"))["t"], "welcome")
+            self.assertIsNone(await client.receive(timeout=1))
+            for _ in range(50):
+                if not handle.relay.rooms:
+                    break
+                await asyncio.sleep(0.01)
+            self.assertEqual(handle.relay.rooms, {})
+        finally:
+            await client.close()
+            await handle.close()
+
     async def test_cancelled_join_does_not_leave_a_ghost_peer_or_room(self) -> None:
 
         hello = json.dumps({"t": "hello", "v": 1, "game": "demo", "room": "main", "name": "Late"}).encode()
@@ -241,6 +319,37 @@ class RelayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await cat.receive())["name"], "score")
         with self.assertRaises(asyncio.TimeoutError):
             await ann.receive(timeout=0.2)
+
+    async def test_state_relay_rejects_outbound_frame_over_receiver_budget(self) -> None:
+        # A near-limit inbound state can grow past 64 KiB when the relay
+        # appends its sender ID. Keep the incoming packet valid in both the
+        # ASCII and UTF-8 cases, so only the outgoing check can reject it.
+        for prefix in ("x" * 200, "\u00e9" * 20 + "x" * 150):
+            with self.subTest(prefix=prefix[:4]):
+                ann, bob = await self.client(), await self.client()
+                ann_id = (await ann.hello(name="Ann"))["you"]
+                await bob.hello(name="Bob")
+                await ann.receive()  # joined
+                entity = {"id": prefix, "position": [0, 0, 0], "rotation": [0, 0, 0]}
+                message = {"t": "state", "seq": 1, "time": 1, "entities": [dict(entity) for _ in range(256)]}
+                remaining = relay.MAX_MESSAGE_BYTES - 4 - len(relay._wire_bytes(message))
+                self.assertGreater(remaining, 0)
+                for current in message["entities"]:
+                    grow = min(remaining, 256 - len(current["id"]))
+                    current["id"] += "x" * grow
+                    remaining -= grow
+                    if not remaining:
+                        break
+                self.assertEqual(remaining, 0)
+                inbound = relay._wire_bytes(message)
+                self.assertEqual(len(inbound), relay.MAX_MESSAGE_BYTES - 4)
+                outgoing = {"t": "state", "from": ann_id, "seq": 1, "time": 1, "entities": message["entities"]}
+                self.assertGreater(len(relay._wire_bytes(outgoing)), relay.MAX_MESSAGE_BYTES)
+
+                await ann.send_raw(0x1, inbound)
+                await self.assertRejected(ann, "bad_message")
+                self.assertEqual((await bob.receive(max_payload_bytes=relay.MAX_MESSAGE_BYTES))["t"], "left")
+                await bob.close()
 
     async def test_large_unicode_and_ascii_events_reach_all_peers_within_wire_budget(self) -> None:
         ann, bob, cat = await self.client(), await self.client(), await self.client()

@@ -65,6 +65,33 @@ describe('camera director', () => {
     expect(director.overridesView()).toBe(false);
   });
 
+  it('finishes blends on schedule at 4 FPS, after a hitch, and ignores invalid deltas', () => {
+    const director = createCameraDirector();
+    const rendered = view();
+    director.register('cam', levelCamera([10, 2, 10], 30));
+    director.apply(rendered, 1 / 60);
+    director.setActive('cam', 1);
+    director.apply(rendered, 0.25);
+    director.apply(rendered, 0.25);
+    expect(rendered.position.x).toBeCloseTo(5);
+    director.apply(rendered, -1);
+    director.apply(rendered, Number.NaN);
+    expect(rendered.position.x).toBeCloseTo(5);
+    director.apply(rendered, 0.25);
+    director.apply(rendered, 0.25);
+    expect(rendered.position.x).toBeCloseTo(10);
+    expect(rendered.fov).toBeCloseTo(30);
+
+    const hitchDirector = createCameraDirector();
+    const hitchView = view();
+    hitchDirector.register('cam', levelCamera([10, 2, 10], 30));
+    hitchDirector.apply(hitchView, 1 / 60);
+    hitchDirector.setActive('cam', 1);
+    hitchDirector.apply(hitchView, 2);
+    expect(hitchView.position.x).toBeCloseTo(10);
+    expect(hitchView.fov).toBeCloseTo(30);
+  });
+
   it('ignores unknown cameras and falls back when the active one goes away', () => {
     const director = createCameraDirector();
     director.setActive('nope');
