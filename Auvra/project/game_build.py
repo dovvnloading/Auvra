@@ -708,6 +708,10 @@ def _load_asset(read_asset: AssetReader, asset_id: str) -> Iterator[tuple[bytes 
         payload = bytes(data)
         if len(payload) > _MAX_ASSET_BYTES:
             raise GameBuildError("invalid_project", f"asset {asset_id} exceeds the build size limit")
+        # The legacy bytes callback still promises content-addressed IDs.
+        # Check the original identity before publishing the staged asset.
+        if hashlib.sha256(payload).hexdigest() != asset_id:
+            raise GameBuildError("invalid_project", f"asset {asset_id} does not match its declared SHA-256")
         yield payload, essence, None
         return
 
