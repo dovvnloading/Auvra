@@ -55,17 +55,20 @@ def classify(paths: list[str], *, full: bool = False) -> set[str]:
         if path.startswith("release/"):
             selected.update(("python", "player"))
             continue
+        # The Python tests read the Rust trees too: native/src for the program trace,
+        # and both Cargo.lock files for the third-party notices and the SBOM. A Rust
+        # change that skips them can pass its own pull request and break main.
         if path.startswith("native/"):
-            selected.update(("native", "smoke"))
+            selected.update(("native", "smoke", "python"))
             continue
         if path.startswith("player-desktop/"):
-            selected.add("player")
+            selected.update(("player", "python"))
             continue
         if path in {"pyproject.toml", "uv.lock"}:
             selected.update(("python", "smoke"))
             continue
         if path in {"Cargo.toml", "Cargo.lock", "rust-toolchain.toml"}:
-            selected.update(("native", "player", "smoke"))
+            selected.update(("native", "player", "smoke", "python"))
             continue
 
         # Never silently skip checks when the repository gains a new code area.
