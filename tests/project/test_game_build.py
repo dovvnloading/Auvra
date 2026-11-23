@@ -110,11 +110,11 @@ class GameBuildTests(unittest.TestCase):
         self.assertEqual(manifest["settings"]["navigation"], {"agentRadius": 0.4, "agentHeight": 1.8, "maxSlopeDegrees": 40, "maxStepHeight": 0.35})
         self.assertEqual(manifest["levels"], [{"id": "level-1", "name": "First"}, {"id": "level-2", "name": "Second"}])
         self.assertEqual(manifest["domains"], list(DOMAIN_NAMES))
-        self.assertEqual(manifest["assets"], [
+        self.assertEqual(manifest["assets"], sorted([
             {"id": MODEL_ID, "file": f"{MODEL_ID}.fbx", "mime": "model/fbx", "size": 9},
             {"id": TEXTURE_ID, "file": f"{TEXTURE_ID}.png", "mime": "image/png", "size": 9},
             {"id": HEIGHTFIELD_ID, "file": f"{HEIGHTFIELD_ID}.ahf", "mime": "application/vnd.auvra.heightfield", "size": 7},
-        ])
+        ], key=lambda item: item["id"]))
         self.assertEqual((self.destination / "game/assets" / f"{MODEL_ID}.fbx").read_bytes(), b"fbx-bytes")
         for domain in DOMAIN_NAMES:
             self.assertEqual(self.load(f"game/content/{domain}.json")["schemaVersion"], 1)
