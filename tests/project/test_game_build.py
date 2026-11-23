@@ -14,10 +14,12 @@ from Auvra.project import game_build as game_build_module
 from Auvra.project.game_build import BUILD_MARKER, GameBuildError, build_game
 from Auvra.project.schemas import DOMAIN_NAMES
 
-MODEL_ID = "a" * 64
-TEXTURE_ID = "b" * 64
-UNUSED_ID = "c" * 64
-HEIGHTFIELD_ID = "d" * 64
+# Content-addressed fixtures: even the legacy byte reader must return
+# bytes whose SHA-256 matches the identity declared by the document.
+MODEL_ID = hashlib.sha256(b"fbx-bytes").hexdigest()
+TEXTURE_ID = hashlib.sha256(b"png-bytes").hexdigest()
+UNUSED_ID = hashlib.sha256(b"never-shipped").hexdigest()
+HEIGHTFIELD_ID = hashlib.sha256(b"heights").hexdigest()
 
 ASSETS = {
     MODEL_ID: (b"fbx-bytes", "model/fbx"),
@@ -127,6 +129,26 @@ class GameBuildTests(unittest.TestCase):
         self.assertEqual((report.files, report.assets, report.levels, report.warnings), (len(written), 3, 2, ()))
         self.assertEqual(report.bytes, sum((self.destination / p).stat().st_size for p in written))
         self.assert_no_leftovers()
+
+    def test_legacy_bytes_reader_verifies_content_identity_before_publish(self):
+        self.build("baseline")
+        baseline = (self.destination / BUILD_MARKER).read_bytes()
+        correct = b"legacy-content-addressed"
+        asset_id = sha256(correct)
+        domains = project_domains(
+            models=[{"id": "model-1", "name": "Legacy", "assetId": asset_id}],
+            textures=[], objects=[],
+        )
+        with self.assertRaisesRegex(GameBuildError, "SHA-256"):
+            self.build("bad", domains=domains, read_asset=lambda _: (b"corrupted", "model/fbx"))
+        self.assertEqual((self.destination / BUILD_MARKER).read_bytes(), baseline)
+        self.assert_no_leftovers()
+
+        report = self.build("good", domains=domains, read_asset=lambda _: (correct, "model/fbx"))
+        self.assertEqual(report.assets, 1)
+        self.assertEqual((self.destination / "game/assets" / f"{asset_id}.fbx").read_bytes(), correct)
+        manifest = self.load("game/game.json")
+        self.assertEqual(manifest["assets"][0]["id"], asset_id)
 
     def test_large_streamed_asset_is_bounded_and_manifest_matches(self):
         block = b"x" * (1024 * 1024)
