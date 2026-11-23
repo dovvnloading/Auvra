@@ -120,6 +120,35 @@ describe('engine and gearbox', () => {
     expect(reversing.target).toBe(-1);
   });
 
+  it('can free-rev in neutral or during a shift at zero wheel speed', () => {
+    const engine = planEngine(120);
+    const box = planGearbox(44, 0.34, engine.redlineRpm, 6);
+    const transmission = createTransmission();
+    transmission.gear = 0;
+    transmission.target = 0;
+
+    const idle = driveTorque(engine, box, transmission, 0, 0);
+    expect(idle.rpm).toBe(engine.idleRpm);
+    expect(idle.wheelTorque).toBe(0);
+    const half = driveTorque(engine, box, transmission, 0, 0.5);
+    const full = driveTorque(engine, box, transmission, 0, 1);
+    expect(full.rpm).toBeGreaterThan(half.rpm);
+    expect(half.rpm).toBeGreaterThan(idle.rpm);
+    expect(full.rpm).toBeLessThanOrEqual(engine.redlineRpm);
+    expect(full.wheelTorque).toBe(0);
+    expect(full.clutchSlip).toBe(true);
+
+    transmission.gear = 1;
+    transmission.target = 2;
+    transmission.shifting = 0.2;
+    for (const speed of [0, 0.1, 10]) {
+      const rev = driveTorque(engine, box, transmission, speed, 1);
+      expect(rev.rpm).toBeCloseTo(full.rpm);
+      expect(rev.wheelTorque).toBe(0);
+      expect(rev.clutchSlip).toBe(true);
+    }
+  });
+
   it('slips the clutch on a launch and brakes on the engine with the throttle shut', () => {
     const engine = planEngine(120);
     const box = planGearbox(44, 0.34, engine.redlineRpm, 6);
