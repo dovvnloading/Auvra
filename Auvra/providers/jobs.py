@@ -402,7 +402,7 @@ def _is_project_id(value: str) -> bool:
 
 def _safe_json(value: Mapping[str, Any]) -> None:
     if not isinstance(value, Mapping): raise ValueError("metadata must be an object")
-    allowed = {"durable", "restart_pending", "remote_state", "progress", "route", "provider", "model", "capability", "route_consent", "content_hash", "prompt_hash", "remote_request_id", "remote_root", "cost_micro_usd", "error_code", "retryable"}
+    allowed = {"durable", "restart_pending", "cancel_pending", "remote_state", "progress", "route", "provider", "model", "capability", "route_consent", "content_hash", "prompt_hash", "remote_request_id", "remote_root", "cost_micro_usd", "error_code", "retryable"}
     if any(not isinstance(key, str) or key not in allowed for key in value): raise ValueError("metadata key is not allowlisted")
     if any(not isinstance(item, (str, int, float, bool, type(None))) or (isinstance(item, str) and (len(item) > 512 or "://" in item or "\\" in item)) or (isinstance(item, float) and not math.isfinite(item)) for item in value.values()): raise ValueError("metadata value is not a bounded primitive")
     # An error code is one of ours, and "provider_authorization" is not a secret: refusing it would leave the job running for ever.
