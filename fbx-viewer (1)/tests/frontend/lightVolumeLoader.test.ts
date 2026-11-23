@@ -46,6 +46,23 @@ describe('light-volume source ownership', () => {
     expect(releaseB).toHaveBeenCalledWith('volume');
   });
 
+  it('rejects a cached asset when another level declares incompatible grid dimensions', async () => {
+    const fetched = vi.fn(async () => {
+      const bytes = encodeLightVolume(new Float32Array(2 * SH_FLOATS_PER_PROBE), [2, 1, 1]);
+      return new Response(bytes.buffer as ArrayBuffer);
+    });
+    vi.stubGlobal('fetch', fetched);
+    const release = vi.fn();
+    setLightVolumeSource(async () => 'blob:shared', release);
+
+    const first = { ...probes, counts: [2, 1, 1] as [number, number, number] };
+    const incompatible = { ...probes, counts: [1, 2, 1] as [number, number, number] };
+    expect(await loadLightVolume(first)).toHaveLength(2 * SH_FLOATS_PER_PROBE);
+    await expect(loadLightVolume(incompatible)).rejects.toThrow(/does not match its level/);
+    expect(fetched).toHaveBeenCalledTimes(1);
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
   it('releases an acquired URL even when its fetch fails', async () => {
     const release = vi.fn();
     setLightVolumeSource(async () => 'blob:failure', release);
