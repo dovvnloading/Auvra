@@ -282,7 +282,7 @@ export class ParticleSimulation {
         while (i < this.count) {
             const age = this.ages[i] + step;
             if (age >= this.lifetimes[i]) {
-                if (this.wants.death) this.pushEvent('death', i);
+                if (this.wants.death) this.pushEvent('death', i, world);
                 this.remove(i);
                 continue;
             }
@@ -322,12 +322,12 @@ export class ParticleSimulation {
                     if (this.wants.collision) {
                         p[v] = hit.x; p[v + 1] = hit.y; p[v + 2] = hit.z;
                         vel[v] = vx; vel[v + 1] = vy; vel[v + 2] = vz;
-                        this.pushEvent('collision', i);
+                        this.pushEvent('collision', i, world);
                     }
                     if (effect.collision.kill) {
                         if (this.wants.death) {
                             p[v] = hit.x; p[v + 1] = hit.y; p[v + 2] = hit.z;
-                            this.pushEvent('death', i);
+                            this.pushEvent('death', i, world);
                         }
                         this.remove(i);
                         continue;
@@ -573,18 +573,25 @@ export class ParticleSimulation {
         this.count = i + 1;
     }
 
-    private pushEvent(trigger: SubEmitterTrigger, i: number): void {
+    private pushEvent(trigger: SubEmitterTrigger, i: number, world: ArrayLike<number>): void {
         if (this.events.length >= 256) return;
         const v = i * 3;
         let x = this.positions[v], y = this.positions[v + 1], z = this.positions[v + 2];
-        if (this.effect.space === 'local' && this.last) {
-            const m = this.last;
+        let vx = this.velocities[v], vy = this.velocities[v + 1], vz = this.velocities[v + 2];
+        if (this.effect.space === 'local') {
             const lx = x, ly = y, lz = z;
-            x = m[0] * lx + m[4] * ly + m[8] * lz + m[12];
-            y = m[1] * lx + m[5] * ly + m[9] * lz + m[13];
-            z = m[2] * lx + m[6] * ly + m[10] * lz + m[14];
+            x = world[0] * lx + world[4] * ly + world[8] * lz + world[12];
+            y = world[1] * lx + world[5] * ly + world[9] * lz + world[13];
+            z = world[2] * lx + world[6] * ly + world[10] * lz + world[14];
+            // The event API is world-space: rotate and scale velocity as a
+            // direction, never translate it. Use this step's transform for
+            // both values rather than the previous frame's matrix.
+            const lvx = vx, lvy = vy, lvz = vz;
+            vx = world[0] * lvx + world[4] * lvy + world[8] * lvz;
+            vy = world[1] * lvx + world[5] * lvy + world[9] * lvz;
+            vz = world[2] * lvx + world[6] * lvy + world[10] * lvz;
         }
-        this.events.push({ trigger, x, y, z, vx: this.velocities[v], vy: this.velocities[v + 1], vz: this.velocities[v + 2] });
+        this.events.push({ trigger, x, y, z, vx, vy, vz });
     }
 
     private remove(index: number): void {
