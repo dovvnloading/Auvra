@@ -27,7 +27,7 @@ from Auvra.providers import (
     AnthropicAdapter, Capability, CommandProposal, FalAdapter,
     LlamaCppAdapter, OllamaAdapter, OpenAIAdapter, OpenRouterAdapter,
     ProviderError, ProviderRegistry, ProviderSettingsStore, RoutePolicy,
-    RouteRequest, SQLiteJobStore, XAIAdapter, validate_command, validate_update,
+    RouteRequest, SQLiteJobStore, JobState, XAIAdapter, validate_command, validate_update,
 )
 from Auvra.providers.adapters import MediaJob
 from Auvra.providers.reframe import ReframeAdapter
