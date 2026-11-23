@@ -315,6 +315,34 @@ describe('particle simulation', () => {
     expect(dying.events[0]).toMatchObject({ trigger: 'death', y: 0 });
   });
 
+  it('reports local-space death positions and velocities in the current world frame', () => {
+    const effect = effectOf({
+      ...still, space: 'local', rate: 0, bursts: [{ time: 0, count: 1 }],
+      speed: [1, 1], lifetime: [0.05, 0.05],
+      shape: { ...DEFAULT_PARTICLE_EFFECT.shape, kind: 'point', angle: 0, axis: [0, 1, 0] },
+      subEmitters: [{ trigger: 'death', target: 'sparks', count: 1, inheritVelocity: 1 }],
+    });
+    const simulation = new ParticleSimulation(effect, 4, seeded());
+    const rotated = new THREE.Matrix4()
+      .makeRotationZ(Math.PI / 2)
+      .scale(new THREE.Vector3(2, 3, 1))
+      .setPosition(10, 0, 0);
+    simulation.step(0.01, rotated.elements);
+    expect(simulation.count).toBe(1);
+    // Move the emitter before the death event. Both point and direction must
+    // use the current world matrix, not the previous frame's transform.
+    const moved = rotated.clone().setPosition(20, 4, 0);
+    simulation.step(0.05, moved.elements);
+    expect(simulation.events).toHaveLength(1);
+    const death = simulation.events[0];
+    expect(death.trigger).toBe('death');
+    expect(death.x).toBeCloseTo(20, 4);
+    expect(death.y).toBeCloseTo(4, 4);
+    expect(death.vx).toBeCloseTo(-3, 4);
+    expect(death.vy).toBeCloseTo(0, 4);
+    expect(death.vz).toBeCloseTo(0, 4);
+  });
+
   it('bursts from its shape at a world point, starting with a given velocity', () => {
     const simulation = new ParticleSimulation(effectOf({ ...still, rate: 0, lifetime: [5, 5], shape: { ...DEFAULT_PARTICLE_EFFECT.shape, kind: 'point' } }), 16, seeded());
     simulation.stop();
