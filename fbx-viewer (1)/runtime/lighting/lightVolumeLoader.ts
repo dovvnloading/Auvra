@@ -1,5 +1,5 @@
 import { frontendDiagnostics } from '../../diagnostics/runtime';
-import { decodeLightVolume, type BakedProbeVolume } from './bakedLighting';
+import { decodeLightVolume, SH_FLOATS_PER_PROBE, type BakedProbeVolume } from './bakedLighting';
 
 /**
  * Reads baked light volumes (see bakedLighting.ts) from wherever the game's assets are: the open
@@ -12,7 +12,8 @@ type UrlResolver = (assetId: string) => Promise<string>;
 let resolveUrl: UrlResolver | null = null;
 let releaseUrl: ((assetId: string) => void) | null = null;
 let sourceGeneration = 0;
-const cache = new Map<string, Promise<Float32Array>>();
+type CachedVolume = { pending: Promise<Float32Array>; counts: readonly number[] | null };
+const cache = new Map<string, CachedVolume>();
 /** Volumes kept after their level is left. */
 const CACHE_LIMIT = 6;
 
@@ -24,9 +25,9 @@ export const setLightVolumeSource = (resolve: UrlResolver | null, release?: (ass
     cache.clear();
 };
 
-const keep = (assetId: string, pending: Promise<Float32Array>): void => {
+const keep = (assetId: string, pending: Promise<Float32Array>, counts: readonly number[] | null = null): void => {
     cache.delete(assetId);
-    cache.set(assetId, pending);
+    cache.set(assetId, { pending, counts });
     while (cache.size > CACHE_LIMIT) cache.delete(cache.keys().next().value as string);
 };
 
@@ -35,8 +36,22 @@ export const rememberLightVolume = (assetId: string, sh: Float32Array): void => 
 
 /** The probes of a stored volume; rejects when they cannot be read or do not match the level's record. */
 export const loadLightVolume = async (probes: BakedProbeVolume): Promise<Float32Array> => {
-    let pending = cache.get(probes.assetId);
-    if (!pending) {
+    const cached = cache.get(probes.assetId);
+    if (cached) {
+        // A previously validated volume is only valid for the grid topology
+        // that was decoded. Equal probe counts in a different order are not
+        // interchangeable, even when the SH buffer length matches.
+        if (cached.counts?.some((count, axis) => count !== probes.counts[axis])) {
+            throw new Error('Light volume does not match its level');
+        }
+        const sh = await cached.pending;
+        if (!cached.counts && sh.length !== probes.counts.reduce((product, count) => product * count, 1) * SH_FLOATS_PER_PROBE) {
+            throw new Error('Light volume does not match its level');
+        }
+        return sh;
+    }
+    {
+        let pending: Promise<Float32Array>;
         const resolve = resolveUrl;
         const release = releaseUrl;
         const generation = sourceGeneration;
@@ -58,9 +73,9 @@ export const loadLightVolume = async (probes: BakedProbeVolume): Promise<Float32
                 if (acquired) release?.(probes.assetId);
             }
         })();
-        keep(probes.assetId, pending);
+        keep(probes.assetId, pending, probes.counts);
         pending.catch((error: unknown) => {
-            if (cache.get(probes.assetId) === pending) cache.delete(probes.assetId);
+            if (cache.get(probes.assetId)?.pending === pending) cache.delete(probes.assetId);
             frontendDiagnostics.failure('light_volume_load_failed', error);
         });
     }
