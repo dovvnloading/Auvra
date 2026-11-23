@@ -11,6 +11,7 @@ type UrlResolver = (assetId: string) => Promise<string>;
 
 let resolveUrl: UrlResolver | null = null;
 let releaseUrl: ((assetId: string) => void) | null = null;
+let sourceGeneration = 0;
 const cache = new Map<string, Promise<Float32Array>>();
 /** Volumes kept after their level is left. */
 const CACHE_LIMIT = 6;
@@ -19,6 +20,7 @@ const CACHE_LIMIT = 6;
 export const setLightVolumeSource = (resolve: UrlResolver | null, release?: (assetId: string) => void): void => {
     resolveUrl = resolve;
     releaseUrl = release ?? null;
+    sourceGeneration++;
     cache.clear();
 };
 
@@ -36,14 +38,25 @@ export const loadLightVolume = async (probes: BakedProbeVolume): Promise<Float32
     let pending = cache.get(probes.assetId);
     if (!pending) {
         const resolve = resolveUrl;
+        const release = releaseUrl;
+        const generation = sourceGeneration;
         pending = (async () => {
             if (!resolve) throw new Error('No project or game is loaded');
-            const response = await fetch(await resolve(probes.assetId), { method: 'GET' });
-            if (!response.ok) throw new Error(`Light volume download failed (${response.status})`);
-            const { counts, sh } = decodeLightVolume(await response.arrayBuffer());
-            releaseUrl?.(probes.assetId);
-            if (counts.some((count, axis) => count !== probes.counts[axis])) throw new Error('Light volume does not match its level');
-            return sh;
+            // Keep resolution and release ownership together across project
+            // switches, including failures after an asset URL was obtained.
+            let acquired = false;
+            try {
+                const url = await resolve(probes.assetId);
+                acquired = true;
+                const response = await fetch(url, { method: 'GET' });
+                if (!response.ok) throw new Error(`Light volume download failed (${response.status})`);
+                const { counts, sh } = decodeLightVolume(await response.arrayBuffer());
+                if (generation !== sourceGeneration) throw new Error('Light volume source changed during load');
+                if (counts.some((count, axis) => count !== probes.counts[axis])) throw new Error('Light volume does not match its level');
+                return sh;
+            } finally {
+                if (acquired) release?.(probes.assetId);
+            }
         })();
         keep(probes.assetId, pending);
         pending.catch((error: unknown) => {
