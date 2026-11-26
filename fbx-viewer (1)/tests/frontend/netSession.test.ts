@@ -393,6 +393,16 @@ describe('net helpers', () => {
       .toEqual({ ...DEFAULT_NETWORK_SETTINGS, maxPlayers: 1 });
   });
 
+  it('normalizes authored player caps consistently with the game builder', () => {
+    for (const [value, expected] of [
+      [undefined, 8], [null, 8], [true, 8], [false, 8], ['2', 8], [{}, 8],
+      [0, 1], [-100, 1], [1, 1], [2, 2], [8, 8], [16, 16], [17, 16],
+      [2.49, 2], [2.5, 3], [15.5, 16], [NaN, 8], [Infinity, 8], [-Infinity, 8],
+    ] as const) {
+      expect(normalizeNetworkSettings({ maxPlayers: value }).maxPlayers).toBe(expected);
+    }
+  });
+
   it('parses only well-formed relay messages', () => {
     expect(parseServerMessage(JSON.stringify({ t: 'left', id: 'x' }))).toEqual({ t: 'left', id: 'x' });
     expect(parseServerMessage(JSON.stringify({ t: 'left', id: '' }))).toBeNull();

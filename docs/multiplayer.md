@@ -11,7 +11,7 @@ Open **Game Settings** and, under **Multiplayer**:
 | Online multiplayer | Connects every play session to the relay |
 | Server address | The relay's address, `ws://host:port` or `wss://host:port` (`ws://127.0.0.1:7777` by default) |
 | Room | Every player of this build joins this room |
-| Max players | How many players a room holds (1 to 16) |
+| Max players | The authored maximum number of connections in each room, including the host (1 to 16, default 8) |
 
 A small badge in the corner of the game shows the connection, the number of players and whether this player is the host. When the relay cannot be reached the game keeps playing offline and keeps trying to connect. Offline gameplay does not confer online host authority.
 
@@ -31,18 +31,20 @@ Set the relay process environment variable `AUVRA_RELAY_HOST_TOKEN` to that valu
 python -m Auvra.net.relay --port 7777
 ```
 
-A game built with multiplayer on includes the same relay as `server/relay.py`, with a README. The designated host opens the game's **Host credentials** control in the multiplayer badge (release pointer lock first if needed), enters the private credential and selects **Host room**. It is kept only in the current runtime session's memory, including reconnects; enter it again when a new session is created. Other players use the ordinary connection, without the credential. A bad credential is rejected, and an empty room cannot be reserved by a guest. A second authenticated connection cannot take over an existing room. If the host disconnects, the relay closes that room and its guest connections; clients can retry after the host returns. Guests are never promoted.
+A game built with multiplayer on includes a standalone `server/relay.py` and a README. The builder embeds the normalized **Max players** setting into that relay, so the usual `python relay.py --port 7777` command enforces the game's limit without extra setup. A room includes the host in its player count. Neither guests nor a credentialed host can override the limit in a connection message; the server refuses excess joins with a room-full error. The operator can set `--max-players` lower, but not higher than the embedded limit. A departing guest frees a slot. Rebuild and redeploy the bundled relay when the authored cap changes. This policy is embedded in the script, not dependent on its working directory or a separate settings file.
+
+For a separately installed generic relay (including `python -m Auvra.net.relay`), there is no built game's settings attached: the operator must supply the authored limit, e.g. `--max-players 2` for a two-player game. The generic default remains 16. Use separate relay instances for different authored caps. The designated host opens the game's **Host credentials** control in the multiplayer badge (release pointer lock first if needed), enters the private credential and selects **Host room**. It is kept only in the current runtime session's memory, including reconnects; enter it again when a new session is created. Other players use the ordinary connection, without the credential. A bad credential is rejected, and an empty room cannot be reserved by a guest. A second authenticated connection cannot take over an existing room. If the host disconnects, the relay closes that room and its guest connections; clients can retry after the host returns. Guests are never promoted.
 
 The credential grants hosting authority for this relay, not a unique player identity. Use a separate relay/credential for independently administered games and rotate a credential by restarting the relay. This is not a server-authoritative simulation or player account system: guests still control their own avatars and can send ordinary gameplay events; validate event semantics in your game.
 
 Options:
 
 - `--host` (default literal loopback, `127.0.0.1`) and `--port` (default 7777).
-- `--max-players` caps players per room (at most 16).
+- `--max-players` sets an operator cap per room (1–16); a bundled relay uses the smaller of this cap and the authored limit.
 - `--allow-origin URL` (repeatable) restricts browser origins; it is not authentication.
 - `--insecure-local` explicitly enables the old first-join/oldest-peer behavior for local testing only. It requires a literal loopback bind and no configured host credential. Never proxy or tunnel this mode to other machines.
 
-For internet players, put the authenticated relay behind a correctly configured TLS reverse proxy and set the game's server address to `wss://`. The host client refuses to transmit a credential to a non-loopback `ws://` address. Built games allow connections to exactly the relay address in Game Settings and nowhere else. For local editor testing, start `python -m Auvra.net.relay --insecure-local --port 7777` with the credential environment variable unset.
+For internet players, put the authenticated relay behind a correctly configured TLS reverse proxy and set the game's server address to `wss://`. The host client refuses to transmit a credential to a non-loopback `ws://` address. Built games allow connections to exactly the relay address in Game Settings and nowhere else. For local editor testing, start `python -m Auvra.net.relay --insecure-local --port 7777 --max-players 8` with the credential environment variable unset, replacing 8 with the authored limit.
 
 ## What is shared
 
