@@ -25,7 +25,7 @@ The relay is one Python file with no dependencies beyond Python 3.12 or newer. *
 python -c "import secrets; print(secrets.token_urlsafe(32))"
 ```
 
-Set the relay process environment variable `AUVRA_RELAY_HOST_TOKEN` to that value (43–128 URL-safe characters). Keep it out of source control, project settings, game packs, URLs, logs and public chat. Start the relay:
+Set the relay process environment variable `AUVRA_RELAY_HOST_TOKEN` to that value (43–128 URL-safe characters). Keep it out of source control, project settings, game packs, URLs, logs and public chat. The builder rejects an accidentally persisted `network.hostToken` field before publishing either the manifest or the raw project metadata. Start the relay:
 
 ```bash
 python -m Auvra.net.relay --port 7777

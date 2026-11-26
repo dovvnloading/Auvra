@@ -992,6 +992,15 @@ def _resolve_settings(content: Mapping[str, list[dict[str, Any]]]) -> tuple[dict
         (item.get("settings") for item in content["metadata"] if item["id"] == GAME_SETTINGS_DOCUMENT_ID),
         None,
     )
+    if isinstance(stored, Mapping):
+        network = stored.get("network")
+        if isinstance(network, Mapping) and "hostToken" in network:
+            # Both the resolved manifest and the raw metadata document ship
+            # in the build. Reject before staging either, rather than risk
+            # exposing an accidentally persisted runtime credential.
+            raise GameBuildError("invalid_project",
+                                 "Remove the saved multiplayer host credential from project settings; "
+                                 "enter it only in the running game")
     settings = normalize_game_settings(stored)
     if not isinstance(settings.get("name"), str) or not settings["name"].strip():
         settings["name"] = DEFAULT_GAME_SETTINGS["name"]

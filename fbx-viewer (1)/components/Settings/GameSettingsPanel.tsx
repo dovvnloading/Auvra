@@ -374,7 +374,7 @@ export const GameSettingsPanel: React.FC<GameSettingsPanelProps> = ({ onClose })
                   </label>
                   <NumberField label="Max players" value={draft.network.maxPlayers} limits={{ min: 1, max: 16, step: 1 }} disabled={disabled} onChange={(maxPlayers) => update((current) => ({ ...current, network: { ...current.network, maxPlayers } }))} />
                 </div>
-                <p className="text-2xs text-gray-500">Players meet through a relay server: run <code>python -m Auvra.net.relay</code>, or the <code>server/relay.py</code> shipped with the build. Play in the editor reaches a relay on this machine at port 7777.</p>
+                <p className="text-2xs text-gray-500">Online rooms require an operator credential (set <code>AUVRA_RELAY_HOST_TOKEN</code> on the relay, then enter it in the running game, not here). For local editor testing only, run <code>python -m Auvra.net.relay --insecure-local</code> with that environment variable unset. Builds ship <code>server/relay.py</code> and setup instructions. Use wss:// for internet play.</p>
               </>
             )}
           </div>

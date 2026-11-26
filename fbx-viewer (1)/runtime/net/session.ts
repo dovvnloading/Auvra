@@ -89,7 +89,7 @@ export const hostTokenTransportAllowed = (address: string): boolean => {
     try {
         const url = new URL(address);
         return !url.username && !url.password && (url.protocol === 'wss:'
-            || (url.protocol === 'ws:' && ['127.0.0.1', '[::1]', 'localhost'].includes(url.hostname)));
+            || (url.protocol === 'ws:' && ['127.0.0.1', '[::1]'].includes(url.hostname)));
     } catch {
         return false;
     }
@@ -363,7 +363,7 @@ export const createNetSession = (options: NetSessionOptions): NetSession => {
         },
         setHostToken(token) {
             if (closed) return 'This play session has ended.';
-            if (token && !NET_HOST_TOKEN_PATTERN.test(token)) return 'Enter a valid host credential (43–128 URL-safe characters).';
+            if (token && (token.trim() !== token || !NET_HOST_TOKEN_PATTERN.test(token))) return 'Enter a valid host credential (43–128 URL-safe characters).';
             if (token && !hostTokenTransportAllowed(settings.serverUrl)) return 'Host credentials require wss:// or a loopback relay.';
             hostToken = token;
             rejected = false;

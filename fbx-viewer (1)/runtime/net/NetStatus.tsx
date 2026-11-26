@@ -19,7 +19,7 @@ export const NetStatus: React.FC = () => {
     };
     return (
         <div
-            className="absolute top-2 left-2 z-30 flex flex-col items-start gap-1 cursor-auto text-[10px] font-bold text-white"
+            className="absolute top-2 left-2 z-[55] flex flex-col items-start gap-1 cursor-auto text-[10px] font-bold text-white"
             onPointerDown={event => event.stopPropagation()}
             onKeyDown={event => event.stopPropagation()}
             onKeyUp={event => event.stopPropagation()}
@@ -45,7 +45,7 @@ export const NetStatus: React.FC = () => {
                         maxLength={128}
                         value={active.token}
                         onChange={event => setDraft({ session, token: event.target.value, error: '' })}
-                        className="rounded bg-gray-800 px-2 py-1 text-white"
+                        className="rounded bg-gray-800 px-2 py-1 text-white select-text cursor-text"
                     />
                     {active.error && <span role="alert" className="text-red-300">{active.error}</span>}
                     <div className="flex gap-2">

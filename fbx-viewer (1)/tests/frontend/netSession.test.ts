@@ -96,6 +96,7 @@ describe('net session', () => {
     const { session, socket } = connect({ serverUrl: 'ws://relay.example/game' });
     expect(session.setHostToken('A'.repeat(43))).toMatch(/wss:/);
     expect(session.setHostToken('short')).toMatch(/valid host credential/);
+    expect(session.setHostToken('A'.repeat(43) + '\n')).toMatch(/valid host credential/);
     expect(FakeSocket.instances).toHaveLength(1);
     socket.open();
     expect(socket.sent[0]).not.toHaveProperty('hostToken');
