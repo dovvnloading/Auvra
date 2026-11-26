@@ -1,6 +1,6 @@
 import { frontendDiagnostics } from '../../diagnostics/runtime';
 import {
-    NET_LIMITS, NET_NAME_PATTERN, NET_PROTOCOL_VERSION,
+    NET_HOST_TOKEN_PATTERN, NET_LIMITS, NET_NAME_PATTERN, NET_PROTOCOL_VERSION,
     type NetEntityState, type NetPayload, type NetPeer, type NetServerMessage, type NetSession, type NetStateFrame, type NetStatus,
     type NetworkSettings,
 } from './protocol';
@@ -84,6 +84,17 @@ export const relayName = (name: string): string => {
     return cleaned || 'Player';
 };
 
+/** Host credentials may only travel over TLS or a literal/local loopback WebSocket. */
+export const hostTokenTransportAllowed = (address: string): boolean => {
+    try {
+        const url = new URL(address);
+        return !url.username && !url.password && (url.protocol === 'wss:'
+            || (url.protocol === 'ws:' && ['127.0.0.1', '[::1]'].includes(url.hostname)));
+    } catch {
+        return false;
+    }
+};
+
 const median = (values: number[]): number => {
     const sorted = [...values].sort((a, b) => a - b);
     return sorted[Math.floor(sorted.length / 2)];
@@ -123,6 +134,8 @@ export const createNetSession = (options: NetSessionOptions): NetSession => {
     let lastEventRateWarning = -Infinity;
     // A relay that rejects this build for good (other protocol version or game) is not retried.
     let rejected = false;
+    // Deliberately outside persisted network settings, URLs, diagnostic data and game packs.
+    let hostToken = '';
 
     const stateListeners = new Set<(from: string, frame: NetStateFrame) => void>();
     const eventListeners = new Set<(from: string, name: string, payload: NetPayload) => void>();
@@ -244,7 +257,9 @@ export const createNetSession = (options: NetSessionOptions): NetSession => {
                 notify(eventListeners, message.from, message.name, message.payload);
                 break;
             case 'error':
-                if (message.code === 'version' || message.code === 'game_mismatch') rejected = true;
+                // A bad credential needs an explicit correction. Missing/temporarily occupied
+                // hosts are retryable so ordinary guests and reconnecting hosts can recover.
+                if (message.code === 'version' || message.code === 'game_mismatch' || message.code === 'host_auth') rejected = true;
                 setStatus('error', message.message);
                 break;
         }
@@ -277,7 +292,10 @@ export const createNetSession = (options: NetSessionOptions): NetSession => {
         socket = current;
         current.onopen = () => {
             if (socket !== current || closed) return;
-            current.send(JSON.stringify({ t: 'hello', v: NET_PROTOCOL_VERSION, game: gameId.slice(0, NET_LIMITS.maxGameLength), room: settings.room, name }));
+            current.send(JSON.stringify({
+                t: 'hello', v: NET_PROTOCOL_VERSION, game: gameId.slice(0, NET_LIMITS.maxGameLength),
+                room: settings.room, name, ...(hostToken ? { hostToken } : {}),
+            }));
             outboundSentAt.push(now());
         };
         current.onmessage = (event: MessageEvent) => {
@@ -290,6 +308,8 @@ export const createNetSession = (options: NetSessionOptions): NetSession => {
             if (socket !== current) return;
             socket = null;
             stopTimers();
+            pendingState = null;
+            lastStateSent = -Infinity;
             selfId = null;
             hostId = null;
             peers.clear();
@@ -341,9 +361,32 @@ export const createNetSession = (options: NetSessionOptions): NetSession => {
             changeListeners.add(listener);
             return () => { changeListeners.delete(listener); };
         },
+        setHostToken(token) {
+            if (closed) return 'This play session has ended.';
+            if (token && (token.trim() !== token || !NET_HOST_TOKEN_PATTERN.test(token))) return 'Enter a valid host credential (43–128 URL-safe characters).';
+            if (token && !hostTokenTransportAllowed(settings.serverUrl)) return 'Host credentials require wss:// or a loopback relay.';
+            hostToken = token;
+            rejected = false;
+            if (reconnectTimer) clearTimeout(reconnectTimer);
+            reconnectTimer = null;
+            reconnectDelay = RECONNECT_MIN_MS;
+            stopTimers();
+            pendingState = null;
+            lastStateSent = -Infinity;
+            const current = socket;
+            socket = null; // Fence callbacks from the previous identity before closing it.
+            current?.close();
+            selfId = null;
+            hostId = null;
+            peers.clear();
+            connect();
+            return null;
+        },
         close() {
             if (closed) return;
             closed = true;
+            hostToken = '';
+            pendingState = null;
             stopTimers();
             if (reconnectTimer) clearTimeout(reconnectTimer);
             const current = socket;

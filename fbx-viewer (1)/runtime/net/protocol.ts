@@ -3,15 +3,18 @@
  *
  * Games talk to a relay server (Auvra/net/relay.py, shipped with builds as server/relay.py) over one
  * WebSocket each, as JSON text frames. The relay groups clients into rooms, forwards state and events
- * to the other members of a room, and names one member the host: the first to join, then the oldest
- * remaining member when the host leaves. The relay holds no game logic.
+ * to the other members of a room. Online room creation requires an operator-provisioned host
+ * credential; guests never inherit authority and disconnect when that host leaves.
+ * First-join/oldest-peer host migration exists only in explicitly insecure loopback test mode.
+ * The relay holds no game logic.
  *
  * Ownership: every peer owns its own player avatar, entity id `player:<peerId>`; the host owns every
  * level object with an enabled netSync component (entity id = the level object id). A peer sends
  * state only for entities it owns and applies received state only to entities it does not own.
  */
 
-export const NET_PROTOCOL_VERSION = 1;
+export const NET_PROTOCOL_VERSION = 2;
+export const NET_HOST_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43,128}$/;
 
 /** The same limits the relay enforces (Auvra/net/relay.py). */
 export const NET_LIMITS = {
@@ -53,7 +56,7 @@ export interface NetEntityState {
 
 /** Client -> relay. `hello` must be the first message. */
 export type NetClientMessage =
-    | { t: 'hello'; v: typeof NET_PROTOCOL_VERSION; game: string; room: string; name: string }
+    | { t: 'hello'; v: typeof NET_PROTOCOL_VERSION; game: string; room: string; name: string; hostToken?: string }
     | { t: 'state'; seq: number; time: number; entities: NetEntityState[] }
     /** To every other room member, or only to peer `to`. */
     | { t: 'event'; name: string; payload: NetPayload; to?: string }
@@ -68,7 +71,7 @@ export type NetServerMessage =
     | { t: 'state'; from: string; seq: number; time: number; entities: NetEntityState[] }
     | { t: 'event'; from: string; name: string; payload: NetPayload }
     | { t: 'pong'; id: number; time: number; serverTime: number }
-    | { t: 'error'; code: 'version' | 'full' | 'bad_message' | 'rate_limited' | 'game_mismatch'; message: string };
+    | { t: 'error'; code: 'version' | 'full' | 'bad_message' | 'rate_limited' | 'game_mismatch' | 'host_auth' | 'host_required' | 'host_exists' | 'state_owner'; message: string };
 
 /** A game's multiplayer settings (GameSettings.network). */
 export interface NetworkSettings {
@@ -119,6 +122,8 @@ export interface NetSession {
     onEvent(listener: (from: string, name: string, payload: NetPayload) => void): () => void;
     /** Status, peer list or host changed. */
     onChange(listener: () => void): () => void;
+    /** Reconnect with an in-memory host credential (empty clears it). Returns a safe validation error, if any. */
+    setHostToken(token: string): string | null;
     close(): void;
 }
 

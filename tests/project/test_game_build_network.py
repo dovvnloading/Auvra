@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from Auvra.project.game_build import BUILD_MARKER, build_game, relay_origin
+from Auvra.project.game_build import BUILD_MARKER, GameBuildError, build_game, relay_origin
 
 from tests.project.test_game_build import ASSETS, project_domains, sha256
 
@@ -38,12 +38,31 @@ class NetworkBuildTests(unittest.TestCase):
         self.assertIn("def start_relay", relay)
         readme = (self.destination / "server" / "README.txt").read_text(encoding="utf-8")
         self.assertIn("python relay.py --port 8443", readme)
+        self.assertIn("AUVRA_RELAY_HOST_TOKEN", readme)
+        self.assertIn("--insecure-local", readme)
+        self.assertIn("Host credentials", readme)
+        self.assertIn("wss://", readme)
         marker = json.loads((self.destination / BUILD_MARKER).read_text(encoding="utf-8"))
         record = next(item for item in marker["files"] if item["path"] == "index.html")
         self.assertEqual(record["sha256"], sha256(page.encode("utf-8")))
         self.assertEqual(report.warnings, ())
         manifest = json.loads((self.destination / "game" / "game.json").read_text(encoding="utf-8"))
         self.assertTrue(manifest["settings"]["network"]["enabled"])
+        self.assertNotIn("hostToken", manifest["settings"]["network"])
+
+    def test_persisted_host_credentials_are_not_exported_and_existing_build_is_preserved(self):
+        self.build({"enabled": False})
+        previous = (self.destination / BUILD_MARKER).read_bytes()
+        credential = "A" * 43
+        for enabled in (False, True):
+            with self.subTest(enabled=enabled):
+                with self.assertRaises(GameBuildError) as rejected:
+                    self.build({"enabled": enabled, "hostToken": credential})
+                self.assertEqual(rejected.exception.code, "invalid_project")
+                self.assertIn("Remove the saved multiplayer host credential", str(rejected.exception))
+                self.assertNotIn(credential, str(rejected.exception))
+                self.assertEqual((self.destination / BUILD_MARKER).read_bytes(), previous)
+                self.assertEqual(list(self.destination.parent.glob(".Demo.staging-*")), [])
 
     def test_single_player_builds_are_unchanged(self):
         self.build({"enabled": False, "serverUrl": "ws://127.0.0.1:7777"})
