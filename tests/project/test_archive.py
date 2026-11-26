@@ -2,16 +2,15 @@ from __future__ import annotations
 
 import hashlib
 import tempfile
-import unittest
 import zipfile
 from pathlib import Path
-from unittest import mock
+from unittest import TestCase, mock
 
 from Auvra.project import archive
 from Auvra.project.errors import ArchiveValidationError
 
 
-class ArchiveExportTests(unittest.TestCase):
+class ArchiveExportTests(TestCase):
     def setUp(self):
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
@@ -103,7 +102,7 @@ class ArchiveExportTests(unittest.TestCase):
             self.assertTrue(archive.validate_archive(self.destination, max_total=self.total))
 
 
-class RepositoryArchiveBudgetTests(unittest.TestCase):
+class RepositoryArchiveBudgetTests(TestCase):
     def test_export_and_import_share_budget_for_valid_project(self):
         from io import BytesIO
         from Auvra.project import ProjectRepository
