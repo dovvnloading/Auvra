@@ -23,6 +23,8 @@ For an empty project:
 1. Click **New** in the header (click again to confirm). A project is a folder with an `.auvra` descriptor, JSON documents and content-addressed assets.
 2. Use **Save** / **Save As** to choose where it lives. **Open** reopens it later; **Export** writes a portable `.auvrapack`.
 
+Portable packs have a 2 GiB (2,147,483,648-byte) limit on the combined uncompressed size of their descriptor, project documents, manifest, and assets. The ZIP's compressed size does not determine whether it fits. Export refuses a pack above this limit without replacing any existing pack. For larger projects, use **Save As** to keep a folder copy instead.
+
 ## Make a level
 
 1. Open the **Environment** tab (the World Editor).
