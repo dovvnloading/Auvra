@@ -79,8 +79,8 @@ class Client:
             return json.loads(payload.decode("utf-8"))
         return await asyncio.wait_for(read(), timeout)
 
-    async def hello(self, room: str = "main", name: str = "Ann", game: str = "demo") -> dict:
-        await self.send({"t": "hello", "v": 1, "game": game, "room": room, "name": name})
+    async def hello(self, room: str = "main", name: str = "Ann", game: str = "demo", **extra) -> dict:
+        await self.send({"t": "hello", "v": relay.PROTOCOL_VERSION, "game": game, "room": room, "name": name, **extra})
         return await self.receive()
 
     async def close(self) -> None:
@@ -91,7 +91,7 @@ class Client:
 
 class RelayTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
-        self.handle = await relay.start_relay("127.0.0.1", 0, max_players=3)
+        self.handle = await relay.start_relay("127.0.0.1", 0, insecure_local=True, max_players=3)
         self.clients: list[Client] = []
 
     async def asyncTearDown(self) -> None:
@@ -133,7 +133,7 @@ class RelayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await cat.receive(), {"t": "host", "id": bob_id})
 
     async def test_global_connection_budget_includes_half_open_handshakes(self) -> None:
-        handle = await relay.start_relay("127.0.0.1", 0, max_connections=1)
+        handle = await relay.start_relay("127.0.0.1", 0, insecure_local=True, max_connections=1)
         raw_writer = None
         rejected = None
         try:
@@ -165,7 +165,7 @@ class RelayTests(unittest.IsolatedAsyncioTestCase):
             await handle.close()
 
     async def test_global_room_limit_rejects_new_rooms_but_allows_existing_ones(self) -> None:
-        handle = await relay.start_relay("127.0.0.1", 0, max_rooms=2)
+        handle = await relay.start_relay("127.0.0.1", 0, insecure_local=True, max_rooms=2)
         clients = []
         try:
             async def client():
@@ -196,7 +196,7 @@ class RelayTests(unittest.IsolatedAsyncioTestCase):
             await handle.close()
 
     async def test_idle_joined_client_is_disconnected_and_room_reclaimed(self) -> None:
-        handle = await relay.start_relay("127.0.0.1", 0, max_rooms=1, idle_timeout=0.05)
+        handle = await relay.start_relay("127.0.0.1", 0, insecure_local=True, max_rooms=1, idle_timeout=0.05)
         client = await Client.connect(handle.port)
         try:
             self.assertEqual((await client.hello(room="temporary"))["t"], "welcome")
@@ -212,10 +212,10 @@ class RelayTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_cancelled_join_does_not_leave_a_ghost_peer_or_room(self) -> None:
 
-        hello = json.dumps({"t": "hello", "v": 1, "game": "demo", "room": "main", "name": "Late"}).encode()
+        hello = json.dumps({"t": "hello", "v": relay.PROTOCOL_VERSION, "game": "demo", "room": "main", "name": "Late"}).encode()
         reader = asyncio.StreamReader()
         writer = object()
-        relay_instance = relay.Relay(max_players=2)
+        relay_instance = relay.Relay(max_players=2, insecure_local=True)
 
         async def hang(_peer, _message):
             await asyncio.Event().wait()
@@ -279,7 +279,7 @@ class RelayTests(unittest.IsolatedAsyncioTestCase):
         slow = relay.Peer("slow", "Slow", slow_writer, 0.0)
         fast = relay.Peer("fast", "Fast", fast_writer, 0.0)
         room = relay.Room("test", "demo", [slow, fast])
-        relay_instance = relay.Relay()
+        relay_instance = relay.Relay(insecure_local=True)
         with mock.patch.object(relay, "PEER_SEND_TIMEOUT_SECONDS", 1.0):
             broadcasting = asyncio.create_task(relay_instance.broadcast(room, {"t": "event", "name": "ping", "payload": 1}))
             # Give busy Windows CI runners time to schedule the healthy writer,
@@ -477,7 +477,7 @@ class RelayTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_fragmented_messages_are_joined(self) -> None:
         ann = await self.client()
-        body = json.dumps({"t": "hello", "v": 1, "game": "demo", "room": "main", "name": "Ann"}).encode("utf-8")
+        body = json.dumps({"t": "hello", "v": relay.PROTOCOL_VERSION, "game": "demo", "room": "main", "name": "Ann"}).encode("utf-8")
         await ann.send_raw(0x1, body[:10], fin=False)
         await ann.send_raw(0x0, body[10:], fin=True)
         self.assertEqual((await ann.receive())["t"], "welcome")
@@ -490,8 +490,8 @@ class RelayTests(unittest.IsolatedAsyncioTestCase):
     async def test_bad_messages_are_rejected(self) -> None:
         cases = [
             {"t": "state", "seq": 1, "time": 0, "entities": []},
-            {"t": "hello", "v": 1, "game": "demo", "room": "bad/room", "name": "Ann"},
-            {"t": "hello", "v": 1, "game": "", "room": "main", "name": "Ann"},
+            {"t": "hello", "v": relay.PROTOCOL_VERSION, "game": "demo", "room": "bad/room", "name": "Ann"},
+            {"t": "hello", "v": relay.PROTOCOL_VERSION, "game": "", "room": "main", "name": "Ann"},
         ]
         for message in cases:
             with self.subTest(message=message):
@@ -519,13 +519,13 @@ class RelayTests(unittest.IsolatedAsyncioTestCase):
         first = await self.client()
         await first.hello(game="demo")
         other_game = await self.client()
-        await other_game.send({"t": "hello", "v": 1, "game": "other", "room": "main", "name": "Bob"})
+        await other_game.send({"t": "hello", "v": relay.PROTOCOL_VERSION, "game": "other", "room": "main", "name": "Bob"})
         await self.assertRejected(other_game, "game_mismatch")
         for name in ("Bob", "Cat"):
             joined = await self.client()
             await joined.hello(name=name)
         full = await self.client()
-        await full.send({"t": "hello", "v": 1, "game": "demo", "room": "main", "name": "Dan"})
+        await full.send({"t": "hello", "v": relay.PROTOCOL_VERSION, "game": "demo", "room": "main", "name": "Dan"})
         await self.assertRejected(full, "full")
 
     async def test_flooding_clients_are_dropped(self) -> None:
@@ -543,7 +543,7 @@ class RelayTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_origin_allow_list(self) -> None:
         await self.handle.close()
-        self.handle = await relay.start_relay("127.0.0.1", 0, allowed_origins=["https://game.example"])
+        self.handle = await relay.start_relay("127.0.0.1", 0, insecure_local=True, allowed_origins=["https://game.example"])
         allowed = await self.client(origin="https://game.example")
         self.assertEqual(allowed.status, "101")
         denied = await self.client(origin="https://evil.example")
@@ -559,6 +559,148 @@ class RelayTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AuthenticatedRelayTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self) -> None:
+        self.token = relay.secrets.token_urlsafe(32)
+        self.handle = await relay.start_relay("127.0.0.1", 0, host_token=self.token)
+        self.clients: list[Client] = []
+
+    async def asyncTearDown(self) -> None:
+        for client in self.clients:
+            await client.close()
+        await self.handle.close()
+
+    async def client(self) -> Client:
+        client = await Client.connect(self.handle.port)
+        self.clients.append(client)
+        return client
+
+    async def test_guest_cannot_reserve_room_and_bad_credentials_do_not_leak(self) -> None:
+        early = await self.client()
+        self.assertEqual((await early.hello(game="other"))["code"], "host_required")
+        self.assertEqual(self.handle.relay.rooms, {})
+        for credential in (None, 123, "short", "x" * 43, "\u00e9" * 43, "x" * 129):
+            with self.subTest(kind=type(credential).__name__):
+                invalid = await self.client()
+                result = await invalid.hello(hostToken=credential)
+                self.assertEqual(result["code"], "host_auth")
+                self.assertNotIn(str(credential), result["message"])
+                self.assertEqual(await invalid.receive(), "close")
+        self.assertEqual(self.handle.relay.rooms, {})
+        host = await self.client()
+        welcome = await host.hello(name="Host", hostToken=self.token)
+        self.assertEqual(welcome["host"], welcome["you"])
+        self.assertNotIn(self.token, json.dumps(welcome))
+        guest = await self.client()
+        guest_welcome = await guest.hello(name="Guest")
+        self.assertEqual(guest_welcome["host"], welcome["you"])
+        self.assertNotIn(self.token, json.dumps(guest_welcome))
+        self.assertEqual((await host.receive())["t"], "joined")
+        duplicate = await self.client()
+        self.assertEqual((await duplicate.hello(hostToken=self.token))["code"], "host_exists")
+        wrong = await self.client()
+        self.assertEqual((await wrong.hello(hostToken="x" * 43))["code"], "host_auth")
+
+    async def test_host_departure_closes_room_without_guest_promotion_and_host_can_return(self) -> None:
+        host = await self.client()
+        first = await host.hello(hostToken=self.token)
+        guest = await self.client()
+        self.assertEqual((await guest.hello(name="Guest"))["host"], first["you"])
+        await host.receive()  # joined
+        previous_room = self.handle.relay.rooms["main"]
+        previous_peer = previous_room.peers[1]
+        await host.close()
+        self.assertIsNone(await guest.receive())
+        self.assertNotIn("main", self.handle.relay.rooms)
+        early = await self.client()
+        self.assertEqual((await early.hello())["code"], "host_required")
+        replacement = await self.client()
+        welcome = await replacement.hello(hostToken=self.token)
+        self.assertEqual(welcome["host"], welcome["you"])
+        self.assertNotEqual(welcome["you"], first["you"])
+        # Old connection cleanup/dispatch cannot affect the replacement room.
+        await self.handle.relay._leave(previous_peer, previous_room)
+        self.assertIsNot(self.handle.relay.rooms["main"], previous_room)
+        with self.assertRaises(relay.ProtocolError):
+            await self.handle.relay._dispatch(previous_peer, previous_room, {"t": "ping", "id": 1, "time": 0})
+        returning = await self.client()
+        self.assertEqual((await returning.hello())["host"], welcome["you"])
+
+    async def test_only_host_can_send_level_state_and_neither_can_impersonate_an_avatar(self) -> None:
+        host = await self.client()
+        host_id = (await host.hello(hostToken=self.token))["you"]
+        guest = await self.client()
+        guest_id = (await guest.hello(name="Guest"))["you"]
+        await host.receive()
+
+        def state(entity_id):
+            return {"t": "state", "seq": 1, "time": 1, "entities": [
+                {"id": entity_id, "position": [0, 0, 0], "rotation": [0, 0, 0]},
+            ]}
+
+        await host.send(state("door"))
+        self.assertEqual((await guest.receive())["from"], host_id)
+        await guest.send(state(f"player:{guest_id}"))
+        self.assertEqual((await host.receive())["from"], guest_id)
+        await guest.send(state("door"))
+        self.assertEqual((await guest.receive())["code"], "state_owner")
+        self.assertEqual((await host.receive())["t"], "left")
+        guest2 = await self.client()
+        guest2_id = (await guest2.hello())["you"]
+        await host.receive()
+        await guest2.send(state(f"player:{host_id}"))
+        self.assertEqual((await guest2.receive())["code"], "state_owner")
+        self.assertEqual((await host.receive())["t"], "left")
+        await host.send(state(f"player:{guest2_id}"))
+        self.assertEqual((await host.receive())["code"], "state_owner")
+
+    async def test_provisional_host_cannot_admit_guests_and_failed_welcome_reclaims_room(self) -> None:
+        instance = self.handle.relay
+        host_hello = json.dumps({"t": "hello", "v": relay.PROTOCOL_VERSION, "game": "demo",
+                                 "room": "main", "name": "Host", "hostToken": self.token}).encode()
+        guest_hello = json.dumps({"t": "hello", "v": relay.PROTOCOL_VERSION, "game": "demo",
+                                  "room": "main", "name": "Guest"}).encode()
+        welcome_started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def stalled(_peer, _message):
+            welcome_started.set()
+            await release.wait()
+            return False
+
+        host_writer = mock.Mock()
+        with mock.patch.object(relay, "read_message", side_effect=[(relay._OP_TEXT, host_hello),
+                                                                   (relay._OP_TEXT, guest_hello)]), \
+             mock.patch.object(relay.Peer, "send", stalled):
+            joining = asyncio.create_task(instance._join(asyncio.StreamReader(), host_writer))
+            try:
+                await asyncio.wait_for(welcome_started.wait(), 1)
+                with self.assertRaises(relay.ProtocolError) as rejected:
+                    await instance._join(asyncio.StreamReader(), mock.Mock())
+                self.assertEqual(rejected.exception.code, "host_required")
+                release.set()
+                with self.assertRaises(ConnectionError):
+                    await joining
+            finally:
+                release.set()
+                if not joining.done():
+                    joining.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await joining
+        self.assertEqual(instance.rooms, {})
+        host_writer.close.assert_called_once()
+
+    async def test_public_or_unconfigured_insecure_relay_is_refused(self) -> None:
+        with self.assertRaises(ValueError):
+            await relay.start_relay("0.0.0.0", 0, insecure_local=True)
+        with self.assertRaises(ValueError):
+            await relay.start_relay("127.0.0.1", 0)
+        with self.assertRaises(ValueError):
+            await relay.start_relay("127.0.0.1", 0, host_token="short")
+        with self.assertRaises(ValueError):
+            await relay.start_relay("127.0.0.1", 0, host_token=self.token, insecure_local=True)
 
 
 class QuietDisconnectTests(unittest.TestCase):

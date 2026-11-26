@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { DEFAULT_NETWORK_SETTINGS, NET_LIMITS, normalizeNetworkSettings, type NetworkSettings } from '../../runtime/net/protocol';
-import { createNetSession, parseServerMessage, relayName } from '../../runtime/net/session';
+import { DEFAULT_NETWORK_SETTINGS, NET_LIMITS, NET_PROTOCOL_VERSION, normalizeNetworkSettings, type NetworkSettings } from '../../runtime/net/protocol';
+import { createNetSession, hostTokenTransportAllowed, parseServerMessage, relayName } from '../../runtime/net/session';
 import { frontendDiagnostics } from '../../diagnostics/runtime';
 
 class FakeSocket {
@@ -36,7 +36,7 @@ const connect = (overrides: Partial<NetworkSettings> = {}) => {
 
 const welcome = (socket: FakeSocket, extra: Record<string, unknown> = {}) => {
   socket.open();
-  socket.receive({ t: 'welcome', v: 1, you: 'me', host: 'me', peers: [{ id: 'bob', name: 'Bob' }], serverTime: 5000, ...extra });
+  socket.receive({ t: 'welcome', v: NET_PROTOCOL_VERSION, you: 'me', host: 'me', peers: [{ id: 'bob', name: 'Bob' }], serverTime: 5000, ...extra });
 };
 
 beforeEach(() => {
@@ -51,10 +51,10 @@ describe('net session', () => {
     const { session, socket } = connect();
     expect(session.status()).toBe('connecting');
     socket.open();
-    expect(socket.sent[0]).toEqual({ t: 'hello', v: 1, game: 'demo', room: 'main', name: 'Ann' });
+    expect(socket.sent[0]).toEqual({ t: 'hello', v: NET_PROTOCOL_VERSION, game: 'demo', room: 'main', name: 'Ann' });
     const changes = vi.fn();
     session.onChange(changes);
-    socket.receive({ t: 'welcome', v: 1, you: 'me', host: 'bob', peers: [{ id: 'bob', name: 'Bob' }], serverTime: 5000 });
+    socket.receive({ t: 'welcome', v: NET_PROTOCOL_VERSION, you: 'me', host: 'bob', peers: [{ id: 'bob', name: 'Bob' }], serverTime: 5000 });
     expect(session.status()).toBe('connected');
     expect(session.selfId()).toBe('me');
     expect(session.isHost()).toBe(false);
@@ -65,6 +65,75 @@ describe('net session', () => {
     expect(session.isHost()).toBe(true);
     expect(session.peers().map(peer => peer.id)).toEqual(['cat']);
     expect(changes).toHaveBeenCalledTimes(4);
+  });
+
+  it('keeps credentials out of guest hello, reconnects with them only on a trusted transport, and clears them explicitly', () => {
+    const { session, socket } = connect({ serverUrl: 'wss://relay.example/game' });
+    socket.open();
+    expect(socket.sent[0]).not.toHaveProperty('hostToken');
+    const credential = 'A'.repeat(43);
+    expect(session.setHostToken(credential)).toBeNull();
+    expect(socket.readyState).toBe(3);
+    const hostSocket = FakeSocket.instances.at(-1)!;
+    hostSocket.open();
+    expect(hostSocket.sent[0]).toEqual({
+      t: 'hello', v: NET_PROTOCOL_VERSION, game: 'demo', room: 'main', name: 'Ann', hostToken: credential,
+    });
+    expect(hostSocket.url).not.toContain(credential);
+    hostSocket.drop();
+    vi.advanceTimersByTime(1000);
+    const reconnected = FakeSocket.instances.at(-1)!;
+    reconnected.open();
+    expect(reconnected.sent[0]).toHaveProperty('hostToken', credential);
+    expect(session.setHostToken('')).toBeNull();
+    const guest = FakeSocket.instances.at(-1)!;
+    guest.open();
+    expect(guest.sent[0]).not.toHaveProperty('hostToken');
+    session.close();
+  });
+
+  it('refuses unsafe credential transports and malformed tokens without sending or reconnecting', () => {
+    const { session, socket } = connect({ serverUrl: 'ws://relay.example/game' });
+    expect(session.setHostToken('A'.repeat(43))).toMatch(/wss:/);
+    expect(session.setHostToken('short')).toMatch(/valid host credential/);
+    expect(FakeSocket.instances).toHaveLength(1);
+    socket.open();
+    expect(socket.sent[0]).not.toHaveProperty('hostToken');
+    expect(hostTokenTransportAllowed('ws://127.0.0.1:7777')).toBe(true);
+    expect(hostTokenTransportAllowed('ws://[::1]:7777')).toBe(true);
+    expect(hostTokenTransportAllowed('wss://relay.example')).toBe(true);
+    expect(hostTokenTransportAllowed('ws://localhost.evil.example')).toBe(false);
+    expect(hostTokenTransportAllowed('wss://user@relay.example')).toBe(false);
+    expect(hostTokenTransportAllowed('not a URL')).toBe(false);
+    session.close();
+  });
+
+  it('retries while waiting for a host, but a rejected credential needs an explicit correction', () => {
+    const { session, socket } = connect();
+    socket.open();
+    socket.receive({ t: 'error', code: 'host_required', message: 'Waiting for an authenticated host' });
+    socket.drop();
+    vi.advanceTimersByTime(1000);
+    expect(FakeSocket.instances).toHaveLength(2);
+    expect(session.setHostToken('A'.repeat(43))).toBeNull();
+    const attempted = FakeSocket.instances.at(-1)!;
+    attempted.open();
+    attempted.receive({ t: 'error', code: 'host_auth', message: 'host credential rejected' });
+    attempted.drop();
+    const count = FakeSocket.instances.length;
+    vi.advanceTimersByTime(16000);
+    expect(FakeSocket.instances).toHaveLength(count);
+    expect(session.setHostToken('B'.repeat(43))).toBeNull();
+    const corrected = FakeSocket.instances.at(-1)!;
+    corrected.open();
+    expect(corrected.sent[0]).toHaveProperty('hostToken', 'B'.repeat(43));
+    session.close();
+  });
+
+  it('rejects a legacy welcome rather than trusting an old unauthenticated relay', () => {
+    expect(parseServerMessage(JSON.stringify({
+      t: 'welcome', v: 1, you: 'me', host: 'me', peers: [], serverTime: 5000,
+    }))).toBeNull();
   });
 
   it('counts as host while not connected, so single-player logic keeps running', () => {
@@ -245,12 +314,12 @@ describe('net session', () => {
     vi.advanceTimersByTime(1000);
     const nextSocket = FakeSocket.instances[1];
     nextSocket.open();
-    nextSocket.receive({ t: 'welcome', v: 1, you: 'fresh', host: 'fresh', peers: [{ id: 'friend', name: 'Friend' }], serverTime: 6000 });
+    nextSocket.receive({ t: 'welcome', v: NET_PROTOCOL_VERSION, you: 'fresh', host: 'fresh', peers: [{ id: 'friend', name: 'Friend' }], serverTime: 6000 });
     expect(session.status()).toBe('connected');
     const changeCount = changes.mock.calls.length;
 
     // Already-queued callbacks from A must not mutate the live B session.
-    oldSocket.receive({ t: 'welcome', v: 1, you: 'stale', host: 'bob', peers: [], serverTime: 100 });
+    oldSocket.receive({ t: 'welcome', v: NET_PROTOCOL_VERSION, you: 'stale', host: 'bob', peers: [], serverTime: 100 });
     oldSocket.receive({ t: 'host', id: 'bob' });
     oldSocket.receive({ t: 'state', from: 'bob', seq: 1, time: 1, entities: [] });
     oldSocket.receive({ t: 'event', from: 'bob', name: 'stale', payload: 1 });
@@ -263,7 +332,7 @@ describe('net session', () => {
 
     session.close();
     const closedChanges = changes.mock.calls.length;
-    nextSocket.receive({ t: 'welcome', v: 1, you: 'late', host: 'late', peers: [], serverTime: 100 });
+    nextSocket.receive({ t: 'welcome', v: NET_PROTOCOL_VERSION, you: 'late', host: 'late', peers: [], serverTime: 100 });
     expect(session.status()).toBe('closed');
     expect(session.selfId()).toBe('fresh');
     expect(changes).toHaveBeenCalledTimes(closedChanges);

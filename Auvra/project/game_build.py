@@ -83,13 +83,21 @@ _RELAY_URL = re.compile(r"^(wss?)://([A-Za-z0-9.-]+|\[[0-9A-Fa-f:.]+\])(?::(\d{1
 RELAY_SCRIPT = Path(__file__).resolve().parent.parent / "net" / "relay.py"
 _RELAY_README = """Multiplayer relay for {name}
 
-Players of this game meet in rooms on a relay server. Run it on a machine every player can reach:
+Players of this game meet in rooms on a relay server. Generate a private operator credential with
+python -c "import secrets; print(secrets.token_urlsafe(32))" and set AUVRA_RELAY_HOST_TOKEN in the
+relay process environment. Do not add it to the game pack or share it with ordinary players.
 
     python relay.py --port {port}
 
+The host enters this credential using Host credentials in the game's multiplayer badge. Guests
+can join once that host has opened the room. When the host disconnects, the room closes instead
+of promoting a guest. Use --insecure-local only for explicit loopback testing.
+
 It needs Python 3.12 or newer and nothing else. The game connects to {url}; change Multiplayer >
-Server address in Game Settings and rebuild to point it somewhere else. Use --allow-origin to accept
-only your game's web origin, and put the relay behind TLS (wss://) when players connect over the internet.
+Server address in Game Settings and rebuild to point it somewhere else. The relay binds loopback
+by default. For internet players, put it behind a TLS reverse proxy (wss://), and use --allow-origin
+to restrict browser origins. Never expose an insecure-local relay through a proxy or tunnel.
+Protocol version 2 requires a matching rebuilt game and relay.
 """
 
 

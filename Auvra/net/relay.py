@@ -3,10 +3,13 @@
 Games connect over WebSocket and exchange JSON text frames (the wire format is
 ``fbx-viewer (1)/runtime/net/protocol.ts``). The relay groups clients into
 rooms, forwards state and events to the other members of a room, and names one
-member the host: the first to join, then the oldest remaining member when the
-host leaves. It holds no game logic.
+member the host. Online rooms require an operator credential to start; guests
+never inherit that authority. When the host leaves, the room closes and clients
+can reconnect after a credentialed host returns. Explicit loopback-only test
+mode retains the old first-join/oldest-peer behavior. It holds no game logic.
 
-Run it with ``python -m Auvra.net.relay --port 7777``. The module imports
+Set AUVRA_RELAY_HOST_TOKEN before running
+``python -m Auvra.net.relay --port 7777``. The module imports
 nothing outside the standard library, so it also runs as a single file copied
 next to a game build (``python relay.py --port 7777``).
 """
@@ -18,8 +21,10 @@ import argparse
 import asyncio
 import base64
 import hashlib
+import ipaddress
 import json
 import math
+import os
 import re
 import secrets
 import struct
@@ -27,7 +32,9 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Iterable
 
-PROTOCOL_VERSION = 1
+PROTOCOL_VERSION = 2
+# Operator-provisioned bearer token; generate with secrets.token_urlsafe(32).
+_HOST_TOKEN_PATTERN = re.compile(r"[A-Za-z0-9_-]{43,128}", re.ASCII)
 MAX_MESSAGE_BYTES = 64 * 1024
 MAX_PEERS_PER_ROOM = 16
 MAX_ROOM_LENGTH = 64
@@ -297,10 +304,30 @@ class Room:
     name: str
     game: str
     peers: list[Peer] = field(default_factory=list)
+    # In authenticated mode a provisional host must finish joining before
+    # guests can enter. This also fences failed/cancelled welcome delivery.
+    ready: bool = False
 
     @property
     def host(self) -> Peer | None:
         return self.peers[0] if self.peers else None
+
+
+def _validate_host_policy(host_token: str | None, insecure_local: bool) -> None:
+    if insecure_local:
+        if host_token is not None:
+            raise ValueError("do not configure a host credential in insecure local mode")
+    elif not isinstance(host_token, str) or not _HOST_TOKEN_PATTERN.fullmatch(host_token):
+        raise ValueError("set AUVRA_RELAY_HOST_TOKEN to a 43-128 character URL-safe random token, "
+                         "or explicitly select --insecure-local for loopback testing")
+
+
+def _loopback_bind(host: str) -> bool:
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        # Do not depend on DNS resolving a hostname to loopback.
+        return False
 
 
 class Relay:
@@ -308,7 +335,10 @@ class Relay:
 
     def __init__(self, max_players: int = MAX_PEERS_PER_ROOM, allowed_origins: Iterable[str] = (),
                  *, max_connections: int = MAX_TOTAL_CONNECTIONS, max_rooms: int = MAX_ROOMS,
-                 idle_timeout: float = IDLE_TIMEOUT_SECONDS) -> None:
+                 idle_timeout: float = IDLE_TIMEOUT_SECONDS, host_token: str | None = None,
+                 insecure_local: bool = False) -> None:
+        _validate_host_policy(host_token, insecure_local)
+        self._host_token = host_token
         if max_connections < 1 or max_rooms < 1 or not math.isfinite(idle_timeout) or idle_timeout <= 0:
             raise ValueError("connection, room and idle-timeout budgets must be positive")
         self.max_players = max(1, min(MAX_PEERS_PER_ROOM, max_players))
@@ -391,7 +421,21 @@ class Relay:
         name = _name(hello.get("name"), MAX_NAME_LENGTH)
         if not isinstance(game, str) or not 0 < len(game) <= MAX_GAME_LENGTH or not room_name or not name:
             raise ProtocolError("bad_message", "hello needs a game id, a room and a name")
+        authenticated = False
+        if "hostToken" in hello:
+            supplied = hello["hostToken"]
+            if (self._host_token is None or not isinstance(supplied, str)
+                    or not _HOST_TOKEN_PATTERN.fullmatch(supplied)
+                    or not secrets.compare_digest(supplied, self._host_token)):
+                # Never echo the credential in an error, log or broadcast.
+                raise ProtocolError("host_auth", "host credential rejected")
+            authenticated = True
         room = self.rooms.get(room_name)
+        if self._host_token is not None:
+            if not authenticated and (room is None or not room.ready):
+                raise ProtocolError("host_required", "Waiting for an authenticated host")
+            if authenticated and room is not None:
+                raise ProtocolError("host_exists", "An authenticated host already has this room")
         if room is None:
             if len(self.rooms) >= self.max_rooms:
                 raise ProtocolError("full", "the relay has reached its room limit")
@@ -412,6 +456,10 @@ class Relay:
             if delivered is False:
                 raise ConnectionError("welcome could not be delivered")
             await self.broadcast(room, {"t": "joined", "peer": {"id": peer.id, "name": peer.name}}, skip=peer)
+            if self.rooms.get(room.name) is not room or peer not in room.peers:
+                raise ConnectionError("room closed during join")
+            if authenticated:
+                room.ready = True
             complete = True
             return peer, room
         finally:
@@ -419,10 +467,13 @@ class Relay:
                 # A timed-out/cancelled join never returns to handle(), whose
                 # cleanup therefore cannot see this provisional room member.
                 # Roll it back synchronously even under task cancellation.
-                if peer in room.peers:
-                    room.peers.remove(peer)
-                if not room.peers and self.rooms.get(room.name) is room:
-                    self.rooms.pop(room.name, None)
+                if self._host_token is not None and room.host is peer:
+                    self._close_authenticated_room(room)
+                else:
+                    if peer in room.peers:
+                        room.peers.remove(peer)
+                    if not room.peers and self.rooms.get(room.name) is room:
+                        self.rooms.pop(room.name, None)
 
     def _count(self, peer: Peer) -> None:
         now = time.monotonic()
@@ -434,11 +485,22 @@ class Relay:
             raise ProtocolError("rate_limited", "too many messages")
 
     async def _dispatch(self, peer: Peer, room: Room, message: dict[str, Any]) -> None:
+        # A socket from a closed room must never act in a replacement room.
+        if self.rooms.get(room.name) is not room or peer not in room.peers:
+            raise ProtocolError("host_required", "The room has closed; reconnect when its host returns")
         kind = message["t"]
         if kind == "state":
             if not isinstance(message.get("seq"), int) or isinstance(message.get("seq"), bool) or not _finite(message.get("time")):
                 raise ProtocolError("bad_message", "state needs a seq and a time")
             entities = validate_entities(message.get("entities"))
+            for entity in entities:
+                entity_id = entity["id"]
+                if entity_id.startswith("player:"):
+                    owned = entity_id == f"player:{peer.id}"
+                else:
+                    owned = room.host is peer
+                if not owned:
+                    raise ProtocolError("state_owner", "state contains an entity this peer does not own")
             relayed = {"t": "state", "from": peer.id, "seq": message["seq"], "time": message["time"], "entities": entities}
             # The added sender ID must fit the same 64-KiB limit the browser
             # validates. Otherwise peers silently discard a valid input state.
@@ -470,15 +532,32 @@ class Relay:
         else:
             raise ProtocolError("bad_message", f"unknown message type {kind[:32]!r}")
 
+    def _close_authenticated_room(self, room: Room) -> None:
+        # Revoke authority and detach the room before yielding. A fresh host
+        # can create the same room immediately; old sockets cannot affect it.
+        if self.rooms.get(room.name) is not room:
+            return
+        self.rooms.pop(room.name)
+        room.ready = False
+        peers = list(room.peers)
+        room.peers.clear()
+        for peer in peers:
+            peer.writer.close()
+
     async def _leave(self, peer: Peer, room: Room) -> None:
+        if self.rooms.get(room.name) is not room or peer not in room.peers:
+            return
         was_host = room.host is peer
-        if peer in room.peers:
-            room.peers.remove(peer)
+        if was_host and self._host_token is not None:
+            self._close_authenticated_room(room)
+            return
+        room.peers.remove(peer)
         if not room.peers:
             self.rooms.pop(room.name, None)
             return
         await self.broadcast(room, {"t": "left", "id": peer.id})
         if was_host and room.host:
+            # Host migration exists only in explicitly insecure local mode.
             await self.broadcast(room, {"t": "host", "id": room.host.id})
 
     @staticmethod
@@ -514,10 +593,14 @@ class RelayHandle:
 
 async def start_relay(host: str = "127.0.0.1", port: int = 7777, *, max_players: int = MAX_PEERS_PER_ROOM,
                       allowed_origins: Iterable[str] = (), max_connections: int = MAX_TOTAL_CONNECTIONS,
-                      max_rooms: int = MAX_ROOMS, idle_timeout: float = IDLE_TIMEOUT_SECONDS) -> RelayHandle:
+                      max_rooms: int = MAX_ROOMS, idle_timeout: float = IDLE_TIMEOUT_SECONDS,
+                      host_token: str | None = None, insecure_local: bool = False) -> RelayHandle:
     """Starts a relay; port 0 picks a free port (see the handle's port)."""
+    if insecure_local and not _loopback_bind(host):
+        raise ValueError("insecure local mode must bind a literal loopback address")
     relay = Relay(max_players, allowed_origins, max_connections=max_connections,
-                  max_rooms=max_rooms, idle_timeout=idle_timeout)
+                  max_rooms=max_rooms, idle_timeout=idle_timeout,
+                  host_token=host_token, insecure_local=insecure_local)
     server = await asyncio.start_server(relay.handle, host, port, limit=MAX_HANDSHAKE_BYTES)
     bound = server.sockets[0].getsockname()[1]
     return RelayHandle(server, relay, bound)
@@ -536,7 +619,9 @@ def _quiet_disconnects(loop: asyncio.AbstractEventLoop, context: dict) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Auvra multiplayer relay")
-    parser.add_argument("--host", default="0.0.0.0", help="address to listen on (default all interfaces)")
+    parser.add_argument("--host", default="127.0.0.1", help="address to listen on (default loopback)")
+    parser.add_argument("--insecure-local", action="store_true",
+                        help="explicitly allow unauthenticated hosting on a literal loopback bind only")
     parser.add_argument("--port", type=int, default=7777)
     parser.add_argument("--max-players", type=int, default=MAX_PEERS_PER_ROOM, help=f"players per room, at most {MAX_PEERS_PER_ROOM}")
     parser.add_argument("--max-connections", type=int, default=MAX_TOTAL_CONNECTIONS, help="maximum concurrent sockets, including handshakes")
@@ -544,13 +629,22 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--idle-timeout", type=float, default=IDLE_TIMEOUT_SECONDS, help="seconds without an application message before disconnect")
     parser.add_argument("--allow-origin", action="append", default=[], help="accept only browsers from this origin (repeatable)")
     args = parser.parse_args(argv)
+    host_token = os.environ.get("AUVRA_RELAY_HOST_TOKEN")
+    try:
+        _validate_host_policy(host_token, args.insecure_local)
+        if args.insecure_local and not _loopback_bind(args.host):
+            raise ValueError("insecure local mode must bind a literal loopback address")
+    except ValueError as error:
+        parser.error(str(error))
 
     async def serve() -> None:
         asyncio.get_running_loop().set_exception_handler(_quiet_disconnects)
         handle = await start_relay(args.host, args.port, max_players=args.max_players, allowed_origins=args.allow_origin,
                                    max_connections=args.max_connections, max_rooms=args.max_rooms,
-                                   idle_timeout=args.idle_timeout)
-        print(f"Auvra relay listening on {args.host}:{handle.port}", flush=True)
+                                   idle_timeout=args.idle_timeout, host_token=host_token,
+                                   insecure_local=args.insecure_local)
+        mode = "INSECURE LOCAL ONLY" if args.insecure_local else "authenticated hosts"
+        print(f"Auvra relay listening on {args.host}:{handle.port} ({mode})", flush=True)
         try:
             await asyncio.Event().wait()
         finally:
