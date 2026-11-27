@@ -11,7 +11,9 @@ mode retains the old first-join/oldest-peer behavior. It holds no game logic.
 Set AUVRA_RELAY_HOST_TOKEN before running
 ``python -m Auvra.net.relay --port 7777``. The module imports
 nothing outside the standard library, so it also runs as a single file copied
-next to a game build (``python relay.py --port 7777``).
+next to a game build (``python relay.py --port 7777``). Each bundled relay
+has the game's authored player limit embedded at build time; an operator may
+lower it with ``--max-players`` but clients cannot change it.
 """
 
 from __future__ import annotations
@@ -37,6 +39,9 @@ PROTOCOL_VERSION = 2
 _HOST_TOKEN_PATTERN = re.compile(r"[A-Za-z0-9_-]{43,128}", re.ASCII)
 MAX_MESSAGE_BYTES = 64 * 1024
 MAX_PEERS_PER_ROOM = 16
+# The game builder replaces this single declaration in the shipped relay.
+# A source checkout has no authored policy; a bundled relay always does.
+BUNDLED_MAX_PLAYERS: int | None = None
 MAX_ROOM_LENGTH = 64
 MAX_NAME_LENGTH = 32
 MAX_GAME_LENGTH = 128
@@ -341,7 +346,17 @@ class Relay:
         self._host_token = host_token
         if max_connections < 1 or max_rooms < 1 or not math.isfinite(idle_timeout) or idle_timeout <= 0:
             raise ValueError("connection, room and idle-timeout budgets must be positive")
-        self.max_players = max(1, min(MAX_PEERS_PER_ROOM, max_players))
+        if type(max_players) is not int:
+            raise ValueError("max_players must be an integer")
+        if BUNDLED_MAX_PLAYERS is not None and (
+            type(BUNDLED_MAX_PLAYERS) is not int or not 1 <= BUNDLED_MAX_PLAYERS <= MAX_PEERS_PER_ROOM
+        ):
+            raise ValueError("invalid bundled player limit")
+        operator_limit = max(1, min(MAX_PEERS_PER_ROOM, max_players))
+        # Only the server controls capacity. The operator may tighten, but not
+        # raise, the authored cap. This applies before any room is created,
+        # including local mode and concurrent joins.
+        self.max_players = min(operator_limit, BUNDLED_MAX_PLAYERS) if BUNDLED_MAX_PLAYERS is not None else operator_limit
         self.max_connections = max_connections
         self.max_rooms = max_rooms
         self.idle_timeout = idle_timeout
@@ -442,6 +457,8 @@ class Relay:
             room = self.rooms[room_name] = Room(room_name, game)
         elif room.game != game:
             raise ProtocolError("game_mismatch", "this room is playing a different game")
+        # No client-supplied capacity is consulted, including a host's hello.
+        # Reserve the slot before awaiting welcome/broadcast delivery.
         if len(room.peers) >= self.max_players:
             raise ProtocolError("full", "the room is full")
         peer = Peer(secrets.token_hex(6), name, writer, time.monotonic())
@@ -623,7 +640,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--insecure-local", action="store_true",
                         help="explicitly allow unauthenticated hosting on a literal loopback bind only")
     parser.add_argument("--port", type=int, default=7777)
-    parser.add_argument("--max-players", type=int, default=MAX_PEERS_PER_ROOM, help=f"players per room, at most {MAX_PEERS_PER_ROOM}")
+    parser.add_argument("--max-players", type=int, default=MAX_PEERS_PER_ROOM,
+                        help=f"operator cap per room (1..{MAX_PEERS_PER_ROOM}); cannot raise the bundled game's limit")
     parser.add_argument("--max-connections", type=int, default=MAX_TOTAL_CONNECTIONS, help="maximum concurrent sockets, including handshakes")
     parser.add_argument("--max-rooms", type=int, default=MAX_ROOMS, help="maximum active rooms across all games")
     parser.add_argument("--idle-timeout", type=float, default=IDLE_TIMEOUT_SECONDS, help="seconds without an application message before disconnect")
@@ -644,7 +662,8 @@ def main(argv: list[str] | None = None) -> int:
                                    idle_timeout=args.idle_timeout, host_token=host_token,
                                    insecure_local=args.insecure_local)
         mode = "INSECURE LOCAL ONLY" if args.insecure_local else "authenticated hosts"
-        print(f"Auvra relay listening on {args.host}:{handle.port} ({mode})", flush=True)
+        print(f"Auvra relay listening on {args.host}:{handle.port} "
+              f"({mode}; max {handle.relay.max_players} players per room)", flush=True)
         try:
             await asyncio.Event().wait()
         finally:

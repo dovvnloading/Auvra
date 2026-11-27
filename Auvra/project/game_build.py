@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, BinaryIO, Callable, Iterator, Literal, Mapping, Sequence
 
+from ..net.relay import MAX_PEERS_PER_ROOM
 from .schemas import DOMAIN_NAMES, SCHEMA_VERSION
 from .serialization import canonical_json
 
@@ -81,6 +82,7 @@ _NESTED_SETTINGS = ("window", "quality", "input", "audio", "network", "navigatio
 _PLAYER_CONNECT_SRC = "connect-src 'self' blob:"
 _RELAY_URL = re.compile(r"^(wss?)://([A-Za-z0-9.-]+|\[[0-9A-Fa-f:.]+\])(?::(\d{1,5}))?(?:/[^\s;'\"]*)?$")
 RELAY_SCRIPT = Path(__file__).resolve().parent.parent / "net" / "relay.py"
+_RELAY_LIMIT_PLACEHOLDER = b"BUNDLED_MAX_PLAYERS: int | None = None"
 _RELAY_README = """Multiplayer relay for {name}
 
 Players of this game meet in rooms on a relay server. Generate a private operator credential with
@@ -88,6 +90,12 @@ python -c "import secrets; print(secrets.token_urlsafe(32))" and set AUVRA_RELAY
 relay process environment. Do not add it to the game pack or share it with ordinary players.
 
     python relay.py --port {port}
+
+The shipped relay enforces this game's maximum of {max_players} players per room (including the host).
+The limit is embedded in relay.py; it is not supplied by a connecting player. The optional
+--max-players argument can lower it, but cannot increase it. For a separately installed generic
+relay, the operator must configure --max-players {max_players}. Rebuild and redeploy the bundled
+relay to change the authored limit.
 
 The host enters this credential using Host credentials in the game's multiplayer badge. Guests
 can join once that host has opened the room. When the host disconnects, the room closes instead
@@ -99,6 +107,19 @@ by default. For internet players, put it behind a TLS reverse proxy (wss://), an
 to restrict browser origins. Never expose an insecure-local relay through a proxy or tunnel.
 Protocol version 2 requires a matching rebuilt game and relay.
 """
+
+
+def _bundled_relay_script(max_players: int) -> bytes:
+    """Embed server-owned build policy into the standalone, dependency-free relay."""
+    if type(max_players) is not int or not 1 <= max_players <= MAX_PEERS_PER_ROOM:
+        raise GameBuildError("invalid_project", "invalid normalized multiplayer player limit")
+    source = RELAY_SCRIPT.read_bytes()
+    if source.count(_RELAY_LIMIT_PLACEHOLDER) != 1:
+        # Never publish a generic (uncapped) relay when an older or mismatched
+        # packaged source is present. A prior build remains untouched.
+        raise GameBuildError("unsupported_capability", "the bundled relay template cannot enforce the game player limit")
+    policy = f"BUNDLED_MAX_PLAYERS: int | None = {max_players}".encode("ascii")
+    return source.replace(_RELAY_LIMIT_PLACEHOLDER, policy, 1)
 
 
 def relay_origin(settings: Mapping[str, Any]) -> str | None:
@@ -291,8 +312,10 @@ def build_game(
             else:
                 _allow_relay_origin(staging, f"{web}index.html", origin, records, warnings)
                 port = re.search(r":(\d+)$", origin)
-                readme = _RELAY_README.format(name=settings["name"], port=port.group(1) if port else 7777, url=settings["network"]["serverUrl"])
-                _write(staging, "server/relay.py", RELAY_SCRIPT.read_bytes(), records)
+                max_players = settings["network"]["maxPlayers"]
+                readme = _RELAY_README.format(name=settings["name"], port=port.group(1) if port else 7777,
+                                              url=settings["network"]["serverUrl"], max_players=max_players)
+                _write(staging, "server/relay.py", _bundled_relay_script(max_players), records)
                 _write(staging, "server/README.txt", readme.encode("utf-8"), records)
         for domain in DOMAIN_NAMES:
             document = {"schemaVersion": SCHEMA_VERSION, "documents": content[domain]}
@@ -555,6 +578,20 @@ def is_marked_build(path: Path) -> bool:
     return True
 
 
+def _normalize_max_players(value: Any) -> int:
+    """Match normalizeNetworkSettings' numeric rounding, range and default."""
+    # JSON booleans and strings are not JS numbers; Python bool is an int.
+    if isinstance(value, int) and not isinstance(value, bool):
+        return max(1, min(MAX_PEERS_PER_ROOM, value))
+    if isinstance(value, float) and math.isfinite(value):
+        bounded = max(1.0, min(float(MAX_PEERS_PER_ROOM), value))
+        whole = math.floor(bounded)
+        # Match Math.round (ties toward positive infinity) without Python's
+        # ties-to-even round(), or a large-int to float conversion.
+        return whole + int(bounded - whole >= 0.5)
+    return DEFAULT_GAME_SETTINGS["network"]["maxPlayers"]
+
+
 def normalize_game_settings(value: Any) -> dict[str, Any]:
     """Merge stored (possibly partial or older) settings over the defaults."""
 
@@ -563,6 +600,7 @@ def normalize_game_settings(value: Any) -> dict[str, Any]:
     for key in _NESTED_SETTINGS:
         nested = stored.get(key)
         result[key] = {**DEFAULT_GAME_SETTINGS[key], **(dict(nested) if isinstance(nested, Mapping) else {})}
+    result["network"]["maxPlayers"] = _normalize_max_players(result["network"]["maxPlayers"])
     return result
 
 
