@@ -10,7 +10,7 @@ interface AiRouteBarProps {
   capability: ProviderCapability;
   /** What the model is for, e.g. "Retexture model". */
   label: string;
-  /** Told of the model in use whenever it changes, or null with none chosen. */
+  /** Told of the model in use (including its configured providerId), or null with none chosen. */
   onModelChange?: (model: ProviderModel | null) => void;
   placement?: PopoverPlacement;
   className?: string;
@@ -45,7 +45,7 @@ export const AiRouteBar: React.FC<AiRouteBarProps> = ({ capability, label, onMod
       if (load !== latestLoad.current) return;
       if (!active) { setRoute(null); return; }
       setProviderId(active.providerId);
-      setRoute((current) => ({ providerId: active.providerId, modelId: active.modelId, model: current?.modelId === active.modelId ? current.model : undefined }));
+      setRoute((current) => ({ providerId: active.providerId, modelId: active.modelId, model: current?.providerId === active.providerId && current.modelId === active.modelId ? current.model : undefined }));
       const models = await hostProviderService.listModels(active.providerId, capability).catch(() => [] as ProviderModel[]);
       if (load !== latestLoad.current) return;
       setRoute({ providerId: active.providerId, modelId: active.modelId, model: models.find((model) => model.id === active.modelId) });
@@ -72,7 +72,7 @@ export const AiRouteBar: React.FC<AiRouteBarProps> = ({ capability, label, onMod
 
   useEffect(() => { if (open) void loadProviders(); }, [open, loadProviders]);
 
-  useEffect(() => { onModelChange?.(route?.model ?? (route ? { id: route.modelId } : null)); }, [onModelChange, route]);
+  useEffect(() => { onModelChange?.(route ? { ...route.model, id: route.modelId, providerId: route.providerId } : null); }, [onModelChange, route]);
 
   const provider = useMemo(() => providers.find((item) => item.id === providerId), [providers, providerId]);
   const needsKey = Boolean(provider?.requiresCredential) && provider?.credentialStatus !== 'configured' && provider?.credentialStatus !== 'memoryOnly';

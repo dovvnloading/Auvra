@@ -1,9 +1,9 @@
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { CheckIcon, ChevronsLeftRightIcon, CompareIcon, CrossIcon, CubeIcon, FrameIcon, GridIcon, MaterialIcon, PlusIcon, RotateIcon, SaveIcon, TrashIcon, WarningIcon } from '../UI/Icons';
 import { useScene } from '../../context/SceneContext';
 import { useNotification } from '../../context/NotificationContext';
-import type { ProviderModel } from '../../services/HostProviderService';
+import type { ProviderCapability, ProviderModel } from '../../services/HostProviderService';
 import { materialLibrary } from '../../runtime/materials/materialLibrary';
 import { estimateJobCost, formatCost } from '../../services/providerPricing';
 import { AiRouteBar } from '../Settings/AiRouteBar';
@@ -86,7 +86,10 @@ export const RetextureEditor: React.FC = () => {
   const wholeAllowed = texturedParts.length === 0;
   const mode: RetextureMode = part && !part.texture ? (blankWay === 'whole' && wholeAllowed ? 'whole' : 'new') : 'restyle';
   const everyPart = mode === 'restyle' && scope === 'all' && texturedParts.length > 1;
-  const [routeModel, setRouteModel] = useState<ProviderModel | null>(null);
+  const [routeSelection, setRouteSelection] = useState<{ capability: ProviderCapability; model: ProviderModel | null } | null>(null);
+  const [retrying, setRetrying] = useState(false);
+  const retryInFlight = useRef(false);
+  const retryDetailsId = useId();
   const [count, setCount] = useState<'1' | '2' | '4'>('1');
   const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -133,6 +136,9 @@ export const RetextureEditor: React.FC = () => {
 
   // Painting from nothing goes through the object wherever its map is laid out over it, as a change to a map does.
   const onObject = Boolean(session && part && mode === 'new' && sessions.paintsOnObject(session, part));
+  const routeCapability = onObject ? 'media.edit' : capabilityOfMode(mode);
+  const routeModel = routeSelection?.capability === routeCapability ? routeSelection.model : null;
+  const noteRoute = useCallback((model: ProviderModel | null) => setRouteSelection({ capability: routeCapability, model }), [routeCapability]);
   const cost = part ? sessions.estimate({ mode, model: routeModel }, onObject || mode === 'restyle') : null;
   const runs = everyPart ? texturedParts.length : Number(count);
   const canGenerate = Boolean(session && part && routeModel && prompt.trim());
@@ -230,6 +236,35 @@ export const RetextureEditor: React.FC = () => {
   const mapsCost = mapsModel ? estimateJobCost(mapsModel, session && part ? sessions.mapsMegapixels(session, part, focused?.size) : undefined) : null;
 
   const failed = focused?.state === 'failed' ? focused : null;
+  const canRetry = Boolean(session && part && failed && failed.mode === mode && failed.prompt.trim() && routeModel?.providerId && !retrying);
+  const retry = async () => {
+    if (!session || !part || !failed || failed.mode !== mode || !failed.prompt.trim() || !routeModel?.providerId || retryInFlight.current) return;
+    // One selected result, independent of the draft and batch controls. Capture the chosen
+    // route before any asynchronous source preparation; never silently switch providers.
+    const request = {
+      mode: failed.mode, prompt: failed.prompt.trim(), model: routeModel, count: 1,
+      expectedRoute: { providerId: routeModel.providerId, modelId: routeModel.id },
+    };
+    retryInFlight.current = true;
+    setRetrying(true);
+    setMessage(null);
+    try {
+      await sessions.generate(session, part, request);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'The texture retry could not be started.');
+    } finally {
+      retryInFlight.current = false;
+      setRetrying(false);
+    }
+  };
+
+  const retrySummary = failed && (failed.mode !== mode
+    ? `To retry result ${failed.number}, select ${failed.mode === 'whole' ? 'Whole model' : failed.mode === 'new' ? 'New' : 'This part'} again.`
+    : !failed.prompt.trim()
+      ? 'This result has no description to retry.'
+      : !routeModel?.providerId
+        ? 'Choose a provider and model to retry this result.'
+        : `Retry result ${failed.number}: 1 result · ${failed.mode === 'whole' ? 'whole model' : failed.mode === 'restyle' ? 'this part, from its current map' : 'this part, painted from scratch'} · ${routeModel.providerId} / ${routeModel.id} · ${cost === null ? 'price not known yet' : `about ${formatCost(cost)}`}. Uses the result’s description, not your draft.`);
   const shownError = message ?? failed?.error ?? null;
   const shownPicture = focused?.state === 'ready' && focused.url ? focused.url : part && session ? sessions.previewOf(session, part) : null;
   const shownSize = focused?.state === 'ready' ? focused.size ?? part?.size : part?.size;
@@ -322,7 +357,7 @@ export const RetextureEditor: React.FC = () => {
               ) : focused.state === 'failed' ? (
                 <>
                   <IconButton label={`Remove result ${focused.number}`} size="md" onClick={() => session && void sessions.remove(session, part, focused)}><TrashIcon size={14} /></IconButton>
-                  <Button disabled={!canGenerate} onClick={() => { setPrompt(focused.prompt); void generate(); }}>Try again</Button>
+                  <Button disabled={!canRetry} aria-describedby={retryDetailsId} onClick={() => void retry()}>{retrying ? 'Starting retry' : 'Try again'}</Button>
                 </>
               ) : (
                 <Button icon={<CrossIcon size={13} />} disabled={!focused.jobId || focused.stopping} onClick={() => void sessions.cancel(focused)}>{focused.stopping ? 'Stopping' : 'Stop'}</Button>
@@ -346,6 +381,7 @@ export const RetextureEditor: React.FC = () => {
               {message && <button type="button" aria-label="Dismiss" onClick={() => setMessage(null)} className="text-ink-3 hover:text-ink"><CrossIcon size={13} /></button>}
             </div>
           )}
+          {retrySummary && <p id={retryDetailsId} className="break-words border-b border-line px-3 py-1.5 text-2xs text-ink-2">{retrySummary}</p>}
           <div className="flex gap-2 p-2">
             <div className="flex min-w-0 flex-1 flex-col gap-1.5">
               {mode === 'restyle' ? (
@@ -383,7 +419,7 @@ export const RetextureEditor: React.FC = () => {
               />
             </div>
             <div className="flex w-56 shrink-0 flex-col justify-end gap-1.5">
-              <AiRouteBar capability={onObject ? 'media.edit' : capabilityOfMode(mode)} label={mode === 'new' && !onObject ? 'Image model' : mode === 'whole' ? 'Whole-model model' : 'Retexture model'} onModelChange={setRouteModel} placement="top-end" />
+              <AiRouteBar key={routeCapability} capability={routeCapability} label={mode === 'new' && !onObject ? 'Image model' : mode === 'whole' ? 'Whole-model model' : 'Retexture model'} onModelChange={noteRoute} placement="top-end" />
               <div className="flex h-5 items-center justify-between gap-2 text-2xs text-ink-3">
                 <span className="truncate tabular-nums">{cost === null ? (routeModel ? 'Price not known yet' : '') : `About ${formatCost(cost * runs)}${runs > 1 ? ` for ${runs}` : ''}`}</span>
                 {!everyPart && <Tooltip text="How many results to paint"><span><Segmented label="How many results" value={count} onChange={setCount} options={COUNTS} /></span></Tooltip>}

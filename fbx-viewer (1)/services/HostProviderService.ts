@@ -66,6 +66,12 @@ export interface ProviderHealth {
   [key: string]: unknown;
 }
 
+/** A caller's explicitly reviewed route; never an override of host-backed Settings. */
+export interface ExpectedProviderRoute {
+  providerId: string;
+  modelId: string;
+}
+
 export interface InferenceJob {
   jobId: string;
   status: 'queued' | 'submitting' | 'running' | 'succeeded' | 'failed' | 'cancel_requested' | 'cancelled' | 'recovering' | 'unknown';
@@ -328,11 +334,14 @@ export class HostProviderService {
     return normalizeHealth(result);
   }
 
-  async submitInference(payload: Record<string, unknown>): Promise<InferenceJob> {
+  async submitInference(payload: Record<string, unknown>, expectedRoute?: ExpectedProviderRoute): Promise<InferenceJob> {
     const capability = payload.capability as ProviderCapability;
     await this.ensureConfiguredRoutes();
     const configured = this.configuredModels[capability];
     if (!configured) throw new HostProviderError('Configure a provider and model for this capability in Settings first.', 'provider_not_configured');
+    if (expectedRoute && (configured.providerId !== expectedRoute.providerId || configured.modelId !== expectedRoute.modelId)) {
+      throw new HostProviderError('The provider or model changed. Review the selected route before trying again.', 'provider_route_changed');
+    }
     if (configured.route === 'cloud' && payload.consent !== 'explicit') throw new HostProviderError('Explicit cost consent is required before submitting cloud work.');
     // Route and model are always sourced from host-backed Settings state. A
     // component cannot silently select a browser-only provider or fallback.

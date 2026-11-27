@@ -2,7 +2,7 @@ import { useSyncExternalStore } from 'react';
 import * as THREE from 'three';
 import { boundMaterialGraph } from '../../../runtime/materials/graphMaterial';
 import { frontendDiagnostics } from '../../../diagnostics/runtime';
-import { describeProviderFailure, hostProviderService, type InferenceJob, type ProviderCapability, type ProviderModel } from '../../../services/HostProviderService';
+import { describeProviderFailure, hostProviderService, type ExpectedProviderRoute, type InferenceJob, type ProviderCapability, type ProviderModel } from '../../../services/HostProviderService';
 import { estimateJobCost } from '../../../services/providerPricing';
 import { picksFor } from '../../../services/providerPicks';
 import { textureService } from '../../../services/TextureGenerationService';
@@ -127,6 +127,8 @@ export interface GenerateRequest {
   prompt: string;
   model: ProviderModel | null;
   count: number;
+  /** Reject rather than submit to a route changed after the user approved the retry. */
+  expectedRoute?: ExpectedProviderRoute;
 }
 
 /** What a part draws with, whichever result or original that is. */
@@ -522,14 +524,14 @@ class RetextureSessions {
       };
       part.nextNumber += 1;
       part.takes.push(take);
-      void this.run(session, part, take, source);
+      void this.run(session, part, take, source, request.expectedRoute);
     }
     this.changed();
   }
 
-  private async run(session: ModelSession, part: SessionPart, take: Take, source: Promise<string | null>) {
+  private async run(session: ModelSession, part: SessionPart, take: Take, source: Promise<string | null>, expectedRoute?: ExpectedProviderRoute) {
     try {
-      const job = await textureService.submit(await source, instructionOf(take), take.sheet ? 'media.edit' : capabilityOfMode(take.mode));
+      const job = await textureService.submit(await source, instructionOf(take), take.sheet ? 'media.edit' : capabilityOfMode(take.mode), expectedRoute);
       take.jobId = job.jobId;
       const preview = await textureService.follow(job, (current) => {
         const state = stateOfJob(current.status);
