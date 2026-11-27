@@ -1,4 +1,4 @@
-import { hostProviderService, HostProviderError, InferenceJob, MediaPreview, type ProviderCapability } from './HostProviderService';
+import { hostProviderService, HostProviderError, InferenceJob, MediaPreview, type ExpectedProviderRoute, type ProviderCapability } from './HostProviderService';
 import { projectService } from '../utils/projectService';
 import { nativeDomainRecords } from '../utils/projectRecords';
 import { frontendDiagnostics } from '../diagnostics/runtime';
@@ -20,12 +20,13 @@ const MAX_LOCAL_MEDIA_BYTES = 8 * 1024 * 1024;
  */
 export class TextureGenerationService {
   /** Asks for the source asset restyled as the prompt says, or with none, a new image from the prompt alone. */
-  async submit(sourceAssetId: string | null, userPrompt: string, capability?: ProviderCapability): Promise<InferenceJob> {
+  async submit(sourceAssetId: string | null, userPrompt: string, capability?: ProviderCapability, expectedRoute?: ExpectedProviderRoute): Promise<InferenceJob> {
     if (!userPrompt.trim()) throw new Error('Describe the desired material before generating.');
-    return hostProviderService.submitInference({
+    const payload = {
       capability: capability ?? (sourceAssetId ? 'media.edit' : 'media.generate'),
       input: userPrompt.trim(), ...(sourceAssetId ? { assetIds: [sourceAssetId] } : {}), consent: 'explicit',
-    });
+    };
+    return expectedRoute ? hostProviderService.submitInference(payload, expectedRoute) : hostProviderService.submitInference(payload);
   }
 
   /** Follows a job to its end, and loads the picture of one that succeeded. */

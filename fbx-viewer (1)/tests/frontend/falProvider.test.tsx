@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describeProviderFailure, HostProviderService, hostProviderService, type ProviderModel } from '../../services/HostProviderService';
+import { TextureGenerationService } from '../../services/TextureGenerationService';
 import { formatModelPrice, modelCostWeight } from '../../services/providerPricing';
 import { filterModels, ModelPicker, sortModels } from '../../components/Settings/ModelPicker';
 import { composeScriptRequest, extractScriptCode, MAX_REQUEST_CHARACTERS } from '../../components/Scripting/scriptAssistantPrompt';
@@ -132,6 +133,33 @@ describe('the host provider service', () => {
     expect(configured[0].payload.expectedSettingsRevision).toBe(5);
     expect(configured[1].payload.settings).toMatchObject({ enabled: true, routes: [{ capability: 'code', modelId: 'mistralai/mistral-nemo' }] });
     expect(service.getConfiguredRoute('code')?.providerId).toBe('fal');
+  });
+
+  it('submits a reviewed route only while it matches the configured provider and model', async () => {
+    const { service, calls } = fakeHost((method) => {
+      if (method === 'provider.list') return { providers: [{ providerId: 'fal', route: 'cloud', capabilities: ['media.edit'] }] };
+      if (method === 'provider.getStatus') return { providerId: 'fal', settings: { enabled: true, routes: [{ capability: 'media.edit', modelId: 'reviewed' }] } };
+      return { job: { jobId: 'job-1', status: 'queued' } };
+    });
+    const expected = { providerId: 'fal', modelId: 'reviewed' };
+    const payload = { capability: 'media.edit', input: 'worn leather', consent: 'explicit' };
+    await service.submitInference(payload, expected);
+    const submissions = () => calls.filter((call) => call.method === 'inference.submit');
+    expect(submissions()).toHaveLength(1);
+    expect(submissions()[0].payload).toMatchObject({ ...payload, ...expected, route: 'cloud' });
+
+    service.hydrateConfiguration('fal', 'cloud', { enabled: true, routes: [{ capability: 'media.edit', modelId: 'changed' }] });
+    await expect(service.submitInference(payload, expected)).rejects.toThrow(/provider or model changed/);
+    service.hydrateConfiguration('other', 'cloud', { enabled: true, routes: [{ capability: 'media.edit', modelId: 'reviewed' }] });
+    await expect(service.submitInference(payload, expected)).rejects.toThrow(/provider or model changed/);
+    expect(submissions()).toHaveLength(1);
+  });
+
+  it('passes the reviewed route through media submission without losing explicit consent', async () => {
+    const submit = vi.spyOn(hostProviderService, 'submitInference').mockResolvedValue({ jobId: 'job-1', status: 'queued' });
+    const expected = { providerId: 'fal', modelId: 'reviewed' };
+    await new TextureGenerationService().submit(null, ' worn leather ', 'media.generate', expected);
+    expect(submit).toHaveBeenCalledExactlyOnceWith({ capability: 'media.generate', input: 'worn leather', consent: 'explicit' }, expected);
   });
 
   it('says a failure in words, keeping what the provider said itself', () => {
