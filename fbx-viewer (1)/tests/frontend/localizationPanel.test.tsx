@@ -13,6 +13,8 @@ const { project, scene } = vi.hoisted(() => {
     const project = {
         document: null as unknown,
         hydrated: true,
+        readError: null as Error | null,
+        retry: vi.fn(),
         writes: [] as unknown[],
         /** Settles the write in flight, like the host answering after the UI has rendered. */
         settle: null as null | { resolve: () => void; reject: (cause: Error) => void },
@@ -42,7 +44,7 @@ vi.mock('../../utils/useNativeProjectDocument', async () => {
             return {
                 document: project.document as T,
                 hydrated: project.hydrated,
-                error: null,
+                error: project.readError,
                 replace: async (next: T) => {
                     const previous = project.document;
                     project.set(next);
@@ -56,7 +58,7 @@ vi.mock('../../utils/useNativeProjectDocument', async () => {
                     }
                     project.writes.push(next);
                 },
-                refresh: () => undefined,
+                refresh: project.retry,
             };
         },
     };
@@ -83,6 +85,8 @@ const save = async (outcome: 'ok' | Error = 'ok') => {
 beforeEach(() => {
     project.document = null;
     project.hydrated = true;
+    project.readError = null;
+    project.retry.mockReset();
     project.settle = null;
     project.writes = [];
     scene.projectStatus = { projectId: 'project-1', readOnly: false };
@@ -170,5 +174,26 @@ describe('Localization panel string keys', () => {
 
         fireEvent.change(screen.getByLabelText('Filter strings'), { target: { value: 'text' } });
         expect(cell('toString', 'en')).toHaveValue('Text');
+    });
+});
+
+describe('Localization read failure', () => {
+    it('prevents saving a default or a draft until the native document is read', () => {
+        project.document = createDefaultLocalizationDocument();
+        project.hydrated = false;
+        project.readError = new Error('Host read failed');
+        render(<LocalizationPanel onClose={() => undefined} />);
+        expect(screen.getByRole('alert')).toHaveTextContent('Host read failed');
+        expect(screen.getByLabelText('New string key')).toBeDisabled();
+        expect(screen.getByRole('button', { name: /Save/ })).toBeDisabled();
+        fireEvent.click(screen.getByRole('button', { name: /Retry loading/ }));
+        expect(project.retry).toHaveBeenCalledTimes(1);
+        act(() => {
+            project.readError = null;
+            project.set(twoLocales());
+        });
+        expect(cell('menu.play', 'en')).toHaveValue('Play');
+        expect(cell('menu.play', 'en')).toBeEnabled();
+        expect(project.writes).toEqual([]);
     });
 });

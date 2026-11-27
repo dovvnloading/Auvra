@@ -15,6 +15,8 @@ const { project, scene, refreshStatus } = vi.hoisted(() => {
     const project = {
         document: null as unknown,
         hydrated: true,
+        readError: null as Error | null,
+        retry: vi.fn(),
         writes: [] as unknown[],
         /** Settles the write in flight, like the host answering after the UI has rendered. */
         settle: null as null | { resolve: () => void; reject: (cause: Error) => void },
@@ -55,7 +57,7 @@ vi.mock('../../utils/useNativeProjectDocument', async () => {
             return {
                 document: project.document as T,
                 hydrated: project.hydrated,
-                error: null,
+                error: project.readError,
                 replace: async (next: T) => {
                     const previous = project.document;
                     project.set(next);
@@ -69,7 +71,7 @@ vi.mock('../../utils/useNativeProjectDocument', async () => {
                     }
                     project.writes.push(next);
                 },
-                refresh: () => undefined,
+                refresh: project.retry,
             };
         },
     };
@@ -98,6 +100,8 @@ const save = async (outcome: 'ok' | Error = 'ok') => {
 beforeEach(() => {
     project.document = null;
     project.hydrated = true;
+    project.readError = null;
+    project.retry.mockReset();
     project.settle = null;
     project.writes = [];
     scene.projectStatus = { projectId: 'project-1', readOnly: false };
@@ -329,5 +333,31 @@ describe('readBuildTargets', () => {
             { target: 'linux', available: false, reason: LINUX_MISSING },
             { target: 'macos', available: false, reason: 'This editor cannot build for this platform.' },
         ]);
+    });
+});
+
+describe('Game settings read failure', () => {
+    it('keeps a draft visible but prevents saving or building until retry succeeds', () => {
+        project.document = documentWith({ name: 'Arena' });
+        render(<GameSettingsPanel onClose={() => undefined} />);
+        typeName('Arena draft');
+        act(() => {
+            project.readError = new Error('Host read failed');
+            project.set(project.document, false);
+        });
+        expect(screen.getByRole('alert')).toHaveTextContent('Host read failed');
+        expect(nameField()).toHaveValue('Arena draft');
+        expect(nameField()).toBeDisabled();
+        expect(screen.getByRole('button', { name: /^Save/ })).toBeDisabled();
+        expect(screen.getByRole('button', { name: /^Build / })).toBeDisabled();
+        fireEvent.click(screen.getByRole('button', { name: /Retry loading/ }));
+        expect(project.retry).toHaveBeenCalledTimes(1);
+        expect(project.writes).toEqual([]);
+        act(() => {
+            project.readError = null;
+            project.set(documentWith({ name: 'Arena' }));
+        });
+        expect(nameField()).toHaveValue('Arena draft');
+        expect(screen.getByRole('button', { name: /^Save/ })).toBeEnabled();
     });
 });

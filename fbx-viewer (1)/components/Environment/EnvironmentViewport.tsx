@@ -445,7 +445,7 @@ export const EnvironmentViewport: React.FC<EnvironmentViewportProps> = ({
     const containerRef = useRef<HTMLDivElement>(null);
     // The view draws with the renderer the project is set to, as Play does. The canvas waits for the setting the first
     // time only: a canvas cannot change renderer, and a revision bump re-hydrates the document without changing it.
-    const { document: settingsDocument, hydrated: settingsHydrated } = useNativeProjectDocument<GameSettingsDocument>('metadata', GAME_SETTINGS_DOCUMENT_ID, createDefaultGameSettingsDocument);
+    const { document: settingsDocument, hydrated: settingsHydrated, error: settingsError, refresh: refreshSettings } = useNativeProjectDocument<GameSettingsDocument>('metadata', GAME_SETTINGS_DOCUMENT_ID, createDefaultGameSettingsDocument);
     const renderer = useMemo(() => normalizeGameSettings(settingsDocument.settings).quality.renderer, [settingsDocument]);
     const shadowPages = useMemo(() => normalizeGameSettings(settingsDocument.settings).quality.shadowPages, [settingsDocument]);
     const settingsLoaded = useRef(false);
@@ -629,6 +629,12 @@ export const EnvironmentViewport: React.FC<EnvironmentViewportProps> = ({
                 <div className="absolute inset-0 z-20 pointer-events-none ring-2 ring-inset ring-blue-500/70 bg-blue-500/5" />
             )}
 
+            {!settingsLoaded.current && settingsError && (
+                <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-gray-950/90 p-4 text-xs text-red-200">
+                    <p role="alert">Could not load game settings: {settingsError.message}</p>
+                    <button type="button" onClick={refreshSettings} className="rounded border border-gray-600 px-3 py-1.5">Retry loading</button>
+                </div>
+            )}
             {/* Shared Canvas */}
             {settingsLoaded.current && <AuvraCanvas
                 surfaceId="editor-environment-viewport"

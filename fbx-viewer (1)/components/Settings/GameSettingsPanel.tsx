@@ -145,7 +145,7 @@ const NumberField: React.FC<{ label: string; value: number; limits: { min: numbe
 
 export const GameSettingsPanel: React.FC<GameSettingsPanelProps> = ({ onClose }) => {
   const { levels, blueprints, projectStatus, buildGame, isLoading } = useScene();
-  const { document, hydrated, error, replace } = useNativeProjectDocument<GameSettingsDocument>(
+  const { document, hydrated, error, replace, refresh } = useNativeProjectDocument<GameSettingsDocument>(
     'metadata', GAME_SETTINGS_DOCUMENT_ID, createDefaultGameSettingsDocument,
   );
   const stored = useMemo(() => normalizeGameSettings(document.settings), [document]);
@@ -220,6 +220,7 @@ export const GameSettingsPanel: React.FC<GameSettingsPanelProps> = ({ onClose })
   const canBuild = hydrated && !saving && !building && !isLoading && buildBlocked === null;
 
   const build = async () => {
+    if (!canBuild) return;
     const { target } = selectedBuild;
     setBuilding(true); setMessage(null); setBuildReport(null);
     try {
@@ -249,6 +250,7 @@ export const GameSettingsPanel: React.FC<GameSettingsPanelProps> = ({ onClose })
   };
 
   const save = async () => {
+    if (disabled || !dirty || !writable) return;
     setSaving(true); setMessage(null);
     try {
       const settings = sanitizeGameSettings(draft);
@@ -271,7 +273,12 @@ export const GameSettingsPanel: React.FC<GameSettingsPanelProps> = ({ onClose })
           <button type="button" onClick={onClose} className="rounded p-1 text-gray-500 hover:bg-gray-800 hover:text-white" aria-label="Close game settings"><CrossIcon size={16} /></button>
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto p-5 space-y-4">
-          {!hydrated && <div className="text-xs text-gray-500">Loading game settings…</div>}
+          {!hydrated && (error ? (
+            <div className="rounded border border-red-800 bg-red-950/40 px-3 py-2 text-xs text-red-200">
+              <p role="alert">Could not load game settings: {error.message}. Editing and saving are paused until reload succeeds.</p>
+              <button type="button" onClick={refresh} className="mt-2 rounded border border-red-700 px-2 py-1 hover:bg-red-900">Retry loading</button>
+            </div>
+          ) : <div className="text-xs text-gray-500">Loading game settings…</div>)}
           {!projectStatus.projectId && <div className="rounded border border-amber-900 bg-amber-950/40 px-3 py-2 text-2xs text-amber-300">Open or create a project to save game settings.</div>}
           {projectStatus.readOnly && <div className="rounded border border-amber-900 bg-amber-950/40 px-3 py-2 text-2xs text-amber-300">This project is read-only.</div>}
 
@@ -402,7 +409,7 @@ export const GameSettingsPanel: React.FC<GameSettingsPanelProps> = ({ onClose })
             </div>
           </div>
 
-          {(message || error) && <div className="rounded border border-gray-700 bg-gray-950 p-3 text-xs text-gray-300">{message || error?.message}</div>}
+          {hydrated && (message || error) && <div className="rounded border border-gray-700 bg-gray-950 p-3 text-xs text-gray-300">{message || error?.message}</div>}
           {reportText && (
             <section aria-label="Build report" className="rounded border border-gray-700 bg-gray-950 p-3 text-xs text-gray-300 space-y-2">
               <div className="flex items-center justify-between gap-2">

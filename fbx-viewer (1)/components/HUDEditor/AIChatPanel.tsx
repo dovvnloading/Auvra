@@ -13,6 +13,8 @@ export interface HUDProposalPreview {
 }
 
 interface AIChatPanelProps {
+    /** The owning HUD has not been read successfully; do not submit or mutate it. */
+    disabled?: boolean;
     elements: HUDElement[];
     selectedElementId: string | null;
     onUpdateElement: (id: string, updates: Partial<HUDElement>) => void;
@@ -51,6 +53,7 @@ const proposalLines = (proposal: CommandProposal): string[] => (Array.isArray(pr
     .filter(Boolean);
 
 export const AIChatPanel: React.FC<AIChatPanelProps> = ({
+    disabled = false,
     elements,
     selectedElementId,
     onSelectElement,
@@ -83,7 +86,7 @@ export const AIChatPanel: React.FC<AIChatPanelProps> = ({
 
     const submit = async () => {
         const request = input.trim();
-        if (!request || working) return;
+        if (disabled || !request || working) return;
 
         setWorking(true); setProposalError(null); setProposalState(null); setApprovedTransactionId(null);
         setMessages(previous => [...previous, { role: 'user', text: request }]);
@@ -107,7 +110,7 @@ export const AIChatPanel: React.FC<AIChatPanelProps> = ({
     };
 
     const approveProposal = async () => {
-        if (!proposalState) return;
+        if (disabled || !proposalState || working) return;
         setWorking(true); setProposalError(null);
         try {
             const result = await hostProviderService.approveCommand({ proposalId: proposalState.proposal.proposalId });
@@ -126,7 +129,7 @@ export const AIChatPanel: React.FC<AIChatPanelProps> = ({
     };
 
     const undoApprovedProposal = async () => {
-        if (!approvedTransactionId) return;
+        if (disabled || !approvedTransactionId || working) return;
         setWorking(true); setProposalError(null);
         try {
             await hostProviderService.undoCommand({ transactionId: approvedTransactionId });
@@ -189,14 +192,14 @@ export const AIChatPanel: React.FC<AIChatPanelProps> = ({
                     )}
                     <div className="flex justify-end gap-1.5 pt-0.5">
                         <Button variant="ghost" disabled={working} onClick={rejectProposal}>Reject</Button>
-                        <Button variant="primary" disabled={working} onClick={() => void approveProposal()}>Apply</Button>
+                        <Button variant="primary" disabled={disabled || working} onClick={() => void approveProposal()}>Apply</Button>
                     </div>
                 </div>
             )}
             {approvedTransactionId && !proposalState && (
                 <div className="flex shrink-0 items-center justify-between gap-2 border-t border-line px-3 py-1.5">
                     <span className="text-2xs text-ink-3">Applied to the HUD.</span>
-                    <Button size="sm" disabled={working} onClick={() => void undoApprovedProposal()}>Undo</Button>
+                    <Button size="sm" disabled={disabled || working} onClick={() => void undoApprovedProposal()}>Undo</Button>
                 </div>
             )}
             {proposalError && (
@@ -212,6 +215,7 @@ export const AIChatPanel: React.FC<AIChatPanelProps> = ({
             >
                 <TextArea
                     value={input}
+                    disabled={disabled}
                     onChange={(event) => setInput(event.target.value)}
                     onKeyDown={(event) => {
                         if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void submit(); }
@@ -220,7 +224,7 @@ export const AIChatPanel: React.FC<AIChatPanelProps> = ({
                     placeholder={activeContextId === 'create' ? 'What should be added?' : 'What should change?'}
                     className="h-[52px] flex-1"
                 />
-                <IconButton type="submit" label="Send" size="md" disabled={!input.trim() || working} className="!text-accent disabled:!text-ink-3"><SendIcon size={14} /></IconButton>
+                <IconButton type="submit" label="Send" size="md" disabled={disabled || !input.trim() || working} className="!text-accent disabled:!text-ink-3"><SendIcon size={14} /></IconButton>
             </form>
         </div>
     );

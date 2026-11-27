@@ -62,7 +62,7 @@ const smallButtonClass = 'flex shrink-0 items-center gap-1 rounded border border
 
 export const LocalizationPanel: React.FC<LocalizationPanelProps> = ({ onClose }) => {
   const { projectStatus } = useScene();
-  const { document, hydrated, error, replace } = useNativeProjectDocument<LocalizationDocument>(
+  const { document, hydrated, error, replace, refresh } = useNativeProjectDocument<LocalizationDocument>(
     'metadata', LOCALIZATION_DOCUMENT_ID, createDefaultLocalizationDocument,
   );
   const stored = useMemo(() => normalizeLocalizationSettings(document.settings), [document]);
@@ -84,12 +84,13 @@ export const LocalizationPanel: React.FC<LocalizationPanelProps> = ({ onClose })
   // optimistic write makes the draft look clean just before the rollback arrives. Decided here, not
   // in a setDraft updater, which StrictMode calls twice (the second call would see the moved baseline).
   useEffect(() => {
+    if (!hydrated) return;
     const next = JSON.stringify(stored);
     if (next === baselineRef.current) return;
     if (JSON.stringify(normalizeLocalizationSettings(draftRef.current)) !== baselineRef.current) return;
     baselineRef.current = next;
     setDraft(stored);
-  }, [stored]);
+  }, [stored, hydrated]);
 
   // A project switch always discards the draft.
   useEffect(() => {
@@ -131,18 +132,19 @@ export const LocalizationPanel: React.FC<LocalizationPanelProps> = ({ onClose })
   };
 
   const submitKey = () => {
-    if (!trimmedKey || keyProblem) return;
+    if (disabled || !trimmedKey || keyProblem) return;
     update((current) => addKey(current, trimmedKey));
     setNewKey('');
   };
 
   const submitLocale = () => {
-    if (!trimmedLocale || localeProblem) return;
+    if (disabled || !trimmedLocale || localeProblem) return;
     update((current) => addLocale(current, trimmedLocale));
     setNewLocale('');
   };
 
   const save = async () => {
+    if (disabled || !dirty || !writable) return;
     setSaving(true); setMessage(null);
     try {
       const settings = normalizeLocalizationSettings(draft);
@@ -164,7 +166,12 @@ export const LocalizationPanel: React.FC<LocalizationPanelProps> = ({ onClose })
           <button type="button" onClick={onClose} className="rounded p-1 text-gray-500 hover:bg-gray-800 hover:text-white" aria-label="Close localization"><CrossIcon size={16} /></button>
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto p-5 space-y-4">
-          {!hydrated && <div className="text-xs text-gray-500">Loading localization…</div>}
+          {!hydrated && (error ? (
+            <div className="rounded border border-red-800 bg-red-950/40 px-3 py-2 text-xs text-red-200">
+              <p role="alert">Could not load localization: {error.message}. Editing and saving are paused until reload succeeds.</p>
+              <button type="button" onClick={refresh} className="mt-2 rounded border border-red-700 px-2 py-1 hover:bg-red-900">Retry loading</button>
+            </div>
+          ) : <div className="text-xs text-gray-500">Loading localization…</div>)}
           {!projectStatus.projectId && <div className="rounded border border-amber-900 bg-amber-950/40 px-3 py-2 text-2xs text-amber-300">Open or create a project to save localization.</div>}
           {projectStatus.readOnly && <div className="rounded border border-amber-900 bg-amber-950/40 px-3 py-2 text-2xs text-amber-300">This project is read-only.</div>}
 
@@ -260,7 +267,7 @@ export const LocalizationPanel: React.FC<LocalizationPanelProps> = ({ onClose })
             )}
           </div>
 
-          {(message || error) && <div className="rounded border border-gray-700 bg-gray-950 p-3 text-xs text-gray-300">{message || error?.message}</div>}
+          {hydrated && (message || error) && <div className="rounded border border-gray-700 bg-gray-950 p-3 text-xs text-gray-300">{message || error?.message}</div>}
         </div>
         <div className="flex items-center justify-between gap-2 border-t border-gray-800 bg-gray-950 px-5 py-3">
           <button type="button" disabled={disabled || !dirty} onClick={() => { setMessage(null); baselineRef.current = JSON.stringify(stored); setDraft(stored); }} className="flex items-center gap-2 rounded border border-gray-700 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-800 disabled:opacity-50"><ResetIcon size={13} /> Revert</button>

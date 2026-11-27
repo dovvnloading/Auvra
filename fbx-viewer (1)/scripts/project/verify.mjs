@@ -359,7 +359,8 @@ if (!playSceneFields.length || playSceneFields.some(field => !PLAY_SCENE_READS.h
   failures.push('play-in-editor shell reads scene fields outside its read-only allowlist');
 }
 const playSettingsReads = levelGameLoop.match(/const \{([^}]*)\} = useNativeProjectDocument/)?.[1].split(',').map(field => field.split(':')[0].trim()).filter(Boolean) ?? [];
-if (playSettingsReads.some(field => field !== 'document' && field !== 'hydrated')) {
+// Read failures may be displayed and retried; the play shell still cannot write settings.
+if (playSettingsReads.some(field => !['document', 'hydrated', 'error', 'refresh'].includes(field))) {
   failures.push('play-in-editor shell may only read the game settings document');
 }
 if (!/<LevelRuntime\b/.test(levelGameLoop) || /useRuntimeLevelWorld|<AuvraCanvas/.test(levelGameLoop)) {
