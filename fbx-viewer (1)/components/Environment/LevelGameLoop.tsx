@@ -56,7 +56,7 @@ const createEmptyHud = (): HUDDocumentData => ({ id: HUD_DOCUMENT_ID, elements: 
 export const LevelGameLoop: React.FC<LevelGameLoopProps> = ({ onExit, spawnPosition, fromCamera = false }) => {
     const { levelObjects, activeLevelBlueprint, levels, currentLevelId } = useScene();
     const { addNotification } = useNotification();
-    const { document: settingsDocument, hydrated: settingsHydrated } = useNativeProjectDocument<GameSettingsDocument>(
+    const { document: settingsDocument, hydrated: settingsHydrated, error: settingsError, refresh: refreshSettings } = useNativeProjectDocument<GameSettingsDocument>(
         'metadata', GAME_SETTINGS_DOCUMENT_ID, createDefaultGameSettingsDocument,
     );
     const settings = useMemo(() => normalizeGameSettings(settingsDocument.settings), [settingsDocument]);
@@ -174,6 +174,17 @@ export const LevelGameLoop: React.FC<LevelGameLoopProps> = ({ onExit, spawnPosit
     // Each play-in-editor run starts from a clean game state.
     useEffect(() => () => gameState.reset(), []);
 
+    if (!settingsLoaded.current && settingsError) {
+        return (
+            <div className="flex h-full w-full flex-col items-center justify-center gap-3 bg-black p-4 text-xs text-red-200">
+                <p role="alert">Could not load game settings: {settingsError.message}</p>
+                <div className="flex gap-2">
+                    <button type="button" onClick={refreshSettings} className="rounded border border-gray-600 px-3 py-1.5">Retry loading</button>
+                    <button type="button" onClick={onExit} className="rounded border border-gray-600 px-3 py-1.5">Stop Play</button>
+                </div>
+            </div>
+        );
+    }
     if (!settingsLoaded.current || prefabs === null) {
         return <div className="flex items-center justify-center h-full w-full bg-black text-xs text-gray-500">Starting play session...</div>;
     }

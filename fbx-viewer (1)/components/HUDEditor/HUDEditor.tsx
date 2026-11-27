@@ -288,12 +288,12 @@ export const HUDEditor: React.FC = () => {
     );
     // The preview resolves textKey/labelKey against the project's string tables, so load them on open
     // rather than only when the Localization panel saves.
-    const { document: localizationDocument } = useNativeProjectDocument<LocalizationDocument>(
+    const { document: localizationDocument, hydrated: localizationHydrated } = useNativeProjectDocument<LocalizationDocument>(
         'metadata', LOCALIZATION_DOCUMENT_ID, createDefaultLocalizationDocument,
     );
     useEffect(() => {
-        localization.load(localizationDocument.settings);
-    }, [localizationDocument]);
+        if (localizationHydrated) localization.load(localizationDocument.settings);
+    }, [localizationDocument, localizationHydrated]);
     // The granular level context, so scene edits elsewhere do not re-render the HUD editor.
     const { levels } = useLevel();
     // Right after a switch the hook still holds the previous document until it re-hydrates.
@@ -380,6 +380,7 @@ export const HUDEditor: React.FC = () => {
     const selectedElement = elements.find(el => el.id === selectedId) || null;
 
     const handleAddElement = (type: string, overrides: Partial<HUDElement> = {}) => {
+        if (loading) return;
         const def = AVAILABLE_COMPONENTS.find(c => c.type === type);
         if (!def) return;
 
@@ -417,6 +418,7 @@ export const HUDEditor: React.FC = () => {
 
     // Untracked write: canvas drags stream through here and are recorded once at drag end.
     const applyElementUpdate = (id: string, updates: Partial<HUDElement>) => {
+        if (loading) return;
         void commitElements(elements.map(el => {
             if (el.id !== id) return el;
             const next = { ...el, ...updates };
@@ -468,6 +470,7 @@ export const HUDEditor: React.FC = () => {
     const selectedLocalizedKey = selectedElement ? LOCALIZED_KEY_PROPS[selectedElement.type] : undefined;
 
     const handleDelete = (id: string) => {
+        if (loading) return;
         recordChange();
         void commitElements(elements.filter(el => el.id !== id))
             .catch((cause) => frontendDiagnostics.failure('hud_element_delete_failed', cause));
@@ -514,14 +517,19 @@ export const HUDEditor: React.FC = () => {
 
     return (
         <div className="flex h-full w-full bg-gray-950 text-white font-sans overflow-hidden">
-            {error && (
-                <div className="absolute top-2 left-1/2 -translate-x-1/2 z-50 rounded border border-red-800 bg-red-950/90 px-3 py-2 text-xs text-red-200 shadow-lg">
+            {error && !loading && (
+                <div role="alert" className="absolute top-2 left-1/2 -translate-x-1/2 z-50 rounded border border-red-800 bg-red-950/90 px-3 py-2 text-xs text-red-200 shadow-lg">
                     {error.message}
                 </div>
             )}
             {loading && (
                 <div className="absolute inset-0 z-40 flex items-center justify-center bg-gray-950/70 text-xs text-gray-400">
-                    Loading HUD…
+                    {error ? (
+                        <div className="max-w-sm rounded border border-red-800 bg-gray-950 p-4 text-red-200 shadow-lg">
+                            <p role="alert">Could not load HUD: {error.message}. Editing is paused until reload succeeds.</p>
+                            <button type="button" onClick={refresh} className="mt-3 rounded border border-red-700 px-3 py-1.5 hover:bg-red-900">Retry loading</button>
+                        </div>
+                    ) : 'Loading HUD…'}
                 </div>
             )}
             {/* Left Sidebar: Library & Layers */}
@@ -610,7 +618,7 @@ export const HUDEditor: React.FC = () => {
                     </button>
                     <button 
                         onClick={() => setRightPanelTab('ai')}
-                        disabled={!aiAvailable}
+                        disabled={!aiAvailable || loading}
                         title={aiAvailable ? undefined : 'AI Coder edits the Game HUD only'}
                         className={`flex-1 py-3 text-2xs font-bold flex items-center justify-center gap-2 border-b-2 transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${rightPanelTab === 'ai' && aiAvailable ? 'border-blue-500 text-white' : 'border-transparent text-gray-500 hover:text-gray-300'}`}
                     >
@@ -622,6 +630,7 @@ export const HUDEditor: React.FC = () => {
                     {rightPanelTab === 'ai' && aiAvailable ? (
                         <AIChatPanel 
                             key={descriptor.id}
+                            disabled={loading}
                             elements={elements}
                             selectedElementId={selectedId}
                             onSelectElement={setSelectedId}

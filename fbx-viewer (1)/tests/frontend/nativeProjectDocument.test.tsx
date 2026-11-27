@@ -12,6 +12,9 @@ const { host } = vi.hoisted(() => {
         documents: {} as Record<string, unknown[]>,
         /** While true, snapshot reads wait for release(), like a slow host. */
         hold: false,
+        readError: null as Error | null,
+        snapshotOverride: undefined as unknown,
+        writes: [] as Array<{ domain: string; id: string; value: unknown }>,
         held: [] as Array<() => void>,
         listeners: new Set<(status: Status) => void>(),
         /** Every read decodes fresh objects, like documents arriving from the native host. */
@@ -43,10 +46,19 @@ vi.mock('../../utils/projectService', () => ({
         },
         getSnapshotAll: async (domain: string) => {
             if (host.hold) await new Promise<void>(resolve => { host.held.push(resolve); });
-            return host.snapshot(domain);
+            if (host.readError) throw host.readError;
+            return host.snapshotOverride === undefined ? host.snapshot(domain) : host.snapshotOverride;
         },
         assertWritable: () => undefined,
-        applyChanges: async () => undefined,
+        applyChanges: async (changes: Array<{ domain: string; id: string; value: unknown }>) => {
+            for (const change of changes) {
+                host.writes.push(change);
+                host.documents[change.domain] = [
+                    ...(host.documents[change.domain] ?? []).filter(doc => (doc as TestDocument).id !== change.id),
+                    change.value,
+                ];
+            }
+        },
     },
 }));
 
@@ -83,6 +95,9 @@ beforeEach(() => {
     host.status = { projectId: 'project-1', revision: 1, readOnly: false };
     host.documents = { hud: [{ id: 'doc', value: 'saved' }, { id: 'other', value: 'other saved' }] };
     host.hold = false;
+    host.readError = null;
+    host.snapshotOverride = undefined;
+    host.writes = [];
     host.held = [];
     host.listeners.clear();
     openSession();
@@ -164,5 +179,155 @@ describe('useNativeProjectDocument re-hydration', () => {
         bumpRevision([]);
         await waitFor(() => expect(result.current.hydrated).toBe(true));
         expect(result.current.document.value).toBe('default');
+    });
+});
+
+describe('native project document read authorization', () => {
+    it('blocks writes after an initial failed read and allows retry without destroying saved content', async () => {
+        host.readError = new Error('Read unavailable');
+        const { result, unmount } = mount();
+        const beforeRead = result.current.replace;
+        await waitFor(() => expect(result.current.error?.message).toBe('Read unavailable'));
+        expect(result.current.hydrated).toBe(false);
+        const failedReplace = result.current.replace;
+        await act(async () => {
+            await expect(failedReplace({ id: 'doc', value: 'lost' })).rejects.toThrow(/loaded successfully/);
+        });
+        expect(host.writes).toEqual([]);
+        expect(host.documents.hud[0]).toEqual({ id: 'doc', value: 'saved' });
+
+        host.readError = null;
+        act(() => result.current.refresh());
+        await waitFor(() => expect(result.current.hydrated).toBe(true));
+        expect(result.current.error).toBeNull();
+        expect(result.current.document.value).toBe('saved');
+        await act(async () => {
+            await expect(beforeRead({ id: 'doc', value: 'stale' })).rejects.toThrow();
+            await expect(failedReplace({ id: 'doc', value: 'stale' })).rejects.toThrow();
+            await result.current.replace({ id: 'doc', value: 'edited safely' });
+        });
+        expect(host.writes).toHaveLength(1);
+        unmount();
+        const reopened = mount();
+        await waitFor(() => expect(reopened.result.current.hydrated).toBe(true));
+        expect(reopened.result.current.document.value).toBe('edited safely');
+    });
+
+    it('preserves the last available document on refresh failure and revokes a captured writer immediately', async () => {
+        const { result } = mount();
+        await waitFor(() => expect(result.current.hydrated).toBe(true));
+        const oldReplace = result.current.replace;
+        const saved = result.current.document;
+        host.readError = new Error('Refresh failed');
+        await act(async () => {
+            result.current.refresh();
+            await expect(oldReplace({ id: 'doc', value: 'stale' })).rejects.toThrow();
+        });
+        await waitFor(() => expect(result.current.error?.message).toBe('Refresh failed'));
+        expect(result.current.hydrated).toBe(false);
+        expect(result.current.document).toBe(saved);
+        expect(host.writes).toEqual([]);
+    });
+
+    it('rejects a queued write invalidated before it reaches the host', async () => {
+        const { result } = mount();
+        await waitFor(() => expect(result.current.hydrated).toBe(true));
+        await act(async () => {
+            const write = result.current.replace({ id: 'doc', value: 'queued' });
+            result.current.refresh();
+            await expect(write).rejects.toThrow();
+        });
+        await waitFor(() => expect(result.current.hydrated).toBe(true));
+        expect(host.writes).toEqual([]);
+        expect(result.current.document.value).toBe('saved');
+    });
+
+    it('cannot reuse a receipt after switching documents and returning at the same revision', async () => {
+        const { result, rerender } = mount();
+        await waitFor(() => expect(result.current.hydrated).toBe(true));
+        const oldReplace = result.current.replace;
+        host.readError = new Error('Read unavailable');
+        rerender({ id: 'other', create: createOtherDefault });
+        await waitFor(() => expect(result.current.error).not.toBeNull());
+        expect(result.current.hydrated).toBe(false);
+        await act(async () => {
+            await expect(result.current.replace({ id: 'other', value: 'lost' })).rejects.toThrow();
+            await expect(oldReplace({ id: 'doc', value: 'lost' })).rejects.toThrow();
+        });
+        host.readError = null;
+        rerender({ id: 'doc', create: createDefault });
+        await waitFor(() => expect(result.current.hydrated).toBe(true));
+        await act(async () => {
+            await expect(oldReplace({ id: 'doc', value: 'stale' })).rejects.toThrow();
+        });
+        expect(host.writes).toEqual([]);
+    });
+
+    it('isolates a failed read in a replacement project even when the document id and revision match', async () => {
+        const { result } = mount();
+        await waitFor(() => expect(result.current.hydrated).toBe(true));
+        const oldReplace = result.current.replace;
+        host.readError = new Error('Second project read unavailable');
+        act(() => {
+            host.status = { projectId: 'project-2', revision: 1, readOnly: false };
+            host.documents = { hud: [{ id: 'doc', value: 'second project authored' }] };
+            openSession();
+            host.publish();
+        });
+        await waitFor(() => expect(result.current.error).not.toBeNull());
+        expect(result.current.hydrated).toBe(false);
+        await act(async () => {
+            await expect(oldReplace({ id: 'doc', value: 'first project' })).rejects.toThrow();
+            await expect(result.current.replace({ id: 'doc', value: 'default edit' })).rejects.toThrow();
+        });
+        expect(host.writes).toEqual([]);
+        host.readError = null;
+        act(() => result.current.refresh());
+        await waitFor(() => expect(result.current.hydrated).toBe(true));
+        expect(result.current.document.value).toBe('second project authored');
+        expect(host.documents.hud).toEqual([{ id: 'doc', value: 'second project authored' }]);
+    });
+
+    it.each([
+        ['null snapshot', null],
+        ['wrong project', { projectId: 'other', revision: 1, domains: { hud: [] } }],
+        ['wrong revision', { projectId: 'project-1', revision: 0, domains: { hud: [] } }],
+        ['incomplete snapshot', { projectId: 'project-1', revision: 1, hasMore: true, domains: { hud: [] } }],
+        ['missing domain', { projectId: 'project-1', revision: 1, domains: { metadata: [] }, documents: [] }],
+        ['malformed domain', { projectId: 'project-1', revision: 1, domains: { hud: {} } }],
+        ['unidentified entry', { projectId: 'project-1', revision: 1, domains: { hud: [{ value: 'unknown' }] } }],
+    ])('does not infer absence from a %s', async (_label, snapshot) => {
+        host.snapshotOverride = snapshot;
+        const { result } = mount();
+        await waitFor(() => expect(result.current.error).not.toBeNull());
+        expect(result.current.hydrated).toBe(false);
+        await act(async () => {
+            await expect(result.current.replace({ id: 'doc', value: 'lost' })).rejects.toThrow();
+        });
+        expect(host.writes).toEqual([]);
+    });
+
+    it.each([
+        { projectId: 'project-1', revision: 1, domains: { hud: [] } },
+        { projectId: 'project-1', revision: 1, domains: { hud: { documents: [] } } },
+        { projectId: 'project-1', revision: 1, domains: {}, documents: [] },
+    ])('allows creation only after a valid empty document list', async (snapshot) => {
+        host.documents.hud = [];
+        host.snapshotOverride = snapshot;
+        const { result } = mount();
+        await waitFor(() => expect(result.current.hydrated).toBe(true));
+        expect(result.current.document.value).toBe('default');
+        await act(async () => {
+            await result.current.replace({ id: 'doc', value: 'new document' });
+        });
+        expect(host.writes).toHaveLength(1);
+        expect(host.documents.hud).toEqual([{ id: 'doc', value: 'new document' }]);
+    });
+
+    it('loads an existing document from a valid flat host snapshot rather than treating it as absent', async () => {
+        host.snapshotOverride = { projectId: 'project-1', revision: 1, domains: {}, documents: host.documents.hud };
+        const { result } = mount();
+        await waitFor(() => expect(result.current.hydrated).toBe(true));
+        expect(result.current.document.value).toBe('saved');
     });
 });

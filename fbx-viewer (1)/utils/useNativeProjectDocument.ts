@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { projectService } from './projectService';
 import { frontendDiagnostics } from '../diagnostics/runtime';
-import { editorSession } from './editorSession';
+import { editorSession, type EditorSessionLease } from './editorSession';
 
 /**
  * A small React adapter for one authored project document.
@@ -12,6 +12,7 @@ import { editorSession } from './editorSession';
  */
 export interface NativeProjectDocumentState<T extends { id: string }> {
   document: T;
+  /** True only after a confirmed read, or for the non-persistable no-project preview. */
   hydrated: boolean;
   error: Error | null;
   replace: (next: T) => Promise<void>;
@@ -22,6 +23,17 @@ export interface NativeProjectDocumentState<T extends { id: string }> {
 const documentIdentity = (domain: string, documentId: string, projectId: string | null): string => (
   JSON.stringify([domain, documentId, projectId])
 );
+
+interface DocumentReadAttempt {
+  identity: string;
+  session: EditorSessionLease;
+  refreshToken: number;
+}
+
+interface ConfirmedDocumentRead {
+  attempt: DocumentReadAttempt;
+  kind: 'loaded' | 'absent' | 'unopened';
+}
 
 const sameContent = (left: unknown, right: unknown): boolean => {
   if (left === right) return true;
@@ -35,7 +47,8 @@ export function useNativeProjectDocument<T extends { id: string }>(
 ): NativeProjectDocumentState<T> {
   const [document, setDocument] = useState<T>(() => createDefault());
   const [projectId, setProjectId] = useState<string | null>(() => projectService.getStatus().projectId);
-  const [hydrated, setHydrated] = useState(false);
+  const [confirmedRead, setConfirmedRead] = useState<ConfirmedDocumentRead | null>(null);
+  const activeRead = useRef<DocumentReadAttempt | null>(null);
   const [error, setError] = useState<Error | null>(null);
   const [refreshToken, setRefreshToken] = useState(0);
   const sessionSnapshot = useSyncExternalStore(
@@ -43,6 +56,11 @@ export function useNativeProjectDocument<T extends { id: string }>(
     editorSession.getSnapshot,
     editorSession.getSnapshot,
   );
+  const identity = documentIdentity(domain, documentId, projectId);
+  const hydrated = confirmedRead !== null
+    && confirmedRead.attempt.identity === identity
+    && confirmedRead.attempt.session === sessionSnapshot
+    && confirmedRead.attempt.refreshToken === refreshToken;
   const writeQueue = useRef<Promise<void>>(Promise.resolve());
   const writeSequence = useRef(0);
   // The identity `document` currently describes. A revision bump, session
@@ -56,8 +74,15 @@ export function useNativeProjectDocument<T extends { id: string }>(
     setProjectId(status.projectId);
   }), []);
 
-  useEffect(() => {
+  // Invalidate old callbacks at commit, before the newly selected editor can accept input.
+  useLayoutEffect(() => {
+    const attempt: DocumentReadAttempt = { identity, session: sessionSnapshot, refreshToken };
+    activeRead.current = attempt;
     const controller = new AbortController();
+    const invalidate = () => {
+      if (activeRead.current === attempt) activeRead.current = null;
+      controller.abort();
+    };
     let finished = false;
     const lease = projectId
       ? (sessionSnapshot.phase === 'ready' ? sessionSnapshot : null)
@@ -66,7 +91,8 @@ export function useNativeProjectDocument<T extends { id: string }>(
     const isCurrent = () => {
       const status = projectService.getStatus();
       const session = editorSession.getSnapshot();
-      return status.projectId === projectId
+      return activeRead.current === attempt
+        && status.projectId === projectId
         && status.revision === (lease?.revision ?? status.revision)
         && session.generation === generation
         && (!projectId || (Boolean(lease) && editorSession.isCurrent(lease)));
@@ -75,47 +101,53 @@ export function useNativeProjectDocument<T extends { id: string }>(
       category: 'project_read', detailedOnly: true,
     });
     const unsubscribeSession = editorSession.subscribe(() => {
-      if (!isCurrent()) controller.abort();
+      if (!isCurrent()) invalidate();
     });
     const unsubscribeProject = projectService.subscribe((status) => {
-      if (status.projectId !== projectId || (lease && status.revision !== lease.revision)) controller.abort();
+      if (status.projectId !== projectId || (lease && status.revision !== lease.revision)) invalidate();
     });
     const finish = (outcome: 'success' | 'failure' | 'cancelled') => {
       if (finished) return;
       finished = true;
       span.finish(outcome);
     };
-    setHydrated(false);
+    setConfirmedRead(null);
     setError(null);
-    const identity = documentIdentity(domain, documentId, projectId);
     if (shownIdentity.current !== identity) {
       shownIdentity.current = identity;
       setDocument(createDefault());
     }
 
     if (!projectId) {
-      setHydrated(true);
+      setConfirmedRead({ attempt, kind: 'unopened' });
       finish('success');
-      return () => { controller.abort(); unsubscribeSession(); unsubscribeProject(); };
+      return () => { invalidate(); unsubscribeSession(); unsubscribeProject(); };
     }
 
-    if (!lease) {
+    if (!lease || lease.projectId !== projectId || !isCurrent()) {
       finish('cancelled');
-      return () => { controller.abort(); unsubscribeSession(); unsubscribeProject(); };
+      return () => { invalidate(); unsubscribeSession(); unsubscribeProject(); };
     }
 
     void projectService.getSnapshotAll(domain, span.context).then((snapshot) => {
       if (controller.signal.aborted || !isCurrent()) return;
-      if (!snapshot || snapshot.projectId !== lease.projectId || snapshot.revision !== lease.revision) {
-        controller.abort();
-        return;
+      if (!snapshot || snapshot.projectId !== lease.projectId || snapshot.revision !== lease.revision || snapshot.hasMore === true) {
+        throw new Error('The project document snapshot was unavailable, incomplete or out of date. Reload before editing.');
       }
-      const values = snapshot?.domains?.[domain];
+      const values = snapshot.domains?.[domain];
+      // getSnapshotAll normalizes native domain pages and the in-memory host's
+      // domain-filtered flat pages. A missing or malformed list is not absence.
       const documents = Array.isArray(values)
         ? values
         : values && typeof values === 'object' && Array.isArray((values as { documents?: unknown[] }).documents)
           ? (values as { documents: unknown[] }).documents
-          : [];
+          : (!snapshot.domains || Object.keys(snapshot.domains).length === 0) && Array.isArray(snapshot.documents)
+            ? snapshot.documents
+            : null;
+      if (!documents || documents.some(candidate => !candidate || typeof candidate !== 'object'
+        || typeof (candidate as { id?: unknown }).id !== 'string')) {
+        throw new Error('The project document list could not be read. Reload before editing.');
+      }
       const loaded = documents.find((candidate): candidate is T => (
         Boolean(candidate) && typeof candidate === 'object' &&
         (candidate as { id?: unknown }).id === documentId
@@ -125,23 +157,24 @@ export function useNativeProjectDocument<T extends { id: string }>(
       // Equal content keeps the current object, so the re-hydrate after every
       // write does not hand consumers a new document they would re-sync to.
       setDocument((current) => (sameContent(current, value) ? current : value));
-      setHydrated(true);
+      setConfirmedRead({ attempt, kind: loaded ? 'loaded' : 'absent' });
       finish('success');
     }).catch((cause: unknown) => {
       if (controller.signal.aborted || !isCurrent()) return;
       setError(cause instanceof Error ? cause : new Error('Project document could not be hydrated'));
-      setHydrated(true);
+      // Retain the last available value, but never authorize a write after a failed read.
+      setConfirmedRead(null);
       span.fail(cause);
       finish('failure');
     });
 
     return () => {
-      controller.abort();
+      invalidate();
       unsubscribeSession();
       unsubscribeProject();
       finish('cancelled');
     };
-  }, [domain, documentId, projectId, createDefault, refreshToken, sessionSnapshot]);
+  }, [domain, documentId, projectId, identity, createDefault, refreshToken, sessionSnapshot]);
 
   const replace = useCallback(async (next: T): Promise<void> => {
     const span = frontendDiagnostics.startSpan('project_document', 'replace', { category: 'project_write' });
@@ -154,6 +187,12 @@ export function useNativeProjectDocument<T extends { id: string }>(
         throw new Error('A native project document requires a current ready editor session.');
       }
       editorSession.requireWritable(lease, statusAtStart);
+      // A stale callback must not borrow permission from a newer document or retry.
+      if (!hydrated || !confirmedRead || confirmedRead.kind === 'unopened'
+        || activeRead.current !== confirmedRead.attempt || !editorSession.isCurrent(confirmedRead.attempt.session)
+        || statusAtStart.projectId !== projectId || statusAtStart.revision !== lease.revision) {
+        throw new Error('The project document must be loaded successfully before it can be saved. Reload and try again.');
+      }
       setError(null);
       // Update in place so the editor remains responsive while the host commits.
       const previous = document;
@@ -162,7 +201,8 @@ export function useNativeProjectDocument<T extends { id: string }>(
       const isCurrent = () => {
         const status = projectService.getStatus();
         const session = editorSession.getSnapshot();
-        return status.projectId === projectId
+        return activeRead.current === confirmedRead.attempt
+          && status.projectId === projectId
           && status.projectId === lease.projectId
           && status.revision === lease.revision
           && session.generation === generation
@@ -198,8 +238,13 @@ export function useNativeProjectDocument<T extends { id: string }>(
       span.finish('failure');
       throw cause;
     }
-  }, [document, domain, documentId, projectId, sessionSnapshot]);
+  }, [document, domain, documentId, projectId, hydrated, confirmedRead]);
 
-  const refresh = useCallback(() => setRefreshToken((value) => value + 1), []);
+  const refresh = useCallback(() => {
+    // Revocation is synchronous, including calls made before React renders.
+    activeRead.current = null;
+    setConfirmedRead(null);
+    setRefreshToken((value) => value + 1);
+  }, []);
   return { document, hydrated, error, replace, refresh };
 }

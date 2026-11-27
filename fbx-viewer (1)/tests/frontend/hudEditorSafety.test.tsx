@@ -13,6 +13,8 @@ const { documents, defaults, project } = vi.hoisted(() => ({
         // default while the stored copy loads again.
         rehydrateAfterWrite: false,
         rehydrating: new Map<string, StoredDocument>(),
+        readErrors: new Map<string, Error>(),
+        retry: vi.fn(),
         listeners: new Set<() => void>(),
     },
 }));
@@ -33,14 +35,14 @@ vi.mock('../../utils/useNativeProjectDocument', async () => {
             const placeholder = project.rehydrating.get(key);
             return {
                 document: (placeholder ?? documents.get(key) ?? defaults.get(key)) as unknown as T,
-                hydrated: !placeholder,
-                error: null,
+                hydrated: !placeholder && !project.readErrors.has(key),
+                error: project.readErrors.get(key) ?? null,
                 replace: async (next: T) => {
                     documents.set(key, next as unknown as StoredDocument);
                     if (project.rehydrateAfterWrite) project.rehydrating.set(key, createDefault() as unknown as StoredDocument);
                     rerender();
                 },
-                refresh: () => undefined,
+                refresh: project.retry,
             };
         },
     };
@@ -90,6 +92,8 @@ beforeEach(() => {
     defaults.clear();
     project.rehydrateAfterWrite = false;
     project.rehydrating.clear();
+    project.readErrors.clear();
+    project.retry.mockReset();
 });
 
 describe('HUD editor writes while a document re-hydrates', () => {
@@ -210,5 +214,27 @@ describe('HUD editor binding hints with a string key', () => {
         fireEvent.change(screen.getByLabelText('text Key'), { target: { value: '' } });
         expect(screen.getByLabelText('text')).toHaveAccessibleDescription('Bound to vars.score; shows the live value while playing.');
         expect(screen.getByLabelText('text Key')).toHaveAccessibleDescription('String key from Localization; overrides the text unless it is bound.');
+    });
+});
+
+describe('HUD editor read failure', () => {
+    it('blocks editing and AI while a failed read is displayed, and exposes retry', () => {
+        documents.set('hud/hud-main', { id: 'hud-main', elements: [textElement('authored', { text: 'Saved' })] });
+        project.readErrors.set('hud/hud-main', new Error('Host read failed'));
+        const { container } = render(<HUDEditor />);
+        expect(screen.getByRole('alert')).toHaveTextContent('Host read failed');
+        expect(screen.getByRole('button', { name: /AI Coder/ })).toBeDisabled();
+        selectOnCanvas(container, 'authored');
+        fireEvent.change(screen.getByLabelText('text'), { target: { value: 'Lost' } });
+        expect(storedElement('hud-main', 'authored')?.props.text).toBe('Saved');
+        fireEvent.click(screen.getByRole('button', { name: /Retry loading/ }));
+        expect(project.retry).toHaveBeenCalledTimes(1);
+        act(() => {
+            project.readErrors.clear();
+            project.listeners.forEach(listener => listener());
+        });
+        expect(screen.queryByRole('alert')).toBeNull();
+        fireEvent.change(screen.getByLabelText('text'), { target: { value: 'Edited' } });
+        expect(storedElement('hud-main', 'authored')?.props.text).toBe('Edited');
     });
 });
