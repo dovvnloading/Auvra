@@ -2,8 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import * as THREE from 'three';
 import { RetextureEditor } from '../../components/Tools/RetextureEditor';
-import { retextureSessions, type ModelSession, type SessionPart, type Take } from '../../components/Tools/Retexture/retextureSession';
+import { retextureSessions, surfaceInstruction, type ModelSession, type SessionPart, type Take } from '../../components/Tools/Retexture/retextureSession';
 import { hostProviderService, type ProviderCapability } from '../../services/HostProviderService';
+import { textureService } from '../../services/TextureGenerationService';
 
 const { useScene } = vi.hoisted(() => ({ useScene: vi.fn() }));
 vi.mock('../../context/SceneContext', () => ({ useScene }));
@@ -71,12 +72,16 @@ const openEditor = (take: Take = failed, textured = true) => {
 };
 
 describe('retrying a selected failed Retexture result', () => {
-  it.each(['fresh draft', '   '])('uses the failed description instead of draft %j and ignores batch controls', async (draft) => {
+  it.each([
+    { draft: 'fresh draft', allParts: false },
+    { draft: '   ', allParts: true },
+    { draft: 'different draft', allParts: true },
+  ])('uses the failed description instead of draft "$draft" (all parts: $allParts)', async ({ draft, allParts }) => {
     const { session, active, generate, submit } = openEditor();
     const description = screen.getByRole('textbox', { name: 'Description' });
     fireEvent.change(description, { target: { value: draft } });
     fireEvent.click(within(screen.getByRole('radiogroup', { name: 'How many results' })).getByRole('radio', { name: '4' }));
-    fireEvent.click(within(screen.getByRole('radiogroup', { name: 'What to change' })).getByRole('radio', { name: 'All parts' }));
+    if (allParts) fireEvent.click(within(screen.getByRole('radiogroup', { name: 'What to change' })).getByRole('radio', { name: 'All parts' }));
     const retry = screen.getByRole('button', { name: 'Try again' });
     await waitFor(() => expect(retry).toBeEnabled());
     expect(retry).toHaveAccessibleDescription(/1 result · this part, from its current map · mock-provider \/ mock\/media.edit/);
@@ -89,6 +94,26 @@ describe('retrying a selected failed Retexture result', () => {
     });
     expect(description).toHaveValue(draft);
     expect(submit).not.toHaveBeenCalled();
+  });
+
+  it('sends exactly one provider request with the failed description through the real session and media service', async () => {
+    const { active, generate, submit } = openEditor({ ...failed, mode: 'new' }, false);
+    generate.mockRestore();
+    submit.mockResolvedValue({ jobId: 'mock-job', status: 'queued' });
+    vi.spyOn(textureService, 'follow').mockRejectedValue(new Error('Mock provider failure'));
+    const description = screen.getByRole('textbox', { name: 'Description' });
+    fireEvent.change(description, { target: { value: 'unrelated draft' } });
+    fireEvent.click(within(screen.getByRole('radiogroup', { name: 'How many results' })).getByRole('radio', { name: '4' }));
+    const retry = screen.getByRole('button', { name: 'Try again' });
+    await waitFor(() => expect(retry).toBeEnabled());
+    fireEvent.click(retry);
+    await screen.findByRole('button', { name: 'Result 2, failed' });
+    expect(submit).toHaveBeenCalledExactlyOnceWith({
+      capability: 'media.generate', input: surfaceInstruction(failed.prompt), consent: 'explicit',
+    }, { providerId: 'mock-provider', modelId: 'mock/media.generate' });
+    expect(active.takes).toHaveLength(2);
+    expect(active.takes[1]).toMatchObject({ prompt: failed.prompt, modelName: 'Reviewed model', state: 'failed' });
+    expect(description).toHaveValue('unrelated draft');
   });
 
   it('does not start another retry while the first is preparing its source', async () => {
