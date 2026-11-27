@@ -6,6 +6,7 @@ import { frontendDiagnostics } from '../../../diagnostics/runtime';
 import { collectSubtree } from '../../../utils/sceneGraph';
 import { copyLevelObjects, pasteLevelObjects, readLevelClipboard, writeLevelClipboard, type LevelClipboardPayload } from '../../../utils/levelClipboard';
 import { deleteSelectedSplinePoint, splineEditing } from '../splineEditing';
+import { foliageToolStore, selectedInstanceCount } from '../Foliage/foliageSettings';
 
 interface HotkeyConfig {
     state: EditorState & { selectedObjectIds?: string[] };
@@ -110,12 +111,25 @@ export const useEnvironmentHotkeys = (config: HotkeyConfig) => {
                 return;
             }
 
+            const isDelete = e.key === 'Backspace' || e.key === 'Delete';
+            if (isDelete && (e.defaultPrevented || inBlueprint)) return;
+
+            // Foliage owns deletion in Paint mode, even when nothing is selected or the
+            // viewport tool is not mounted. Never fall through to a hidden scene/spline selection.
+            if (isDelete && state.interactionMode === 'paint') {
+                e.preventDefault();
+                if (canEdit() && selectedInstanceCount(foliageToolStore.get().selection) > 0) {
+                    foliageToolStore.command({ kind: 'remove-selected' });
+                }
+                return;
+            }
+
             // A selected spline point is deleted, or deselected, before its object.
             const splinePoint = splineEditing.get();
             const splineObject = splinePoint && selection.includes(splinePoint.objectId)
                 ? current.levelObjects.find((object) => object.id === splinePoint.objectId)
                 : undefined;
-            if (splineObject && (e.key === 'Backspace' || e.key === 'Delete')) {
+            if (splineObject && isDelete) {
                 e.preventDefault();
                 if (!canEdit()) return;
                 const components = deleteSelectedSplinePoint(splineObject);
@@ -131,7 +145,7 @@ export const useEnvironmentHotkeys = (config: HotkeyConfig) => {
             }
 
             // Deletion: the selection and everything parented under it, as one undo step.
-            if (e.key === 'Backspace' || e.key === 'Delete') {
+            if (isDelete) {
                 if (selection.length && canEdit()) {
                     e.preventDefault();
                     const ids = new Set(selection.flatMap((id) => collectSubtree(current.levelObjects, id).map((object) => object.id)));

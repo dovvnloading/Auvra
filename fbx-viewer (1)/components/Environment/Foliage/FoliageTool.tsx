@@ -558,6 +558,7 @@ export const FoliageTool: React.FC<FoliageToolProps> = ({
 
         const handleMove = (event: PointerEvent) => { shiftHeld.current = event.shiftKey; };
 
+        // Delete/Backspace are routed by useEnvironmentHotkeys, the sole owner of destructive shortcuts.
         const handleKey = (event: KeyboardEvent) => {
             shiftHeld.current = event.shiftKey;
             if (event.type !== 'keydown' || isTyping(event.target) || !latest.current.enabled) return;
@@ -565,9 +566,6 @@ export const FoliageTool: React.FC<FoliageToolProps> = ({
             if (event.code === 'BracketLeft' || event.code === 'BracketRight') {
                 event.preventDefault();
                 latest.current.onSettingsChange({ ...current, radius: Math.max(0.25, Math.min(2000, current.radius * (event.code === 'BracketRight' ? 1.1 : 1 / 1.1))) });
-            } else if ((event.key === 'Delete' || event.key === 'Backspace') && foliageToolStore.get().selection.size > 0) {
-                event.preventDefault();
-                foliageToolStore.command({ kind: 'remove-selected' });
             } else if (event.key === 'Escape') {
                 foliageToolStore.clearSelection();
             }
